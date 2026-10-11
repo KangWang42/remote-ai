@@ -191,23 +191,24 @@ def main():
         report["first"] = first
         mine = (first["needs"] or []) + (first["active"] or [])
         assert "部署到测试环境" in first["needs"] and "整理读书笔记" in first["active"] and "看日志" in mine and len(mine) == 3, first
-        assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券", "画流程图", "整理第三章的参考文献", "摘要翻译", "旧的讨论"] and first["more"], first
+        assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券"] and first["more"], first
         assert first["background"] == ["被占着的对话"] and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and "等你确认" in first["summary"], first
         assert first["filters"][:4] == ["*全部", "Claude Code", "Codex", "PowerShell"] and "手机终端" in first["filters"], first
         # each card says where it is and by what it runs; the one outside every project says its folder, and that it is none
-        outside, shell, saved = about("整理读书笔记"), about("看日志"), about("画流程图")
-        report["cards"] = {"outside": outside, "terminal": shell, "saved": saved}
+        outside, shell = about("整理读书笔记"), about("看日志")
         assert outside["pill"] == "正在执行" and outside["apart"] and outside["meta"][:2] == ["reading-notes", "未加入项目"], outside
         assert shell["meta"][0] == "thesis" and shell["meta"][1].startswith("PowerShell · 手机终端") and not shell["apart"], shell
-        assert saved["meta"][0] == "thesis" and saved["meta"][1].startswith("Codex · ") and saved["pill"] == "", saved
         picture("inbox.png")
         page_value("(() => { document.getElementById('more-recent').click(); return 1; })()")
         lists(lambda seen: seen["recent"] and len(seen["recent"]) == 7 and not seen["more"], "the rest of what was used lately")
+        saved = about("画流程图")
+        report["cards"] = {"outside": outside, "terminal": shell, "saved": saved}
+        assert saved["meta"][0] == "thesis" and saved["meta"][1].startswith("Codex · ") and saved["pill"] == "", saved
 
         # ---- told apart by tool, and by where a thing runs
         press("Claude Code")
         only = lists(lambda seen: seen["filters"][1] == "*Claude Code", "one tool")
-        assert only["needs"] is None and only["active"] is None and only["background"] is None and len(only["recent"]) == 6 and "画流程图" not in only["recent"] and not only["nothing"], only
+        assert only["needs"] is None and only["active"] is None and only["background"] is None and len(only["recent"]) == 2 and "画流程图" not in only["recent"] and not only["nothing"], only
         press("手机终端")
         none = lists(lambda seen: seen["nothing"], "nothing is both")
         assert none["recent"] is None and "*手机终端" in none["filters"] and none["projects"] == ["web-shop", "thesis"], none
@@ -215,7 +216,7 @@ def main():
         phone = lists(lambda seen: not seen["nothing"], "what runs from the phone")
         assert (phone["needs"] or []) + (phone["active"] or []) == ["看日志"] and phone["recent"] is None, phone
         press("全部")
-        lists(lambda seen: seen["filters"][0] == "*全部" and seen["recent"] and len(seen["recent"]) == 6, "everything again")
+        lists(lambda seen: seen["filters"][0] == "*全部" and seen["recent"] and len(seen["recent"]) == 2, "everything again")
 
         # ---- one search over all of it, the projects too
         search("读书")
@@ -243,6 +244,9 @@ def main():
         assert "给结算页加上优惠券" not in pinned["recent"] and about("给结算页加上优惠券")["pin"], pinned
         assert listed(uuid(11))["pinned"] is True and uuid(11) in (data / "conversation-marks.json").read_text(encoding="utf-8")
 
+        # The default recent list is compact; expand it before testing a card outside the first two.
+        page_value("(() => { document.getElementById('more-recent').click(); return 1; })()")
+
         # ---- and a finger that stays down: it opens nothing, though it ends on the card
         at = page_value("(() => { const c = %s('摘要翻译'); c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()" % CARD)
         time.sleep(0.3)
@@ -268,9 +272,11 @@ def main():
 
         # ---- in its project: the pinned first, the hidden only when asked for
         page_value("(() => { Array.from(document.querySelectorAll('#project-list .card b')).find(b => b.textContent === 'thesis').closest('button').click(); return 1; })()")
-        HISTORY = "(() => document.getElementById('project').hidden ? null : { saved: Array.from(document.querySelectorAll('#p-history .card b')).map(b => b.textContent), put: document.getElementById('hidden-history').hidden ? '' : document.getElementById('hidden-history').textContent })()"
+        HISTORY = "(() => document.getElementById('project').hidden ? null : { saved: Array.from(document.querySelectorAll('#p-history .card b')).map(b => b.textContent), folded: document.querySelector('#p-history > ul').hidden, put: document.getElementById('hidden-history').hidden ? '' : document.getElementById('hidden-history').textContent })()"
         inside = until(lambda: page_value(HISTORY), 5, "the project's page")
-        assert inside == {"saved": ["画流程图", "整理第三章的参考文献"], "put": "已隐藏 1 段 · 显示"}, inside
+        assert inside == {"saved": ["画流程图", "整理第三章的参考文献"], "folded": True, "put": "已隐藏 1 段 · 显示"}, inside
+        page_value("(() => { document.querySelector('#p-history .section-head').click(); return 1; })()")
+        assert page_value(HISTORY)["folded"] is False
         page_value("(() => { document.getElementById('hidden-history').click(); return 1; })()")
         assert page_value(HISTORY)["saved"] == ["画流程图", "整理第三章的参考文献", "摘要翻译"] and about("摘要翻译")["pill"] == "已隐藏"
         page_value("(() => { %s('摘要翻译').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)

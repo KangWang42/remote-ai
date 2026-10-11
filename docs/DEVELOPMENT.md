@@ -48,6 +48,7 @@ python tests\fullscreen_check.py <chrome.exe>             # 占满屏幕的程�
 python tests\phone_line_check.py [chrome.exe [输出文件夹]]  # 手机上切换线路和更改设置：新线路在原线路旁准备好，交接后手机到达才保留，没到则回到原线路；隧道、局域网、中转互相切换；带浏览器时在页面上实际点按，并从列表给终端发一条指令。先运行 tools\package_windows.py
 node tests\session_state_check.js                         # 运行中的会话与保留的写入锁分开显示
 python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组、排序、已完成标记和刷新判定；按“等你处理、置顶、进行中、最近”分段、搜索、按工具和运行位置筛选、未加入项目的对话
+python tests\workbench_ui_check.py                         # 工作台默认折叠、最近两条和标题可读性
 python tests\android_update_check.py                      # App 更新器关闭安装流的顺序
 python tests\native_owner_check.py                        # 临时进程验证归属，不操作真实 Codex 会话
 python tests\relay_check.py                               # 电脑端对自有中转的判断：密码对、密码错、地址不是中转、端口不通

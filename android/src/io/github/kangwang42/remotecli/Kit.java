@@ -84,6 +84,12 @@ final class Kit {
         view.setSingleLine(true); view.setEllipsize(TextUtils.TruncateAt.END);
         return view;
     }
+    /** A title may use the available width before it is shortened. */
+    TextView title(String value, float size, int color, boolean strong) {
+        TextView view = strong ? bold(value, size, color) : text(value, size, color);
+        view.setMaxLines(2); view.setEllipsize(TextUtils.TruncateAt.END);
+        return view;
+    }
     GradientDrawable shape(int fill, int stroke, float radius) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(fill); drawable.setCornerRadius(dp(radius)); if (stroke != 0) drawable.setStroke(dp(1), stroke);

@@ -31,7 +31,7 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 /* ---- top bar */
 .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 4px; margin: 0 -16px; padding: 8px 10px 10px 16px; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 .top .who { flex: 1; min-width: 0; }
-.top h1 { font-size: 1.35rem; font-weight: 700; line-height: 1.25; letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top h1 { font-size: 1.35rem; font-weight: 700; line-height: 1.25; letter-spacing: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 #device { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .83rem; line-height: 1.4; }
 #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 #dot.on { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 24%, transparent); }
@@ -53,6 +53,9 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 26px 2px 10px; }
 .section-head h2 { font-size: .95rem; font-weight: 700; }
 .section-head p { color: var(--muted); font-size: .8rem; text-align: right; }
+.section-head[data-fold] { cursor: pointer; user-select: none; }
+.section-head[data-fold]::after { content: "⌄"; color: var(--muted); font-size: 1.1rem; line-height: 1; transition: transform .15s ease; }
+.section-head[data-fold].folded::after { transform: rotate(-90deg); }
 .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .card { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
 .card > button.open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; text-align: left; min-height: 64px; }
@@ -64,7 +67,7 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .card > button.side.say { margin-right: 8px; }
 .card > button.side.say:active { background: color-mix(in srgb, var(--accent) 20%, var(--raised)); color: var(--accent); }
 .card .text { flex: 1; min-width: 0; display: grid; gap: 3px; }
-.card b { font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card b { font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .card .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: .8rem; line-height: 1.3; min-width: 0; }
 .card .meta span { white-space: nowrap; }
 .card .peek { color: var(--muted); font-size: .8rem; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }

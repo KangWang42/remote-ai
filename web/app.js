@@ -20,7 +20,9 @@
     if (native && native.setPref && LOOK.includes(key)) native.setPref(key, value);
     try { localStorage.setItem('rcli-' + key, value); } catch (error) { /* private window */ }
   };
-  let data = null, project = '', timer = 0, busy = false, shown = 12, endedShown = 8, toastTimer = 0;
+  let data = null, project = '', timer = 0, busy = false, shown = 2, endedShown = 8, toastTimer = 0;
+  // Project detail starts as a compact index. Each long section opens only when the user asks for it.
+  const projectFolds = { active: false, live: false, history: false };
   // The first list is asked for while the sign-in is still being checked: over a tunnel each answer takes a
   // quarter of a second, and waiting for one before asking for the other doubled the time to the first picture.
   let early = null;
@@ -379,13 +381,13 @@
     : [x.s.id, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), x.s.ask ? x.s.ask.id : '', x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state];
 
   // ---- the filters: by tool, and by where a thing runs. They last as long as the page is kept open.
-  let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 6, hiddenShown = false;
+  let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 2, hiddenShown = false;
   try { filter = Object.assign(filter, JSON.parse(sessionStorage.getItem('rcli-filter') || '{}')); } catch (error) { /* no storage */ }
   const pass = x => (!filter.tool || x.tool === filter.tool) && (!filter.source || x.source === filter.source);
   function choose(change) {
     filter = Object.assign({}, filter, change);
     try { sessionStorage.setItem('rcli-filter', JSON.stringify(filter)); } catch (error) { /* no storage */ }
-    resultsShown = 30; recentShown = 6; draw();
+    resultsShown = 30; recentShown = 2; draw();
   }
   function drawFilters(all) {
     // a row is offered only where it tells something apart, or to take back what was chosen
@@ -530,6 +532,18 @@
     list.dataset.signature = signature;
     list.replaceChildren(...cards);
   }
+  function applyProjectFold(key) {
+    const head = document.querySelector('#project .section-head[data-fold="' + key + '"]');
+    if (!head) return;
+    const section = head.parentElement, open = projectFolds[key];
+    head.classList.toggle('folded', !open);
+    head.setAttribute('aria-expanded', String(open));
+    Array.from(section.children).slice(1).forEach(child => {
+      // Keep the recovery action for hidden conversations reachable even while the history body is folded.
+      if (child.id !== 'hidden-history') child.hidden = !open;
+    });
+  }
+  function toggleProjectFold(key) { projectFolds[key] = !projectFolds[key]; applyProjectFold(key); }
   // one list of things: its cards, and what they are known by
   const show = (list, shown, withProject, more) => fill(list, shown.map(x => card(x, withProject)), JSON.stringify([shown.map(signed), more, data.device.features, usable()]));
   const stamp = minutes => Math.floor(Date.now() / (minutes * 60000));
@@ -636,9 +650,11 @@
     const inside = everything.filter(x => x.project === project), tick = [stamp(1), ready];
     const own = inside.filter(x => x.t && x.live).sort(byRank);
     $('p-active').hidden = !own.length;
+    applyProjectFold('active');
     show($('p-active').querySelector('ul'), own, false, tick);
     const here = inside.filter(x => !x.t), open2 = here.filter(x => x.state === 'active'), held2 = here.filter(x => x.state === 'locked');
     $('p-live').hidden = !open2.length;
+    applyProjectFold('live');
     show($('p-live').querySelector('ul'), open2, false, tick);
     $('p-background').hidden = !held2.length;
     $('p-background-summary').textContent = held2.length + ' 段 · 不计入运行中';
@@ -654,6 +670,7 @@
     $('more-history').hidden = found.length <= shown;
     $('hidden-history').hidden = !put;
     $('hidden-history').textContent = hiddenShown ? '不显示已隐藏的 ' + put + ' 段' : '已隐藏 ' + put + ' 段 · 显示';
+    applyProjectFold('history');
     // Kept terminal screens and saved conversations have different actions: view a screen or resume a conversation.
     const ended = inside.filter(x => x.t && !x.live).sort(byTime);
     $('p-ended').hidden = !ended.length;
@@ -663,7 +680,7 @@
   }
 
   // ---- moving between the overview and one project; the phone's back key goes back to the overview
-  function enter(name) { project = name; shown = 12; endedShown = 8; hiddenShown = false; $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
+  function enter(name) { project = name; shown = 2; endedShown = 8; hiddenShown = false; Object.keys(projectFolds).forEach(key => { projectFolds[key] = false; }); $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
   window.addEventListener('popstate', event => { project = event.state && event.state.project || ''; if (data) draw(); });
   // A project opened by a link (the workbench does that) has no overview behind it in the history.
   $('back').addEventListener('click', () => {
@@ -671,13 +688,18 @@
     if (native && native.home) return native.home();
     project = ''; history.replaceState(null, '', location.pathname); draw();
   });
-  $('search').addEventListener('input', () => { shown = 12; draw(); });
+  $('search').addEventListener('input', () => { shown = 2; draw(); });
   $('more-history').addEventListener('click', () => { shown += 30; draw(); });
   $('more-ended').addEventListener('click', () => { endedShown += 30; draw(); });
-  $('hidden-history').addEventListener('click', () => { hiddenShown = !hiddenShown; draw(); });
+  $('hidden-history').addEventListener('click', () => { hiddenShown = !hiddenShown; if (hiddenShown) { shown = Math.max(shown, 30); projectFolds.history = true; } draw(); });
   $('query').addEventListener('input', () => { resultsShown = 30; draw(); });
   $('more-results').addEventListener('click', () => { resultsShown += 30; draw(); });
   $('more-recent').addEventListener('click', () => { recentShown += 20; draw(); });
+  document.querySelectorAll('#project .section-head[data-fold]').forEach(head => {
+    const key = head.dataset.fold;
+    head.addEventListener('click', () => toggleProjectFold(key));
+    head.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleProjectFold(key); } });
+  });
 
   async function refresh() {
     clearTimeout(timer);

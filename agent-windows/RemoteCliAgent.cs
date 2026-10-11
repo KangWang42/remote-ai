@@ -249,6 +249,18 @@ public sealed class TerminalAgent {
     DateTime nextScan = DateTime.MinValue, lastActivity = DateTime.MinValue;
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
 
+    // A hook can remain attached to a conversation after its window has gone idle.  Such a record is still useful
+    // history, but it should not occupy the workbench's "进行中" section.  Claude Code and Codex use the same
+    // activity rule: only thinking, waiting for a phone message, or showing a confirmation request is active.
+    static bool ReachActive(Reach.Open open) {
+        return open != null && (open.Status == "busy" || open.Status == "confirm" || open.Status == "waiting");
+    }
+    bool SessionActive(string host, Reach.Open open) {
+        // Before a tool reports its first hook event there is no activity signal to classify. Keep the ownership
+        // entry visible until that signal arrives; once hooks are active, an idle entry is treated as history.
+        return open == null ? !String.IsNullOrEmpty(host) : ReachActive(open);
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct ProcessEntry {
         public uint size, usage, processId; public IntPtr heap; public uint module, threads, parentId; public int priority; public uint flags;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string file;
@@ -369,7 +381,7 @@ public sealed class TerminalAgent {
                         int parent; if (!parents.TryGetValue(at, out parent) || parent == at || parent == 0) break; at = parent;
                     }
                     if (owner != null) { owner.Session = session; owner.Status = source.Status; }
-                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true); }
+                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), SessionActive(source.Host, Reach.Of("claude", session))); }
                 } catch { }
             }
         } catch { }
@@ -382,13 +394,14 @@ public sealed class TerminalAgent {
                 foreach (FileInfo file in recent.Where(f => recentNames.Contains(f.Name) || open.ContainsKey(Path.GetFileNameWithoutExtension(f.Name)))) {
                     string id = Path.GetFileNameWithoutExtension(file.Name), title, same;
                     if (!Regex.IsMatch(id, Uuid) || (title = ClaudeTitle(file, out same)).Length == 0) continue;
-                    ClaudeSessions.Owner source; bool live = open.TryGetValue(id, out source);
+                    ClaudeSessions.Owner source; bool known = open.TryGetValue(id, out source);
+                    bool live = known && SessionActive(source.Host, Reach.Of("claude", id));
                     found.Add(new SessionInfo { Id = id, Tool = "claude", Dir = dir.Key, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? source.Host : "", Origin = live ? source.Origin : "", CanTakeover = live && source.CanTakeover, OwnershipKnown = !live || source.CanTakeover || source.Host == "remote", Status = live ? source.Status : "", TakeoverReason = live ? source.Reason : "", Same = same });
                 }
             } catch { }
         }
         // Conversations Claude Code has open in folders that are no projects: listed with their folder.
-        foreach (var held in open.Where(o => !found.Any(s => s.Tool == "claude" && s.Id == o.Key))) {
+        foreach (var held in open.Where(o => SessionActive(o.Value.Host, Reach.Of("claude", o.Key)) && !found.Any(s => s.Tool == "claude" && s.Id == o.Key))) {
             try {
                 string where = (held.Value.Dir ?? "").TrimEnd('\\', '/'), same;
                 if (!Elsewhere(where) || dirs.Values.Any(d => SamePath(d, where)) || !Regex.IsMatch(held.Key, Uuid)) continue;
@@ -446,7 +459,10 @@ public sealed class TerminalAgent {
                 if (folder.Length == 0) continue;
                 string dir = dirs.Where(d => SamePath(d.Value, folder)).Select(d => d.Key).FirstOrDefault();
                 var owner = codexSessions.Get(id);
-                bool live = owner.Live;
+                // The writer lock says a Codex process has the file, while the hook says whether that process is
+                // currently showing or thinking about the conversation.  An old idle app session belongs in history.
+                var signal = Reach.Of("codex", id);
+                bool live = owner.Live && SessionActive(owner.Host, signal);
                 bool phone = owner.Pid > 0 && CodexSessions.Descends(owner.Pid, running.Select(t => t.Pty.Id), ownerParents);
                 string title; codexNames.TryGetValue(id, out title); title = Tidy(title);
                 if (dir == null) {
@@ -461,7 +477,7 @@ public sealed class TerminalAgent {
                 int count; counts.TryGetValue(dir, out count);
                 if (!live && count >= 15) continue;
                 if (!live) counts[dir] = count + 1;
-                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? owner.Host : "", Origin = live ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = title });
+                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? owner.Host : "", Origin = live ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
         // Associate a phone terminal only with the verified writer process in its own process tree.

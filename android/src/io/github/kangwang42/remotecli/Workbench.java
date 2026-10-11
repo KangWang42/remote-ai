@@ -37,7 +37,7 @@ final class Workbench {
         final boolean marks;        // the computer keeps what is said of single conversations: pinned, hidden
         Snapshot(String state, String line, List<AggregateSessions.Project> projects, boolean marks) { this.state = state; this.line = line; this.projects = projects; this.marks = marks; }
     }
-    private static final int SHOWN = 4, TASKS = 12, TALKS = 8, RECENT = 5, RECENT_ALL = 20, FOUND = 30;
+    private static final int SHOWN = 4, TASKS = 12, TALKS = 8, RECENT = 2, RECENT_ALL = 20, FOUND = 30;
 
     private final MainActivity activity;
     private final Kit kit;
@@ -226,7 +226,9 @@ final class Workbench {
         return row;
     }
     // A folded section stays folded the next time the app is opened.
-    private boolean folded(String section) { return activity.prefs.getBoolean("fold-" + section, false); }
+    // The overview is a triage surface. Keep the long-running and recently-used sections closed until the
+    // user asks for them; otherwise a busy computer pushes the projects and the rest of the workbench below the fold.
+    private boolean folded(String section) { return activity.prefs.getBoolean("fold-" + section, true); }
     private void fold(String section) { activity.prefs.edit().putBoolean("fold-" + section, !folded(section)).apply(); draw(); }
     private void addComputer() {
         kit.sheet("添加电脑", "", new String[]{"扫码添加", "手动输入地址"}, new String[]{"对准电脑端窗口里的二维码", "填写电脑端窗口里显示的地址和密码"}, -1,
@@ -502,7 +504,7 @@ final class Workbench {
         card.addView(kit.tile(toolIcon(entry.tool), toolColor(entry.tool), 40));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(12), 0, 0, 0);
-        texts.addView(kit.line(entry.shownTitle(), 15.5f, kit.INK, true));
+        texts.addView(kit.title(entry.shownTitle(), 15.5f, kit.INK, true));
         LinearLayout meta = kit.row();
         boolean closing = ending.contains(task.url + '\n' + entry.id);
         meta.addView(kit.pill(closing ? "正在结束" : entry.hidden ? "已隐藏" : AggregateSessions.label(task.kind), closing ? kit.MUTED : color(task.kind)));
@@ -827,7 +829,7 @@ final class Workbench {
         LinearLayout row = kit.row();
         row.setMinimumHeight(kit.dp(52)); row.setPadding(kit.dp(16), kit.dp(8), kit.dp(12), kit.dp(8));
         row.addView(kit.icon(R.drawable.ic_folder, open ? kit.ACCENT : kit.MUTED, 20));
-        TextView name = kit.line(project.name, 15, kit.INK, open);
+        TextView name = kit.title(project.name, 15, kit.INK, open);
         name.setPadding(kit.dp(12), 0, kit.dp(8), 0);
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
         // each state keeps its own colour here too: red asks for a decision, green is finished work not yet looked at
@@ -880,7 +882,7 @@ final class Workbench {
         LinearLayout row = kit.row();
         row.setMinimumHeight(kit.dp(50)); row.setPadding(kit.dp(8), kit.dp(6), kit.dp(8), kit.dp(6));
         row.addView(kit.tile(toolIcon(entry.tool), toolColor(entry.tool), 30));
-        TextView title = kit.line(entry.shownTitle(), 14.5f, "history".equals(kind) ? kit.MUTED : kit.INK, false);
+        TextView title = kit.title(entry.shownTitle(), 14.5f, "history".equals(kind) ? kit.MUTED : kit.INK, false);
         title.setPadding(kit.dp(10), 0, kit.dp(8), 0);
         row.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         String used = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
