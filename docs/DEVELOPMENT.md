@@ -47,7 +47,7 @@ node tests\terminal_scroll_check.js                       # 拖动、惯性、�
 python tests\fullscreen_check.py <chrome.exe>             # 占满屏幕的程序：触摸拖动逐行滚动；滑动时屏幕截图与静止时的终端画面逐像素比对（每一行都在应在的位置，没有遮挡），移动图层时不重画；手机给不出滑动图层、图层中途丢失或复制画面过慢时退回按行滚动；手指点“回到最新”回到末尾，程序自己在画面上给出回到末尾的提示时（Claude Code 的 Jump to bottom）上面的内容下移一行盖住它，不留空行，没有滑动图层时才只盖住这一行，按钮按程序的方式回去；长时间运行后重新打开只读最近的输出且画面完整。真实的中转和电脑端，Codex 用替身程序；屏幕密度按手机取 2.625（`RCLI_TEST_DENSITY` 可改）；读截图需要 Pillow
 python tests\phone_line_check.py [chrome.exe [输出文件夹]]  # 手机上切换线路和更改设置：新线路在原线路旁准备好，交接后手机到达才保留，没到则回到原线路；隧道、局域网、中转互相切换；带浏览器时在页面上实际点按，并从列表给终端发一条指令。先运行 tools\package_windows.py
 node tests\session_state_check.js                         # 运行中的会话与保留的写入锁分开显示
-python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组、排序、已完成标记和刷新判定
+python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组、排序、已完成标记和刷新判定；按“等你处理、置顶、进行中、最近”分段、搜索、按工具和运行位置筛选、未加入项目的对话
 python tests\android_update_check.py                      # App 更新器关闭安装流的顺序
 python tests\native_owner_check.py                        # 临时进程验证归属，不操作真实 Codex 会话
 python tests\relay_check.py                               # 电脑端对自有中转的判断：密码对、密码错、地址不是中转、端口不通
@@ -57,7 +57,7 @@ python tests\side_status_check.py                         # 电脑端窗口左�
 python tests\own_mode_check.py                            # “我的中转”页签：点开不断线，检查不通过不切换也不保存并说明原因，通过才保存并切换，之后记得它；先运行 tools\package_windows.py
 python tests\public_mode_check.py                         # “公共中转”页签：不用配置就列出，选中后自动申请自己的空间，不显示地址和密码；空间被清理后重新申请；电脑端在空间里开终端，别的空间看不到
 python tests\reach_check.py                               # 电脑上开着的对话：工具的钩子报告的事件由谁回答、何时交给手机，手机的消息怎样送达，以及写入工具配置的条目（用虚构的事件和临时文件夹；先构建电脑端）
-python tests\reach_e2e_check.py [chrome.exe [输出文件夹]]  # 同一件事经真实的中转、电脑端和钩子程序走一遍：列表、确认、发消息，以及列表页上的卡片（虚构的 Codex 目录和事件）
+python tests\reach_e2e_check.py [chrome.exe [输出文件夹]]  # 同一件事经真实的中转、电脑端和钩子程序走一遍：列表、确认、发消息，以及列表页上的卡片（虚构的 Codex 目录和事件）；对话的置顶和隐藏由电脑端记住；未加入项目的对话被列出、查看、发消息，文件夹加为项目后归入该项目
 python tests\session_copies_check.py                      # 同一段对话只列一次，用虚构的对话文件
 python tests\said_check.py                                # 手机上看到的对话内容：问了什么、答了什么、做了什么，用虚构的对话文件
 python tests\look_check.py                                # 先看对话再接手、票据登录、手机和电脑共用一个终端；真实的中转和电脑端
@@ -71,6 +71,6 @@ python tests\move_check.py                             # 电脑端换到另一�
 python tests\history_check.py                          # 电脑端保留已交给中转的输出，中转缺少时从缺的地方再给一遍
 chrome --headless=new --window-size=1480,520 --screenshot=skins.png tests\skin_code_check.html   # 各外观下代码、diff 和 16 色的显示
 python tests\setup_check.py dist\RemoteCli-Setup-x.y.z.exe      # 安装程序，沙盒方式，不碰已有安装
-python tests\pages_check.py <chrome.exe> <输出文件夹>     # 用本机的中转和电脑端截取列表页和终端页
+python tests\pages_check.py <chrome.exe> <输出文件夹>     # 用本机的中转和电脑端截取列表页和终端页；对话是编造的（tests\made_up.py），不会把本机真实的对话画进图里
 java -cp .cache\zxing-core-3.5.3.jar tests\QrDecodeCheck.java <二维码.png> <内容>   # 手机端的二维码识别
 ```
