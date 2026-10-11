@@ -13,6 +13,11 @@
 //! Synchronous threads, no async runtime: one report loop, one held-pull loop, one reader
 //! and one waiter per terminal — the same shape the Python agent uses. Terminal input and
 //! output never reach a log.
+//!
+//! Terminals and project file browsing (file_list / file_read) are covered; reading saved
+//! conversations (peek) and starting Claude Code or Codex stay with the Python agent for
+//! now, and the features list in the report says so.
+use base64::Engine as _;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::Write as _;
@@ -30,6 +35,8 @@ const CHUNK_CHARS: usize = 12000; // one numbered piece of output
 const BATCH_BYTES: usize = 512 * 1024;
 const BATCH_CHUNKS: usize = 150;
 const OUTPUT_FLOOR_BYTES: usize = 2 * 1024 * 1024; // unsent output is dropped past this; the relay dedups by seq
+const FILE_PIECE: usize = 737280; // bytes of a file in one answer, as the Python agent cuts them
+const FILE_ENTRIES: usize = 3000; // entries of a folder in one answer
 const STRIP_ENV: [&str; 3] = [
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
@@ -45,6 +52,15 @@ fn now() -> f64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+/// A file's mtime in milliseconds since the epoch, the shape the phone reads.
+fn millis(stamp: std::io::Result<SystemTime>) -> i64 {
+    stamp
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn say(message: &str) {
@@ -143,6 +159,21 @@ fn tidy(text: &str, limit: usize) -> String {
     }
 }
 
+/// like os.path.normpath: collapse //, . and .. lexically (the folder need not exist)
+fn lexically_normalize(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    format!("/{}", parts.join("/"))
+}
+
 fn normal_folder(path: &str) -> Result<String, String> {
     let path = path.trim();
     if path.len() < 2
@@ -155,18 +186,7 @@ fn normal_folder(path: &str) -> Result<String, String> {
     {
         return Err("请填写电脑上的完整文件夹路径，例如 /home/you/demo".into());
     }
-    // like os.path.normpath: collapse //, . and .. lexically (the folder need not exist yet)
-    let mut parts: Vec<&str> = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            p => parts.push(p),
-        }
-    }
-    Ok(format!("/{}", parts.join("/")))
+    Ok(lexically_normalize(path))
 }
 
 fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
@@ -337,6 +357,129 @@ impl Http {
             Err(e) => Err(e.to_string()),
         }
     }
+}
+
+// ---------- file browsing ----------
+
+/// What a project folder holds, or a piece of one of its files. Nothing outside the
+/// project's own folder is given out: a link inside it that leads elsewhere is refused.
+/// The same answers the Python agent's files() gives, the way the phone's file pages read.
+fn files(
+    root: &str,
+    relative: &str,
+    action: &str,
+    offset: Result<i64, ()>,
+) -> Result<Value, String> {
+    let root = lexically_normalize(root.trim());
+    let relative = relative.replace('\\', "/");
+    let relative = relative.trim_matches('/');
+    let full = if relative.is_empty() {
+        root.clone()
+    } else {
+        lexically_normalize(&format!("{root}/{relative}"))
+    };
+    let inside = format!("{}/", root.trim_end_matches('/'));
+    if full != root && !full.starts_with(&inside) {
+        return Err("路径不在项目文件夹内".into());
+    }
+    let shown = if full == root {
+        String::new()
+    } else {
+        full[inside.len()..].to_string()
+    };
+    // a link inside the project that leads elsewhere is refused. A path that does not
+    // resolve (a file that is not there, a link to nowhere) falls back to the lexical
+    // check above and is reported by the action itself.
+    if let (Ok(real_root), Ok(real)) = (std::fs::canonicalize(&root), std::fs::canonicalize(&full))
+    {
+        let real_root = real_root.to_string_lossy();
+        let real = real.to_string_lossy();
+        let real_inside = format!("{}/", real_root.trim_end_matches('/'));
+        if real != real_root && !real.starts_with(&real_inside) {
+            return Err("这个位置链接到项目文件夹之外，不能打开".into());
+        }
+    }
+    if action == "file_list" {
+        let target = Path::new(&full);
+        if !target.is_dir() {
+            return Err(if target.exists() {
+                "这不是文件夹"
+            } else {
+                "文件夹不存在"
+            }
+            .into());
+        }
+        let mut entries: Vec<Value> = Vec::new();
+        let mut more = false;
+        let list = std::fs::read_dir(target).map_err(|_| "读取失败".to_string())?;
+        for item in list {
+            if entries.len() >= FILE_ENTRIES {
+                more = true;
+                break;
+            }
+            let Ok(item) = item else { continue };
+            // a link that leads nowhere is still an entry: stat it following links, else as itself
+            let Ok(info) = std::fs::metadata(item.path()).or_else(|_| item.metadata()) else {
+                continue;
+            };
+            let name = item.file_name().to_string_lossy().to_string();
+            let is_dir = info.is_dir();
+            entries.push(json!({
+                "name": name, "dir": is_dir, "size": if is_dir { 0 } else { info.len() },
+                "modified": millis(info.modified()), "hidden": name.starts_with('.'),
+            }));
+        }
+        return Ok(json!({"path": shown, "entries": entries, "more": more}));
+    }
+    if Path::new(&full).is_dir() {
+        return Err("这是文件夹".into());
+    }
+    let offset = match offset {
+        Ok(o) => o,
+        Err(_) => return Err("位置无效".into()),
+    };
+    // opened without waiting, so a pipe or a device left in a project cannot hold the agent
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&full)
+        .map_err(|e| {
+            match e.kind() {
+                std::io::ErrorKind::NotFound => "文件不存在",
+                std::io::ErrorKind::PermissionDenied => "没有权限读取",
+                _ => "读取失败",
+            }
+            .to_string()
+        })?;
+    let info = file.metadata().map_err(|_| "读取失败".to_string())?;
+    if !info.is_file() {
+        return Err("这不是普通文件，不能打开".into());
+    }
+    let size = info.len() as i64;
+    let offset = match offset {
+        o if o >= 0 && o <= size => o,
+        _ => return Err("位置无效".into()),
+    };
+    let want = std::cmp::min(FILE_PIECE as i64, size - offset) as usize;
+    use std::io::{Read, Seek};
+    file.seek(std::io::SeekFrom::Start(offset as u64))
+        .map_err(|_| "读取失败".to_string())?;
+    let mut data = vec![0u8; want];
+    let mut filled = 0usize;
+    while filled < want {
+        match file.read(&mut data[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err("读取失败".into()),
+        }
+    }
+    data.truncate(filled);
+    Ok(json!({
+        "path": shown, "size": size, "modified": millis(info.modified()), "offset": offset,
+        "data": base64::engine::general_purpose::STANDARD.encode(&data),
+        "end": offset + filled as i64 >= size,
+    }))
 }
 
 // ---------- terminal ----------
@@ -993,6 +1136,7 @@ impl Projects {
 
 struct Ack {
     error: String,
+    result: Option<Value>, // the answer of a file request, handed over once
 }
 
 struct State {
@@ -1168,13 +1312,37 @@ impl Agent {
                 if !output.is_empty() {
                     state.last_activity = now();
                 }
-                let acks: Vec<Value> = state
-                    .completed
-                    .iter()
-                    .filter(|(id, _)| !state.reported.contains(*id))
-                    .take(200)
-                    .map(|(id, a)| json!({"id": id, "error": a.error}))
-                    .collect();
+                // Pieces of files are large: a report carries as many as fit, the rest go
+                // with the next — the same budget the Python agent keeps. Oldest first, so
+                // a file answer reaches the waiting phone page without a long queue ahead.
+                let mut acks: Vec<Value> = Vec::new();
+                let mut room = (3 * FILE_PIECE) as i64;
+                for id in state.completed_order.iter() {
+                    if state.reported.contains(id) {
+                        continue;
+                    }
+                    let Some(a) = state.completed.get(id) else {
+                        continue;
+                    };
+                    let data = a
+                        .result
+                        .as_ref()
+                        .and_then(|r| r.get("data"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.len())
+                        .unwrap_or(0);
+                    room -= data as i64;
+                    if !acks.is_empty() && room < 0 {
+                        break;
+                    }
+                    acks.push(match &a.result {
+                        Some(r) => json!({"id": id, "error": a.error, "result": r}),
+                        None => json!({"id": id, "error": a.error}),
+                    });
+                    if acks.len() >= 200 {
+                        break;
+                    }
+                }
                 let ack_ids: Vec<String> = acks
                     .iter()
                     .map(|a| {
@@ -1203,7 +1371,8 @@ impl Agent {
                     .to_string();
                 let payload = json!({
                     "info": {"instance": self.instance, "enabled": enabled, "tools": ["shell"],
-                             "version": VERSION, "shell": shell_name,
+                             "features": ["terminal-exit", "files"], "version": VERSION,
+                             "shell": shell_name,
                              "workspaces": dirs.keys().collect::<Vec<_>>(),
                              "projects": entries},
                     "terminals": terminals,
@@ -1249,6 +1418,9 @@ impl Agent {
             }
         }
         for id in ack_ids {
+            if let Some(a) = state.completed.get_mut(&id) {
+                a.result = None; // handed over once: nothing of a file is kept
+            }
             state.reported.insert(id);
         }
         if let Some(ops) = answer.get("operations").and_then(|v| v.as_array()) {
@@ -1300,6 +1472,7 @@ impl Agent {
             action.as_str(),
             "project_add" | "project_remove" | "project_rename"
         );
+        let file_op = matches!(action.as_str(), "file_list" | "file_read");
         let op_id = op
             .get("id")
             .and_then(|v| v.as_str())
@@ -1311,7 +1484,9 @@ impl Agent {
             .unwrap_or("")
             .to_string();
         // shape and freshness, before anything is carried out
-        if !is_lower_hex(&op_id, 16, 32) || (!project && !is_lower_hex(&terminal, 32, 32)) {
+        if !is_lower_hex(&op_id, 16, 32)
+            || (!project && !file_op && !is_lower_hex(&terminal, 32, 32))
+        {
             say("拒绝操作：操作编号无效");
             return;
         }
@@ -1329,6 +1504,7 @@ impl Agent {
             return;
         }
         let mut error = String::new();
+        let mut result: Option<Value> = None;
         if cfg.get("RemoteEnabled").and_then(|v| v.as_bool()) != Some(true) {
             error = "电脑远控已关闭".into();
         } else if project {
@@ -1345,6 +1521,23 @@ impl Agent {
                 .start_terminal(op, dirs, &terminal, cfg, state)
                 .err()
                 .unwrap_or_default();
+        } else if file_op {
+            let root = dirs.get(op.get("dir").and_then(|v| v.as_str()).unwrap_or(""));
+            match root {
+                None => error = "没有这个项目".to_string(),
+                Some(root) => {
+                    let relative = op.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let offset = match op.get("offset") {
+                        None => Ok(0),
+                        Some(Value::Number(n)) => n.as_i64().ok_or(()),
+                        _ => Err(()),
+                    };
+                    match files(root, relative, &action, offset) {
+                        Ok(answer) => result = Some(answer),
+                        Err(e) => error = e,
+                    }
+                }
+            }
         } else {
             let existing = state
                 .terminals
@@ -1382,7 +1575,7 @@ impl Agent {
             ));
         }
         state.completed_order.push_back(op_id.clone());
-        state.completed.insert(op_id.clone(), Ack { error });
+        state.completed.insert(op_id.clone(), Ack { error, result });
         state.reported.remove(&op_id);
         state.last_activity = now();
         state.soon = true;
