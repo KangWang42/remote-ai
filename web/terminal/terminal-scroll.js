@@ -10,10 +10,11 @@
   const SLOT = 110, MOVES = [[6, 4], [4, 2], [3, 1]], OWED = 45;
   // A terminal moves by whole rows, and a program that scrolls its own view moves it a few rows at a time, a moment
   // after it was asked. What is seen is to move with the finger by the pixel all the same, and whole: with rows
-  // coming into sight at one edge as they leave at the other. So while a finger scrolls, what is seen is drawn from a
-  // strip of the rows the terminal has shown (TerminalSlide):
+  // coming into sight at one edge as they leave at the other. So while a finger scrolls, what is seen is shown from a
+  // strip of the rows the terminal has shown (TerminalSlide says where it stands; TerminalStrip, in
+  // terminal-strip.js, holds the pictures of the rows and moves them):
   // - the rows are kept on the strip as the terminal draws them, each under the place it has in what is scrolled
-  //   through, and are drawn from there at the place the finger is at;
+  //   through, and the strip is shown at the place the finger is at;
   // - the terminal is kept ahead of the finger the way it moves, so that the rows about to come into sight are on
   //   the strip before they are needed: by the rows the finger covers in the time the program takes to move (both
   //   are measured as it goes) and in SPARE ms more, for a network that stops for a moment, within LEAD [fewest,
@@ -33,11 +34,12 @@
   const WAIT = 700, SETTLE = 90, EASE = 70, LATE = 8;
   class TerminalSlide {
     // options: cell() the height of a row; count() the rows of the terminal; viewport() where the terminal's own
-    // history is scrolled to; read() the text of every row on the screen; keep(row, place, rows) copies rows of the
-    // terminal's picture onto the strip and says false when there is no picture to copy from; show(place, top,
-    // bottom, first, last) draws the rows between the still ones from the strip, with the terminal's first row
-    // standing for `place` (which may lie between two rows), the strip holding the places `first` to `last`;
-    // show(null) leaves the terminal as it draws itself; nudge(rows) asks the terminal for rows the finger did not move.
+    // history is scrolled to; read() the text of every row on the screen; draw() asks the terminal to draw, and
+    // says false when it has no picture that can be copied; keep(row, place, rows) copies rows of the picture onto
+    // the strip, and is only called as the terminal has drawn; show(place, top, bottom, first, last) shows the rows
+    // between the still ones from the strip, with the terminal's first row standing for `place` (which may lie
+    // between two rows), the strip holding the places `first` to `last`; show(null) leaves the terminal as it
+    // draws itself; nudge(rows) asks the terminal for rows the finger did not move.
     constructor(options) {
       this.options = options;
       this.top = 0; this.bottom = 0; this.went = 0; this.stuck = 0;
@@ -57,8 +59,9 @@
       this.kind = kind; this.active = true; this.seen = false; this.at = at; this.drain = 0;
       this.viewport = this.options.viewport();
       this.rows = kind === 'local' ? null : this.options.read();
-      // Without a picture of the terminal there is nothing to draw from: it scrolls by the row, as it does by itself.
-      if (fresh && !this.keep()) this.active = false;
+      // The terminal's picture can be copied only as it is drawn: it is asked to draw, and its rows go onto the
+      // strip then (drawn). Without a picture there is nothing to show: it scrolls by the row, as it does by itself.
+      if (fresh && this.options.draw() === false) this.active = false;
     }
     cancel() {
       const shown = this.active;
@@ -117,9 +120,14 @@
       let best = 0, most = 0;
       for (let k = 1; k <= far; k++) for (const way of [k, -k]) { const same = count(way); if (same > most) { best = way; most = same; } }
       if (most < 2 || most < (changed - Math.abs(best)) / 2) return 0;
+      // A row at the edge is one of those that move when it reads differently and is seen to have come from, or to
+      // have gone to, the row that many further on. One that changed where it stands (a line that says how long the
+      // program has been working) stands still, like those that did not change.
+      const there = i => i >= 0 && i < n;
+      const moved = i => before[i] !== after[i] && ((there(i - best) && after[i] === before[i - best]) || (there(i + best) && before[i] === after[i + best]));
       let top = 0, bottom = 0;
-      while (top < n && before[top] === after[top]) top++;
-      while (bottom < n - top && before[n - 1 - bottom] === after[n - 1 - bottom]) bottom++;
+      while (top < n && !moved(top)) top++;
+      while (bottom < n - top && !moved(n - 1 - bottom)) bottom++;
       // Rows that happen to read the same may be taken for still ones; over a drag the fewest seen are the true ones.
       const was = this.edges();
       this.top = this.seen ? Math.min(this.top, top) : top; this.bottom = this.seen ? Math.min(this.bottom, bottom) : bottom;
@@ -146,7 +154,7 @@
         if (!first.rows) this.asked.shift();
       }
       this.base -= shift;
-      this.keep();
+      if (!this.keep()) { this.cancel(); return; }
       if (made) { this.went = way; this.stuck = 0; this.madeAt = this.at; }
       // What is seen stays where it was: a move that changes where the picture may be is come on to, not jumped to.
       if (shift) { const most = LATE * cell; this.ease = Math.max(-most, Math.min(most, this.ease + before - shift * cell - this.within())); }
@@ -159,10 +167,13 @@
       this.at = at;
       if (dt) { this.speed += (this.gone / cell / dt - this.speed) * .2; this.gone = 0; }
       // What was asked for long ago, with nothing having moved since, is not coming (the program is at the end of
-      // its list): the picture gives up the finger's part of it, and the terminal is not ahead by the rest.
+      // its list). The terminal is not ahead by the rows that were to keep it ahead; and the finger's own are first
+      // made up for by those it still is ahead by: the picture gives up only what is left of them.
       while (this.asked.length && at - Math.max(this.asked[0].at, this.madeAt) > Math.max(WAIT, 4 * this.lag)) {
         const lost = this.asked.shift(), own = lost.rows - lost.free;
-        this.drain += own * cell; this.led -= lost.free;
+        this.led -= lost.free;
+        const spare = Math.sign(this.led) === Math.sign(own) ? Math.sign(own) * Math.min(Math.abs(own), Math.abs(this.led)) : 0;
+        this.led -= spare; this.drain += (own - spare) * cell;
         // the finger's own rows say that the program will not go that way; rows asked to get ahead, or back, do not
         if (own) { this.stuck = Math.sign(own); if (this.went === this.stuck) this.went = 0; }
       }
@@ -198,6 +209,7 @@
       return way * cell * (known + (beyond <= free || !give ? Math.min(beyond, free) : free + give * (1 - Math.exp((free - beyond) / give))));
     }
     show() {
+      if (this.to < this.from) { this.options.show(null); return; }      // no row is held yet: the terminal has not drawn
       const [top, bottom] = this.edges();
       this.options.show(this.base - (this.within() + this.ease) / this.options.cell(), top, bottom, this.from, this.to);
     }
@@ -214,11 +226,15 @@
       this.frame = 0; this.dragging = false; this.velocity = 0; this.pending = 0; this.more = 0;
     }
     start(y, at) {
-      this.stop(); this.dragging = true; this.y = y; this.lastMove = at;
+      this.stop(); this.dragging = true; this.y = y; this.lastMove = at; this.began = false;
       this.lastFrame = at; this.distance = 0; this.kind = this.options.mode();
     }
     move(y, at) {
       if (!this.dragging) return;
+      // A browser tells of a finger's move only once it has left the spot it touched, and then of all the way it
+      // has gone at once (some ten pixels). That is where scrolling begins, as it does in a list of the phone's
+      // own: nothing has to be caught up with in one frame.
+      if (!this.began) { this.began = true; this.y = y; this.lastMove = at; return; }
       const delta = y - this.y, dt = Math.max(8, Math.min(64, at - this.lastMove));
       if (delta && this.velocity && Math.sign(delta) !== Math.sign(this.velocity)) {
         this.pending = 0; this.velocity = 0;

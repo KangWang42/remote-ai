@@ -43,8 +43,8 @@ python -m unittest discover -s relay -p "test_*.py"
 python3 -m unittest discover -s agent-linux -p "test_*.py"   # Linux 电脑端，在 Linux 上运行：真实中转、真实终端，Claude Code 用替身程序
 python tests\e2e_windows.py
 node tests\bridge_check.js                                # 传输选择、连接状态、延迟测量、连续输入和断线重试
-node tests\terminal_scroll_check.js                       # 拖动、惯性、画面从已显示过的行连续绘出（两侧都有内容、网络停顿时的跟随）、Codex 普通/全屏模式、Claude Code 的滚轮配速、鼠标编码和回到最新
-python tests\fullscreen_check.py <chrome.exe>             # 占满屏幕的程序：触摸拖动逐行滚动，手指点“回到最新”回到末尾；长时间运行后重新打开只读最近的输出且画面完整。真实的中转和电脑端，Codex 用替身程序
+node tests\terminal_scroll_check.js                       # 拖动、惯性、起滑不跳动、画面跟随手指（两侧都有内容、网络停顿时的跟随、滑到列表尽头不漂移）、固定行的识别、只在终端重画时复制画面、Codex 普通/全屏模式、Claude Code 的滚轮配速、鼠标编码和回到最新
+python tests\fullscreen_check.py <chrome.exe>             # 占满屏幕的程序：触摸拖动逐行滚动；滑动图层上的行与终端画面逐像素相同、位置对齐，移动图层时不重画；手指点“回到最新”回到末尾；长时间运行后重新打开只读最近的输出且画面完整。真实的中转和电脑端，Codex 用替身程序；屏幕密度按手机取 2.625（`RCLI_TEST_DENSITY` 可改）
 python tests\phone_line_check.py [chrome.exe [输出文件夹]]  # 手机上切换线路和更改设置：新线路在原线路旁准备好，交接后手机到达才保留，没到则回到原线路；隧道、局域网、中转互相切换；带浏览器时在页面上实际点按，并从列表给终端发一条指令。先运行 tools\package_windows.py
 node tests\session_state_check.js                         # 运行中的会话与保留的写入锁分开显示
 python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组、排序、已完成标记和刷新判定

@@ -28,9 +28,7 @@
   let drawing = 'dom';
   if (window.WebglAddon && !(bridge && bridge.renderer() === 'dom')) {
     try {
-      // The picture is kept after it is shown: its rows are copied onto a strip, from which what is seen is drawn
-      // while a finger scrolls (see `strip` below).
-      const gl = new WebglAddon.WebglAddon(true);
+      const gl = new WebglAddon.WebglAddon();
       gl.onContextLoss(() => { gl.dispose(); drawing = 'dom'; });
       term.loadAddon(gl);
       drawing = 'webgl';
@@ -140,14 +138,17 @@
   });
   term.onData(data => { if (!restoring) send(data); });
 
-  // While a finger scrolls, what is seen is drawn here, over the terminal, from a strip of the rows the terminal has
-  // shown (TerminalSlide): so it moves with the finger by the pixel, and rows come into sight at one edge as they
-  // leave at the other. The rows a fullscreen program holds still, its heading and its message box, are not covered.
-  const strip = document.createElement('canvas'), over = document.createElement('canvas');
+  // While a finger scrolls, what is seen is shown from a strip of the rows the terminal has drawn (TerminalSlide,
+  // TerminalStrip): so it moves with the finger by the pixel, and rows come into sight at one edge as they leave at
+  // the other. The strip lies over the terminal's picture, in the same element, and covers the rows that move: those
+  // a fullscreen program holds still, its heading and its message box, are the terminal's own.
+  const over = document.createElement('div');
   over.id = 'slid'; over.hidden = true;
-  screen.insertBefore(over, latest);
-  const picture = () => Array.from(holder.querySelectorAll('.xterm-screen canvas')).find(canvas => !canvas.classList.contains('xterm-link-layer')) || null;
-  let slideFrame = 0, places = 0;         // places: how many rows the strip has room for; a row's place counts round it
+  holder.querySelector('.xterm-screen').appendChild(over);
+  const strip = new TerminalStrip(over, TerminalSlide.KEPT, () => (term.options.theme && term.options.theme.background) || '#000');
+  // the picture the terminal draws on the graphics card; drawn as plain elements, it has none to copy from
+  const picture = () => drawing === 'webgl' ? holder.querySelector('.xterm-screen > canvas:not(.xterm-link-layer)') : null;
+  let slideFrame = 0;
   const slide = new TerminalSlide({
     cell: () => tall / Math.max(1, term.rows),
     count: () => term.rows,
@@ -157,46 +158,9 @@
       for (let i = 0; i < term.rows; i++) { const line = buffer.getLine(buffer.viewportY + i); rows.push(line ? line.translateToString(true) : ''); }
       return rows;
     },
-    keep(row, place, rows) {
-      const source = picture();
-      if (!source) return false;
-      const high = source.height / Math.max(1, term.rows), room = term.rows + 2 * TerminalSlide.KEPT + 2;
-      if (places !== room || strip.width !== source.width || strip.height !== Math.round(room * high)) { places = room; strip.width = source.width; strip.height = Math.round(room * high); }
-      const draw = strip.getContext('2d');
-      for (let done = 0; done < rows;) {
-        const at = ((place + done) % places + places) % places, run = Math.min(rows - done, places - at);
-        draw.drawImage(source, 0, Math.round((row + done) * high), source.width, Math.round(run * high), 0, Math.round(at * high), source.width, Math.round(run * high));
-        done += run;
-      }
-      return true;
-    },
-    show(place, top, bottom, first, last) {
-      const source = place === null ? null : picture();
-      if (!source || !places) { if (!over.hidden) over.hidden = true; return; }
-      const high = source.height / Math.max(1, term.rows), from = source.getBoundingClientRect(), frame = screen.getBoundingClientRect();
-      if (over.width !== source.width || over.height !== source.height) { over.width = source.width; over.height = source.height; }
-      over.style.left = (from.left - frame.left) + 'px'; over.style.top = (from.top - frame.top) + 'px';
-      over.style.width = from.width + 'px'; over.style.height = from.height + 'px';
-      // every row is drawn on whole pixels, all moved by the same amount: the text stays as sharp as the terminal draws it
-      const draw = over.getContext('2d'), begin = Math.round(top * high), end = Math.round((term.rows - bottom) * high), moved = Math.round(place * high);
-      const lowest = Math.max(first, Math.floor(place + top)), highest = Math.min(last, Math.ceil(place + term.rows - bottom) - 1);
-      draw.clearRect(0, 0, over.width, over.height);
-      draw.save();
-      draw.beginPath(); draw.rect(0, begin, over.width, end - begin); draw.clip();
-      draw.fillStyle = (term.options.theme && term.options.theme.background) || '#000';
-      draw.fillRect(0, begin, over.width, end - begin);
-      for (let i = lowest; i <= highest;) {
-        const at = (i % places + places) % places, run = Math.min(highest - i + 1, places - at);
-        draw.drawImage(strip, 0, Math.round(at * high), strip.width, Math.round(run * high), 0, Math.round(i * high) - moved, over.width, Math.round(run * high));
-        i += run;
-      }
-      draw.restore();
-      if (over.hidden) over.hidden = false;
-      // for the checks: where the picture stands, how far between two rows, and how many rows of it have nothing to show
-      over.dataset.place = place.toFixed(3);
-      over.dataset.between = String(((moved % Math.round(high)) + Math.round(high)) % Math.round(high));
-      over.dataset.blank = (Math.max(0, lowest - (place + top)) + Math.max(0, place + term.rows - bottom - 1 - highest)).toFixed(2);
-    },
+    draw() { if (!picture()) return false; term.refresh(0, term.rows - 1); return true; },
+    keep(row, place, rows) { const source = picture(); return !!source && strip.keep(source, term.rows, row, place, rows); },
+    show(place, top, bottom, first, last) { if (place === null) strip.hide(); else strip.show(place, top, bottom, first, last); },
     nudge: rows => scroller.nudge(rows)
   });
   const resting = () => !scroller.dragging && !scroller.velocity && !scroller.frame;
@@ -237,7 +201,7 @@
   screen.addEventListener('touchcancel', () => { scroller.stop(); unslide(); }, { capture: true, passive: true });
   document.addEventListener('visibilitychange', () => { if (document.hidden) { scroller.stop(); unslide(); } });
   term.buffer.onBufferChange(() => { scroller.stop(); unslide(); slide.forget(); scrollRouter.reset(); follow(); });
-  term.onResize(() => { unslide(); slide.forget(); });
+  term.onResize(() => { unslide(); slide.forget(); strip.forget(); });
 
   // Buttons act on the terminal without taking the keyboard away from the message box.
   function keepFocus(element) { element.addEventListener('mousedown', event => event.preventDefault()); }
@@ -413,7 +377,8 @@
       }
       return text;
     },
-    terminal: term
+    terminal: term,
+    slide, strip          // for the checks
   };
   grow();
   layout();

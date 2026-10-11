@@ -7,11 +7,14 @@ A stand-in (tests/fullscreen_standin.py) takes the place of Codex; --real starts
 computer instead and checks the scrolling only. What is checked:
 
 - a drag moves the program's own list by the line: wheel reports reach it, page keys do not;
+- while a finger scrolls, the rows shown over the terminal are the terminal's own, pixel for pixel, stand where they
+  belong, and are moved without anything being painted;
 - "回到最新" leads back to the end;
 - after a long run the page is read from the program's last output only, still knows that the program is
   fullscreen and reads the mouse, and shows the whole picture, the part the program drew long ago included.
 
-Uses a temporary data folder and port 8743 (RCLI_TEST_PORT changes it).
+Uses a temporary data folder and port 8743 (RCLI_TEST_PORT changes it), on a screen as dense as a phone's
+(RCLI_TEST_DENSITY changes it; 2.625 unless set).
 """
 import base64
 import http.client
@@ -91,7 +94,9 @@ def main():
             raise AssertionError("the agent did not report Codex: %s" % device)
         terminal = op(action="start", tool="codex", dir="demo", history=False)["terminal"]
 
-        browser = subprocess.Popen([chrome, "--headless=new", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run", "--user-data-dir=" + str(profile),
+        # A screen as dense as a phone's: about two and a half to three of its pixels to one of the page's, seldom a
+        # whole number. The terminal measures its picture in the screen's pixels, which an emulated density does not change.
+        browser = subprocess.Popen([chrome, "--headless=new", "--force-device-scale-factor=" + os.environ.get("RCLI_TEST_DENSITY", "2.625"), "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run", "--user-data-dir=" + str(profile),
                                     "--remote-debugging-port=%d" % (PORT + 1), "--remote-allow-origins=*", "--window-size=412,892", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(60):
             try:
@@ -136,9 +141,53 @@ def main():
         TOP = "Number((/top=(\\d+)/.exec(" + SCREEN + ") || [0, -1])[1])"
         COUNT = lambda name: "Number((/" + name + "=(\\d+)/.exec(" + SCREEN + ") || [0, -1])[1])"
 
+        # Watches the strip while a finger scrolls. Every frame: how far between two rows the picture stands, whether it
+        # is shown, how many of its rows have nothing on them. Every time the terminal has drawn: three of the rows
+        # just copied are compared with the terminal's picture, and it is noted whether they have text on them. Every
+        # frame the strip is shown: where its box and one of its rows are on the page, against where the terminal's are.
+        # And every time anything is painted on a 2D canvas, by anyone.
+        WATCH = """(() => {
+          const t = TerminalUI.terminal, slide = TerminalUI.slide, strip = TerminalUI.strip, seen = window.__watched = { draws: 0, compared: 0, differed: 0, inked: 0, placed: 0, off: 0, paints: 0, glides: 0 };
+          window.__slid = [];
+          const source = () => document.querySelector('#terminal .xterm-screen > canvas:not(.xterm-link-layer)');
+          const scratch = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+          const band = (canvas, y, high) => { scratch.canvas.width = canvas.width; scratch.canvas.height = high; scratch.drawImage(canvas, 0, y, canvas.width, high, 0, 0, canvas.width, high); return scratch.getImageData(0, 0, canvas.width, high).data; };
+          t.onRender(() => {
+            if (!slide.active || slide.to < slide.from) return;
+            seen.draws++;
+            const [top, bottom] = slide.edges(), high = strip.high, from = source();
+            for (const row of [top, Math.floor((top + t.rows - bottom) / 2), t.rows - bottom - 1]) {
+              const place = slide.base + row, index = Math.floor(place / strip.per), tile = strip.tiles.find(one => one.index === index);
+              const a = band(from, strip.above + row * high, high).slice(), b = tile ? band(tile.canvas, (place - index * strip.per) * high, high) : [];
+              seen.compared++;
+              if (a.length !== b.length || a.some((value, i) => value !== b[i])) seen.differed++;
+              if (a.some((value, i) => value !== a[i % 4])) seen.inked++;
+            }
+          });
+          const proto = CanvasRenderingContext2D.prototype;
+          for (const name of ['drawImage', 'fillRect', 'clearRect', 'putImageData']) { const real = proto[name]; proto[name] = function () { if (this !== scratch) seen.paints++; return real.apply(this, arguments); }; }
+          let before = null;
+          (function look() {
+            window.__slid.push(strip.shown ? [strip.between(), true, strip.blank()] : [0, false, 0]);
+            if (strip.shown) {
+              const [top, bottom] = slide.edges(), from = source().getBoundingClientRect(), box = document.getElementById('slid').getBoundingClientRect(), row = strip.high * strip.unit;
+              const first = from.top + strip.above * strip.unit + top * row;          // where the terminal draws the first row that moves
+              const place = slide.base + top, index = Math.floor(place / strip.per), tile = strip.tiles.find(one => one.index === index);
+              let off = Math.max(Math.abs(box.top - first), Math.abs(box.bottom - first - (t.rows - top - bottom) * row), Math.abs(box.left - from.left), Math.abs(box.width - from.width));
+              // the terminal's first moving row, on its tile, lies as far from the terminal's own as the picture is moved
+              if (tile) off = Math.max(off, Math.abs(tile.canvas.getBoundingClientRect().top + (place - index * strip.per) * row - first - (slide.base - strip.place) * row));
+              seen.placed++; seen.off = Math.max(seen.off, off * devicePixelRatio);
+              const now = [strip.moved, seen.paints];
+              if (before && now[0] !== before[0] && now[1] === before[1]) seen.glides++;
+              before = now;
+            } else before = null;
+            if (window.__slid.length < 1200) requestAnimationFrame(look);
+          })();
+          return 1;
+        })()"""
         ask("Page.enable")
         ask("Runtime.enable")
-        ask("Emulation.setDeviceMetricsOverride", width=412, height=892, deviceScaleFactor=1, mobile=True)
+        ask("Emulation.setDeviceMetricsOverride", width=412, height=892, deviceScaleFactor=0, mobile=True)        # the density is the browser's own, see where it is started
         ask("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=1)
         base = "http://127.0.0.1:%d" % PORT
         ask("Page.navigate", url=base + "/#p=" + password)
@@ -240,8 +289,7 @@ def main():
         assert moved - 4 <= top - page_value(TOP) <= moved - 3, (top, page_value(TOP), moved)
         # ---- a slow drag is followed by the pixel: between the program's moves the picture is slid under the finger,
         # the rows the program holds still stay where they are, and at rest the picture is where the terminal draws it
-        ask("Runtime.evaluate", expression="window.__slid = []; (function look() { const o = document.getElementById('slid');"
-            " window.__slid.push(o.hidden ? [0, false, 0] : [Number(o.dataset.between || 0), true, Number(o.dataset.blank || 0)]); if (window.__slid.length < 1200) requestAnimationFrame(look); })()")
+        page_value(WATCH)
         slow = page_value(TOP)
         drag(5, steps=75, pause=0.02, halfway=lambda: picture("fullscreen-sliding.png"))
         time.sleep(0.6)
@@ -255,6 +303,19 @@ def main():
         # rows come into sight at the edge as the finger moves: at no time is a row's height of the list without text
         assert report["rows_of_nothing_in_a_slow_drag"] < 1, report
         assert places[-1] == 0 and page_value("document.getElementById('slid').hidden") is True, places[-5:]
+        # what is shown is the terminal's own picture: every time the terminal drew, the rows copied from it were the
+        # same on the strip, pixel for pixel, and had text on them; and the strip stood over the terminal's rows, cut
+        # off at the rows the program holds still, each row as far from the terminal's as the picture was moved
+        watched = page_value("window.__watched")
+        report["times_the_terminal_drew"], report["rows_compared"], report["rows_that_differed"] = watched["draws"], watched["compared"], watched["differed"]
+        report["rows_with_text"], report["most_the_strip_was_out_of_place"] = watched["inked"], round(watched["off"], 2)
+        report["density"], report["picture"] = page_value("devicePixelRatio"), page_value("(() => { const s = TerminalUI.strip; return [s.high, s.above, s.per, s.tiles.length]; })()")
+        assert watched["compared"] >= 6 and watched["differed"] == 0 and watched["inked"] >= watched["compared"] // 2, report
+        assert watched["placed"] >= 15 and watched["off"] <= 1, report
+        # moving the picture paints nothing: it was painted when the terminal drew (a copy of its rows, on one tile or
+        # on two), and in the many frames between it was only moved
+        report["paints"], report["frames_moved_without_painting"] = watched["paints"], watched["glides"]
+        assert watched["paints"] <= 3 * watched["draws"] + 12 and watched["glides"] >= 15, report
         assert 4 <= report["rows_moved_by_a_slow_5_row_drag"] <= 5, report
         drag(-5)
         # a quick flick of about ten rows glides on after the finger lifts, as far as its speed carries it (the speed
@@ -285,9 +346,10 @@ def main():
         time.sleep(0.15)
         ask("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": box[0], "y": box[1]}])        # a finger put down on the moving picture
         time.sleep(0.3)
-        place = page_value("document.getElementById('slid').dataset.place")
+        HELD = "(() => { const s = TerminalUI.slide; return [TerminalUI.strip.place, s.active, s.base, s.offset, s.asked.length, s.led]; })()"
+        place = page_value(HELD)
         time.sleep(0.8)
-        assert page_value("document.getElementById('slid').dataset.place") == place, "the picture moved on under a finger that held it"
+        assert place[0] is not None and page_value(HELD)[0] == place[0], ("the picture moved on under a finger that held it", place, page_value(HELD))
         ask("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
         time.sleep(1.2)             # the program comes back the rows it was kept ahead of the finger by
         held = page_value(TOP)

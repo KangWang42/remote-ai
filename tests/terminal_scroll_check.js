@@ -12,14 +12,14 @@ function fixture(kind = 'local', reduced = false) {
     hide() {visible = false;}, mode(m) {kind = m;}};
 }
 {
-  const f = fixture('mouse'); f.scroller.start(0, 0); f.scroller.move(15, 8); f.scroller.move(35, 12);
+  const f = fixture('mouse'); f.scroller.start(0, 0); f.scroller.move(0, 0); f.scroller.move(15, 8); f.scroller.move(35, 12);
   assert.equal(f.frames.size, 1); f.step(16);
   assert.deepEqual(f.moves, [{lines: 3, mode: 'mouse', at: 16}]);
   f.scroller.move(30, 18); f.scroller.move(10, 22); f.step(32);
   assert.equal(f.moves[1].lines, -2, 'reversing a drag must not replay queued movement in the previous direction');
 }
 {
-  const f = fixture(); f.scroller.start(0, 0);
+  const f = fixture(); f.scroller.start(0, 0); f.scroller.move(0, 0);
   for (let i = 1; i <= 5; i++) {f.scroller.move(i * 2, i * 16); f.step(i * 16);}
   assert.equal(f.moves.reduce((n, m) => n + m.lines, 0), 1, 'small movements must accumulate');
   f.scroller.move(70, 96); f.step(96); f.scroller.end(97); const before = f.moves.length;
@@ -28,24 +28,33 @@ function fixture(kind = 'local', reduced = false) {
   assert.equal(f.frames.size, 0, 'inertia must settle');
 }
 {
-  const f = fixture('mouse'); f.scroller.start(0, 0); f.scroller.move(1000, 16); f.scroller.end(17);
+  const f = fixture('mouse'); f.scroller.start(0, 0); f.scroller.move(0, 0); f.scroller.move(1000, 16); f.scroller.end(17);
   for (let t = 32; t < 3000; t += 16) f.step(t);
   assert.ok(f.moves.every(m => Math.abs(m.lines) <= 12), 'remote scrolling must send bounded batches');
   assert.equal(f.frames.size, 0, 'remote inertia must not keep queuing input');
 }
 {
-  const f = fixture(); f.scroller.start(0, 0); f.scroller.move(100, 16); f.step(16); f.scroller.end(17);
-  f.step(32); const count = f.moves.length; f.scroller.start(0, 33); f.step(48);
+  const f = fixture(); f.scroller.start(0, 0); f.scroller.move(0, 0); f.scroller.move(100, 16); f.step(16); f.scroller.end(17);
+  f.step(32); const count = f.moves.length; f.scroller.start(0, 33); f.scroller.move(0, 33); f.step(48);
   assert.equal(f.moves.length, count, 'a new touch cancels an old fling');
   f.scroller.move(20, 50); f.scroller.stop(); f.step(64); assert.equal(f.moves.length, count);
 }
 {
+  // A browser tells of a finger's move once it has left the spot it touched, and then of all the way it has gone:
+  // that is where the scrolling begins, and the way gone before is not caught up with.
+  const f = fixture(); f.scroller.start(100, 0); f.scroller.move(115, 30);
+  assert.equal(f.frames.size, 0); f.step(32);
+  assert.equal(f.moves.length, 0, 'the first move only says where the finger is');
+  f.scroller.move(127, 46); f.step(48);
+  assert.deepEqual(f.moves.map(m => m.lines), [1], 'and what follows is scrolled from there');
+}
+{
   for (const action of ['hide', 'mode']) {
-    const f = fixture(); f.scroller.start(0, 0); f.scroller.move(40, 16);
+    const f = fixture(); f.scroller.start(0, 0); f.scroller.move(0, 0); f.scroller.move(40, 16);
     if (action === 'hide') f.hide(); else f.mode('mouse');
     f.step(16); assert.equal(f.moves.length, 0, 'hidden or changed terminal must cancel pending scrolling');
   }
-  const f = fixture('local', true); f.scroller.start(0, 0); f.scroller.move(40, 16); f.step(16); f.scroller.end(17);
+  const f = fixture('local', true); f.scroller.start(0, 0); f.scroller.move(0, 0); f.scroller.move(40, 16); f.step(16); f.scroller.end(17);
   f.step(32); assert.equal(f.moves.length, 1, 'reduced-motion mode must avoid inertia');
 }
 {
@@ -136,7 +145,7 @@ function fixture(kind = 'local', reduced = false) {
 }
 {
   // the glide after lift-off is the same wherever the scrolling is done
-  const rows = kind => { const f = fixture(kind); f.scroller.start(0, 0);
+  const rows = kind => { const f = fixture(kind); f.scroller.start(0, 0); f.scroller.move(0, 0);
     for (let i = 1; i <= 6; i++) { f.scroller.move(i * 20, i * 16); f.step(i * 16); }
     f.scroller.end(100); for (let t = 116; t < 4000; t += 16) f.step(t);
     assert.equal(f.frames.size, 0, 'the glide must come to rest');
@@ -147,24 +156,26 @@ function fixture(kind = 'local', reduced = false) {
 {
   // While a finger scrolls, what is seen is drawn from a strip of the rows the terminal has shown, and the program
   // is kept some rows ahead of the finger. A program like Claude Code is asked by the wheel, moves its list three
-  // rows or more at a time a moment later, and keeps a heading and a message box where they are; the finger moves
+  // rows or more at a time a moment later, and keeps a heading and a message box where they are, with a line above
+  // the box that changes every time it draws (how long it has been working); the finger moves
   // evenly. What is seen must stay with the finger at every frame, with rows at both edges and not a band of nothing
   // where rows are yet to come; every row must stand where it belongs; and at rest the terminal itself must show
   // what was seen, the still rows untouched.
   const { TerminalSlide } = TerminalScroller;
   const cell = 20, rows = 24, head = 1, foot = 4, latency = 150;
-  let now = 0, top = 500, id = 0, shown = null;
+  let now = 0, top = 500, id = 0, shown = null, redraw = false, copies = 0, draws = 0;
   const frames = new Map(), due = [], strip = new Map();
   const screen = () => { const text = ['heading'];
     for (let i = 0; i < rows - head - foot; i++) text.push('line ' + (top + i));
-    return text.concat(['', 'box top', '> message', 'box bottom']); };
+    return text.concat(['', '* working (' + (500 - top) + ')', '> message', 'box bottom']); };
   const term = { cols: 80, rows, modes: { mouseTrackingMode: 'any' }, buffer: { active: { type: 'alternate', viewportY: 0, baseY: 0 } },
     parser: { registerCsiHandler() {} }, scrollLines() {}, scrollToBottom() {} };
   const router = new TerminalScrollRouter(term, text => { const steps = text.split('\x1b[').length - 1, up = text.includes('<64;');
     due.push({ at: now + latency, rows: (up ? 1 : -1) * { 1: 3, 2: 4, 4: 6 }[steps] }); return true; }, () => 'claude', () => now);
   router.sgr = true;
   const slide = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => 0, read: screen,
-    keep(row, place, count) { const text = screen(); for (let i = 0; i < count; i++) strip.set(place + i, text[row + i]); return true; },
+    draw() { redraw = true; },                  // the terminal draws in its next frame
+    keep(row, place, count) { copies++; const text = screen(); for (let i = 0; i < count; i++) strip.set(place + i, text[row + i]); return true; },
     show(place, t, b, first, last) { shown = place === null ? null : { place, top: t, bottom: b, first, last }; },
     nudge: count => scroller.nudge(count) });
   const scroller = new TerminalScroller({ request: f => { frames.set(++id, f); return id; }, cancel: n => frames.delete(n), mode: () => 'mouse', lineHeight: () => cell,
@@ -191,12 +202,12 @@ function fixture(kind = 'local', reduced = false) {
     if (drop) due.length = 0;
     let drew = false;
     while (arrives && due.length && due[0].at <= now) { top -= due.shift().rows; drew = true; }
-    if (drew) slide.drawn();                    // what arrived within a frame is drawn at once
+    if (drew || redraw) { redraw = false; draws++; slide.drawn(); }         // what arrived within a frame is drawn at once
     moving = slide.frame(now, !scroller.dragging && !scroller.velocity && !scroller.frame);
   };
   const start = top;
   let finger = 0, worst = 0, jumps = 0, last = 0, nothing = 0;
-  scroller.start(0, 0); slide.begin('remote', 0); router.start();
+  scroller.start(0, 0); scroller.move(0, 0); slide.begin('remote', 0); router.start();
   for (let n = 1; n <= 300; n++) {
     now = n * 1000 / 60;
     if (n <= 90) { finger = n * 4; scroller.move(finger, now); }        // 12 rows a second for a second and a half
@@ -215,13 +226,15 @@ function fixture(kind = 'local', reduced = false) {
   assert.equal(jumps, 0, 'and must not jump by rows, as the program by itself does');
   assert.equal(nothing, 0, 'rows come into sight as the finger moves, not after a band of nothing: ' + nothing);
   assert.equal(shown, null, 'at rest the terminal is left as it draws itself'); assert.equal(moving, false);
-  assert.deepEqual([slide.top, slide.bottom], [head, foot], 'the heading and the message box are found to stand still');
+  // a frame in which the terminal has not drawn costs no copy of its picture: rows are copied as it draws, and only then
+  assert.ok(copies === draws && draws < 60, 'the picture is copied once for each time the terminal draws: ' + copies + ' copies, ' + draws + ' draws, 300 frames');
+  assert.deepEqual([slide.top, slide.bottom], [head, foot], 'the heading and the message box are found to stand still, the line that changes with them');
   assert.ok(Math.abs((start - top) - 18) <= 1.5, 'and the program is where the finger left it, not ahead of it: ' + (start - top));
   // at the end of its list the program does not move: there is a little of nothing to see, never more, and it goes again
   const pull = () => {
     let most = 0;
     const from = top;
-    scroller.start(0, now); slide.begin('remote', now); router.start(); due.length = 0;
+    scroller.start(0, now); scroller.move(0, now); slide.begin('remote', now); router.start(); due.length = 0;
     for (let n = 1; n <= 360; n++) {
       now += 1000 / 60;
       if (n <= 60) scroller.move(n * 6, now);
@@ -240,12 +253,37 @@ function fixture(kind = 'local', reduced = false) {
   most = pull();
   assert.ok(most > .5 && most <= 3, 'a way the program has not been seen to move in: at most three rows: ' + most);
   slide.forget();
+  // The program reaches the end of its list while it is ahead of the finger: the rows it does not make are taken
+  // from those it is ahead by, and the picture stays under a finger that holds it, and comes to rest where it was left.
+  {
+    const end = top - 20, from = top;
+    scroller.start(0, now); scroller.move(0, now); slide.begin('remote', now); router.start(); due.length = 0;
+    let held = null;
+    for (let n = 1; n <= 420; n++) {
+      now += 1000 / 60;
+      if (n <= 54) scroller.move(n * 6, now);                      // 16 rows, at 18 rows a second: the program is asked for more than 20
+      if (n === 300) { scroller.velocity = 0; scroller.end(now); }
+      const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(f => f(now));
+      let drew = false;
+      while (due.length && due[0].at <= now) { const rows = due.shift().rows, to = Math.max(end, top - rows); if (to !== top) { top = to; drew = true; } }
+      if (drew || redraw) { redraw = false; slide.drawn(); }
+      moving = slide.frame(now, !scroller.dragging && !scroller.velocity && !scroller.frame);
+      const picture = seen(from);
+      if (n === 90) held = picture.moved;                          // the finger has stopped, and holds the picture
+      if (n > 90 && n < 300) assert.ok(Math.abs(picture.moved - held) < .5, 'the picture stays under the finger that holds it: ' + held + ', ' + picture.moved + ' at frame ' + n);
+    }
+    assert.ok(Math.abs(held - 54 * 6) <= cell, 'which is where the finger is: ' + held);
+    assert.equal(shown, null); assert.equal(moving, false);
+    assert.ok(Math.abs((from - top) - 16) <= 1, 'the program has come back to where the finger left it: ' + (from - top));
+    top = from;
+  }
+  slide.forget();
   // A network that holds messages back for a while and then delivers them at once. The program was ahead of the
   // finger, so for a while there are rows to go on with; what comes after a longer wait is come on to, not jumped to.
   // (the program here answers after 150 ms and moves three rows or more at a time)
   for (const [held, pace, within, leap] of [[200, 5, 1.5, 1], [450, 5, 2, 1], [450, 9, 5, 1.5]]) {
     let finger = 0, away = 0, jump = 0, last = null;
-    scroller.start(0, now); slide.begin('remote', now); router.start(); due.length = 0;
+    scroller.start(0, now); scroller.move(0, now); slide.begin('remote', now); router.start(); due.length = 0;
     const began = now, from = top;
     for (let n = 1; n <= 240; n++) {
       now += 1000 / 60;
@@ -265,12 +303,15 @@ function fixture(kind = 'local', reduced = false) {
   // the finger with rows at both edges
   let viewport = 100, place = null;
   const kept = new Map();
-  const local = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => viewport, read: () => [],
+  const local = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => viewport, read: () => [], draw() {},
     keep(row, at, count) { for (let i = 0; i < count; i++) kept.set(at + i, viewport + row + i); return true; },
     show(at, t, b, first, last) { place = at === null ? null : { at, first, last }; },
     nudge(count) { viewport -= count; local.ask(count, 0); } });
   local.begin('local', 0);
-  let moved = 0, off = 0, bare = 0;
+  local.moved(1); local.frame(1, false);
+  assert.equal(place, null, 'until the terminal has drawn there is no picture of it to show');
+  local.drawn();                                // it draws, as it was asked to, before it is scrolled
+  let moved = 1, off = 0, bare = 0;
   for (let n = 1; n <= 50; n++) {
     local.moved(3); moved += 3;
     const lines = Math.trunc(moved / cell) - (100 - viewport) + local.led;
@@ -286,6 +327,11 @@ function fixture(kind = 'local', reduced = false) {
   assert.equal(bare, 0, 'with a row to show at either edge');
   for (let n = 51; n < 120; n++) { local.drawn(); local.frame(n * 16, true); }
   assert.equal(place, null, 'and settles on a whole row, which the terminal then shows itself');
+  const plain = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => 0, read: () => [], draw: () => false,
+    keep() { assert.fail('there is no picture to copy'); }, show(at) { assert.equal(at, null); }, nudge() { assert.fail('nothing is asked of a terminal that is not slid'); } });
+  plain.begin('local', 0); plain.moved(30);
+  assert.equal(plain.active, false, 'a terminal that has no picture to copy is not slid: it scrolls by the row');
+  assert.equal(plain.frame(16, false), false);
   assert.equal(100 - viewport, Math.trunc(moved / cell), 'the terminal is at the row the finger left it in, not ahead of it: ' + (100 - viewport));
 }
 console.log('Terminal scroll behavior checks passed');
