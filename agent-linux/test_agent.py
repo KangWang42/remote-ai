@@ -335,12 +335,12 @@ class Pure(unittest.TestCase):
         apart, passing = "/srv/读书 笔记", "/tmp/rcli-scratch"        # folders that are no projects; the second is the system's own
         inside, outside, silent, scratch, codex_out, codex_idle, old = (str(uuid.uuid4()) for _ in range(7))
 
-        def claude(folder, session, title, at):
+        def claude(folder, session, title, at, **said):
             saved = os.path.join(home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", folder))
             os.makedirs(saved, exist_ok=True)
             path = os.path.join(saved, session + ".jsonl")
             with open(path, "w", encoding="utf-8") as stream:
-                stream.write(json.dumps({"type": "user", "message": {"role": "user", "content": title}}, ensure_ascii=False) + "\n" if title else "{}\n")
+                stream.write(json.dumps(dict({"type": "user", "message": {"role": "user", "content": title}}, **said), ensure_ascii=False) + "\n" if title else "{}\n")
             os.utime(path, (at, at))
 
         claude(project, inside, "项目里的对话", 1000)
@@ -348,6 +348,10 @@ class Pure(unittest.TestCase):
         claude(apart, outside, "整理读书笔记", 2000)
         claude(apart, silent, "", 2000)                   # open, and nothing said in it yet
         claude(passing, scratch, "临时的", 2000)
+        # folders with conversations that nothing has open: one used in a terminal, one that is gone since
+        quiet, gone, edited = "/srv/old-notes", "/srv/removed", "/srv/edited"
+        claude(quiet, str(uuid.uuid4()), "旧笔记", 1500, cwd=quiet, entrypoint="cli")
+        claude(gone, str(uuid.uuid4()), "删掉的", 1800, cwd=gone, entrypoint="cli")
         rollouts = os.path.join(home, ".codex", "sessions", "2026", "10", "11")
         os.makedirs(rollouts)
         files = {}
@@ -355,6 +359,9 @@ class Pure(unittest.TestCase):
             files[session] = os.path.join(rollouts, "rollout-2026-10-11T10-00-00-%s.jsonl" % session)
             with open(files[session], "w", encoding="utf-8") as stream:
                 stream.write(json.dumps({"type": "session_meta", "payload": {"id": session, "cwd": folder}}, ensure_ascii=False) + "\n")
+        with open(os.path.join(rollouts, "rollout-2026-10-11T09-00-00-%s.jsonl" % uuid.uuid4()), "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"type": "session_meta", "payload": {"cwd": edited, "originator": "codex_vscode"}}) + "\n")
+        os.utime(stream.name, (1700, 1700))
         marks = agent.Marks(data)
         marks.set("pinned", "claude", old, True)
         marks.set("hidden", "claude", inside, True)
@@ -363,6 +370,7 @@ class Pure(unittest.TestCase):
         # which conversations a program has open is read from /proc; here it is said
         sessions._claude_open = lambda terminals: {outside: apart, silent: apart, scratch: passing, inside: project}
         sessions._codex_open = lambda root: {files[codex_out]: 4000000}
+        sessions.exists = lambda folder: folder != gone
         before = os.environ.pop("CODEX_HOME", None)
         try:
             found = sessions.scan({"项目": project}, [])
@@ -377,6 +385,11 @@ class Pure(unittest.TestCase):
             # the ones that are open and the pinned one come first, whatever their age
             self.assertEqual({s["id"] for s in found[:3]} | {found[3]["id"]}, set(by))
             self.assertTrue(all(s["live"] or s["pinned"] for s in found))
+            # the folders that are no projects and have conversations are offered, to make projects of: the ones in
+            # use first, each with by what it is used; not the system's folder, not one that is gone
+            self.assertEqual([(c["path"], c["name"], c["live"], c["tools"], c["kinds"]) for c in sessions.candidates],
+                             [(apart, "读书 笔记", True, "claude codex", ["终端"]), (edited, "edited", False, "codex", ["编辑器"]), (quiet, "old-notes", False, "claude", ["终端"])])
+            self.assertEqual([c["updated"] for c in sessions.candidates[1:]], [1700000, 1500000])
             # it is read where it is; one of a project is read by its project as before
             self.assertEqual(sessions.read(outside, "claude", "", {"项目": project})["messages"], [{"role": "user", "text": "整理读书笔记"}])
             self.assertEqual(sessions.read(codex_out, "codex", "", {"项目": project})["messages"], [])
@@ -386,6 +399,7 @@ class Pure(unittest.TestCase):
             # once its folder is a project it is one of that project's
             joined = {s["id"]: s for s in sessions.scan({"项目": project, "笔记": apart}, [])}
             self.assertEqual([(joined[s]["dir"], joined[s]["folder"]) for s in (outside, codex_out, codex_idle)], [("笔记", ""), ("笔记", ""), ("笔记", "")])
+            self.assertEqual([c["path"] for c in sessions.candidates], [edited, quiet])
         finally:
             if before is not None:
                 os.environ["CODEX_HOME"] = before

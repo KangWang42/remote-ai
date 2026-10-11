@@ -164,6 +164,23 @@ public static class ReachCheck {
                 Answer(Run("claude", Event("SessionEnd", desk)), 5000, "the desktop app's conversation ends");
                 Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null); idle = 0;
 
+                // ---- words left for a conversation that sits idle, also one that has told of nothing: its Stop hook gives
+                // them to it when it next stops, whoever is at the computer; what nothing comes for is taken back
+                string asleep = Guid.NewGuid().ToString();
+                reach.Leave("claude", asleep, "把结论再写短一点");
+                Require(claude(asleep) != null && claude(asleep).Status == "idle", "it is known as one that sits idle");
+                bool? came = null;
+                var waits = Task.Run(() => { came = reach.Taken("claude", asleep, 20); });
+                var woke = Run("claude", Event("Stop", asleep, ",\"last_assistant_message\":\"…\""));
+                string given = Answer(woke, 5000, "the words left are given at the stop");
+                Require(given.Contains("\"decision\":\"block\"") && given.Contains(Reach.FromPhone) && given.Contains("把结论再写短一点"), "given as the user's words: " + given);
+                Require(waits.Wait(3000) && came == true, "and whoever left them is told at once that they were taken");
+                reach.Leave("claude", asleep, "没有人来取");
+                var began = DateTime.UtcNow;
+                Require(!reach.Taken("claude", asleep, 1) && (DateTime.UtcNow - began).TotalSeconds < 3, "what nothing comes for is taken back");
+                Require(Answer(Run("claude", Event("Stop", asleep)), 5000, "nothing lies there any more") == "", "and is not given later");
+                Answer(Run("claude", Event("SessionEnd", asleep)), 5000, "ended");
+
                 // ---- a conversation that ends is forgotten
                 Answer(Run("claude", Event("SessionEnd", one)), 5000, "ended");
                 Require(claude(one) == null && codex(two) != null, "only the one that ended");

@@ -22,11 +22,13 @@ class Homes:
     def environment(self, **more):
         return dict(os.environ, PYTHONUTF8="1", CLAUDE_CONFIG_DIR=str(self.claude), CODEX_HOME=str(self.codex), **more)
 
-    def claude_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。")):
-        """A conversation Claude Code saved for a folder, named, and last used that many hours ago."""
+    def claude_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), entry=None):
+        """A conversation Claude Code saved for a folder, named, and last used that many hours ago. `entry`: what
+        started it, as Claude Code notes it with the folder in every row ("cli", "claude-desktop-3p")."""
         saved = self.claude / "projects" / re.sub("[^a-zA-Z0-9]", "-", str(folder))
         saved.mkdir(parents=True, exist_ok=True)
-        rows = [{"type": "user", "message": {"role": "user", "content": said[0]}}, {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": said[1]}]}},
+        noted = {"cwd": str(folder), "entrypoint": entry} if entry else {}
+        rows = [dict({"type": "user", "message": {"role": "user", "content": said[0]}}, **noted), {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": said[1]}]}},
                 {"type": "ai-title", "aiTitle": title, "sessionId": session}]
         path = saved / (session + ".jsonl")
         path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
@@ -34,10 +36,11 @@ class Homes:
         os.utime(path, (at, at))
         return path
 
-    def codex_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), held=False):
-        """A conversation Codex saved for a folder; `held`: something has it open (its lock is held until close())."""
+    def codex_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), held=False, originator=None):
+        """A conversation Codex saved for a folder; `held`: something has it open (its lock is held until close());
+        `originator`: what started it, as Codex notes it ("codex-tui", "Codex Desktop")."""
         path = self.codex / "sessions" / "2026" / "10" / "11" / ("rollout-2026-10-11T08-00-00-%s.jsonl" % session)
-        rows = [{"type": "session_meta", "payload": {"id": session, "cwd": str(folder)}}] + [
+        rows = [{"type": "session_meta", "payload": dict({"id": session, "cwd": str(folder)}, **({"originator": originator} if originator else {}))}] + [
             {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": "input_text" if role == "user" else "output_text", "text": text}]}}
             for role, text in zip(("user", "assistant"), said)]
         path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")

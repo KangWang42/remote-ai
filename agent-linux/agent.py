@@ -45,7 +45,7 @@ import time
 import uuid
 from urllib.parse import quote, urlsplit
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -404,6 +404,11 @@ class Sessions:
         self.home = os.path.expanduser("~")
         self.titles = {}                # path -> (mtime, size, title)
         self.folders = {}               # codex rollout path -> the folder it worked in
+        self.used = {}                  # the same path, or a folder of Claude Code's -> by what it is used
+        self.spoken = {}                # a folder of Claude Code's conversations -> the folder they were held in
+        self.offers = {}                # folders that are no projects and have conversations, as found by this look
+        self.candidates = []            # ... the ones a project can be made of, as told to the phone
+        self.exists = os.path.isdir     # (a folder that is gone is not offered)
         self.names = (None, {})         # codex's own index of names, by its mtime
         self.found = []
 
@@ -432,16 +437,70 @@ class Sessions:
         except (OSError, IndexError):
             raise OpError("读不到这个对话的内容")
 
+    @staticmethod
+    def used_by(said):
+        """By what a conversation is used, from what its file says started it: an editor, or a
+        terminal. (The tools have no desktop app on Linux.)"""
+        return "编辑器" if "vscode" in said.lower() or "jetbrains" in said.lower() else "终端"
+
+    def _offer(self, dirs, folder, tool, at, live, kind):
+        """Notes a folder with conversations that is no project: one a project can be made of."""
+        folder = os.path.normpath(folder) if folder else ""
+        if not elsewhere(folder) or folder in dirs.values():
+            return
+        item = self.offers.setdefault(folder, {"path": folder, "name": tidy(os.path.basename(folder)), "updated": 0,
+                                               "live": False, "tools": [], "kinds": []})
+        item["updated"] = max(item["updated"], int(at * 1000))
+        item["live"] = item["live"] or live
+        for key, value in (("tools", tool), ("kinds", kind)):
+            if value not in item[key]:
+                item[key].append(value)
+
+    def _claude_folders(self, dirs):
+        """The folders Claude Code has saved conversations for, read from the newest of each."""
+        for saved in glob.glob(os.path.join(self.claude_home(), "projects", "*", "")):
+            name = os.path.basename(os.path.dirname(saved))
+            newest = None
+            for path in glob.glob(os.path.join(saved, "*.jsonl")):
+                try:
+                    info = os.stat(path)
+                except OSError:
+                    continue
+                if newest is None or info.st_mtime > newest[0].st_mtime:
+                    newest = (info, path)
+            if newest is None:
+                continue
+            if name not in self.spoken:
+                try:
+                    head = read_part(newest[1], False, 1 << 20)
+                except OSError:
+                    continue
+                row = next((r for r in rows(head) if isinstance(r.get("cwd"), str) and r["cwd"]), {})
+                self.spoken[name] = row.get("cwd", "")
+                self.used["claude\n" + name] = self.used_by(str(row.get("entrypoint") or ""))
+            folder = self.spoken.get(name, "")
+            if folder and re.sub(r"[^a-zA-Z0-9]", "-", folder) == name:
+                self._offer(dirs, folder, "claude", newest[0].st_mtime, False, self.used.get("claude\n" + name, "终端"))
+
     def scan(self, dirs, terminals):
         found = []
+        self.offers = {}
+        if len(self.folders) > 3000 or len(self.spoken) > 500:
+            # (what the folders are used by is read with the folders, and forgotten with them)
+            self.folders.clear(), self.spoken.clear(), self.used.clear()
         try:
             found += self._claude(dirs, terminals)
+            self._claude_folders(dirs)
         except OSError:
             pass
         try:
             found += self._codex(dirs, terminals)
         except OSError:
             pass
+        self.candidates = sorted((c for c in self.offers.values() if self.exists(c["path"])),
+                                 key=lambda c: (not c["live"], -c["updated"]))[:40]
+        for offered in self.candidates:
+            offered["tools"] = " ".join(offered["tools"])
         for entry in found:
             for kind in MARKS:
                 entry[kind] = bool(self.marks and self.marks.has(kind, entry["tool"], entry["id"]))
@@ -512,6 +571,7 @@ class Sessions:
             folder = os.path.normpath(folder) if folder else ""
             if session in listed or not elsewhere(folder) or folder in dirs.values():
                 continue
+            self._offer(dirs, folder, "claude", time.time(), True, "终端")
             path = os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")
             try:
                 info = os.stat(path)
@@ -547,8 +607,6 @@ class Sessions:
             if not UUID_RE.match(session):
                 continue
             if path not in self.folders:
-                if len(self.folders) > 3000:
-                    self.folders.clear()
                 try:
                     head = read_part(path, False, 16 * 1024)
                 except OSError:
@@ -557,12 +615,14 @@ class Sessions:
                 payload = first.get("payload") if isinstance(first.get("payload"), dict) else {}
                 # a helper that a conversation started for itself is part of that conversation
                 self.folders[path] = "" if '"parent_thread_id"' in head else str(payload.get("cwd") or "")
+                self.used[path] = self.used_by(str(payload.get("originator") or ""))
             folder = self.folders[path]
             name = next((n for n, p in dirs.items() if folder and os.path.normpath(folder) == p), None)
             pid = open_now.get(path)
             owner = owner_of(pid, terminals) if pid else None
             live = pid is not None and owner is None
             if name is None:
+                self._offer(dirs, folder, "codex", info.st_mtime, live, self.used.get(path, "终端"))
                 # one that a program has open in a folder that is no project is listed with its folder
                 if live and elsewhere(os.path.normpath(folder) if folder else ""):
                     title = tidy(str(self.names[1].get(session) or "")) \
@@ -1093,7 +1153,7 @@ class Agent:
                          "features": FEATURES, "version": VERSION, "newer": "",
                          "shell": os.path.basename(self.shell(cfg)),
                          "workspaces": list(dirs.keys()),
-                         "projects": self.projects.entries(cfg, dirs)},
+                         "projects": self.projects.entries(cfg, dirs), "candidates": self.sessions.candidates},
                 "terminals": [{"id": live.id, "state": "closed" if live.closed else "running",
                                "cols": live.cols, "rows": live.rows, "session": live.session,
                                "status": "" if live.closed else live.status, "exit_code": live.exit_code,

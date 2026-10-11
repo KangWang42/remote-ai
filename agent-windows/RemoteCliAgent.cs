@@ -186,6 +186,9 @@ public sealed class TerminalAgent {
     readonly Dictionary<string, LiveTerminal> terminals = new Dictionary<string, LiveTerminal>();
     readonly Dictionary<string, Dictionary<string, object>> completed = new Dictionary<string, Dictionary<string, object>>();
     readonly HashSet<string> reported = new HashSet<string>();
+    // How long a woken conversation is given to stop and take the words left for it. REMOTECLI_WAKE names another time, for a test.
+    static readonly int WakeSeconds = WakeTime();
+    static int WakeTime() { int given; return Int32.TryParse(Environment.GetEnvironmentVariable("REMOTECLI_WAKE"), out given) && given >= 1 && given <= 120 ? given : 40; }
     readonly HashSet<string> relaying = new HashSet<string>();       // messages on their way into an idle conversation (ClaudeRelay)
     readonly object gate = new object();
     HttpClient client;
@@ -245,6 +248,20 @@ public sealed class TerminalAgent {
     List<SessionInfo> sessions = new List<SessionInfo>();
     List<Dictionary<string, object>> candidates = new List<Dictionary<string, object>>();
     readonly Dictionary<string, string> claudeFolders = new Dictionary<string, string>();
+    // By what a folder that is no project is used, as its conversations say: a desktop app, an editor, or a terminal.
+    // Kept beside the folders read from the conversations' files (by the same key).
+    readonly Dictionary<string, string> usedBy = new Dictionary<string, string>();
+    public const string InTerminal = "终端", InEditor = "编辑器", CodexApp = "Codex 桌面版", ClaudeApp = "Claude 桌面版";
+    /// The folders a project can be made of say by what they are used. One that only a desktop app uses is offered
+    /// while that app runs: with the app closed there is nothing of it to work beside.
+    /// By what a conversation is used that a program has open, from where that program runs; `saved`: what the
+    /// conversation's own file says, for a holder that tells nothing (the service the Codex programs share).
+    public static string UsedBy(string origin, string saved) {
+        return origin == CodexApp || origin == ClaudeApp ? origin : origin == SessionOrigin.CommandLine ? InTerminal : origin.Length == 0 || origin.EndsWith("后台服务") ? saved : InEditor;
+    }
+    public static string[] Kinds(IEnumerable<string> used, bool codexApp, bool claudeApp) {
+        return used.Distinct().Where(kind => kind == CodexApp ? codexApp : kind == ClaudeApp ? claudeApp : true).OrderBy(kind => kind == InTerminal ? 1 : 0).ToArray();
+    }
     string sentSessions = ""; DateTime sessionsSent = DateTime.MinValue;
     // Released when a program wrote to its terminal or the relay holds a new operation: the next report goes out at once.
     readonly SemaphoreSlim wake = new SemaphoreSlim(0);
@@ -325,6 +342,13 @@ public sealed class TerminalAgent {
     // Where Claude Code keeps its conversations and the notes of the programs that have them open: its own folder
     // in the person's home, or the one CLAUDE_CONFIG_DIR names, as Claude Code itself reads it.
     public static string ClaudeHome { get { return ClaudeSessions.Home; } }
+    /// Whether a program of that name runs; `exact`: in these very letters (Claude's app is Claude.exe, its command line claude.exe).
+    static bool Running(string name, bool exact) {
+        try {
+            var found = Process.GetProcessesByName(name);
+            try { return found.Any(p => !exact || p.ProcessName == name); } finally { foreach (var p in found) p.Dispose(); }
+        } catch (InvalidOperationException) { return false; }
+    }
     public static string ProjectFolder(string path) { return Regex.Replace(path, "[^a-zA-Z0-9]", "-"); }
     // A folder that is no project is spoken of to the phone unless it is one of the system's own for passing things.
     static bool Elsewhere(string folder) { return folder.Length >= 3 && folder.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) < 0 && !folder.EndsWith(@"\AppData\Local\Temp", StringComparison.OrdinalIgnoreCase); }
@@ -347,11 +371,12 @@ public sealed class TerminalAgent {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var open = new Dictionary<string, ClaudeSessions.Owner>();
         var seen = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);   // folders that are not projects
-        Action<string, string, DateTime, bool> note = delegate(string folder, string tool, DateTime at, bool live) {
+        Action<string, string, DateTime, bool, string> note = delegate(string folder, string tool, DateTime at, bool live, string kind) {
             folder = (folder ?? "").TrimEnd('\\', '/');
             if (!Elsewhere(folder) || dirs.Values.Any(d => SamePath(d, folder))) return;
             Dictionary<string, object> item;
-            if (!seen.TryGetValue(folder, out item)) seen[folder] = item = new Dictionary<string, object> { { "path", folder }, { "name", Tidy(Path.GetFileName(folder)) }, { "updated", 0L }, { "live", false }, { "tools", "" } };
+            if (!seen.TryGetValue(folder, out item)) seen[folder] = item = new Dictionary<string, object> { { "path", folder }, { "name", Tidy(Path.GetFileName(folder)) }, { "updated", 0L }, { "live", false }, { "tools", "" }, { "used", new List<string>() } };
+            ((List<string>)item["used"]).Add(kind);
             if (Milliseconds(at) > (long)item["updated"]) item["updated"] = Milliseconds(at);
             if (live) item["live"] = true;
             if (((string)item["tools"]).IndexOf(tool, StringComparison.Ordinal) < 0) item["tools"] = ((string)item["tools"] + " " + tool).Trim();
@@ -369,7 +394,7 @@ public sealed class TerminalAgent {
                         int parent; if (!parents.TryGetValue(at, out parent) || parent == at || parent == 0) break; at = parent;
                     }
                     if (owner != null) { owner.Session = session; owner.Status = source.Status; }
-                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true); }
+                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true, UsedBy(source.Origin, InTerminal)); }
                 } catch { }
             }
         } catch { }
@@ -417,10 +442,13 @@ public sealed class TerminalAgent {
                     .Where(d => d.Newest != null).OrderByDescending(d => d.Newest.LastWriteTimeUtc).Take(25)) {
                 string path;
                 if (!claudeFolders.TryGetValue(folder.Name, out path)) {
-                    try { path = JsonText(ReadPart(folder.Newest.FullName, false, 1024 * 1024), @"""cwd"":", false); } catch (IOException) { continue; }
-                    if (path.Length > 0) claudeFolders[folder.Name] = path;
+                    string head;
+                    try { head = ReadPart(folder.Newest.FullName, false, 1024 * 1024); } catch (IOException) { continue; }
+                    path = JsonText(head, @"""cwd"":", false);
+                    if (path.Length > 0) { claudeFolders[folder.Name] = path; usedBy["claude\n" + folder.Name] = JsonText(head, @"""entrypoint"":", false).StartsWith("claude-desktop", StringComparison.OrdinalIgnoreCase) ? ClaudeApp : InTerminal; }
                 }
-                if (path.Length > 0 && ProjectFolder(path) == folder.Name) note(path, "claude", folder.Newest.LastWriteTimeUtc, false);
+                string claudeKind;
+                if (path.Length > 0 && ProjectFolder(path) == folder.Name) note(path, "claude", folder.Newest.LastWriteTimeUtc, false, usedBy.TryGetValue("claude\n" + folder.Name, out claudeKind) ? claudeKind : InTerminal);
             }
         } catch { }
         try {
@@ -445,6 +473,8 @@ public sealed class TerminalAgent {
                     try { head = ReadPart(file.FullName, false, 16 * 1024); } catch (IOException) { continue; }
                     // A helper that a conversation started for itself is part of that conversation, not one to continue.
                     codexFolders[file.FullName] = folder = Regex.IsMatch(head, @"""parent_thread_id""\s*:\s*""") ? "" : JsonText(head, @"""cwd"":", false);
+                    string wrote = JsonText(head, @"""originator"":", false);
+                    usedBy[file.FullName] = wrote.IndexOf("desktop", StringComparison.OrdinalIgnoreCase) >= 0 ? CodexApp : wrote.IndexOf("vscode", StringComparison.OrdinalIgnoreCase) >= 0 ? InEditor : InTerminal;
                 }
                 if (folder.Length == 0) continue;
                 string dir = dirs.Where(d => SamePath(d.Value, folder)).Select(d => d.Key).FirstOrDefault();
@@ -453,7 +483,9 @@ public sealed class TerminalAgent {
                 bool phone = owner.Pid > 0 && CodexSessions.Descends(owner.Pid, running.Select(t => t.Pty.Id), ownerParents);
                 string title; codexNames.TryGetValue(id, out title); title = Tidy(title);
                 if (dir == null) {
-                    note(folder, "codex", file.LastWriteTimeUtc, live);
+                    string codexKind;
+                    if (!usedBy.TryGetValue(file.FullName, out codexKind)) codexKind = InTerminal;
+                    note(folder, "codex", file.LastWriteTimeUtc, live, live ? UsedBy(owner.Origin, codexKind) : codexKind);
                     // one that a program has open in a folder that is no project is listed with its folder
                     string where = folder.TrimEnd('\\', '/');
                     // (one that a terminal of the phone's has taken on from there is listed too, as that terminal's)
@@ -478,11 +510,13 @@ public sealed class TerminalAgent {
         }
         // the ones a program has open and the ones their owner pinned are listed whatever their age
         sessions = Single(found).OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated).Take(200).ToList();
-        candidates = seen.Values.Where(c => { try { return Directory.Exists((string)c["path"]); } catch { return false; } })
-            .OrderByDescending(c => (bool)c["live"]).ThenByDescending(c => (long)c["updated"]).Take(12).ToList();
-        if (claudeFolders.Count > 500) claudeFolders.Clear();
+        bool codexRuns = Running("ChatGPT", false) || Running("Codex", true), claudeRuns = Running("Claude", true);
+        foreach (var offered in seen.Values) { offered["kinds"] = Kinds((List<string>)offered["used"], codexRuns, claudeRuns); offered.Remove("used"); }
+        candidates = seen.Values.Where(c => ((string[])c["kinds"]).Length > 0).Where(c => { try { return Directory.Exists((string)c["path"]); } catch { return false; } })
+            .OrderByDescending(c => (bool)c["live"]).ThenByDescending(c => (long)c["updated"]).Take(40).ToList();
+        // (what the folders are used by is read with the folders, and forgotten with them)
+        if (claudeFolders.Count > 500 || codexFolders.Count > 3000) { claudeFolders.Clear(); codexFolders.Clear(); usedBy.Clear(); }
         if (titles.Count > 600) titles.Clear();
-        if (codexFolders.Count > 3000) codexFolders.Clear();
         return sessions;
     }
     // A program says once that it draws on the alternate screen, reads the mouse or takes pasted text in brackets.
@@ -668,6 +702,7 @@ public sealed class TerminalAgent {
             foreach (string key in new[] { "command", "file_path", "path", "pattern", "description", "query", "url" }) { about = at(input, key) as string ?? ""; if (about.Length > 0) break; }
             return (Convert.ToString(name) + (about.Length > 0 ? "：" + (about.Length > 160 ? about.Substring(0, 160) : about) : "")).Trim();
         };
+        bool woken = false;
         foreach (string line in ReadPart(path, true, limit).Split('\n')) {
             if (!line.StartsWith("{", StringComparison.Ordinal)) continue;
             Dictionary<string, object> row;
@@ -675,7 +710,20 @@ public sealed class TerminalAgent {
             string type = at(row, "type") as string;
             if (tool == "claude") {
                 var message = at(row, "message") as Dictionary<string, object>;
-                if ((type != "user" && type != "assistant") || true.Equals(at(row, "isSidechain")) || true.Equals(at(row, "isMeta")) || message == null) continue;
+                if ((type != "user" && type != "assistant") || true.Equals(at(row, "isSidechain")) || message == null) continue;
+                if (true.Equals(at(row, "isMeta"))) {
+                    // What Claude Code notes for itself is left out, but for what the phone said: it reached the
+                    // conversation through a hook or as a message from another session, and is the user's all the same.
+                    var origin = at(row, "origin") as Dictionary<string, object>;
+                    string noted = at(message, "content") as string ?? "", body = at(origin, "body") as string ?? noted;
+                    if (type != "user" || body.IndexOf("from their phone", StringComparison.Ordinal) < 0 || body.IndexOf("Remote CLI", StringComparison.Ordinal) < 0) continue;
+                    if (body.StartsWith("Remote CLI wake-up", StringComparison.Ordinal)) { woken = true; continue; }       // only woke it: the words follow
+                    int words = body.IndexOf("\n\n", StringComparison.Ordinal);
+                    if (words >= 0) { add("user", body.Substring(words + 2)); woken = false; }
+                    continue;
+                }
+                if (woken && type == "assistant") continue;         // what it answered to being woken, before the words reached it
+                woken = false;
                 object content = at(message, "content");
                 IEnumerable parts = content is string ? new object[] { new Dictionary<string, object> { { "type", "text" }, { "text", content } } } : content as IEnumerable;
                 if (parts == null) continue;
@@ -975,7 +1023,18 @@ public sealed class TerminalAgent {
                         string launcher = FindTool(tool), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
                         Task.Run(() => {
                             string failed = "";
-                            try { if (tool == "codex") CodexQueue.Send(launcher, session, text); else ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), text); }
+                            try {
+                                if (tool == "codex") CodexQueue.Send(launcher, session, text);
+                                else if (Reach.Heard("claude")) {
+                                    // Claude Code runs this program's hooks: the words are left for the conversation's own
+                                    // Stop hook, which gives them to it as its user's, and the conversation is only woken.
+                                    // Where its hooks do not come for them, they are handed over as the message itself.
+                                    Reach.Leave(tool, session, text);
+                                    ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Wake);
+                                    if (!Reach.Taken(tool, session, WakeSeconds)) ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(text));
+                                }
+                                else ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(text));
+                            }
                             catch (InvalidOperationException refused) { failed = refused.Message; }
                             catch (IOException) { failed = "消息没有送出：电脑上启动不了这个工具"; }
                             catch (System.ComponentModel.Win32Exception) { failed = "消息没有送出：电脑上启动不了这个工具"; }

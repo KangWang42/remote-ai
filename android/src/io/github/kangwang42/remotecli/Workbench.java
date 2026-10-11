@@ -562,14 +562,14 @@ final class Workbench {
         final AggregateSessions.Entry entry = task.entry;
         Snapshot snapshot = snapshots.get(task.url);
         boolean marks = snapshot != null && snapshot.marks && !entry.conversation().isEmpty();
-        final List<String> labels = new ArrayList<>(), notes = new ArrayList<>(), does = new ArrayList<>();
-        if (marks) { labels.add(entry.pinned ? "取消置顶" : "置顶"); notes.add(entry.pinned ? null : "排在列表最前面"); does.add("pin"); }
-        if (marks && "history".equals(task.kind)) { labels.add(entry.hidden ? "取消隐藏" : "从列表隐藏"); notes.add(entry.hidden ? null : "对话仍保存在电脑上：能搜索到，也能在它的项目里找回"); does.add("hide"); }
-        if (entry.apart()) { labels.add("把所在文件夹加为项目"); notes.add(entry.folder); does.add("add"); }
+        final List<String> labels = new ArrayList<>(), does = new ArrayList<>();
+        if (marks) { labels.add(entry.pinned ? "取消置顶" : "置顶"); does.add("pin"); }
+        if (marks && "history".equals(task.kind)) { labels.add(entry.hidden ? "取消隐藏" : "从列表隐藏"); does.add("hide"); }
+        if (entry.apart()) { labels.add("把 " + entry.place() + " 加为项目"); does.add("add"); }
         int danger = -1;
-        if (entry.terminal && "running".equals(entry.state)) { danger = labels.size(); labels.add("结束终端"); notes.add("正在执行的任务会被中断"); does.add("end"); }
+        if (entry.terminal && "running".equals(entry.state)) { danger = labels.size(); labels.add("结束终端"); does.add("end"); }
         if (labels.isEmpty()) return;
-        kit.sheet(entry.shownTitle(), AggregateSessions.where(entry), labels.toArray(new String[0]), notes.toArray(new String[0]), danger, which -> {
+        kit.sheet(entry.shownTitle(), AggregateSessions.where(entry), labels.toArray(new String[0]), null, danger, which -> {
             String what = does.get(which);
             if ("pin".equals(what)) markRemote(task, true, !entry.pinned);
             else if ("hide".equals(what)) markRemote(task, false, !entry.hidden);
@@ -610,7 +610,7 @@ final class Workbench {
                 JSONObject result = post(task.url + "/api/terminal", cookie, op);
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "没有加上，请稍后重试"));
             } catch (Exception error) { problem = error.getMessage() == null ? "没有加上，请稍后重试" : error.getMessage(); }
-            final String message = problem.isEmpty() ? "已加为项目，这段对话稍后归到它名下" : problem;
+            final String message = problem.isEmpty() ? "已加为项目" : problem;
             activity.runOnUiThread(() -> { android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show(); refresh(); });
         });
     }
@@ -635,7 +635,7 @@ final class Workbench {
     private void sayRemote(AggregateSessions.Thing task, String text) {
         final String cookie = CookieManager.getInstance().getCookie(task.url);
         activity.net.execute(() -> {
-            String problem = ""; boolean later = false, woke = false;
+            String problem = "";
             try {
                 JSONObject op = new JSONObject().put("action", "say").put("id", UUID.randomUUID().toString().replace("-", "")).put("text", text);
                 // a conversation that is open on the computer is told through the program that has it; a terminal through its own
@@ -649,14 +649,12 @@ final class Workbench {
                 }
                 if (result == null) throw new Exception("连不上这台电脑，消息没有发出");
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "消息没有发出"));
-                if (!task.entry.terminal && !result.optBoolean("now", true)) later = true;
-                if (result.optBoolean("woke")) woke = true;
             } catch (Exception error) {
                 String said = error.getMessage();
                 // a relay of an earlier version answers so to anything it does not know
                 problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持在此发消息，请更新后再试" : said == null ? "消息没有发出，请稍后重试" : said;
             }
-            final String message = problem.isEmpty() ? (woke ? "已送进电脑上的这段对话" : later ? "已发送，它做完手上这一步后收到" : "已发送") : problem;
+            final String message = problem.isEmpty() ? "已发送" : problem;
             activity.runOnUiThread(() -> {
                 android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show();
                 refresh();
@@ -674,7 +672,7 @@ final class Workbench {
     private void stopTask(AggregateSessions.Thing task) {
         final String key = task.url + '\n' + task.entry.id;
         if (ending.contains(key)) return;
-        kit.sheet("结束“" + task.entry.shownTitle() + "”？", "正在执行的任务会被中断，历史终端仍会保留。", new String[]{"结束终端"}, new String[]{"结束后会从进行中移到最近使用。"}, 0,
+        kit.sheet("结束“" + task.entry.shownTitle() + "”？", "", new String[]{"结束终端"}, null, 0,
             which -> { if (which == 0 && ending.add(key)) { redraw(); closeRemote(task, key); } });
     }
     private void closeRemote(AggregateSessions.Thing task, String key) {

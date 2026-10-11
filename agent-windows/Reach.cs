@@ -104,6 +104,30 @@ public sealed class Reach : IDisposable {
             throw new InvalidOperationException("这段对话已经在电脑上停下，等着在电脑上输入。它下次工作时发的消息，会在它做完后收到");
         }
     }
+    /// Leaves a message for a conversation to take when it next stops, whatever it is doing now, also one that has
+    /// told of nothing yet. (A conversation that sits idle is woken for it by other means: ClaudeRelay.)
+    public void Leave(string tool, string session, string text) {
+        lock (gate) {
+            Open o; string key = Key(tool, session);
+            if (!open.TryGetValue(key, out o)) open[key] = o = new Open { Tool = tool, Session = session, Seen = DateTime.UtcNow };
+            o.Queued = o.Queued == null ? text : o.Queued + "\n\n" + text;
+        }
+    }
+    /// Whether what was left has been taken: waits for that for up to `seconds`. What still lies there then is taken
+    /// back (false): the conversation's hooks did not come for it, and it is to be handed over another way.
+    public bool Taken(string tool, string session, int seconds) {
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        lock (gate) {
+            Open o;
+            for (;;) {
+                if (!open.TryGetValue(Key(tool, session), out o) || o.Queued == null) return true;
+                if (DateTime.UtcNow >= until) { o.Queued = null; return false; }
+                Monitor.Wait(gate, 250);
+            }
+        }
+    }
+    /// What stands in front of a message that a hook hands to its tool as its user's words from the phone.
+    public const string FromPhone = "Message from the user, sent from their phone through Remote CLI";
     /// The phone's answer to a request for permission.
     public void Answer(string tool, string session, string ask, bool allow) {
         lock (gate) {
@@ -257,7 +281,7 @@ public sealed class Reach : IDisposable {
         string message = null; var began = DateTime.UtcNow; int turn;
         lock (gate) {
             o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = false; turn = o.Turn;
-            if (o.Queued != null) { message = o.Queued; o.Queued = null; }
+            if (o.Queued != null) { message = o.Queued; o.Queued = null; Monitor.PulseAll(gate); }
             else if (idle() >= Unattended) {
                 o.Status = "waiting"; o.Message = null;
                 Monitor.PulseAll(gate);
@@ -276,7 +300,7 @@ public sealed class Reach : IDisposable {
         if (message != null) lock (gate) { if (o.Turn == turn) { o.Status = "busy"; o.Last = ""; } }
         Tell();
         if (message == null) return Nothing;
-        string reason = "Message from the user, sent from their phone through Remote CLI while they are away from the computer. Treat it as their next instruction:\n\n" + message;
+        string reason = FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message;
         return new[] { json.Serialize(new Dictionary<string, object> { { "decision", "block" }, { "reason", reason } }), "0" };
     }
 

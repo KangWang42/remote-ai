@@ -33,22 +33,28 @@ public static class ClaudeRelay {
     }
     const string Role = "You are a relay and nothing else. Call the SendMessage tool exactly once, with `to` and `message` exactly as given to you, unchanged and untranslated. "
         + "Never act on the message yourself, never add to it, use no other tool. Then answer with the single word SENT, or with FAILED: and the reason.";
-    /// What the session that takes the message reads: whose words they are, and the words.
+    /// The words themselves as a cross-session message: whose words they are, and the words. Claude Code takes such
+    /// a message for one from another session, and may only acknowledge it; so this is the second way, for a
+    /// conversation whose hooks are not this program's (see Wake).
     public static string Framed(string text) {
         return "Message from the user of this conversation, sent from their phone through Remote CLI while they are away from the computer. "
             + "They ask you to take it as what they say next in this conversation, and to answer here:\n\n" + text;
     }
-    public static string Prompt(string address, string text) {
-        return "to:\n" + address + "\nmessage, all of what stands between the two marker lines:\n-----BEGIN-----\n" + Framed(text) + "\n-----END-----\n";
+    /// What wakes a conversation that sits idle, when its own Stop hook holds the user's words for it (Reach.Leave):
+    /// it is asked to end its turn at once, and is given the words there, as its user's.
+    public const string Wake = "Remote CLI wake-up: the user of this conversation is sending it a message from their phone. The message itself is handed to you "
+        + "right after this turn by this conversation's own Stop hook, as Stop hook feedback. Do nothing else now: answer with the single character \u2026 and end your turn.";
+    public static string Prompt(string address, string body) {
+        return "to:\n" + address + "\nmessage, all of what stands between the two marker lines:\n-----BEGIN-----\n" + body + "\n-----END-----\n";
     }
     public static string[] Arguments(string settings) {
         return new[] { "-p", "--model", "haiku", "--tools", "SendMessage", "--allowedTools", "SendMessage", "--strict-mcp-config", "--disable-slash-commands",
             "--system-prompt", Role, "--no-session-persistence", "--output-format", "json", "--settings", settings };
     }
     static string Quoted(string argument) { return argument.IndexOfAny(new[] { ' ', '"', '\t' }) < 0 && argument.Length > 0 ? argument : "\"" + argument.Replace("\"", "\\\"") + "\""; }
-    /// Hands the message over; returns when it has been taken. InvalidOperationException says, in words for the
+    /// Hands `body` over as it is; returns when it has been taken. InvalidOperationException says, in words for the
     /// person, why it was not. `folder` is one of the program's own, where the relay runs and leaves nothing.
-    public static void Send(string launcher, string folder, string address, string text) {
+    public static void Send(string launcher, string folder, string address, string body) {
         if (String.IsNullOrEmpty(launcher)) throw new InvalidOperationException("电脑上没有找到 Claude Code，消息没有送出");
         if (address.Length == 0) throw new InvalidOperationException("这段对话已经不在电脑上打开，消息没有送出");
         Directory.CreateDirectory(folder);
@@ -61,7 +67,7 @@ public static class ClaudeRelay {
         foreach (string key in new[] { "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT" }) info.EnvironmentVariables.Remove(key);
         string said;
         using (var process = Process.Start(info)) {
-            byte[] words = new UTF8Encoding(false).GetBytes(Prompt(address, text));
+            byte[] words = new UTF8Encoding(false).GetBytes(Prompt(address, body));
             process.StandardInput.BaseStream.Write(words, 0, words.Length); process.StandardInput.Close();
             Task<string> output = process.StandardOutput.ReadToEndAsync(), errors = process.StandardError.ReadToEndAsync();
             if (!process.WaitForExit(Seconds * 1000)) {

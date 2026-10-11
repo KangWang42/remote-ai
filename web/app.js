@@ -96,17 +96,22 @@
   }
 
   // ---- sheets from the bottom
-  function openSheet(build) {
-    return new Promise(done => {
+  // `window`: it fills the screen and is left by its own way back (a conversation), instead of rising from the bottom.
+  // A sheet is told that it was closed a moment after it is closed. One that is opened in that moment waits for it:
+  // else it would take the word meant for the one before, and answer "nothing chosen" while it is still on the screen.
+  let sheetGone = Promise.resolve();
+  function openSheet(build, window) {
+    return sheetGone.then(() => new Promise(done => {
       const form = $('sheet-form'), sheet = $('sheet');
       form.textContent = '';
+      sheet.classList.toggle('window', !!window);
       let answer = null;
       build(form, value => { answer = value; sheet.close(); });
-      form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
-      sheet.onclose = () => done(answer);
+      if (!window) form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
+      sheetGone = new Promise(gone => { sheet.onclose = () => { gone(); done(answer); }; });
       sheet.onclick = event => { if (event.target === sheet) sheet.close(); };       // a tap beside the sheet
       sheet.showModal();
-    });
+    }));
   }
   // A question with a few answers, optionally with fields to fill in; resolves with the answer, or null when dismissed.
   function ask(title, text, choices, fields) {
@@ -207,8 +212,8 @@
       setTimeout(() => box.focus(), 80);
     });
     if (!text) return;
-    if (s.wake) toast('正在送进电脑上的这段对话…');
-    try { const got = await api('api/conversation', { id: newId(), session: s.id, action: 'say', text }); toast(got.woke ? '已送进电脑上的这段对话' : got.now ? '已发送' : '已发送，它做完手上这一步后收到'); }
+    toast('发送中…');
+    try { await api('api/conversation', { id: newId(), session: s.id, action: 'say', text }); toast('已发送'); }
     catch (error) { toast(error.message); }
     refresh();
   }
@@ -218,30 +223,19 @@
     await refresh();
   }
   async function endTerminal(t) {
-    if (!await ask('结束“' + t.title + '”？', '正在运行的任务会被中断。对话保存在电脑上，可以从历史对话继续。', [{ label: '结束终端', value: true, kind: 'danger' }])) return;
+    if (!await ask('结束“' + t.title + '”？', '', [{ label: '结束终端', value: true, kind: 'danger' }])) return;
     await run({ action: 'close', terminal: t.id }, '正在结束…');
     refresh();
   }
-  // A conversation that a program on the computer has open. Looking at it does nothing to that program: the last
-  // things said are read from the conversation's file. Carrying on from the phone is a separate, deliberate step,
-  // offered below what was said, in the words of what will happen on the computer.
+  // Going on with a conversation that a program on the computer has, in a terminal of the phone's: that takes it from
+  // the program, or goes on with a copy. It is no part of the conversation's window, which works beside the program;
+  // a held press on its card offers it. Each choice says in its own words what happens on the computer.
   function ways(session) {
-    const host = sessionHost(session), locked = sessionActivity(session) === 'locked';
-    const canClose = session.can_takeover === true && !locked;
-    // one that can be told things from here stays on the computer: moving it to the phone is not the first thing offered
-    const kind = Array.isArray(session.reach) ? '' : 'solid';
-    const choices = [canClose
-      ? { label: '在手机上继续', sub: '电脑上的对应窗口将关闭，正在执行的任务会中断', value: 'close', kind }
-      : { label: '已在电脑上关闭，在手机上继续', sub: '如仍在运行，不会关闭它，并说明原因', value: 'close', kind }];
-    if (session.tool === 'codex' && (data.device.features || []).includes('codex-fork'))
-      choices.push({ label: '另开一份继续', sub: '以当前内容新建一段对话；电脑上的原对话不受影响，两者此后相互独立', value: 'copy' });
-    const why = canClose ? ''
-      : host === 'shared' ? '这段对话正由电脑上的 Codex 应用或编辑器使用，手机无法关闭它。请先在该应用中结束这段对话。'
-      : session.takeover_reason || '无法确定使用这段对话的程序，因此不会关闭它。请先在电脑上结束该程序。';
-    // One that is open in a folder that is no project is taken on in the same ways; the terminal then runs in that
-    // folder. Making the folder a project is offered beside them, for whoever wants it among the projects.
-    if (!session.dir && session.folder) choices.push({ label: '把所在文件夹加为项目', sub: session.folder, value: 'add' });
-    return { choices, why };
+    const locked = sessionActivity(session) === 'locked' && session.now !== false, choices = [];
+    if (!session.live) return choices;
+    choices.push(session.can_takeover === true && !locked ? { label: '接到手机终端（关闭电脑上的）', value: 'close' } : { label: '接到手机终端（电脑上已关闭时）', value: 'close' });
+    if (session.tool === 'codex' && (data.device.features || []).includes('codex-fork')) choices.push({ label: '另开一份到手机终端', value: 'copy' });
+    return choices;
   }
   // What was said, laid out to be read: the tools answer in Markdown, which is set as text with headings, lists, code
   // and tables rather than shown as its source; what the person asked stands apart on the right; and a run of things
@@ -279,21 +273,19 @@
       last = m.role;
     });
   }
-  // The page of a conversation that is open on the computer. It stays open on the computer and is used there as
-  // before; this page works beside it: it follows what is said there while it is looked at, what the conversation
-  // asks is answered here, and a message for it is written here. Going on with it in a terminal of the phone's
-  // (which takes it from the program that has it) is one of the choices below, for when that is what is wanted.
+  // The window of a conversation that is open on the computer: what was said, and a box to write in. The
+  // conversation stays in the program that has it and is used there as before; this works beside it. It follows what
+  // is said there while it is open, what the conversation asks is answered here, and what is written here is handed to
+  // it where it is. (Taking it into a terminal is another thing: see ways.)
   async function takeOver(session) {
     if (!usable()) return;
     const canPeek = (data.device.features || []).includes('peek');
     let watch = 0;
     const choice = await openSheet((form, finish) => {
       const now = () => (data.sessions || []).find(s => s.id === session.id && s.tool === session.tool) || session;
-      const head = el('p'), said = el('div', { className: 'said' }, el('p', { className: 'quiet', textContent: '正在读取对话…' }));
-      const note = el('p', { className: 'quiet' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
-      form.append(el('h3', { textContent: session.title }), head);
-      if (canPeek) form.append(said);
-      form.append(note, asks, write, below);
+      const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
+      form.append(el('div', { className: 'bar' }, el('button', { type: 'button', className: 'icon', ariaLabel: '返回', html: ICON.back, onclick: () => finish(null) }),
+        el('div', { className: 'who' }, el('h3', { textContent: session.title }), head)), said, asks, below, write);
       // ---- what is said there
       let read = '', reading = false;
       async function follow(current) {
@@ -304,8 +296,6 @@
           const got = await api('api/conversation', { id: newId(), session: session.id }), messages = got.messages || [];
           const atEnd = !read || said.scrollHeight - said.scrollTop - said.clientHeight < 60, was = said.scrollTop;
           const fresh = el('div');
-          if (got.more) fresh.append(el('p', { className: 'quiet', textContent: '更早的内容没有显示' }));
-          if (!messages.length) fresh.append(el('p', { className: 'quiet', textContent: '这段对话还没有内容' }));
           await writeSaid(fresh, messages, TOOLS[session.tool]);
           said.replaceChildren(...fresh.childNodes);
           said.scrollTop = atEnd ? said.scrollHeight : was;      // what was said last is what one came to see; someone reading further up is left there
@@ -313,31 +303,30 @@
         } catch (error) { if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
         reading = false;
       }
-      // ---- how it stands, what it asks, and what can be done from here
-      const box = el('textarea', { rows: 2, maxLength: 8000, placeholder: '给它发消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
+      // ---- how it stands, what it asks, and the box
+      const box = el('textarea', { rows: 1, maxLength: 8000, placeholder: '发消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
+      box.addEventListener('input', () => { box.style.height = 'auto'; box.style.height = Math.min(140, box.scrollHeight + 2) + 'px'; });
       const send = el('button', { type: 'button', className: 'solid', textContent: '发送', onclick: async () => {
         const text = box.value.trim();
         if (!text) return box.focus();
-        send.disabled = true;
-        // one that sits idle is handed the message where it is: that takes some seconds
-        if (now().wake) { left = '正在送进电脑上的这段对话…'; show(); }
+        send.disabled = true; left = '发送中…'; show();
         try {
-          const got = await api('api/conversation', { id: newId(), session: session.id, action: 'say', text });
-          box.value = ''; left = got.woke ? '已送进电脑上的这段对话，它开始处理了' : got.now ? '已发送，它接着做了' : '已留言：它做完手上这一步后收到';
+          await api('api/conversation', { id: newId(), session: session.id, action: 'say', text });
+          box.value = ''; box.style.height = 'auto'; left = '';
+          // what was written is shown at once, as what the user said; the conversation's own record follows
+          said.append(el('div', { className: 'turn user' }, el('div', { className: 'plain', textContent: text }))); said.scrollTop = said.scrollHeight;
         } catch (error) { left = ''; toast(error.message); }
         send.disabled = false; refresh(); show();
       } });
       write.append(box, send);
       let shown = '', left = '';
       function show() {
-        const current = now(), phase = current.live ? reachPhase(current) : '', told = Array.isArray(current.reach);
+        const current = now(), phase = current.live ? reachPhase(current) : '';
         const stamp = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, left]);
         follow(current);
         if (stamp === shown) return;
         shown = stamp;
-        head.textContent = (phase ? PHASE[phase][0] : current.live ? (current.now === false ? '电脑上闲置' : hostLabel[sessionHost(current)] || hostLabel.unknown) : '已不在电脑上打开') + ' · ' + whereOf({ s: current, tool: current.tool, live: current.live })
-          + ' · ' + (current.dir || base(current.folder) + '（未加入项目）');
-        note.textContent = !current.live ? '' : told ? '这段对话照常开在电脑上。在这里查看、确认和发消息，都不影响电脑上的使用。' : '只是查看，不影响电脑上的程序。';
+        head.textContent = (phase && phase !== 'stopped' ? PHASE[phase][0] + ' · ' : '') + whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));
         // what it asks is answered here, under what was said
         asks.textContent = '';
         if (current.ask) {
@@ -346,29 +335,25 @@
           else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
           asks.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: current.ask.text }), answers)));
         }
-        // a message: taken at once by one that waits, when it has done what it is doing by one at work
         const sayable = can(current, 'say') && !current.ask;
         write.hidden = !sayable;
-        box.placeholder = current.wake ? '给它发消息：直接送进电脑上的这段对话' : current.status === 'waiting' ? '它已停下，正等你的消息' : '给它发消息：它做完手上这一步后收到';
         below.textContent = '';
         if (left) below.append(el('p', { className: 'quiet', textContent: left }));
-        if (told && !sayable && !current.ask && current.live) below.append(el('p', { className: 'quiet', textContent: '它现在停着，等在电脑上输入，从这里发不进消息。要在手机上接着做，用下面的方式把它接过来。' }));
-        if (current.wake) below.append(el('p', { className: 'quiet', textContent: '消息会直接送进电脑上的这段对话，不用把它接到手机上；回到电脑前可以接着在那里说。' + (current.tool === 'claude' ? '它把这条消息记为“来自另一个会话”，大约要十几秒。' : '') }));
-        const { choices, why } = current.live ? ways(current) : { choices: current.dir ? [{ label: '在手机上继续', sub: '它已不在电脑上打开', value: 'resume', kind: 'solid' }] : [], why: '' };
-        if (why && !told) below.append(el('p', { className: 'why', textContent: why }));
-        choices.forEach(c => below.append(el('button', { type: 'button', className: 'choice ' + (c.kind || ''), onclick: () => finish({ value: c.value, session: current }) },
-          el('span', null, c.label, c.sub ? el('small', { textContent: c.sub }) : ''))));
+        // where it cannot be told anything from here, it can still be taken into a terminal: the one thing left to do
+        if (!sayable && !current.ask) {
+          const taken = current.live ? ways(current) : current.dir ? [{ label: '在手机终端继续', value: 'resume' }] : [];
+          taken.forEach(c => below.append(el('button', { type: 'button', className: 'choice', onclick: () => finish({ value: c.value, session: current }) }, el('span', { textContent: c.label }))));
+        }
       }
       show();
       watch = setInterval(() => { if ($('sheet').open) show(); }, 1500);
-    });
+    }, true);
     clearInterval(watch);
-    if (!choice) return;
-    const current = choice.session;
-    if (choice.value === 'add') addFolder(current.folder);
-    else if (choice.value === 'resume') start(current.tool, current.dir, current.id, false);
-    else start(current.tool, current.dir, current.id, choice.value === 'close', choice.value === 'copy');
+    if (choice) into(choice.session, choice.value);
   }
+  // Into a terminal of the phone's: by taking the conversation from the program that has it, by a copy, or, for one
+  // that nothing has open, simply by going on with it.
+  function into(session, how) { start(session.tool, session.dir, session.id, how === 'close', how === 'copy'); }
   // ?new=1 comes from the app's workbench: a terminal is started without walking to a project first. The projects
   // used last come first; each offers the tools the computer has.
   async function startAnywhere() {
@@ -378,7 +363,7 @@
     const names = (data.device.workspaces || []).slice().sort((a, b) => latest(b) - latest(a));
     if (!names.length || !tools.length) return toast(names.length ? '电脑上没有可用的工具' : '请先添加一个项目');
     const picked = await openSheet((form, finish) => {
-      form.append(el('h3', { textContent: '新建终端' }), el('p', { textContent: '选一个项目和要用的工具。最近用过的项目在前。' }));
+      form.append(el('h3', { textContent: '新建终端' }));
       const list = el('div', { className: 'anywhere' });
       names.slice(0, 12).forEach(name => list.append(el('div', { className: 'row' }, el('b', { textContent: name }),
         el('span', null, ...tools.map(tool => el('button', { type: 'button', className: 'tool ' + tool, ariaLabel: '在 ' + name + ' 新建 ' + TOOLS[tool], html: ICON[tool], onclick: () => finish({ tool, name }) }))))));
@@ -386,15 +371,33 @@
     });
     if (picked) start(picked.tool, picked.name);
   }
+  // A project is made of a folder on the computer: one of those that already have conversations (each says by what
+  // it is used: a desktop app, an editor, a terminal), found by searching when they are many, or one that is typed.
+  const FEW = 6;
   async function addProject() {
-    const candidates = (data.device.candidates || []).slice(0, 4).map(c => ({ label: '添加 ' + c.name, sub: c.path, value: c.path }));
-    const answer = await ask('添加项目', '填写电脑上的完整文件夹路径；下面是电脑上有对话记录的文件夹。',
-      [{ label: '添加填写的路径', value: '', kind: 'solid' }].concat(candidates),
-      [{ key: 'path', label: '文件夹路径', placeholder: 'D:\\projects\\demo' }, { key: 'name', label: '名称（可不填）', max: 40 }]);
+    const offered = data.device.candidates || [];
+    const answer = await openSheet((form, finish) => {
+      form.append(el('h3', { textContent: '添加项目' }));
+      if (offered.length) {
+        const list = el('div', { className: 'anywhere folders' });
+        const show = query => {
+          const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+          list.replaceChildren(...offered.filter(c => words.every(w => (c.name + '\n' + c.path + '\n' + (c.kinds || []).join(' ')).toLowerCase().includes(w)))
+            .map(c => el('button', { type: 'button', className: 'choice', onclick: () => finish({ path: c.path, name: '' }) },
+              el('span', null, c.name, el('small', { textContent: (c.kinds || []).concat(c.path).join(' · ') })))));
+        };
+        if (offered.length > FEW) form.append(el('input', { type: 'search', className: 'find', placeholder: '搜索文件夹', ariaLabel: '搜索电脑上有对话的文件夹', autocapitalize: 'off', spellcheck: false, oninput: event => show(event.target.value) }));
+        form.append(list);
+        show('');
+      }
+      const path = el('input', { id: 'field-path', placeholder: 'D:\\projects\\demo', maxLength: 240, autocapitalize: 'off', spellcheck: false });
+      const name = el('input', { id: 'field-name', maxLength: 40, autocapitalize: 'off', spellcheck: false });
+      form.append(el('label', { htmlFor: 'field-path', textContent: '文件夹路径' }), path, el('label', { htmlFor: 'field-name', textContent: '名称（可不填）' }), name,
+        el('button', { type: 'button', className: 'choice solid', onclick: () => finish({ path: path.value.trim(), name: name.value.trim() }) }, el('span', null, '添加填写的路径')));
+    });
     if (!answer) return;
-    const path = answer.choice || answer.path;
-    if (!path) { toast('请填写文件夹路径'); return; }
-    if (await run({ action: 'project_add', path, name: answer.choice ? '' : answer.name, create: false }, '正在添加…')) refresh();
+    if (!answer.path) { toast('请填写文件夹路径'); return; }
+    if (await run({ action: 'project_add', path: answer.path, name: answer.name, create: false }, '正在添加…')) refresh();
   }
 
   // ---- everything there is to work with, said one way
@@ -474,19 +477,21 @@
   }
   async function manage(x) {
     const s = x.s, choices = [];
-    if (s && marks()) choices.push(s.pinned ? { label: '取消置顶', value: 'pin' } : { label: '置顶', sub: '排在列表最前面', value: 'pin' });
-    if (s && !x.t && !s.live && marks()) choices.push(s.hidden ? { label: '取消隐藏', value: 'hide' } : { label: '从列表隐藏', sub: '对话仍保存在电脑上：能搜索到，也能在项目的“已隐藏”里找回', value: 'hide' });
+    if (s && marks()) choices.push({ label: s.pinned ? '取消置顶' : '置顶', value: 'pin' });
+    if (s && !x.t && !s.live && marks()) choices.push({ label: s.hidden ? '取消隐藏' : '从列表隐藏', value: 'hide' });
+    if (s && !x.t && s.live) ways(s).forEach(way => choices.push(way));
     const folder = x.apart ? (x.t ? x.t.folder : s.folder) || '' : '';
-    if (folder && usable()) choices.push({ label: '把所在文件夹加为项目', sub: folder, value: 'add' });
+    if (folder && usable()) choices.push({ label: '把 ' + base(folder) + ' 加为项目', value: 'add' });
     if (!project && x.project) choices.push({ label: '进入项目 ' + x.project, value: 'enter' });
-    if (x.t && x.live) choices.push({ label: '结束终端', sub: '正在运行的任务会被中断', value: 'end', kind: 'danger' });
+    if (x.t && x.live) choices.push({ label: '结束终端', value: 'end', kind: 'danger' });
     if (!choices.length) return;
-    const choice = await ask(x.title, whereOf(x) + (x.place ? ' · ' + x.place : ''), choices);
+    const choice = await ask(x.title, '', choices);
     if (choice === 'pin') mark(s, { pinned: !s.pinned });
     else if (choice === 'hide') mark(s, s.hidden ? { hidden: false } : { hidden: true, pinned: false });
     else if (choice === 'add') addFolder(folder);
     else if (choice === 'enter') enter(x.project);
     else if (choice === 'end') endTerminal(x.t);
+    else if (choice === 'close' || choice === 'copy') into(s, choice);
   }
   // A press that is held on a card asks what to do with it. A finger that moves is scrolling; the press that ends a
   // held one opens nothing. A mouse asks with its other button, and so does a phone that says a held press that way.
@@ -641,7 +646,6 @@
       $('find').hidden = !everything.length;
       drawFilters(everything);
       $('results').hidden = !searching; $('sections').hidden = searching;
-      $('held-hint').hidden = !everything.length;
       if (searching) {
         // everything is looked through, what is hidden too; what is open comes first
         const found = all.filter(x => !x.twice && asked.every(word => wordsOf(x).includes(word))).sort((a, b) => (b.live - a.live) || (b.pinned - a.pinned) || (a.live ? byRank(a, b) : byTime(a, b)));

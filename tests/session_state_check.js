@@ -15,8 +15,11 @@ assert.match(app, /free\.filter\(x => x\.state === 'active'\)/,
 assert.match(app, /free\.filter\(x => x\.state === 'locked'\)/,
   'retained writer locks must remain available as locked history');
 assert.match(app, /here\.filter\(x => x\.state === 'active'\)/, 'and so within a project');
-assert.match(app, /手机无法关闭它。请先在该应用中结束这段对话/,
+// A conversation an app holds is talked to in its window. Why it cannot be taken into a terminal of the phone's is
+// said by the computer when that is asked for; the page does not explain it beforehand.
+assert.match(fs.readFileSync(path.join(root, 'agent-windows/CodexSessions.cs'), 'utf8'), /请先在电脑原应用中结束并关闭此对话/,
   'a conversation held by an app needs to say what to do on the computer');
+assert.doesNotMatch(app, /手机无法关闭它/, 'the lists and the window carry the main words only');
 assert.match(app, /api\('api\/conversation'/, 'a conversation open on the computer is looked at before anything is done to it');
 assert.doesNotMatch(app, /写入锁|app-server|归属待确认/, 'the page speaks of what happens on the computer, not of locks');
 assert.match(page, /<details id="background" class="held-sessions"/);

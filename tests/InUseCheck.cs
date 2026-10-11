@@ -30,8 +30,20 @@ public static class InUseCheck {
         Require(AutoUpdater.Step(false, false, true) == "wait" && AutoUpdater.Step(false, false, false) == "tell", "found by itself");
         Require(AutoUpdater.Newer("v1.5.3", "1.5.2") && !AutoUpdater.Newer("v1.5.2", "1.5.2") && !AutoUpdater.Newer("1.5.1", "1.5.2") && AutoUpdater.Newer("1.10.0", "1.9.9") && !AutoUpdater.Newer("latest", "1.0.0"), "which version is newer");
         // a message for a conversation that sits idle: what the session that hands it over is given, and what its answer means
-        string address = "uds:\\\\.\\pipe\\LOCAL\\cc-msg-0123", prompt = ClaudeRelay.Prompt(address, "把结论再写短一点\n分两段");
+        string address = "uds:\\\\.\\pipe\\LOCAL\\cc-msg-0123", prompt = ClaudeRelay.Prompt(address, ClaudeRelay.Framed("把结论再写短一点\n分两段"));
         Require(prompt.Contains("to:\n" + address + "\n") && prompt.Contains("-----BEGIN-----\n" + ClaudeRelay.Framed("把结论再写短一点\n分两段") + "\n-----END-----"), "the address and the words, whole: " + prompt);
+        // ---- the folders a project can be made of say by what they are used; one that only a desktop app uses is
+        // offered while that app runs
+        string app = TerminalAgent.CodexApp, desk = TerminalAgent.ClaudeApp, term = TerminalAgent.InTerminal, editor = TerminalAgent.InEditor;
+        Require(String.Join(",", TerminalAgent.Kinds(new[] { term, app, term, desk }, true, true)) == app + "," + desk + "," + term, "each once, the terminal last");
+        Require(String.Join(",", TerminalAgent.Kinds(new[] { term, app, desk }, false, true)) == desk + "," + term, "not the app that is closed");
+        Require(TerminalAgent.Kinds(new[] { app }, false, true).Length == 0 && TerminalAgent.Kinds(new[] { desk }, true, false).Length == 0, "a folder only a closed app uses is not offered");
+        Require(TerminalAgent.Kinds(new[] { editor }, false, false).Length == 1, "an editor's and a terminal's are offered always");
+        // a conversation a program holds is used by that program; a holder that tells nothing leaves it to the file
+        Require(TerminalAgent.UsedBy(app, term) == app && TerminalAgent.UsedBy(desk, term) == desk && TerminalAgent.UsedBy(SessionOrigin.CommandLine, app) == term, "by its holder");
+        Require(TerminalAgent.UsedBy("", app) == app && TerminalAgent.UsedBy("Codex 后台服务", app) == app && TerminalAgent.UsedBy("VS Code", term) == editor, "by its file, or an editor");
+        // what only wakes a conversation carries none of the user's words: those are given to it by its own hook
+        Require(ClaudeRelay.Wake.StartsWith("Remote CLI wake-up") && ClaudeRelay.Wake.Contains("Stop hook") && ClaudeRelay.Prompt(address, ClaudeRelay.Wake).Contains("-----BEGIN-----\n" + ClaudeRelay.Wake + "\n-----END-----"), "the wake-up");
         Require(ClaudeRelay.Framed("x").Contains("from their phone") && ClaudeRelay.Framed("x").EndsWith("\n\nx"), "it says whose words they are");
         string[] arguments = ClaudeRelay.Arguments("C:\\data\\relay-settings.json");
         Require(arguments[0] == "-p" && String.Join(" ", arguments).Contains("--tools SendMessage --allowedTools SendMessage --strict-mcp-config") && Array.IndexOf(arguments, "--no-session-persistence") > 0

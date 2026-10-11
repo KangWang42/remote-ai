@@ -35,13 +35,18 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
 ```json
 {"device": {"online": true, "enabled": true, "workspaces": ["demo"], "tools": ["claude", "codex", "shell"],
             "projects": [{"name": "demo", "path": "D:\\demo", "fixed": true, "exists": true}],
-            "candidates": [{"name": "notes", "path": "D:\\notes", "updated": 1700000000000, "tools": ["claude"]}]},
+            "candidates": [{"name": "notes", "path": "D:\\notes", "updated": 1700000000000, "live": false, "tools": ["claude"], "kinds": ["Claude 桌面版", "终端"]}]},
  "terminals": [{"id": "...", "tool": "shell", "dir": "demo", "title": "PowerShell", "state": "running", "status": "idle", "seq": 12, "cols": 80, "rows": 24, "session": ""}],
  "sessions": [{"id": "<uuid>", "tool": "claude", "dir": "demo", "folder": "", "title": "...", "updated": 1700000000000, "live": false, "now": false, "status": "",
                "pinned": false, "hidden": false, "terminal": ""}]}
 ```
 
-`workspaces` are the project names a terminal may be started in. `sessions` are conversations the tools saved on
+`workspaces` are the project names a terminal may be started in. `candidates` are folders that are no projects and
+have conversations of Claude Code or Codex, for a project to be made of (`project_add` with the `path`): at most 40,
+the ones in use (`live`) first, then by when they were last used. `kinds` says by what a folder is used, in the
+computer's own words for the phone to show and search: a desktop app (`Codex 桌面版`, `Claude 桌面版`), an editor
+(`编辑器`), a terminal (`终端`); a computer of an earlier version says none. The Windows computer leaves out a folder
+that only a desktop app uses while that app does not run. `sessions` are conversations the tools saved on
 the computer; `live` means a program on the computer has it open, `terminal` is set when one of the relay's
 terminals already shows it. `state` is `starting`, `running` or `closed`; `status` is `busy`, `idle` or empty.
 
@@ -214,11 +219,17 @@ it stays open on the computer and is used there as before.
   what it is doing. A conversation that has stopped without waiting can be told only where it says `wake`: one that
   sits idle in the program that has it, and whose tool has a way of its own to hand it a message there. For Codex
   the computer runs `codex queue --thread <id> --message <text>`: the conversation takes the message as what its
-  user says next. For Claude Code it hands the message over as one of Claude Code's own cross-session messages,
-  through a Claude Code session started for that one message (one tool, `SendMessage`; no hooks; no conversation
-  kept), addressed to where Claude Code notes that the conversation takes such messages; the conversation reads it
-  as a message from another session, framed as its user's words from the phone. That can take some seconds, so the
-  relay holds the request for up to 85 seconds. → `{"now": true, "woke": true}`. Either way the conversation is not
+  user says next. For Claude Code the computer uses Claude Code's own cross-session messages, sent through a Claude
+  Code session started for that one message (one tool, `SendMessage`; no hooks; no conversation kept) and addressed
+  to where Claude Code notes that the conversation takes such messages. A conversation takes such a message as
+  another session's, not as its user's, so the user's words are not sent that way where it can be avoided: while
+  Claude Code runs this program's hooks, the words are left for the conversation, the message only wakes it (it
+  carries none of the user's words and asks for a one-character answer), and the conversation's own Stop hook hands
+  it the words when that turn ends, as its user's next instruction. Where the words are not taken within 40 seconds,
+  or the hooks are not installed, they are sent as the cross-session message itself, framed as the user's words from
+  the phone. Either way takes some seconds, so the relay holds the request for up to 85 seconds.
+  → `{"now": true, "woke": true}`. In what `read` gives of such a conversation the user's words stand as what the
+  user said; the message that woke it and the answer to that are left out. Either way the conversation is not
   taken from its program. Without `wake` (a Codex without the command, a Claude Code that notes no such address) an
   idle conversation says that it cannot be told.
 

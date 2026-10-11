@@ -81,7 +81,9 @@ def _folders(items, limit):
         if isinstance(item, dict) and _name(item.get("name"), 60) and _name(item.get("path"), 260):
             out.append({"name": item["name"], "path": item["path"], "fixed": item.get("fixed") is True, "exists": item.get("exists") is not False,
                         "updated": item["updated"] if type(item.get("updated")) is int else 0, "live": item.get("live") is True,
-                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex")]})
+                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex")],
+                        # by what the folder is used on the computer, in the computer's words: a desktop app, an editor, a terminal
+                        "kinds": [k[:20] for k in item.get("kinds", []) if isinstance(k, str) and k.strip()][:4] if isinstance(item.get("kinds"), list) else []})
     return out
 
 
@@ -922,7 +924,7 @@ class Relay:
                            features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks")],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
-                           projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 12))
+                           projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))
             for term in state["threads"].values():
                 if term.get("instance") != instance and term["state"] in ("starting", "running"):
                     term.update(state="closed", error="电脑后台已重启，请从历史对话恢复")

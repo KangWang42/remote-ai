@@ -10,6 +10,7 @@ using RemoteCli;
 /// the things the tools write into a conversation for themselves. Made-up conversation files only.
 public static class SaidCheck {
     static void Require(bool condition, string message) { if (!condition) throw new Exception(message); }
+    static string Quoted(string text) { return new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(text); }
     static string Write(string folder, string name, params string[] lines) {
         string path = Path.Combine(folder, name);
         File.WriteAllText(path, String.Join("\n", lines) + "\n", new UTF8Encoding(false));
@@ -33,6 +34,21 @@ public static class SaidCheck {
                 "{\"type\":\"ai-title\",\"aiTitle\":\"修好登录\"}",
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"" + new string('长', 3000) + "\"}]}}");
             var result = TerminalAgent.Said(claude, "claude");
+            // What the phone said reached the conversation through its Stop hook, or as a message from another session:
+            // Claude Code notes both for itself, and both are shown as what the user said. A message that only woke the
+            // conversation, and what it answered to that, are not shown.
+            string phone = Write(folder, "phone.jsonl",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"在电脑上说的\"}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"好的。\"}]}}",
+                "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"remote-cli-phone-e3\",\"body\":" + Quoted(ClaudeRelay.Wake) + "},\"message\":{\"role\":\"user\",\"content\":" + Quoted("Another Claude session sent a message:\n<cross-session-message from=\"uds:x\">\n" + ClaudeRelay.Wake + "\n</cross-session-message>") + "}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"…\"}]}}",
+                "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":" + Quoted("Stop hook feedback:\n" + Reach.FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n把结论再写短一点\n\n分两段") + "}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"改短了。\"}]}}",
+                "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"remote-cli-phone-9e\",\"body\":" + Quoted(ClaudeRelay.Framed("再加一个例子")) + "},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"加了。\"}]}}",
+                "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"someone-else\",\"body\":\"check the tests over there\"},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
+                "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":\"Stop hook feedback:\\nrun the linter first\"}}");
+            Require(Shown(TerminalAgent.Said(phone, "claude")) == "user:在电脑上说的 | assistant:好的。 | user:把结论再写短一点\n\n分两段 | assistant:改短了。 | user:再加一个例子 | assistant:加了。", "what the phone said: " + Shown(TerminalAgent.Said(phone, "claude")));
             var messages = ((IEnumerable)result["messages"]).Cast<Dictionary<string, object>>().ToList();
             Require(messages.Count == 4, "claude count: " + Shown(result));
             Require(Shown(result).StartsWith("user:第一句 | assistant:我先看看登录的代码。 | tool:Bash：grep -rn login src | assistant:长长", StringComparison.Ordinal), "claude: " + Shown(result).Substring(0, 80));

@@ -227,11 +227,14 @@ class TerminalRelayTests(unittest.TestCase):
     def test_projects_are_listed_and_changed_only_through_the_computer(self):
         info = dict(self.info, workspaces=["demo", "组会"], projects=[
             {"name": "demo", "path": "E:\\01\\demo", "fixed": True, "exists": True}, {"name": "组会", "path": "G:\\06 数据分析", "fixed": False, "exists": True},
-            {"name": "", "path": "x"}, "bad"], candidates=[{"name": "EpiAgentKit", "path": "E:\\05\\EpiAgentKit", "updated": 7, "live": True, "tools": "claude codex shell"}])
+            {"name": "", "path": "x"}, "bad"], candidates=[{"name": "EpiAgentKit", "path": "E:\\05\\EpiAgentKit", "updated": 7, "live": True, "tools": "claude codex shell", "kinds": ["Codex 桌面版", "终端", 5, ""]}]
+            + [{"name": "more%d" % at, "path": "E:\\more\\%d" % at, "kinds": "终端"} for at in range(60)])
         self.relay.agent({"info": info}, now=1001)
         device = self.relay.overview(now=1002)["device"]
         self.assertEqual([(x["name"], x["fixed"]) for x in device["projects"]], [("demo", True), ("组会", False)])
         self.assertEqual((device["candidates"][0]["tools"], device["candidates"][0]["live"]), (["claude", "codex"], True))
+        # by what a folder is used, in the computer's words; forty of them are passed on, for the phone to search in
+        self.assertEqual((device["candidates"][0]["kinds"], device["candidates"][1]["kinds"], len(device["candidates"])), (["Codex 桌面版", "终端"], [], 40))
         for bad in ({"action": "project_add", "path": ""}, {"action": "project_add", "path": "E:\\a", "create": "yes"}, {"action": "project_remove", "name": "没有"},
                     {"action": "project_remove", "name": "demo"}, {"action": "project_rename", "name": "组会", "to": " "}, {"action": "project_rename", "name": "组会", "to": "x" * 41}):
             with self.assertRaises(RemoteError):

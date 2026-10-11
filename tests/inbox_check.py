@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -45,9 +46,17 @@ def main():
     # the system's folder for passing things is never spoken of to the phone: the folder that is no project lies elsewhere
     apart_root = ROOT / ".build" / ("inbox-" + secrets.token_hex(4))
     notes = apart_root / "reading-notes"
-    for made in (data, shop, thesis, notes):
+    # folders that are no projects and have conversations nothing has open: used in a terminal, or by a desktop app
+    typed, desk, drawn = apart_root / "term-notes", apart_root / "desk-notes", apart_root / "claude-drafts"
+    more = [apart_root / ("scratch-%d" % at) for at in range(1, 7)]
+    for made in [data, shop, thesis, notes, typed, desk, drawn] + more:
         made.mkdir(parents=True)
     homes = Homes(temp.name)
+    homes.codex_saved(typed, uuid(30), "终端里的笔记", 6, originator="codex-tui")
+    homes.codex_saved(desk, uuid(31), "桌面版里的笔记", 7, originator="Codex Desktop")
+    homes.claude_saved(drawn, uuid(32), "桌面版里的草稿", 8, entry="claude-desktop-3p")
+    for at, folder in enumerate(more):
+        homes.claude_saved(folder, uuid(40 + at), "零散的 %d" % at, 30 + at, entry="cli")
     homes.claude_saved(shop, uuid(10), "修复结算页的金额显示", 1)
     homes.claude_saved(shop, uuid(11), "给结算页加上优惠券", 2)
     homes.codex_saved(thesis, uuid(12), "画流程图", 5)
@@ -59,7 +68,7 @@ def main():
     homes.codex_saved(notes, WORKING, "整理读书笔记", 0, held=True)
     homes.codex_saved(thesis, HELD, "被占着的对话", 3, held=True)
     # a conversation of Claude Code's that the desktop app has loaded and nobody is at: a process keeps it, half an hour after it was last used
-    homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5)
+    homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5, said=("结算页的金额有时多出一位小数，帮我看看", "好的。问题在 `formatPrice`：金额从分换算成元之后没有固定两位小数。\n\n- 换算后统一用 `toFixed(2)`\n- 在 `cart.test.js` 补了一条用例\n\n要顺便检查优惠券那里的金额吗？"))
     homes.claude_open(shop, IDLE)
     environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600")       # nobody is at the computer
     environment["PATH"] = str(homes.stand_ins(temp.name, queue=True)) + ";" + environment["PATH"]
@@ -95,12 +104,12 @@ def main():
                 if found:
                     return found
                 time.sleep(0.25)
-            raise AssertionError("never: " + what)
+            raise AssertionError("never: " + (what() if callable(what) else what))
 
-        def hook(name, session, folder, **more):
-            """The hook, as Codex runs it for an event of a conversation."""
-            event = dict({"hook_event_name": name, "session_id": session, "transcript_path": str(homes.rollouts[session]), "cwd": str(folder), "model": "gpt", "permission_mode": "default"}, **more)
-            program = subprocess.Popen([str(agent_exe), "--hook", "codex", pipe], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        def hook(name, session, folder, tool="codex", **more):
+            """The hook, as a tool runs it for an event of a conversation."""
+            event = dict({"hook_event_name": name, "session_id": session, "transcript_path": str(homes.rollouts.get(session, "")), "cwd": str(folder), "model": "gpt", "permission_mode": "default"}, **more)
+            program = subprocess.Popen([str(agent_exe), "--hook", tool, pipe], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             program.stdin.write(json.dumps(event, ensure_ascii=False).encode("utf-8")); program.stdin.close()
             hooks.append(program)
             return program
@@ -216,16 +225,42 @@ def main():
         kept = about("桌面版里闲置的对话")
         assert kept["list"] == "background-list" and kept["pill"] == "已停下" and kept["meta"][0] == "web-shop", kept
         page_value("(() => { %s('桌面版里闲置的对话').querySelector('button.open').click(); return 1; })()" % CARD)
-        until(lambda: page_value("(() => { const w = document.querySelector('#sheet .write'); return !!w && !w.hidden && document.querySelector('#sheet .write textarea').placeholder; })()"), 8, "the page of the idle conversation has the message box")
-        assert "直接送进电脑上的这段对话" in page_value("document.querySelector('#sheet .write textarea').placeholder")
+        # its window: what was said and a box to write in, filling the screen; nothing to choose, no lines of explanation
+        WINDOW = "(() => { const s = document.getElementById('sheet'), w = s.querySelector('.write'); return s.open && w && !w.hidden ? { window: s.classList.contains('window'), tall: s.getBoundingClientRect().height / innerHeight," \
+                 " choices: s.querySelectorAll('button.choice').length, small: Array.from(s.querySelectorAll('p.quiet, small')).map(e => e.textContent).filter(Boolean), box: w.querySelector('textarea').placeholder, head: s.querySelector('.stands').textContent } : null; })()"
+        window = until(lambda: page_value(WINDOW), 8, "the window of the idle conversation, with its box")
+        report["window_of_a_conversation"] = window
+        assert window["window"] and window["tall"] > 0.98 and window["choices"] == 0 and window["small"] == [] and window["box"] == "发消息" and window["head"] == "Claude 桌面版 · web-shop", window
+        until(lambda: "好的。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 10, "what was said in it")
+        picture("conversation.png")
         page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '把结论再写短一点'; document.querySelector('#sheet .write button').click(); return 1; })()")
-        until(lambda: "已送进电脑上的这段对话" in (page_value("document.querySelector('#sheet .below').textContent") or ""), 30, "the message was handed to the conversation")
+        until(lambda: page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.user'); return mine.length && mine[mine.length - 1].textContent === '把结论再写短一点' && !document.querySelector('#sheet .write button').disabled; })()"), 30, "what was written stands in the window as what the user said")
+        if out:
+            # the picture for the guide, in the size of its other pictures
+            ask("Emulation.setDeviceMetricsOverride", width=500, height=960, deviceScaleFactor=1, mobile=True)
+            time.sleep(0.5)
+            picture("look.png")
+            ask("Emulation.setDeviceMetricsOverride", width=412, height=892, deviceScaleFactor=2, mobile=True)
         handed = json.loads((data / "relay" / "remote-cli-phone" / "stand-in-run.json").read_text(encoding="utf-8"))
         report["handed_over_with"] = handed["arguments"][:8]
         assert "to:\nuds:\\\\.\\pipe\\LOCAL\\cc-msg-made-up\n" in handed["given"] and "from their phone" in handed["given"] and handed["given"].rstrip().endswith("把结论再写短一点\n-----END-----"), handed["given"]
         assert handed["arguments"][0] == "-p" and handed["arguments"][handed["arguments"].index("--tools") + 1] == "SendMessage" and "--no-session-persistence" in handed["arguments"] and '"disableAllHooks": true' in handed["settings"], handed
         assert listed(IDLE)["live"] is True and len(call("/api/terminal")["terminals"]) == started, "the conversation is where it was, and no terminal was started for it"
         page_value("(() => { document.getElementById('sheet').close(); return 1; })()")
+        # Once Claude Code runs this program's hooks, the words are not sent as the message itself (it would take them
+        # for another session's): the message only wakes the conversation, and its own Stop hook gives it the words.
+        assert hook("SessionStart", IDLE, shop, tool="claude").wait(10) == 0
+        (data / "relay" / "remote-cli-phone" / "stand-in-run.json").unlink()
+        answers = {}
+        saying = threading.Thread(target=lambda: answers.update(got=call("/api/conversation", {"id": new_id(), "session": IDLE, "action": "say", "text": "再加一个例子"})))
+        saying.start()
+        woke = until(lambda: (data / "relay" / "remote-cli-phone" / "stand-in-run.json").is_file() and json.loads((data / "relay" / "remote-cli-phone" / "stand-in-run.json").read_text(encoding="utf-8")), 30, "the conversation is woken")
+        assert "Remote CLI wake-up" in woke["given"] and "再加一个例子" not in woke["given"] and saying.is_alive(), woke["given"]
+        stopped = hook("Stop", IDLE, shop, tool="claude", last_assistant_message="…", stop_hook_active=False)
+        given = json.loads(stopped.communicate(timeout=10)[0].decode("utf-8"))
+        assert given["decision"] == "block" and given["reason"].endswith("\n\n再加一个例子") and "from their phone" in given["reason"], given
+        saying.join(15)
+        assert answers.get("got") == {"now": True, "woke": True}, answers
 
         # ---- and so is a Codex conversation that a program holds idle: through Codex's own queue, as what its user says
         # next, whatever signs the message holds
@@ -321,23 +356,29 @@ def main():
         # ---- a conversation outside every project is taken on as it is: the terminal runs in its folder, and no project
         # is made of it. Here by a copy: what holds this one open is a made-up lock, which cannot be asked to close.
         page_value("(() => { %s('整理读书笔记').querySelector('button.open').click(); return 1; })()" % CARD)
-        offered = until(lambda: page_value(SHEET), 5, "what can be done with the one outside")
-        report["offered_for_the_one_outside"] = offered
-        # the page works beside the conversation: what is said on the computer appears on it while it is open
+        until(lambda: page_value(WINDOW), 8, "the window of the one outside")
+        # the window works beside the conversation: what is said on the computer appears in it while it is open
         with open(homes.rollouts[WORKING], "a", encoding="utf-8") as stream:
             stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "第二部分写好了。"}]}}, ensure_ascii=False) + "\n")
-        until(lambda: "第二部分写好了。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 30, "what is said on the computer appears on the open page")
-        head = page_value("document.querySelector('#sheet-form > p').textContent")
-        assert head.startswith("正在执行 · Codex") and "reading-notes（未加入项目）" in head, head
-        # a message is written on the page itself; the page stays, and says that it was left for the tool
+        until(lambda: "第二部分写好了。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 30, "what is said on the computer appears in the open window")
+        head = page_value("document.querySelector('#sheet .stands').textContent")
+        assert head == "正在执行 · Codex · reading-notes", head
+        # a message is written in the window; it stays open
         page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '再加一节小结'; document.querySelector('#sheet .write button').click(); return 1; })()")
-        until(lambda: "已留言" in (page_value("document.querySelector('#sheet .below').textContent") or ""), 10, "the message is left")
         went = hook("Stop", WORKING, notes, last_assistant_message="提纲写好了。", stop_hook_active=False)
         assert went.wait(10) == 0 and "再加一节小结" in json.loads(went.stdout.read().decode("utf-8"))["reason"]
-        assert page_value(SHEET) == offered, "the page is still open"
-        assert offered[-3:] == ["已在电脑上关闭，在手机上继续", "另开一份继续", "把所在文件夹加为项目"], offered
-        choose("另开一份继续")
-        apart = until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["dir"] == "" and t["state"] == "running"), None), 30, "a terminal outside every project runs")
+        assert page_value("document.getElementById('sheet').open") is True, "the window is still open"
+        page_value("(() => { document.querySelector('#sheet .bar button').click(); return 1; })()")
+        until(lambda: page_value("!document.getElementById('sheet').open"), 5, "the way back leaves the window")
+        # into a terminal of the phone's: what a held press on the card offers
+        page_value("(() => { %s('整理读书笔记').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
+        offered = until(lambda: page_value(SHEET), 5, "what can be done with the one outside")
+        report["offered_for_the_one_outside"] = offered
+        assert offered == ["置顶", "接到手机终端（电脑上已关闭时）", "另开一份到手机终端", "把 reading-notes 加为项目"], offered
+        assert page_value("document.querySelectorAll('#sheet small, #sheet p').length") == 0, "no lines of explanation"
+        choose("另开一份到手机终端")
+        apart = until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["dir"] == "" and t["state"] == "running"), None), 30,
+                      lambda: "a terminal outside every project runs; the page says: %s; listed: %s" % (page_value("document.getElementById('toast').textContent"), [(t["dir"], t["state"], t.get("error")) for t in call("/api/terminal")["terminals"]]))
         assert (apart["folder"], apart["tool"], apart["title"]) == (str(notes), "codex", "整理读书笔记 · 副本"), apart
         printed = until(lambda: (lambda text: text if "STAND-IN" in text and "]" in text.split("with [")[-1] else None)("".join(c["data"] for c in call("/api/terminal?terminal=%s&after=0" % apart["id"])["chunks"])), 20, "what the stand-in printed")
         report["started_outside_every_project"] = printed[printed.index("STAND-IN"):].split("\r")[0][:200]
@@ -356,11 +397,43 @@ def main():
         until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["id"] == apart["id"] and t["state"] != "running"), None), 20, "it has ended")
         started = len(call("/api/terminal")["terminals"])
 
+        # ---- a project is added: the folders with conversations are offered, each with by what it is used; the ones
+        # only a desktop app uses while that app runs (whether it does is this computer's own matter: it is looked up)
+        images = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, encoding="mbcs", errors="replace").stdout
+        names = {row.split('","')[0].strip('"') for row in images.splitlines() if row}
+        codex_app = any(n.lower() == "chatgpt.exe" or n == "Codex.exe" for n in names)
+        claude_app = "Claude.exe" in names
+        report["desktop_apps_running"] = {"codex": codex_app, "claude": claude_app}
+        FOLDERS = "(() => { const s = document.getElementById('sheet'); return s.open && s.querySelector('h3').textContent === '添加项目' ? { find: !!s.querySelector('input.find'), small: s.querySelectorAll('#sheet-form > p').length," \
+                  " folders: Array.from(s.querySelectorAll('.folders button.choice')).map(b => [b.firstChild.firstChild.textContent, b.querySelector('small').textContent]) } : null; })()"
+        find = lambda words: page_value("(() => { const q = document.querySelector('#sheet input.find'); q.value = %s; q.dispatchEvent(new Event('input')); return 1; })()" % json.dumps(words, ensure_ascii=False))
+        until(lambda: len(call("/api/terminal")["device"]["candidates"]) >= 8, 30, "the computer has told of the folders")
+        page_value("(() => { document.getElementById('query').value = ''; document.getElementById('query').dispatchEvent(new Event('input')); return 1; })()")
+        until(lambda: page_value("(() => { const b = document.querySelector('#project-list .card.add button.open'); if (!b || !b.offsetParent) return false; b.click(); return true; })()"), 15, "the card that adds a project")
+        offered = until(lambda: page_value(FOLDERS), 5, "the sheet that adds a project")
+        report["folders_offered"] = offered
+        by = dict(offered["folders"])
+        assert offered["find"] and offered["small"] == 0 and offered["folders"][0][0] == "reading-notes", offered
+        assert by["term-notes"] == "终端 · " + str(typed) and by["scratch-3"] == "终端 · " + str(more[2]), by
+        assert ("desk-notes" in by) == codex_app and ("claude-drafts" in by) == claude_app, (by, codex_app, claude_app)
+        assert not codex_app or by["desk-notes"] == "Codex 桌面版 · " + str(desk), by
+        assert not claude_app or by["claude-drafts"] == "Claude 桌面版 · " + str(drawn), by
+        time.sleep(0.5)
+        picture("add-project.png")
+        # found by its name, its path, or by what it is used
+        find("scratch")
+        assert [name for name, _ in page_value(FOLDERS)["folders"]] == ["scratch-%d" % at for at in range(1, 7)], page_value(FOLDERS)
+        find("终端 term")
+        assert [name for name, _ in page_value(FOLDERS)["folders"]] == ["term-notes"], page_value(FOLDERS)
+        choose("term-notes")
+        lists(lambda seen: seen["projects"] and "term-notes" in seen["projects"], "the folder that was chosen is a project")
+        assert "term-notes" not in [c["name"] for c in call("/api/terminal")["device"]["candidates"]] or until(lambda: "term-notes" not in [c["name"] for c in call("/api/terminal")["device"]["candidates"]], 15, "and is offered no more")
+
         # ---- the folder of the conversation that is open outside every project is made one
         page_value("(() => { %s('整理读书笔记').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
         offered = until(lambda: page_value(SHEET), 5, "the sheet of the one outside")
-        assert offered == ["置顶", "把所在文件夹加为项目"], offered
-        choose("把所在文件夹加为项目")
+        assert offered == ["置顶", "接到手机终端（电脑上已关闭时）", "另开一份到手机终端", "把 reading-notes 加为项目"], offered
+        choose("把 reading-notes 加为项目")
         joined = lists(lambda seen: seen["projects"] and "reading-notes" in seen["projects"], "its folder is a project")
         until(lambda: (lambda card: card and not card["apart"] and card["meta"][0] == "reading-notes")(about("整理读书笔记")), 30, "the conversation is the project's own")
         report["projects_after"] = joined["projects"]
