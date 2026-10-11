@@ -218,13 +218,13 @@
   // the way the program takes pasted text and adds Enter (the operation "say").
   async function say(t) {
     const text = await openSheet((form, finish) => {
-      const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '输入指令，发送后等同于在终端中输入并回车', autocapitalize: 'off', spellcheck: false, ariaLabel: '指令' });
+      const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '发送消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
       // what the program said last is shown, to tell which terminal this is and where it stands
       form.append(el('h3', { textContent: t.title }), el('p', { textContent: t.said || TOOLS[t.tool] + ' · ' + t.dir }), box,
         el('button', { type: 'button', className: 'choice solid', onclick: () => { if (box.value.trim()) finish(box.value); else box.focus(); } }, el('span', { textContent: '发送' })));
       setTimeout(() => box.focus(), 80);
     });
-    if (text && await run({ action: 'say', terminal: t.id, text }, '')) { toast('已发送给“' + t.title + '”'); refresh(); }
+    if (text && await run({ action: 'say', terminal: t.id, text }, '')) { toast('已发送'); refresh(); }
   }
   async function endTerminal(t) {
     if (!await ask('结束“' + t.title + '”？', '正在运行的任务会被中断。对话保存在电脑上，可以从历史对话继续。', [{ label: '结束终端', value: true, kind: 'danger' }])) return;
@@ -347,7 +347,7 @@
     const card = el('li', { className: 'card ' + phase }, el('button', { type: 'button', className: 'open', onclick: () => open(t.id) },
       el('span', { className: 'tool ' + t.tool, html: ICON[t.tool] }), el('span', { className: 'text' }, el('b', { textContent: t.title }), meta, peek)));
     // A terminal that waits on a question is answered below, where the question is read: Enter would say yes to it.
-    if (t.state === 'running' && phase !== 'confirm') card.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这个终端发一条指令', html: ICON.say, onclick: () => say(t) }));
+    if (t.state === 'running' && phase !== 'confirm') card.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这个终端发消息', html: ICON.say, onclick: () => say(t) }));
     if (running(t)) card.append(el('button', { type: 'button', className: 'side', ariaLabel: '结束这个终端', html: ICON.stop, onclick: () => endTerminal(t) }));
     // A question the program waits on is answered here, under what it asks: the question is on the card, so nothing
     // is allowed unseen. The two keys are the ones Claude Code and Codex take for "yes" and "no".

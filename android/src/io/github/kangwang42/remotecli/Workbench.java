@@ -455,11 +455,11 @@ final class Workbench {
 
     // ---- a message for a running terminal, typed here and sent without going into it
     private View sayButton(Task task) {
-        return kit.discButton(R.drawable.ic_say, "给“" + task.entry.shownTitle() + "”发一条指令", () -> sayTask(task));
+        return kit.discButton(R.drawable.ic_say, "给“" + task.entry.shownTitle() + "”发消息", () -> sayTask(task));
     }
     private void sayTask(Task task) {
         final android.widget.EditText box = new android.widget.EditText(activity);
-        box.setHint("输入指令，发送后等同于在终端中输入并回车");
+        box.setHint("发送消息");
         box.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         box.setMinLines(2); box.setMaxLines(6); box.setGravity(android.view.Gravity.TOP);
         android.widget.FrameLayout room = new android.widget.FrameLayout(activity);
@@ -489,16 +489,16 @@ final class Workbench {
                     try { result = post(task.url + "/api/terminal", cookie, op); }
                     catch (IOException unreachable) { Thread.sleep(500); }
                 }
-                if (result == null) throw new Exception("连不上这台电脑，指令没有发出");
-                if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "指令没有发出"));
+                if (result == null) throw new Exception("连不上这台电脑，消息没有发出");
+                if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "消息没有发出"));
             } catch (Exception error) {
                 String said = error.getMessage();
                 // a relay of an earlier version answers so to anything it does not know
-                problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持在此发送指令，请更新后再试" : said == null ? "指令没有发出，请稍后重试" : said;
+                problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持在此发消息，请更新后再试" : said == null ? "消息没有发出，请稍后重试" : said;
             }
             final String message = problem;
             activity.runOnUiThread(() -> {
-                android.widget.Toast.makeText(activity, message.isEmpty() ? "已发送给“" + task.entry.shownTitle() + "”" : message, android.widget.Toast.LENGTH_SHORT).show();
+                android.widget.Toast.makeText(activity, message.isEmpty() ? "已发送" : message, android.widget.Toast.LENGTH_SHORT).show();
                 refresh();
             });
         });
