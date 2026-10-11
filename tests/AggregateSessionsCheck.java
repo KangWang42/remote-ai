@@ -102,6 +102,56 @@ public final class AggregateSessionsCheck {
         require(desk.get(0).active.size() == 3 && desk.get(0).history.size() == 1 && "a".equals(desk.get(0).active.get(0).id) && "b".equals(desk.get(0).active.get(1).id), "what asks comes first, then what waits for a message, then what works");
         require(Arrays.equals(AggregateSessions.counts(desk, null), new int[]{1, 1, 1, 3}), "they are counted with the terminals: " + Arrays.toString(AggregateSessions.counts(desk, null)));
         require(AggregateSessions.rank("waiting") < AggregateSessions.rank("busy") && AggregateSessions.rank("stopped") > AggregateSessions.rank("idle"), "one that waits for a message stands before those at work, one that has stopped after those that wait for input");
+        // A conversation that a program has open in a folder that is no project: it has no project, says its folder,
+        // stands in a group without a name, and counts with the tasks.
+        AggregateSessions.Entry outside = new AggregateSessions.Entry(false, "out", "", "整理读书笔记", "codex", "", "", "busy", true, "cli", "", "");
+        outside.folder = "D:\\notes\\reading-notes\\"; outside.origin = "Codex 桌面版"; outside.reached = true; outside.used = 500;
+        AggregateSessions.Entry posix = new AggregateSessions.Entry(false, "px", "", "别的", "claude", "", "", "", true, "cli", "", "");
+        posix.folder = "/srv/读书 笔记";
+        require(outside.apart() && "reading-notes".equals(outside.place()) && "读书 笔记".equals(posix.place()) && "app".equals(outside.source()) && "cli".equals(posix.source()), "where it is and where it runs: " + outside.place() + " " + posix.place());
+        require("Codex 桌面版 · reading-notes（未加入项目）".equals(AggregateSessions.where(outside)), AggregateSessions.where(outside));
+        AggregateSessions.Entry lost = new AggregateSessions.Entry(false, "lost", "", "没有文件夹的", "codex", "", "", "", true, "cli", "", "");
+        List<AggregateSessions.Project> withOutside = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(works, outside, posix, lost));
+        require(withOutside.size() == 2 && withOutside.get(1).name.isEmpty() && withOutside.get(1).active.size() == 2, "the ones outside every project stand in a group without a name, the last");
+        require(AggregateSessions.counts(withOutside, null)[3] == 3 && !AggregateSessions.signature(withOutside).equals(AggregateSessions.signature(desk)), "and count with the tasks");
+
+        // The workbench's lists: what waits for an answer, what is pinned, what is at work, what was used lately.
+        String pc = "https://pc.example", other2 = "https://other.example";
+        AggregateSessions.Entry shell = new AggregateSessions.Entry(true, TERMINAL, "thesis", "看日志", "shell", "running", "idle", "", false, "", "", "");
+        shell.used = 900;
+        AggregateSessions.Entry gone = new AggregateSessions.Entry(true, "b" + TERMINAL.substring(1), "thesis", "昨天的终端", "claude", "closed", "", "", false, "", "", "past-1");
+        gone.used = 300;
+        AggregateSessions.Entry alone = new AggregateSessions.Entry(true, "c" + TERMINAL.substring(1), "thesis", "只有画面的终端", "shell", "closed", "", "", false, "", "", "");
+        alone.used = 250;
+        AggregateSessions.Entry past1 = new AggregateSessions.Entry(false, "past-1", "thesis", "摘要翻译", "claude", "", "", "", false, "", "", ""), past2 = new AggregateSessions.Entry(false, "past-2", "web-shop", "给结算页加上优惠券", "claude", "", "", "", false, "", "", ""),
+            past3 = new AggregateSessions.Entry(false, "past-3", "web-shop", "旧的讨论", "codex", "", "", "", false, "", "", "");
+        past1.used = 400; past2.used = 800; past3.used = 100;
+        past2.pinned = true; past3.hidden = true;
+        asks.used = 700; waits.used = 600; works.used = 650; works.pinned = true;
+        java.util.function.Function<AggregateSessions.Entry, AggregateSessions.Thing> on = entry -> new AggregateSessions.Thing(entry == waits ? other2 : pc, entry == waits ? "台式机" : "笔记本", entry,
+            entry.terminal && !entry.running() ? "ended" : entry.kind(null));
+        List<AggregateSessions.Thing> things = new java.util.ArrayList<>();
+        for (AggregateSessions.Entry entry : Arrays.asList(shell, gone, alone, past1, past2, past3, asks, waits, works, outside, held)) things.add(on.apply(entry));
+        java.util.function.Function<List<AggregateSessions.Thing>, String> ids = list -> { StringBuilder all = new StringBuilder(); for (AggregateSessions.Thing thing : list) all.append(thing.entry.terminal ? thing.entry.shownTitle() : thing.entry.id).append(' '); return all.toString().trim(); };
+        AggregateSessions.Board board = AggregateSessions.board(things, "", "", "");
+        require("a b".equals(ids.apply(board.needs)), "what asks, then what waits for a message: " + ids.apply(board.needs));
+        require("c past-2".equals(ids.apply(board.pinned)), "what is pinned, the open one first: " + ids.apply(board.pinned));
+        require("out 看日志".equals(ids.apply(board.active)), "what is at work, by how it stands: " + ids.apply(board.active));
+        // an ended terminal whose conversation is listed is not listed twice; what is hidden and what a program holds are left out
+        require("past-1 只有画面的终端".equals(ids.apply(board.recent)) && !board.searched && board.found.isEmpty(), "what was used lately: " + ids.apply(board.recent));
+        require("[claude, codex, shell]".equals(board.tools.toString()) && "[phone, cli, app]".equals(board.sources.toString()), board.tools + " " + board.sources);
+        // narrowed by tool and by where a thing runs
+        AggregateSessions.Board claudeOnly = AggregateSessions.board(things, "", "claude", "");
+        require("a b".equals(ids.apply(claudeOnly.needs)) && "past-2".equals(ids.apply(claudeOnly.pinned)) && claudeOnly.active.isEmpty() && "past-1".equals(ids.apply(claudeOnly.recent)), "one tool");
+        AggregateSessions.Board phoneOnly = AggregateSessions.board(things, "", "", "phone");
+        require(phoneOnly.needs.isEmpty() && "看日志".equals(ids.apply(phoneOnly.active)) && phoneOnly.recent.isEmpty() && phoneOnly.tools.size() == 3, "what runs from the phone");
+        // one search over all of it: every word, whatever its case, in the name, the place, the tool, the computer; the hidden too
+        require("out".equals(ids.apply(AggregateSessions.board(things, " 读书 ", "", "").found)) && AggregateSessions.board(things, "读书", "", "").searched, "by a word of the name");
+        require("看日志 past-1 只有画面的终端".equals(ids.apply(AggregateSessions.board(things, "THESIS", "", "").found)), "by the project, what is open first: " + ids.apply(AggregateSessions.board(things, "THESIS", "", "").found));
+        require("past-3".equals(ids.apply(AggregateSessions.board(things, "旧的 codex", "", "").found)) && "b".equals(ids.apply(AggregateSessions.board(things, "台式机", "", "").found)), "the hidden one is found; and by the computer");
+        require("out".equals(ids.apply(AggregateSessions.board(things, "未加入项目", "", "").found)) && AggregateSessions.board(things, "没有这样的", "", "").found.isEmpty(), "by what a card says; and nothing");
+        require(AggregateSessions.board(things, "旧的", "claude", "").found.isEmpty(), "a search stays within what the filters leave");
+        require("out".equals(outside.conversation()) && "past-1".equals(gone.conversation()) && shell.conversation().isEmpty(), "the conversation a mark is kept of");
         System.out.println("Aggregate checks passed: computer isolation, active/history separation, recent ordering, locks, deduplication, stable refresh and exact terminal route.");
     }
 }

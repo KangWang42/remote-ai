@@ -25,22 +25,19 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * The app's first screen. On top, the running tasks of every computer with the ones that need the user first; below,
- * each computer with its projects. Every computer is asked on its own, so one that is switched off delays nothing.
+ * The app's first screen. On top, everything on every computer by what needs the user: what waits for an answer, what
+ * is pinned, what is at work, what was used lately, with one search over all of it and a row of filters; below, each
+ * computer with its projects. Every computer is asked on its own, so one that is switched off delays nothing.
  */
 final class Workbench {
     /** What one computer answered last: "on", "off" or "key" (sign in again), a line about it, and its projects. */
     private static final class Snapshot {
         final String state, line;
         final List<AggregateSessions.Project> projects;
-        Snapshot(String state, String line, List<AggregateSessions.Project> projects) { this.state = state; this.line = line; this.projects = projects; }
+        final boolean marks;        // the computer keeps what is said of single conversations: pinned, hidden
+        Snapshot(String state, String line, List<AggregateSessions.Project> projects, boolean marks) { this.state = state; this.line = line; this.projects = projects; this.marks = marks; }
     }
-    private static final class Task {
-        final String url, computer, kind;
-        final AggregateSessions.Entry entry;
-        Task(String url, String computer, AggregateSessions.Entry entry, String kind) { this.url = url; this.computer = computer; this.entry = entry; this.kind = kind; }
-    }
-    private static final int SHOWN = 4, TASKS = 12, TALKS = 8, RECENT = 5, RECENT_ALL = 20;
+    private static final int SHOWN = 4, TASKS = 12, TALKS = 8, RECENT = 5, RECENT_ALL = 20, FOUND = 30;
 
     private final MainActivity activity;
     private final Kit kit;
@@ -53,7 +50,11 @@ final class Workbench {
     private LinearLayout attention, recent;
     private TextView summary;
     private String attentionMark;
-    private boolean recentOpen;         // "最近使用" shows all of its terminals, not the first few
+    private boolean recentOpen;         // "最近" shows more than its first few
+    // What is searched for, and what the lists are narrowed to: a tool, and where a thing runs ("" for any).
+    private String query = "", tool = "", source = "";
+    private LinearLayout filters;
+    private String filtersMark;
     private final Map<String, TextView> peeks = new HashMap<>();       // address, line break, terminal -> the line it last said
 
     Workbench(MainActivity activity, Kit kit) { this.activity = activity; this.kit = kit; }
@@ -117,7 +118,24 @@ final class Workbench {
             banner.addView(kit.text(problem, 14, kit.INK));
             page.addView(banner, kit.below(16));
         }
-        holders.clear(); marks.clear(); attentionMark = null;
+        holders.clear(); marks.clear(); attentionMark = null; filtersMark = null; filters = null;
+        if (list.length() > 0) {
+            // one search over every computer's terminals and conversations, and what to tell them apart by
+            page.setFocusable(true); page.setFocusableInTouchMode(true);      // the box is written in when it is touched, not as the screen opens
+            android.widget.EditText find = kit.field("搜索对话、终端和项目", android.text.InputType.TYPE_CLASS_TEXT);
+            find.setMinHeight(kit.dp(46)); find.setTextSize(15); find.setText(query);
+            find.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+            find.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) { }
+                @Override public void onTextChanged(CharSequence text, int start, int before, int count) { }
+                @Override public void afterTextChanged(android.text.Editable text) { query = text.toString(); draw(); }
+            });
+            page.addView(find, kit.below(16));
+            filters = kit.row();
+            android.widget.HorizontalScrollView across = new android.widget.HorizontalScrollView(activity);
+            across.setHorizontalScrollBarEnabled(false); across.addView(filters);
+            page.addView(across, kit.below(10));
+        }
         attention = kit.column();
         page.addView(attention);
         recent = kit.column();
@@ -260,7 +278,7 @@ final class Workbench {
                 final String s = state, l = line;
                 activity.runOnUiThread(() -> {
                     pending.remove(url);
-                    snapshots.put(url, answer == null ? new Snapshot(s, l, Collections.<AggregateSessions.Project>emptyList()) : read(url, answer));
+                    snapshots.put(url, answer == null ? new Snapshot(s, l, Collections.<AggregateSessions.Project>emptyList(), false) : read(url, answer));
                     if (!activity.showing("home")) return;
                     drawComputer(computer); draw();
                 });
@@ -273,8 +291,11 @@ final class Workbench {
     private Snapshot read(String url, JSONObject data) {
         JSONObject device = data.optJSONObject("device");
         List<AggregateSessions.Project> none = Collections.emptyList();
-        if (device == null || !device.optBoolean("online")) return new Snapshot("off", "电脑端程序没有在运行", none);
-        if (!device.optBoolean("enabled")) return new Snapshot("off", "电脑端暂停了手机访问", none);
+        if (device == null || !device.optBoolean("online")) return new Snapshot("off", "电脑端程序没有在运行", none, false);
+        if (!device.optBoolean("enabled")) return new Snapshot("off", "电脑端暂停了手机访问", none, false);
+        boolean marks = false;
+        JSONArray features = device.optJSONArray("features");
+        for (int i = 0; features != null && i < features.length(); i++) marks |= "marks".equals(features.optString(i));
         ArrayList<String> names = new ArrayList<>();
         ArrayList<AggregateSessions.Entry> entries = new ArrayList<>();
         Set<String> alive = new HashSet<>();
@@ -299,7 +320,7 @@ final class Workbench {
                 made.said = entry.optString(terminal ? "said" : "last");
                 JSONArray reach = terminal ? null : entry.optJSONArray("reach");
                 made.reached = reach != null;
-                if (!terminal) made.origin = entry.optString("origin");
+                if (!terminal) { made.origin = entry.optString("origin"); made.folder = entry.optString("folder"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
                 for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
                 made.shell = device.optString("shell");
                 made.used = terminal ? (made.at > 0 ? made.at : entry.optLong("created")) : entry.optLong("updated");
@@ -307,6 +328,10 @@ final class Workbench {
             }
         }
         prune(url, alive);
+        // a terminal is pinned with the conversation it runs
+        Set<String> pinned = new HashSet<>();
+        for (AggregateSessions.Entry entry : entries) if (!entry.terminal && entry.pinned) pinned.add(entry.tool + ':' + entry.id);
+        for (AggregateSessions.Entry entry : entries) if (entry.terminal && !entry.session.isEmpty() && pinned.contains(entry.tool + ':' + entry.session)) entry.pinned = true;
         List<AggregateSessions.Project> groups = AggregateSessions.projects(names, entries);
         int[] counts = AggregateSessions.counts(groups, seen(url));
         List<String> parts = new ArrayList<>();
@@ -314,7 +339,7 @@ final class Workbench {
         if (counts[1] > 0) parts.add(counts[1] + " 个已完成");
         if (counts[2] > 0) parts.add(counts[2] + " 个在执行");
         String line = !parts.isEmpty() ? android.text.TextUtils.join(" · ", parts) : counts[3] > 0 ? "在线 · " + counts[3] + " 个终端等待输入" : "在线 · 没有任务在运行";
-        return new Snapshot("on", line, groups);
+        return new Snapshot("on", line, groups, marks);
     }
 
     // ---- drawing; a part is rebuilt only when what it shows has changed, so a press or a scroll is not interrupted
@@ -325,14 +350,16 @@ final class Workbench {
     private int toolIcon(String tool) { return "claude".equals(tool) ? R.drawable.ic_claude : "codex".equals(tool) ? R.drawable.ic_codex : R.drawable.ic_shell; }
     private int toolColor(String tool) { return "claude".equals(tool) ? 0xffd98a5f : "codex".equals(tool) ? kit.ACCENT : kit.GOOD; }
 
-    /** The summary under the title and the tasks of all computers. */
+    /**
+     * The summary under the title and the lists over all computers, by what needs the owner: what waits for an
+     * answer, what is pinned, what is at work, what was used lately; or, while something is searched for, what was found.
+     */
     private void draw() {
         if (attention == null) return;
         JSONArray list = activity.computers();
-        List<Task> tasks = new ArrayList<>(), recentTasks = new ArrayList<>();
+        List<AggregateSessions.Thing> things = new ArrayList<>();
         int online = 0, known = 0;
         int[] total = new int[4];
-        StringBuilder mark = new StringBuilder();
         for (int i = 0; i < list.length(); i++) {
             JSONObject computer = list.optJSONObject(i);
             if (computer == null) continue;
@@ -346,8 +373,10 @@ final class Workbench {
             int[] counts = AggregateSessions.counts(snapshot.projects, looked);
             for (int k = 0; k < 4; k++) total[k] += counts[k];
             for (AggregateSessions.Project project : snapshot.projects) {
-                for (AggregateSessions.Entry entry : project.active) tasks.add(new Task(url, name, entry, entry.kind(looked)));
-                for (AggregateSessions.Entry entry : project.ended) recentTasks.add(new Task(url, name, entry, "ended"));
+                for (AggregateSessions.Entry entry : project.active) things.add(new AggregateSessions.Thing(url, name, entry, entry.kind(looked)));
+                for (AggregateSessions.Entry entry : project.ended) things.add(new AggregateSessions.Thing(url, name, entry, "ended"));
+                // of the saved conversations, the ones nothing has open: one that a program holds is found under its computer
+                for (AggregateSessions.Entry entry : project.history) if (!entry.live) things.add(new AggregateSessions.Thing(url, name, entry, "history"));
             }
         }
         if (known > 0) {
@@ -359,15 +388,25 @@ final class Workbench {
             summary.setText(android.text.TextUtils.join(" · ", parts));
             summary.setTextColor(total[0] > 0 ? kit.BAD : kit.MUTED);
         }
-        Collections.sort(tasks, (a, b) -> AggregateSessions.rank(a.kind) != AggregateSessions.rank(b.kind) ? AggregateSessions.rank(a.kind) - AggregateSessions.rank(b.kind) : Long.compare(b.entry.at, a.entry.at));
-        Collections.sort(recentTasks, (a, b) -> Long.compare(AggregateSessions.recent(b.entry), AggregateSessions.recent(a.entry)));
-        for (Task task : tasks) mark.append(task.url).append('\n').append(task.entry.id).append('\n').append(task.kind).append('\n').append(task.entry.shownTitle()).append('\n').append(task.computer).append('\n').append(ending.contains(task.url + '\n' + task.entry.id)).append('\n');
-        for (Task task : recentTasks) mark.append(task.url).append('\n').append(task.entry.id).append('\n').append(task.kind).append('\n').append(task.entry.shownTitle()).append('\n').append(task.computer).append('\n').append(AggregateSessions.ago(AggregateSessions.recent(task.entry), System.currentTimeMillis())).append('\n');
-        mark.append(recentOpen).append(folded("active")).append(folded("recent"));
+        AggregateSessions.Board board = AggregateSessions.board(things, query, tool, source);
+        drawFilters(board);
+        boolean several = list.length() > 1;
+        long now = System.currentTimeMillis();
+        StringBuilder mark = new StringBuilder();
+        List<AggregateSessions.Thing> all = new ArrayList<>();
+        for (List<AggregateSessions.Thing> part : java.util.Arrays.asList(board.needs, board.pinned, board.active, board.recent, board.found)) {
+            mark.append(part.size()).append('|');
+            for (AggregateSessions.Thing task : part) {
+                all.add(task);
+                mark.append(task.url).append('\n').append(task.entry.id).append('\n').append(task.kind).append('\n').append(task.entry.shownTitle()).append('\n').append(task.computer).append('\n')
+                    .append(AggregateSessions.where(task.entry)).append('\n').append(task.entry.pinned).append(task.entry.hidden).append(ending.contains(task.url + '\n' + task.entry.id)).append('\n');
+                if (!task.running()) mark.append(AggregateSessions.ago(AggregateSessions.recent(task.entry), now)).append('\n');
+            }
+        }
+        mark.append(recentOpen).append(folded("active")).append(folded("recent")).append(board.searched).append(several).append(tool).append('|').append(source);
         if (mark.toString().equals(attentionMark)) {
             // the cards stay; only what each terminal last said is written anew
-            List<Task> all = new ArrayList<>(tasks); all.addAll(recentTasks);
-            for (Task task : all) {
+            for (AggregateSessions.Thing task : all) {
                 TextView peek = peeks.get(task.url + '\n' + task.entry.id);
                 if (peek == null) continue;
                 if (!task.entry.said.contentEquals(peek.getText())) peek.setText(task.entry.said);
@@ -377,35 +416,83 @@ final class Workbench {
         }
         attentionMark = mark.toString();
         peeks.clear();
-        attention.removeAllViews();
-        boolean several = list.length() > 1;
-        if (!tasks.isEmpty()) {
-            List<String> parts = new ArrayList<>();
-            if (total[0] > 0) parts.add(total[0] + " 个等你确认");
-            if (total[1] > 0) parts.add(total[1] + " 个已完成");
-            if (total[2] > 0) parts.add(total[2] + " 个在执行");
-            // Folded, the heading still says how many ask for a decision, are finished or at work.
-            boolean folded = folded("active");
-            attention.addView(heading("进行中", parts.isEmpty() ? tasks.size() + " 个终端在运行" : android.text.TextUtils.join(" · ", parts), folded, () -> fold("active")), kit.below(14));
-            for (int i = 0; !folded && i < Math.min(TASKS, tasks.size()); i++) attention.addView(taskCard(tasks.get(i), several), kit.below(i == 0 ? 0 : 8));
-            if (!folded && tasks.size() > TASKS) attention.addView(kit.text("另外 " + (tasks.size() - TASKS) + " 个在各自的项目里。", 12.5f, kit.MUTED), kit.below(8));
+        attention.removeAllViews(); recent.removeAllViews();
+        if (board.searched) {
+            // everything is looked through, on every computer, what is hidden too
+            attention.addView(heading("搜索结果", board.found.isEmpty() ? "没有找到" : board.found.size() + " 个"), kit.below(14));
+            for (int i = 0; i < Math.min(FOUND, board.found.size()); i++) attention.addView(taskCard(board.found.get(i), several), kit.below(8));
+            if (board.found.size() > FOUND) attention.addView(kit.text("另外 " + (board.found.size() - FOUND) + " 个没有列出，再输几个字可以找到。", 12.5f, kit.MUTED), kit.below(8));
+            return;
         }
-        recent.removeAllViews();
-        if (!recentTasks.isEmpty()) {
-            boolean folded = folded("recent");
-            recent.addView(heading("最近使用", recentTasks.size() + " 个历史终端", folded, () -> fold("recent")), kit.below(tasks.isEmpty() ? 14 : folded("active") ? 0 : 12));
-            int shown = folded ? 0 : Math.min(recentOpen ? RECENT_ALL : RECENT, recentTasks.size());
-            for (int i = 0; i < shown; i++) recent.addView(taskCard(recentTasks.get(i), several), kit.below(i == 0 ? 0 : 8));
-            if (!folded && recentTasks.size() > RECENT) {
-                TextView toggle = kit.text(recentOpen ? "只显示前 " + RECENT + " 个" : "其余 " + (recentTasks.size() - shown) + " 个", 13, kit.MUTED);
-                toggle.setGravity(Gravity.CENTER); toggle.setMinHeight(kit.dp(44));
-                kit.press(toggle, () -> { recentOpen = !recentOpen; draw(); });
-                recent.addView(toggle, kit.below(2));
-            }
-            if (!folded && recentOpen && recentTasks.size() > shown) recent.addView(kit.text("另外 " + (recentTasks.size() - shown) + " 个可在对应项目中查看。", 12.5f, kit.MUTED), kit.below(4));
+        int confirm = 0, done = 0, busy = 0;
+        for (AggregateSessions.Thing task : board.needs) { if ("confirm".equals(task.kind)) confirm++; else done++; }
+        for (AggregateSessions.Thing task : board.active) if ("busy".equals(task.kind) || "starting".equals(task.kind) || "pc-busy".equals(task.kind)) busy++;
+        List<String> asked = new ArrayList<>();
+        if (confirm > 0) asked.add(confirm + " 个等你确认");
+        if (done > 0) asked.add(done + " 个已完成");
+        section(attention, "等你处理", android.text.TextUtils.join(" · ", asked), board.needs, board.needs.size(), several, null);
+        section(attention, "置顶", board.pinned.size() + " 个", board.pinned, board.pinned.size(), several, null);
+        // Folded, the heading still says how many are at work.
+        section(attention, "进行中", busy > 0 ? busy + " 个在执行" : board.active.size() + " 个开着", board.active, TASKS, several, "active");
+        if (!folded("active") && board.active.size() > TASKS) attention.addView(kit.text("另外 " + (board.active.size() - TASKS) + " 个在各自的项目里。", 12.5f, kit.MUTED), kit.below(8));
+        int shown = Math.min(recentOpen ? RECENT_ALL : RECENT, board.recent.size());
+        section(recent, "最近", board.recent.size() + " 个", board.recent, shown, several, "recent");
+        if (!board.recent.isEmpty() && !folded("recent") && board.recent.size() > RECENT) {
+            TextView toggle = kit.text(recentOpen ? "只显示前 " + RECENT + " 个" : "其余 " + (board.recent.size() - shown) + " 个", 13, kit.MUTED);
+            toggle.setGravity(Gravity.CENTER); toggle.setMinHeight(kit.dp(44));
+            kit.press(toggle, () -> { recentOpen = !recentOpen; draw(); });
+            recent.addView(toggle, kit.below(2));
+            if (recentOpen && board.recent.size() > shown) recent.addView(kit.text("另外 " + (board.recent.size() - shown) + " 个可以搜索到，也在对应的项目里。", 12.5f, kit.MUTED), kit.below(4));
+        }
+        if ((!tool.isEmpty() || !source.isEmpty()) && attention.getChildCount() == 0 && recent.getChildCount() == 0) {
+            TextView none = kit.text("没有符合筛选的对话或终端。", 13.5f, kit.MUTED);
+            none.setGravity(Gravity.CENTER); none.setMinHeight(kit.dp(60));
+            attention.addView(none, kit.below(14));
         }
     }
-    private View taskCard(Task task, boolean several) {
+    /** One of the lists: its heading, which folds the list away where `fold` names it, and the cards of its first things. */
+    private void section(LinearLayout into, String title, String note, List<AggregateSessions.Thing> things, int most, boolean several, String fold) {
+        if (things.isEmpty()) return;
+        boolean folded = fold != null && folded(fold);
+        into.addView(fold == null ? heading(title, note) : heading(title, note, folded, () -> fold(fold)), kit.below(into.getChildCount() == 0 ? 14 : 16));
+        for (int i = 0; !folded && i < Math.min(most, things.size()); i++) into.addView(taskCard(things.get(i), several), kit.below(i == 0 && fold != null ? 0 : 8));
+    }
+    /** The row under the search: narrow the lists to a tool, and to where a thing runs. Offered only where it tells something apart. */
+    private void drawFilters(AggregateSessions.Board board) {
+        if (filters == null) return;
+        List<String> tools = new ArrayList<>(board.tools), sources = new ArrayList<>(board.sources);
+        if (!tool.isEmpty() && !tools.contains(tool)) tools.add(tool);
+        if (!source.isEmpty() && !sources.contains(source)) sources.add(source);
+        if (tools.size() < 2 && tool.isEmpty()) tools.clear();
+        if (sources.size() < 2 && source.isEmpty()) sources.clear();
+        String mark = tools + "|" + sources + "|" + tool + "|" + source;
+        if (mark.equals(filtersMark)) return;
+        filtersMark = mark;
+        filters.removeAllViews();
+        if (tools.isEmpty() && sources.isEmpty()) return;
+        filters.addView(chip("全部", tool.isEmpty() && source.isEmpty(), () -> { tool = ""; source = ""; draw(); }));
+        for (final String one : tools) filters.addView(chip("claude".equals(one) ? "Claude Code" : "codex".equals(one) ? "Codex" : "终端", one.equals(tool), () -> { tool = one.equals(tool) ? "" : one; draw(); }));
+        if (!tools.isEmpty() && !sources.isEmpty()) {
+            View between = new View(activity);
+            between.setBackgroundColor(kit.LINE);
+            LinearLayout.LayoutParams thin = new LinearLayout.LayoutParams(kit.dp(1), kit.dp(18));
+            thin.rightMargin = kit.dp(8);
+            filters.addView(between, thin);
+        }
+        for (final String one : sources) filters.addView(chip(AggregateSessions.sourceLabel(one), one.equals(source), () -> { source = one.equals(source) ? "" : one; draw(); }));
+    }
+    private View chip(String label, boolean on, Runnable action) {
+        TextView chip = on ? kit.bold(label, 13, kit.ON_ACCENT) : kit.text(label, 13, kit.MUTED);
+        chip.setSingleLine(true); chip.setGravity(Gravity.CENTER); chip.setMinHeight(kit.dp(34)); chip.setPadding(kit.dp(13), 0, kit.dp(13), 0);
+        chip.setBackground(kit.shape(on ? kit.ACCENT : kit.PANEL, on ? 0 : kit.LINE, 17));
+        chip.setContentDescription(label + (on ? "，已选" : ""));
+        kit.press(chip, action);
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2);
+        gap.rightMargin = kit.dp(8);
+        chip.setLayoutParams(gap);
+        return chip;
+    }
+    private View taskCard(AggregateSessions.Thing task, boolean several) {
         final AggregateSessions.Entry entry = task.entry;
         LinearLayout card = kit.row();
         card.setMinimumHeight(kit.dp(66)); card.setPadding(kit.dp(14), kit.dp(11), kit.dp(14), kit.dp(11));
@@ -417,15 +504,21 @@ final class Workbench {
         texts.addView(kit.line(entry.shownTitle(), 15.5f, kit.INK, true));
         LinearLayout meta = kit.row();
         boolean closing = ending.contains(task.url + '\n' + entry.id);
-        meta.addView(kit.pill(closing ? "正在结束" : AggregateSessions.label(task.kind), closing ? kit.MUTED : color(task.kind)));
-        // a conversation that is open on the computer says where it runs there: the desktop app, an editor, a command line
-        TextView where = kit.line((entry.origin.isEmpty() ? "" : entry.origin + " · ") + entry.project + (several ? " · " + task.computer : ""), 12.5f, kit.MUTED, false);
+        meta.addView(kit.pill(closing ? "正在结束" : entry.hidden ? "已隐藏" : AggregateSessions.label(task.kind), closing ? kit.MUTED : color(task.kind)));
+        if (entry.pinned) {
+            LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(-2, -2);
+            beside.leftMargin = kit.dp(6);
+            meta.addView(kit.pill("置顶", kit.ACCENT), beside);
+        }
+        // by what it runs and where it is: a terminal of the phone's, the desktop app, an editor, a command line; its
+        // project, or the folder a conversation is open in where there is no project
+        TextView where = kit.line(AggregateSessions.where(entry) + (several ? " · " + task.computer : ""), 12.5f, kit.MUTED, false);
         where.setPadding(kit.dp(8), 0, 0, 0);
         meta.addView(where, new LinearLayout.LayoutParams(0, -2, 1));
         texts.addView(meta, kit.below(4));
         if (!entry.running()) {
             String when = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
-            if (!when.isEmpty()) texts.addView(kit.text(when + "结束", 12.5f, kit.MUTED), kit.below(4));
+            if (!when.isEmpty()) texts.addView(kit.text(entry.terminal ? when + "结束" : entry.toolName() + " · " + when, 12.5f, kit.MUTED), kit.below(4));
         }
         if (entry.terminal || entry.reached) {
             TextView peek = kit.text(entry.said, 12.5f, kit.MUTED);
@@ -455,10 +548,70 @@ final class Workbench {
             markSeen(task.url, entry.id, entry.at);
             activity.openTerminal(task.url, entry.id);
         });
+        // a held press asks what to do with it besides opening it
+        card.setOnLongClickListener(v -> { manage(task); return true; });
         return card;
     }
 
-    private View stopButton(Task task) {
+    // ---- what is done with a thing besides opening it: pinned, hidden, its folder made a project, ended
+    private void manage(AggregateSessions.Thing task) {
+        final AggregateSessions.Entry entry = task.entry;
+        Snapshot snapshot = snapshots.get(task.url);
+        boolean marks = snapshot != null && snapshot.marks && !entry.conversation().isEmpty();
+        final List<String> labels = new ArrayList<>(), notes = new ArrayList<>(), does = new ArrayList<>();
+        if (marks) { labels.add(entry.pinned ? "取消置顶" : "置顶"); notes.add(entry.pinned ? null : "排在列表最前面"); does.add("pin"); }
+        if (marks && "history".equals(task.kind)) { labels.add(entry.hidden ? "取消隐藏" : "从列表隐藏"); notes.add(entry.hidden ? null : "对话仍保存在电脑上：能搜索到，也能在它的项目里找回"); does.add("hide"); }
+        if (entry.apart()) { labels.add("把所在文件夹加为项目"); notes.add(entry.folder); does.add("add"); }
+        int danger = -1;
+        if (entry.terminal && "running".equals(entry.state)) { danger = labels.size(); labels.add("结束终端"); notes.add("正在执行的任务会被中断"); does.add("end"); }
+        if (labels.isEmpty()) return;
+        kit.sheet(entry.shownTitle(), AggregateSessions.where(entry), labels.toArray(new String[0]), notes.toArray(new String[0]), danger, which -> {
+            String what = does.get(which);
+            if ("pin".equals(what)) markRemote(task, true, !entry.pinned);
+            else if ("hide".equals(what)) markRemote(task, false, !entry.hidden);
+            else if ("add".equals(what)) addFolder(task);
+            else stopTask(task);
+        });
+    }
+    /** The computer keeps what is said of a conversation (the action "mark"); what is hidden is no longer pinned. */
+    private void markRemote(AggregateSessions.Thing task, boolean pin, boolean on) {
+        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        activity.net.execute(() -> {
+            String problem = "";
+            try {
+                JSONObject op = new JSONObject().put("action", "mark").put("id", UUID.randomUUID().toString().replace("-", "")).put("session", task.entry.conversation());
+                if (pin) op.put("pinned", on); else { op.put("hidden", on); if (on) op.put("pinned", false); }
+                post(task.url + "/api/conversation", cookie, op);
+            } catch (Exception error) {
+                String said = error.getMessage();
+                // a relay of an earlier version answers so to anything it does not know
+                problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持置顶和隐藏，请更新后再试" : said == null ? "没有改成，请稍后重试" : said;
+            }
+            final String message = problem;
+            activity.runOnUiThread(() -> {
+                if (!message.isEmpty()) android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show();
+                else if (pin) task.entry.pinned = on;
+                else { task.entry.hidden = on; if (on) task.entry.pinned = false; }
+                redraw(); refresh();
+            });
+        });
+    }
+    /** The folder a conversation is open in becomes a project of its computer; the conversation is then one of that project. */
+    private void addFolder(AggregateSessions.Thing task) {
+        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        activity.net.execute(() -> {
+            String problem = "";
+            try {
+                JSONObject op = new JSONObject().put("action", "project_add").put("id", UUID.randomUUID().toString().replace("-", "")).put("path", task.entry.folder).put("name", "").put("create", false);
+                JSONObject result = post(task.url + "/api/terminal", cookie, op);
+                if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "没有加上，请稍后重试"));
+            } catch (Exception error) { problem = error.getMessage() == null ? "没有加上，请稍后重试" : error.getMessage(); }
+            final String message = problem.isEmpty() ? "已加为项目，这段对话稍后归到它名下" : problem;
+            activity.runOnUiThread(() -> { android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show(); refresh(); });
+        });
+    }
+
+    private View stopButton(AggregateSessions.Thing task) {
         boolean busy = ending.contains(task.url + '\n' + task.entry.id);
         View button = kit.discButton(R.drawable.ic_stop, busy ? "正在结束“" + task.entry.shownTitle() + "”" : "结束“" + task.entry.shownTitle() + "”", () -> stopTask(task));
         button.setEnabled(!busy); button.setAlpha(busy ? .4f : 1f);
@@ -466,16 +619,16 @@ final class Workbench {
     }
 
     // ---- a message for a running terminal, typed here and sent without going into it
-    private View sayButton(Task task) {
+    private View sayButton(AggregateSessions.Thing task) {
         return kit.discButton(R.drawable.ic_say, "给“" + task.entry.shownTitle() + "”发消息", () -> sayTask(task));
     }
-    private void sayTask(Task task) {
+    private void sayTask(AggregateSessions.Thing task) {
         // what the program said last is shown, to tell which terminal this is and where it stands
         kit.write(task.entry.shownTitle(), task.entry.said.isEmpty() ? task.entry.project + " · " + AggregateSessions.label(task.kind) : task.entry.said,
             "发送消息", "发送", text -> sayRemote(task, text));
     }
     /** The relay puts the message the way the program takes pasted text and adds Enter (the operation "say"). */
-    private void sayRemote(Task task, String text) {
+    private void sayRemote(AggregateSessions.Thing task, String text) {
         final String cookie = CookieManager.getInstance().getCookie(task.url);
         activity.net.execute(() -> {
             String problem = ""; boolean later = false;
@@ -512,13 +665,13 @@ final class Workbench {
         draw();
     }
 
-    private void stopTask(Task task) {
+    private void stopTask(AggregateSessions.Thing task) {
         final String key = task.url + '\n' + task.entry.id;
         if (ending.contains(key)) return;
         kit.sheet("结束“" + task.entry.shownTitle() + "”？", "正在执行的任务会被中断，历史终端仍会保留。", new String[]{"结束终端"}, new String[]{"结束后会从进行中移到最近使用。"}, 0,
             which -> { if (which == 0 && ending.add(key)) { redraw(); closeRemote(task, key); } });
     }
-    private void closeRemote(Task task, String key) {
+    private void closeRemote(AggregateSessions.Thing task, String key) {
         final String cookie = CookieManager.getInstance().getCookie(task.url);
         activity.net.execute(() -> {
             String problem = "";
@@ -605,11 +758,12 @@ final class Workbench {
         head.setOnLongClickListener(v -> { activity.manage(url); return true; });
         card.addView(head);
         if (on && !folded) {
-            List<AggregateSessions.Project> order = new ArrayList<>();
-            for (AggregateSessions.Project project : snapshot.projects) if (!project.active.isEmpty()) order.add(project);
+            List<AggregateSessions.Project> order = new ArrayList<>(), named = new ArrayList<>();
+            for (AggregateSessions.Project project : snapshot.projects) if (!project.name.isEmpty()) named.add(project);       // what is open outside every project is in the lists above
+            for (AggregateSessions.Project project : named) if (!project.active.isEmpty()) order.add(project);
             int busy = order.size();
-            for (AggregateSessions.Project project : snapshot.projects) if (project.active.isEmpty() && !project.ended.isEmpty()) order.add(project);
-            for (AggregateSessions.Project project : snapshot.projects) if (project.active.isEmpty() && project.ended.isEmpty()) order.add(project);
+            for (AggregateSessions.Project project : named) if (project.active.isEmpty() && !project.ended.isEmpty()) order.add(project);
+            for (AggregateSessions.Project project : named) if (project.active.isEmpty() && project.ended.isEmpty()) order.add(project);
             boolean all = expanded.contains(url);
             int shown = all ? order.size() : Math.max(busy, Math.min(SHOWN, order.size()));
             for (int i = 0; i < shown; i++) { card.addView(rule()); card.addView(projectRow(computer, order.get(i), looked)); }
@@ -703,10 +857,13 @@ final class Workbench {
         int endedShown = Math.min(TALKS, project.ended.size());
         if (endedShown > 0) inside.addView(note("历史终端"));
         for (int i = 0; i < endedShown; i++) inside.addView(talkRow(url, project.ended.get(i), "ended"));
-        int remaining = Math.max(0, TALKS - endedShown), historyShown = Math.min(remaining, project.history.size());
+        // what its owner hid is left out here; it is found by a search, and in the project's own page
+        List<AggregateSessions.Entry> saved = new ArrayList<>();
+        for (AggregateSessions.Entry entry : project.history) if (!entry.hidden || entry.live) saved.add(entry);
+        int remaining = Math.max(0, TALKS - endedShown), historyShown = Math.min(remaining, saved.size());
         if (historyShown > 0) inside.addView(note("保存的对话"));
-        for (int i = 0; i < historyShown; i++) inside.addView(talkRow(url, project.history.get(i), project.history.get(i).kind(looked)));
-        int rest = project.history.size() - historyShown, hiddenEnded = project.ended.size() - endedShown;
+        for (int i = 0; i < historyShown; i++) inside.addView(talkRow(url, saved.get(i), saved.get(i).kind(looked)));
+        int rest = saved.size() - historyShown, hiddenEnded = project.ended.size() - endedShown;
         String more = rest + hiddenEnded > 0 ? "新建终端 · 查看更多记录" : "新建终端 · 进入项目";
         TextView enter = kit.bold(more, 13.5f, kit.ACCENT);
         enter.setGravity(Gravity.CENTER_VERTICAL); enter.setMinHeight(kit.dp(46)); enter.setPadding(kit.dp(8), 0, kit.dp(8), 0);
@@ -733,7 +890,7 @@ final class Workbench {
         }
         if (entry.terminal && "running".equals(entry.state)) {
             row.setPadding(kit.dp(8), kit.dp(6), kit.dp(2), kit.dp(6));
-            View stop = stopButton(new Task(url, "", entry, kind));
+            View stop = stopButton(new AggregateSessions.Thing(url, "", entry, kind));
             ((LinearLayout.LayoutParams) stop.getLayoutParams()).leftMargin = kit.dp(4);
             row.addView(stop);
         }
