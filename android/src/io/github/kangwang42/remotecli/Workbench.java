@@ -299,6 +299,7 @@ final class Workbench {
                 made.said = entry.optString(terminal ? "said" : "last");
                 JSONArray reach = terminal ? null : entry.optJSONArray("reach");
                 made.reached = reach != null;
+                if (!terminal) made.origin = entry.optString("origin");
                 for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
                 made.shell = device.optString("shell");
                 made.used = terminal ? (made.at > 0 ? made.at : entry.optLong("created")) : entry.optLong("updated");
@@ -417,7 +418,8 @@ final class Workbench {
         LinearLayout meta = kit.row();
         boolean closing = ending.contains(task.url + '\n' + entry.id);
         meta.addView(kit.pill(closing ? "正在结束" : AggregateSessions.label(task.kind), closing ? kit.MUTED : color(task.kind)));
-        TextView where = kit.line(entry.project + (several ? " · " + task.computer : ""), 12.5f, kit.MUTED, false);
+        // a conversation that is open on the computer says where it runs there: the desktop app, an editor, a command line
+        TextView where = kit.line((entry.origin.isEmpty() ? "" : entry.origin + " · ") + entry.project + (several ? " · " + task.computer : ""), 12.5f, kit.MUTED, false);
         where.setPadding(kit.dp(8), 0, 0, 0);
         meta.addView(where, new LinearLayout.LayoutParams(0, -2, 1));
         texts.addView(meta, kit.below(4));

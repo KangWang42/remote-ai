@@ -139,8 +139,9 @@
       if (row >= 0) { offer.style.top = 100 * row / term.rows + '%'; offer.style.height = 100 / term.rows + '%'; }      // the row, in the terminal's own measure
       offer.hidden = row < 0;
     }
-    // a program that says itself when it is away from the end is believed; of another, the rows it was scrolled by are counted
-    const away = scrollRouter.offers ? row >= 0 : !(buffer.viewportY >= buffer.baseY && scrollRouter.remoteUp <= 0);
+    // away from the end: the program says so itself, or the rows it was scrolled by say so. Either is enough: the
+    // button is rather there once too often than missing when the program words its offer in a way not known here.
+    const away = row >= 0 || !(buffer.viewportY >= buffer.baseY && scrollRouter.remoteUp <= 0);
     if (latest.hidden === away) latest.hidden = !away;
   }
   term.onScroll(follow);

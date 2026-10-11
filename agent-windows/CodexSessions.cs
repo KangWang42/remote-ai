@@ -14,7 +14,9 @@ using System.Web.Script.Serialization;
 namespace RemoteCli {
 public sealed class SessionOrigin {
     public bool Remote;
-    public string Name = "电脑独立终端";
+    /// Where a conversation runs, in words for its owner: a command line unless a program that is known stands above it.
+    public const string CommandLine = "命令行";
+    public string Name = CommandLine;
     public static SessionOrigin Inspect(int pid) {
         var result = new SessionOrigin();
         var seen = new HashSet<int>();
@@ -30,7 +32,11 @@ public sealed class SessionOrigin {
                     if (new[] { "RemoteCli", "RemoteCliAgent", "TerminalAgent" }.Contains(name, StringComparer.OrdinalIgnoreCase)) {
                         result.Remote = true; result.Name = "其它远程终端"; return result;
                     }
-                    if (name.Equals("Positron", StringComparison.OrdinalIgnoreCase)) result.Name = "Positron";
+                    // The desktop apps run the tools as their own children. Claude's app is Claude.exe, its command line
+                    // claude.exe: the two differ in the capital only.
+                    if (name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) || name.Equals("Codex", StringComparison.Ordinal)) result.Name = "Codex 桌面版";
+                    else if (name.Equals("Claude", StringComparison.Ordinal)) result.Name = "Claude 桌面版";
+                    else if (name.Equals("Positron", StringComparison.OrdinalIgnoreCase)) result.Name = "Positron";
                     else if (name.Equals("Code", StringComparison.OrdinalIgnoreCase)) result.Name = "VS Code";
                     else if (name.Equals("Cursor", StringComparison.OrdinalIgnoreCase)) result.Name = "Cursor";
                     else if (name.Equals("Windsurf", StringComparison.OrdinalIgnoreCase)) result.Name = "Windsurf";
@@ -71,6 +77,8 @@ public sealed class ClaudeSessions {
                 if (record.TryGetValue("cwd", out value)) result.Dir = Convert.ToString(value);
                 if (record.TryGetValue("status", out value)) result.Status = Convert.ToString(value);
                 var origin = SessionOrigin.Inspect(pid); result.Origin = origin.Name;
+                // Claude Code says itself how it was started; its app starts it as "claude-desktop".
+                if (record.TryGetValue("entrypoint", out value) && Convert.ToString(value).StartsWith("claude-desktop", StringComparison.OrdinalIgnoreCase)) result.Origin = "Claude 桌面版";
                 result.Host = origin.Remote ? "remote" : exact ? "cli" : "unknown";
                 result.CanTakeover = exact && !origin.Remote;
                 result.Reason = result.CanTakeover ? "接管会结束原终端中的这段 Claude Code 对话，再在手机恢复同一段历史" : origin.Remote ? "此对话由其它远程终端管理，请先在原终端结束后再接管" : result.Reason;
@@ -151,6 +159,7 @@ public sealed class CodexSessions {
                 }
                 if (Regex.IsMatch(command, @"(?:^|\s)(?:app-server|mcp-server)(?:\s|$)", RegexOptions.IgnoreCase)) {
                     result.Host = "shared";
+                    if (result.Origin == SessionOrigin.CommandLine) result.Origin = "Codex 后台服务";      // the shared background service, with no window of its own
                     result.Reason = "此对话由共享后台占用。请先在电脑原应用中结束并关闭此对话，释放后手机才能接管同一段历史；仅切换页面可能不会释放";
                     return result;
                 }

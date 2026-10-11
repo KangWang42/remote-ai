@@ -22,6 +22,7 @@ final class AggregateSessions {
          * is at work there like a terminal, and stands among the tasks by how it stands. canSay: a message can be left for it.
          */
         boolean reached, canSay;
+        String origin = "";     // where a conversation on the computer runs, as the computer says it: "Codex 桌面版", "命令行", "VS Code"
         long used;              // latest terminal phase change or saved conversation update; 0 when not known
         Entry(boolean terminal, String id, String project, String title, String tool, String state,
               String phase, String status, boolean live, String host, String attached, String session) {
@@ -147,7 +148,7 @@ final class AggregateSessions {
                 key.append(entries.size()).append(':');
                 for (Entry entry : entries) {
                     add(key, entry.id); add(key, entry.shownTitle()); add(key, entry.tool);
-                    add(key, label(entry.kind(seen))); add(key, entry.host);
+                    add(key, label(entry.kind(seen))); add(key, entry.host); add(key, entry.origin);
                     if (entries == project.history || entries == project.ended) add(key, ago(recent(entry), System.currentTimeMillis()));
                 }
             }

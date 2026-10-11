@@ -8,9 +8,11 @@
   // Steps that follow one another within about 80 ms move further each time (3, 7, 10, 13 ...), so they are sent
   // SLOT ms apart, where every step moves what it says here. Measured on Claude Code 2.1.
   const SLOT = 110, MOVES = [[6, 4], [4, 2], [3, 1]], OWED = 45;
-  // Scrolled away from the end of its conversation, Claude Code writes these words over the middle of the last row
-  // it scrolls: its own way back to the end, which is Ctrl+End (END, as a terminal sends it).
-  const OFFER = 'Jump to bottom (ctrl+End)', END = '\x1b[1;5F';
+  // Scrolled away from the end of its conversation, Claude Code writes its own way back to the end over the middle
+  // of the last row it scrolls: "Jump to bottom (ctrl+End) ↓", or other words in front of the same key when there
+  // are new messages below. The offer is known by the key and the arrow after it (OFFER), wherever about the middle
+  // of a row they stand; END is that key as a terminal sends it.
+  const OFFER = /\(ctrl\+end\)\s*\u2193/i, END = '\x1b[1;5F';
   // A terminal moves by whole rows, and a program that scrolls its own view moves it a few rows at a time, a moment
   // after it was asked. What is seen is to move with the finger by the pixel all the same, and whole: with rows
   // coming into sight at one edge as they leave at the other. So while a finger scrolls, what is seen is shown from a
@@ -325,14 +327,16 @@
       return { steps: way * move[1], moved: way * move[0] };
     }
     owing() { return this.tool() === 'claude' && this.owed * (this.way || 0) >= 1.5 && this.mode() === 'mouse'; }
-    // The row on which the program itself offers the way back to the end, or -1: the offer's words, in the middle
-    // of a row of the lower part of the screen. The same words anywhere else are somebody's text.
+    // The row on which the program itself offers the way back to the end, or -1: the offer's key and arrow, about
+    // the middle of a row of the lower part of the screen (words of five to thirty letters in front of them put the
+    // key between five columns left of the middle and twelve right of it). Anywhere else they are somebody's text.
     offered() {
       if (this.mode() !== 'mouse') return -1;
       const buffer = this.term.buffer.active, rows = this.term.rows;
       for (let y = rows - 1; y >= Math.floor(rows / 3); y--) {
-        const line = buffer.getLine(buffer.viewportY + y), at = line ? line.translateToString(true).indexOf(OFFER) : -1;
-        if (at >= 0 && Math.abs(at + OFFER.length / 2 - this.term.cols / 2) <= 3) { this.offers = true; return y; }
+        const line = buffer.getLine(buffer.viewportY + y), text = line ? line.translateToString(true) : '';
+        const key = text.search(OFFER), middle = this.term.cols / 2;
+        if (key >= middle - 5 && key <= middle + 12) { this.offers = true; return y; }
       }
       return -1;
     }

@@ -23,6 +23,7 @@ kernel = ctypes.windll.kernel32
 kernel.GetStdHandle.restype = ctypes.c_void_p
 kernel.SetConsoleMode(ctypes.c_void_p(kernel.GetStdHandle(-10)), 0x0200)             # keys and mouse reports arrive as the terminal sent them
 kernel.SetConsoleMode(ctypes.c_void_p(kernel.GetStdHandle(-11)), 0x0001 | 0x0004)
+kernel.SetConsoleOutputCP(65001)            # what is written is UTF-8: the arrow of the offer below is not a letter of the computer's own code page
 
 TOTAL = 300
 lock = threading.Lock()

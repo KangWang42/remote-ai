@@ -128,6 +128,11 @@ function fixture(kind = 'local', reduced = false) {
   assert.equal(router.remoteUp, 0);
   rows[18] = '  Jump to bottom (ctrl+End) is what it says when';
   assert.equal(router.offered(), -1, 'the words at the beginning of a row are text');
+  rows[18] = '  it says Jump to bottom (ctrl+End) there, I think';
+  assert.equal(router.offered(), -1, 'and so are they in the middle of one, without the arrow');
+  // with new messages below, the same key stands behind other words
+  rows[18] = '\u25cf agents-md:  3 new messages (ctrl+End) \u2193  .md';
+  assert.equal(router.offered(), 18, 'the offer is known by its key and arrow, whatever it says in front');
   rows[18] = ''; rows[3] = ' '.repeat(13) + 'Jump to bottom (ctrl+End) \u2193';
   assert.equal(router.offered(), -1, 'and so are they high up on the screen');
   rows[3] = ''; router.remoteUp = 5; router.latest();

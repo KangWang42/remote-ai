@@ -372,14 +372,15 @@
   const hostLabel = { cli: '电脑上打开着', shared: '被电脑上的应用占用', remote: '被另一个远程终端占用', unknown: '被电脑上的程序占用' };
   function sessionCard(s, withProject) {
     const meta = el('span', { className: 'meta' }), phase = s.live ? reachPhase(s) : '';
-    const where = (s.origin ? s.origin + ' · ' : '') + (hostLabel[sessionHost(s)] || hostLabel.unknown);
+    // where it runs, in the computer's words: the desktop app, an editor, or a command line
+    const where = s.origin && s.origin !== '电脑独立终端' ? (/桌面版|后台服务/.test(s.origin) ? s.origin : TOOLS[s.tool] + ' · ' + s.origin) : TOOLS[s.tool] + ' · 电脑上开着';
     if (phase) {
       // told of by its tool: a card like a terminal's, with where it runs in place of "from the phone"
       const see = () => { if (!usable()) return toast('电脑离线，暂时无法打开'); takeOver(s); };
       meta.append(pill(phase, PHASE[phase][0]));
       if (withProject) meta.append(el('span', { className: 'chip', textContent: s.dir }));
       // it is open on the computer and stays there: said so, not as something a program holds
-      meta.append(el('span', { textContent: TOOLS[s.tool] + ' · ' + (s.origin && s.origin !== '电脑独立终端' ? s.origin : '电脑上开着') }));
+      meta.append(el('span', { textContent: where }));
       const card = el('li', { className: 'card ' + (phase === 'waiting' ? 'done' : phase) }, el('button', { type: 'button', className: 'open', onclick: see },
         el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, el('b', { textContent: s.title }), meta, el('span', { className: 'peek', hidden: !s.last || phase === 'confirm', textContent: s.last || '' }))));
       if (can(s, 'say') && phase !== 'confirm') card.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这段对话发消息', html: ICON.say, onclick: () => tell(s) }));
@@ -395,7 +396,7 @@
     }
     if (s.live) {
       const state = sessionActivity(s);
-      meta.append(pill(state === 'active' && s.status === 'busy' ? 'busy' : state === 'active' ? 'pc' : 'locked', (s.origin ? s.origin + ' · ' : '') + (hostLabel[sessionHost(s)] || hostLabel.unknown)));
+      meta.append(pill(state === 'active' && s.status === 'busy' ? 'busy' : state === 'active' ? 'pc' : 'locked', (s.origin && s.origin !== '电脑独立终端' ? s.origin + ' · ' : '') + (hostLabel[sessionHost(s)] || hostLabel.unknown)));
     }
     if (withProject) meta.append(el('span', { className: 'chip', textContent: s.dir }));
     meta.append(el('span', { textContent: TOOLS[s.tool] + ' · ' + ago(s.updated) }));
