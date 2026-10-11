@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix="remote-cli-relay-check-") as folder:
     subprocess.run([str(compiler), "/nologo", "/target:exe", "/platform:x64", "/codepage:65001",
                     "/reference:System.Management.dll", "/reference:System.Net.Http.dll", "/reference:System.Web.Extensions.dll",
                     "/reference:System.Security.dll", "/main:RelayCheck", "/out:" + str(exe),
-                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "agent-windows/RemoteCliAgent.cs"), str(ROOT / "tests/RelayCheck.cs")], check=True)
+                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "agent-windows/Marks.cs"), str(ROOT / "agent-windows/RemoteCliAgent.cs"), str(ROOT / "tests/RelayCheck.cs")], check=True)
     port, other, closed, password = free_port(), free_port(), free_port(), "test-" + secrets.token_hex(12)
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(port), "--data", str(Path(folder) / "relay")],
                              env=dict(os.environ, RCLI_PASSWORD=password, PYTHONUTF8="1"), stdout=subprocess.DEVNULL)

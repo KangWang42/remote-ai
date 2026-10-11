@@ -120,6 +120,7 @@ public sealed class TerminalAgent {
     public TerminalAgent(string dataFolder = null) {
         dataDir = dataFolder ?? DefaultData;
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir)); Reach.Changed += Wake;
+        Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
         try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | (SecurityProtocolType)12288; }
@@ -205,16 +206,21 @@ public sealed class TerminalAgent {
         public string Tool, Dir, Session, Launcher;
         public bool PhoneTerminal;
     }
-    public sealed class SessionInfo { public string Id, Tool, Dir, Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    // Dir: the project a conversation belongs to. One that a program has open in a folder that is no project has none
+    // ("") and says the folder instead (Folder): the phone can look at it, answer it and tell it things, and its folder
+    // can be made a project from there.
+    public sealed class SessionInfo { public string Id, Tool, Dir, Folder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
     /// the tools' settings; whether or not it has, this listens for them.
     public readonly Reach Reach;
+    /// What the owner said of single conversations from the phone: pinned, hidden (Marks.cs).
+    public readonly Marks Marks;
     // A conversation as the phone is told of it: what the scan found, and where a hook has told more, how it stands
     // now, what it asks, what it last said, and what the phone can do to it ("say", "answer").
     object Listed(SessionInfo s) {
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
         string status = known != null ? known.Status : s.Status;
-        return new { id = s.Id, tool = s.Tool, dir = s.Dir, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
+        return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
             reach = known == null ? null : new[] { known.Sayable ? "say" : null, known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
             ask = known != null && known.Status == "confirm" ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
     }
@@ -308,6 +314,8 @@ public sealed class TerminalAgent {
             .SelectMany(copies => copies.Any(s => s.Live) ? copies.Where(s => s.Live) : copies.OrderByDescending(s => s.Updated).Take(1)).ToList();
     }
     public static string ProjectFolder(string path) { return Regex.Replace(path, "[^a-zA-Z0-9]", "-"); }
+    // A folder that is no project is spoken of to the phone unless it is one of the system's own for passing things.
+    static bool Elsewhere(string folder) { return folder.Length >= 3 && folder.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) < 0 && !folder.EndsWith(@"\AppData\Local\Temp", StringComparison.OrdinalIgnoreCase); }
     static bool SamePath(string a, string b) { return String.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
     static long Milliseconds(DateTime utc) { return (long)(utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
     // Reading the conversation lists can take seconds. The reports start it beside themselves, with the terminals as
@@ -323,7 +331,7 @@ public sealed class TerminalAgent {
         var seen = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);   // folders that are not projects
         Action<string, string, DateTime, bool> note = delegate(string folder, string tool, DateTime at, bool live) {
             folder = (folder ?? "").TrimEnd('\\', '/');
-            if (folder.Length < 3 || dirs.Values.Any(d => SamePath(d, folder)) || folder.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) >= 0) return;
+            if (!Elsewhere(folder) || dirs.Values.Any(d => SamePath(d, folder))) return;
             Dictionary<string, object> item;
             if (!seen.TryGetValue(folder, out item)) seen[folder] = item = new Dictionary<string, object> { { "path", folder }, { "name", Tidy(Path.GetFileName(folder)) }, { "updated", 0L }, { "live", false }, { "tools", "" } };
             if (Milliseconds(at) > (long)item["updated"]) item["updated"] = Milliseconds(at);
@@ -360,6 +368,18 @@ public sealed class TerminalAgent {
                     found.Add(new SessionInfo { Id = id, Tool = "claude", Dir = dir.Key, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? source.Host : "", Origin = live ? source.Origin : "", CanTakeover = live && source.CanTakeover, OwnershipKnown = !live || source.CanTakeover || source.Host == "remote", Status = live ? source.Status : "", TakeoverReason = live ? source.Reason : "", Same = same });
                 }
             } catch { }
+        }
+        // Conversations Claude Code has open in folders that are no projects: listed with their folder.
+        foreach (var held in open.Where(o => !found.Any(s => s.Tool == "claude" && s.Id == o.Key))) {
+            try {
+                string where = (held.Value.Dir ?? "").TrimEnd('\\', '/'), same;
+                if (!Elsewhere(where) || dirs.Values.Any(d => SamePath(d, where)) || !Regex.IsMatch(held.Key, Uuid)) continue;
+                var file = new FileInfo(Path.Combine(home, ".claude", "projects", ProjectFolder(where), held.Key + ".jsonl"));
+                string title = file.Exists ? ClaudeTitle(file, out same) : "";
+                if (title.Length == 0) continue;        // nothing has been said in it yet
+                var source = held.Value;
+                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Host = source.Host, Origin = source.Origin, CanTakeover = false, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = "这段对话所在的文件夹还不是项目，请先把它加为项目", Same = "" });
+            } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
         try {
             // Other folders Claude Code has worked in: its folder names lose characters, the real path is inside a conversation.
@@ -401,11 +421,17 @@ public sealed class TerminalAgent {
                 var owner = codexSessions.Get(id);
                 bool live = owner.Live;
                 bool phone = owner.Pid > 0 && CodexSessions.Descends(owner.Pid, running.Select(t => t.Pty.Id), ownerParents);
-                if (dir == null) { note(folder, "codex", file.LastWriteTimeUtc, live); continue; }
+                string title; codexNames.TryGetValue(id, out title); title = Tidy(title);
+                if (dir == null) {
+                    note(folder, "codex", file.LastWriteTimeUtc, live);
+                    // one that a program has open in a folder that is no project is listed with its folder
+                    string where = folder.TrimEnd('\\', '/');
+                    if (live && !phone && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Host = owner.Host, Origin = owner.Origin, OwnershipKnown = owner.Known, CanTakeover = false, TakeoverReason = "这段对话所在的文件夹还不是项目，请先把它加为项目", Same = "" });
+                    continue;
+                }
                 int count; counts.TryGetValue(dir, out count);
                 if (!live && count >= 15) continue;
                 if (!live) counts[dir] = count + 1;
-                string title; codexNames.TryGetValue(id, out title); title = Tidy(title);
                 found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? owner.Host : "", Origin = live ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = title });
             }
         } catch { }
@@ -416,7 +442,8 @@ public sealed class TerminalAgent {
                 && codexSessions.Get(s.Id).Pid > 0 && CodexSessions.Descends(codexSessions.Get(s.Id).Pid, new[] { t.Pty.Id }, codexParents)).ToArray();
             if (mine.Length == 1) t.Session = mine[0].Id;
         }
-        sessions = Single(found).OrderByDescending(s => s.Updated).Take(200).ToList();
+        // the ones a program has open and the ones their owner pinned are listed whatever their age
+        sessions = Single(found).OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated).Take(200).ToList();
         candidates = seen.Values.Where(c => { try { return Directory.Exists((string)c["path"]); } catch { return false; } })
             .OrderByDescending(c => (bool)c["live"]).ThenByDescending(c => (long)c["updated"]).Take(12).ToList();
         if (claudeFolders.Count > 500) claudeFolders.Clear();
@@ -644,7 +671,10 @@ public sealed class TerminalAgent {
     Dictionary<string, object> ReadConversation(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string session = Get(op, "session"), tool = Get(op, "tool"), dir = Get(op, "dir"), root;
         var saved = sessions.FirstOrDefault(s => s.Id == session && s.Tool == tool && s.Dir == dir);
-        if (saved == null || !Regex.IsMatch(session, Uuid) || !AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+        if (saved == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+        // one that is open in a folder that is no project is read where it is
+        if (dir.Length == 0 && saved.Live && saved.Folder.Length > 0) root = saved.Folder;
+        else if (!AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         try {
             string file = tool == "claude"
                 ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects", ProjectFolder(root), session + ".jsonl")
@@ -816,7 +846,7 @@ public sealed class TerminalAgent {
                 // independently owned CLI belongs in the desktop activity list; shared
                 // app-server and foreign/unknown locks remain available in the phone's
                 // locked-history section for fork/retry actions.
-                list.AddRange(sessions.Where(s => s.Live && s.Host == "cli" && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir, s.Status, s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
+                list.AddRange(sessions.Where(s => s.Live && s.Host == "cli" && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), s.Status, s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
                 return list;
             }
         } catch (InvalidOperationException) { return null; }      // the list changed while it was read: the caller keeps what it showed
@@ -879,7 +909,7 @@ public sealed class TerminalAgent {
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
-            bool peek = action == "session_read" || action == "session_say" || action == "session_answer";
+            bool peek = action == "session_read" || action == "session_say" || action == "session_answer" || action == "session_mark";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
@@ -888,10 +918,17 @@ public sealed class TerminalAgent {
             else if (update) { if (UpdateRequested == null) throw new InvalidOperationException("这台电脑运行的是不带自动更新的后台程序"); UpdateRequested(); }
             else if (computer) { if (Computer == null) throw new InvalidOperationException("这台电脑运行的后台程序没有可在手机上更改的设置"); result = Computer(op); }
             else if (action == "session_read") result = ReadConversation(op, prefs);
-            else if (peek) {
-                // a conversation a program on this computer has open: only one this computer listed, in a folder that is allowed
+            else if (action == "session_mark") {
+                // pinned or hidden, or no longer: of a conversation this computer listed
                 string session = Get(op, "session"), tool = Get(op, "tool");
-                if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && AllDirs(prefs).ContainsKey(s.Dir))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+                if (!sessions.Any(s => s.Id == session && s.Tool == tool)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+                foreach (string kind in Marks.Kinds.Where(op.ContainsKey)) Marks.Set(kind, tool, session, Get(op, kind) == "True");
+                result = new Dictionary<string, object>();
+            }
+            else if (peek) {
+                // a conversation a program on this computer has open: only one this computer listed, in a project or where it was found open
+                string session = Get(op, "session"), tool = Get(op, "tool");
+                if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && (s.Dir.Length == 0 ? s.Folder.Length > 0 : AllDirs(prefs).ContainsKey(s.Dir)))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 if (action == "session_say") result = new Dictionary<string, object> { { "now", Reach.Say(tool, session, Get(op, "text")) } };
                 else { Reach.Answer(tool, session, Get(op, "ask"), Get(op, "allow") == "True"); result = new Dictionary<string, object>(); }
             }
@@ -984,7 +1021,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach" }.Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks" }.Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => new { name = d.Key, path = d.Value, @fixed = true, exists = true })
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => new { name = p.Key, path = p.Value, @fixed = false, exists = allowed.ContainsKey(p.Key) })).ToArray(),
                     candidates = candidates.ToArray() } },

@@ -426,6 +426,49 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual(answers["got"]["messages"], said)
         self.assertNotIn(ask["id"], self.relay._pending)        # nothing of it is kept
 
+    def test_a_conversation_is_pinned_or_hidden_from_the_phone_and_the_computer_keeps_it(self):
+        import threading
+        sid = "11111111-2222-3333-4444-555555555555"
+        saved = {"id": sid, "tool": "claude", "dir": "demo", "title": "常用的对话", "updated": 1, "pinned": "yes"}
+        self.relay.agent({"info": dict(self.info, features=["peek"]), "sessions": [saved]}, now=1001)
+        self.assertEqual([(s["pinned"], s["hidden"]) for s in self.relay.overview(now=1001)["sessions"]], [(False, False)])       # only a plain yes counts
+        ask = lambda **more: dict({"id": "c" * 32, "session": sid, "action": "mark"}, **more)
+        with self.assertRaisesRegex(RemoteError, "不支持置顶"):
+            self.relay.conversation(ask(pinned=True), now=1001, wait=0)
+        info = dict(self.info, features=["peek", "marks", "something-else"])
+        self.relay.agent({"info": info}, now=1001)
+        self.assertEqual(self.relay.overview(now=1001)["device"]["features"], ["peek", "marks"])
+        for bad in (ask(), ask(pinned="yes"), ask(pinned=1), ask(hidden=None)):
+            with self.assertRaisesRegex(RemoteError, "标记无效"):
+                self.relay.conversation(bad, now=1001, wait=0)
+        with self.assertRaisesRegex(RemoteError, "没有找到这个对话"):
+            self.relay.conversation(ask(pinned=True, session="66666666-7777-8888-9999-000000000000"), now=1001, wait=0)
+        answers = {}
+        waiting = threading.Thread(target=lambda: answers.update(got=self.relay.conversation(ask(pinned=True, other="x"), now=1001, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual([{k: v for k, v in o.items() if k not in ("at", "terminal")} for o in asked], [{"id": "c" * 32, "action": "session_mark", "session": sid, "tool": "claude", "dir": "demo", "pinned": True}])
+        self.relay.agent({"info": info, "acks": [{"id": "c" * 32, "error": "", "result": {}}]}, now=1002)
+        waiting.join(5)
+        self.assertEqual(answers["got"], {})
+        # it is said at once, before the computer has listed its conversations again; and as the computer says from then on
+        self.assertEqual([(s["pinned"], s["hidden"]) for s in self.relay.overview(now=1002)["sessions"]], [(True, False)])
+        self.relay.agent({"info": info, "sessions": [dict(saved, pinned=False, hidden=True)]}, now=1003)
+        self.assertEqual([(s["pinned"], s["hidden"]) for s in self.relay.overview(now=1003)["sessions"]], [(False, True)])
+
+    def test_a_conversation_open_in_a_folder_that_is_no_project_is_listed_with_its_folder(self):
+        sid, other, third = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000", "aaaaaaaa-7777-8888-9999-000000000000"
+        info = dict(self.info, features=["peek", "reach"])
+        outside = {"id": sid, "tool": "claude", "dir": "", "folder": "D:\\notes\\reading", "title": "读书笔记", "updated": 1, "live": True, "host": "cli", "reach": ["say"], "status": "waiting"}
+        self.relay.agent({"info": info, "sessions": [outside, dict(outside, id=other, live=False), dict(outside, id=third, folder=""), {"id": third, "tool": "codex", "dir": "demo", "folder": "D:\\x", "title": "项目里的", "updated": 1}]}, now=1001)
+        shown = self.relay.overview(now=1001)["sessions"]
+        # only one that a program has open is listed without a project, and only with its folder; a project's own says no folder
+        self.assertEqual([(s["id"], s["dir"], s["folder"]) for s in shown], [(sid, "", "D:\\notes\\reading"), (third, "demo", "")])
+        self.assertEqual(shown[0]["activity"], "active")
+        # it cannot be continued in a terminal from the phone until its folder is a project: the relay knows no such folder
+        with self.assertRaisesRegex(RemoteError, "没有报告这个工具或目录"):
+            self.relay.command({"action": "start", "id": "d" * 32, "tool": "claude", "dir": "", "session": sid, "takeover": True}, now=1002)
+
     def test_a_conversation_open_on_the_computer_is_answered_and_told_from_the_phone(self):
         import threading
         sid, other = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"

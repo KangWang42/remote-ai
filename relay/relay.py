@@ -276,7 +276,9 @@ FILE_SECONDS = 25
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
 REACH = ("say", "answer")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer") + COMPUTER_ACTIONS     # operations whose acknowledgment carries an answer
+# What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
+MARKS = ("pinned", "hidden")
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark") + COMPUTER_ACTIONS     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -289,6 +291,16 @@ def _reached(session):
     ask = {"id": ask["id"], "text": ask["text"][:600]} if (session.get("status") == "confirm" and isinstance(ask, dict) and isinstance(ask.get("id"), str)
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
     return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask)], "ask": ask, "last": str(session.get("last") or "")[:300]}
+
+
+def _placed(session):
+    """Where a conversation belongs: a project by its name, or, for one that a program has open in a folder that is
+    no project, no project and that folder. None for anything else."""
+    if not isinstance(session.get("dir"), str):
+        return None
+    if session["dir"]:
+        return {"dir": session["dir"], "folder": ""}
+    return {"dir": "", "folder": session["folder"]} if session.get("live") is True and _name(session.get("folder"), 260) else None
 
 
 class Relay:
@@ -767,6 +779,10 @@ class Relay:
             if not isinstance(payload.get("ask"), str) or not _ask.fullmatch(payload["ask"]) or type(payload.get("allow")) is not bool:
                 raise RemoteError("回答无效")
             more = {"ask": payload["ask"], "allow": payload["allow"]}
+        elif action == "mark":
+            more = {mark: payload[mark] for mark in MARKS if mark in payload}
+            if not more or any(type(value) is not bool for value in more.values()):
+                raise RemoteError("标记无效")
         elif action != "read":
             raise RemoteError("不支持此操作")
         with self._changed:
@@ -775,11 +791,18 @@ class Relay:
                 raise RemoteError("操作编号已被其它操作使用")
             if not self._view(now)["online"] or not self._device["enabled"]:
                 raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
-            if ("peek" if action == "read" else "reach") not in self._device.get("features", []):
-                raise RemoteError("电脑端版本不支持查看对话内容，请更新电脑端" if action == "read" else "电脑端版本不支持在手机上处理电脑上的对话，请更新电脑端")
+            needed, without = {"read": ("peek", "电脑端版本不支持查看对话内容，请更新电脑端"), "mark": ("marks", "电脑端版本不支持置顶和隐藏对话，请更新电脑端")}.get(
+                action, ("reach", "电脑端版本不支持在手机上处理电脑上的对话，请更新电脑端"))
+            if needed not in self._device.get("features", []):
+                raise RemoteError(without)
             saved = next((s for s in self._sessions if s["id"] == session), None)
             if not saved:
                 raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
+            if action == "mark":
+                # the computer keeps it; the list here says so at once, and again with the computer's next report
+                answer = self._held({"id": op_id, "action": "session_mark", "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
+                saved.update(more)
+                return answer
             if action != "read":
                 if action not in (saved.get("reach") or []):
                     raise RemoteError("这个确认请求已经处理过了，或只能在电脑上回答" if action == "answer" else "这段对话现在不能从手机发消息，请刷新后重试")
@@ -856,18 +879,19 @@ class Relay:
             dirty = wrote = False
             if isinstance(payload.get("sessions"), list):
                 self._sessions[:] = [
-                    {"id": s["id"], "tool": s["tool"], "dir": s["dir"], "title": s["title"].strip()[:80], "updated": s["updated"],
+                    {"id": s["id"], "tool": s["tool"], **_placed(s), "title": s["title"].strip()[:80], "updated": s["updated"],
+                     **{mark: s.get(mark) is True for mark in MARKS},
                      "live": s.get("live") is True, "status": s.get("status") if s.get("status") in ("idle", "busy", "confirm", "waiting") else "", **_reached(s),
                      "host": s.get("host") if s.get("host") in ("cli", "shared", "remote", "unknown") else "",
                      "origin": str(s.get("origin") or "")[:60],
                      "can_takeover": s.get("can_takeover") is True, "ownership_known": s.get("ownership_known") is True,
                      "takeover_reason": str(s.get("takeover_reason") or "")[:200]}
-                    for s in payload["sessions"][:80]
+                    for s in payload["sessions"][:120]
                     if isinstance(s, dict) and isinstance(s.get("id"), str) and _session.fullmatch(s["id"]) and s.get("tool") in ("claude", "codex")
-                    and isinstance(s.get("dir"), str) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
+                    and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach")],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks")],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 12))

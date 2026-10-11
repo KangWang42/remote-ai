@@ -6,7 +6,9 @@ open) and made-up hook events, handed over the way Codex hands them. Build the a
 
 Checked through the relay, as the phone asks it: the conversation is listed as one at work, a request for
 permission is shown and answered, a message left while the tool works reaches it when it stops, and one sent while
-it waits is taken at once. With a browser, the list page shows the card and its "允许" answers the request.
+it waits is taken at once; it is pinned and hidden, and the computer keeps that; a conversation that is open in a
+folder that is no project is listed with its folder, read and told from the phone, and becomes the project's own
+once the folder is added. With a browser, the list page shows the card and its "允许" answers the request.
 Uses a temporary data folder and port 8739 (RCLI_TEST_PORT changes it). Nothing of the real tools is touched.
 """
 import base64
@@ -16,6 +18,7 @@ import json
 import msvcrt
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("RCLI_TEST_PORT", "8739"))
 password = "test-" + secrets.token_hex(8)
 new_id = lambda: secrets.token_hex(16)
-SESSION = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001"
+SESSION, OUTSIDE = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001", "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002"
 
 
 def main():
@@ -38,7 +41,10 @@ def main():
     out = Path(sys.argv[2]) if len(sys.argv) > 2 else None
     temp = tempfile.TemporaryDirectory()
     data, work, codex, profile = (Path(temp.name) / name for name in ("agent", "demo", "codex", "profile"))
-    for made in (data, work, codex / "sessions" / "2026" / "10" / "11", codex / "thread-writer-locks"):
+    # the system's folder for passing things is never spoken of to the phone: the folder that is no project lies elsewhere
+    apart_root = ROOT / ".build" / ("e2e-" + secrets.token_hex(4))
+    elsewhere = apart_root / "reading-notes"
+    for made in (data, work, elsewhere, codex / "sessions" / "2026" / "10" / "11", codex / "thread-writer-locks"):
         made.mkdir(parents=True)
     # a conversation Codex saved in the project's folder, with a name, and a lock on it that a program holds
     rollout = codex / "sessions" / "2026" / "10" / "11" / ("rollout-2026-10-11T08-00-00-%s.jsonl" % SESSION)
@@ -47,6 +53,16 @@ def main():
     lock = open(codex / "thread-writer-locks" / (SESSION + ".lock"), "w+b")
     lock.write(b"held"); lock.flush(); lock.seek(0)
     msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 4)
+    # another, which a program holds open in a folder that is no project, with something said in it
+    apart = codex / "sessions" / "2026" / "10" / "11" / ("rollout-2026-10-11T09-00-00-%s.jsonl" % OUTSIDE)
+    spoken = [("user", "把这一章的笔记整理成提纲"), ("assistant", "提纲分成三部分。")]
+    apart.write_text("\n".join([json.dumps({"type": "session_meta", "payload": {"id": OUTSIDE, "cwd": str(elsewhere)}})] + [json.dumps(
+        {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": "input_text" if role == "user" else "output_text", "text": text}]}}, ensure_ascii=False) for role, text in spoken]) + "\n", encoding="utf-8")
+    with open(codex / "session_index.jsonl", "a", encoding="utf-8") as index:
+        index.write(json.dumps({"id": OUTSIDE, "thread_name": "整理读书笔记"}, ensure_ascii=False) + "\n")
+    lock_apart = open(codex / "thread-writer-locks" / (OUTSIDE + ".lock"), "w+b")
+    lock_apart.write(b"held"); lock_apart.flush(); lock_apart.seek(0)
+    msvcrt.locking(lock_apart.fileno(), msvcrt.LK_NBLCK, 4)
     environment = dict(os.environ, RCLI_PASSWORD=password, PYTHONUTF8="1", CODEX_HOME=str(codex), REMOTECLI_UNATTENDED="600")       # nobody is at the computer
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full", "RemoteDirs": ["demo=" + str(work)]}), encoding="utf-8")
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(PORT), "--data", str(Path(temp.name) / "relay")], env=environment, stdout=subprocess.DEVNULL)
@@ -69,8 +85,8 @@ def main():
             assert reply.status == expect, (path, reply.status, text[:300].decode("utf-8", "replace"))
             return json.loads(text)
 
-        def listed():
-            return next((s for s in call("/api/terminal").get("sessions", []) if s["id"] == SESSION), None)
+        def listed(session=SESSION):
+            return next((s for s in call("/api/terminal").get("sessions", []) if s["id"] == session), None)
 
         def until(test, seconds, what):
             deadline = time.time() + seconds
@@ -81,9 +97,9 @@ def main():
                 time.sleep(0.2)
             raise AssertionError("never: %s; listed: %s" % (what, json.dumps(listed(), ensure_ascii=False)))
 
-        def hook(name, **more):
+        def hook(name, session=SESSION, **more):
             """The hook, as Codex runs it for an event. Returns the running program; its output is what Codex reads."""
-            event = dict({"hook_event_name": name, "session_id": SESSION, "transcript_path": str(rollout), "cwd": str(work), "model": "gpt", "permission_mode": "default"}, **more)
+            event = dict({"hook_event_name": name, "session_id": session, "transcript_path": str(rollout if session == SESSION else apart), "cwd": str(work if session == SESSION else elsewhere), "model": "gpt", "permission_mode": "default"}, **more)
             program = subprocess.Popen([str(agent_exe), "--hook", "codex", pipe], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             program.stdin.write(json.dumps(event, ensure_ascii=False).encode("utf-8")); program.stdin.close()
             return program
@@ -130,6 +146,38 @@ def main():
         went = json.loads(said(stopping))
         assert went["decision"] == "block" and "再跑一遍测试" in went["reason"], went
         until(lambda: listed()["status"] == "busy", 10, "it works on")
+
+        # ---- pinned and hidden from the phone: the computer keeps it, and goes on saying so in its own reports
+        assert "marks" in call("/api/terminal")["device"]["features"] and (listed()["pinned"], listed()["hidden"]) == (False, False)
+        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "mark", "pinned": True}) == {}
+        assert listed()["pinned"] is True
+        assert SESSION in (data / "conversation-marks.json").read_text(encoding="utf-8")
+        time.sleep(12)          # the computer lists its conversations anew at least every ten seconds
+        assert (listed()["pinned"], listed()["hidden"]) == (True, False), listed()
+        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "mark", "pinned": False, "hidden": True}) == {}
+        until(lambda: (listed()["pinned"], listed()["hidden"]) == (False, True), 5, "no longer pinned, and hidden")
+        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "mark", "hidden": False}) == {}
+        assert SESSION not in (data / "conversation-marks.json").read_text(encoding="utf-8")
+
+        # ---- a conversation open in a folder that is no project: listed without a project, with its folder
+        outside = until(lambda: listed(OUTSIDE), 40, "the conversation outside every project is listed")
+        assert (outside["dir"], outside["folder"], outside["live"], outside["title"], outside["tool"]) == ("", str(elsewhere), True, "整理读书笔记", "codex"), outside
+        report["listed_outside_every_project"] = {key: outside[key] for key in ("dir", "live", "host", "activity", "reach")}
+        got = call("/api/conversation", {"id": new_id(), "session": OUTSIDE})
+        assert [(m["role"], m["text"]) for m in got["messages"]] == spoken, got       # it is read where it is
+        # its tool tells of it: it is told from the phone like any other
+        assert said(hook("UserPromptSubmit", OUTSIDE, prompt="整理提纲")) == ""
+        until(lambda: (lambda s: s if s["status"] == "busy" and s["reach"] == ["say"] else None)(listed(OUTSIDE)), 10, "the one outside works")
+        assert call("/api/conversation", {"id": new_id(), "session": OUTSIDE, "action": "say", "text": "再加一节小结"}) == {"now": False}
+        went = json.loads(said(hook("Stop", OUTSIDE, last_assistant_message="提纲写好了。", stop_hook_active=False)))
+        assert went["decision"] == "block" and "再加一节小结" in went["reason"], went
+        # a terminal of the phone's cannot take it on while its folder is no project
+        refused = call("/api/terminal", {"action": "start", "id": new_id(), "tool": "codex", "dir": "", "session": OUTSIDE, "takeover": True}, expect=400)
+        assert "目录" in refused["error"], refused
+        # once the folder is a project, the conversation is one of that project
+        assert call("/api/terminal", {"action": "project_add", "id": new_id(), "path": str(elsewhere), "name": "", "create": False})["state"] in ("queued", "done")
+        joined = until(lambda: (lambda s: s if s and s["dir"] else None)(listed(OUTSIDE)), 30, "the conversation belongs to the new project")
+        assert (joined["dir"], joined["folder"]) == ("reading-notes", "") and "reading-notes" in call("/api/terminal")["device"]["workspaces"], joined
 
         # ---- the list page: a card like a terminal's, in the same list; "允许" on it answers a request
         if chrome:
@@ -191,11 +239,12 @@ def main():
             picture("reach-waiting.png")
             stopping.kill()
         print(json.dumps(report, ensure_ascii=False))
-        print("a conversation open on the computer: listed at work, asked and answered, told what to do next, from the phone")
+        print("a conversation open on the computer: listed at work, asked and answered, told what to do next, pinned and hidden, from the phone; one outside every project too")
     finally:
         if browser:
             browser.kill()
-        agent.kill(); relay.kill(); lock.close()
+        agent.kill(); relay.kill(); lock.close(); lock_apart.close()
+        shutil.rmtree(apart_root, ignore_errors=True)
         time.sleep(1)
         try:
             temp.cleanup()
