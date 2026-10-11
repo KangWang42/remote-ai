@@ -9,7 +9,8 @@ computer instead and checks the scrolling only. What is checked:
 - a drag moves the program's own list by the line: wheel reports reach it, page keys do not;
 - while a finger scrolls, what is on the screen is the terminal's own rows, pixel for pixel, each where it belongs
   (screenshots are compared), and they are moved without anything being drawn;
-- "回到最新" leads back to the end;
+- "回到最新" leads back to the end; where the program offers its own way back (as Claude Code does, in words
+  written over a row), that row is shown as the app's own and a tap takes the offer up;
 - after a long run the page is read from the program's last output only, still knows that the program is
   fullscreen and reads the mouse, and shows the whole picture, the part the program drew long ago included.
 
@@ -403,6 +404,28 @@ def main():
         until(TOP + " === %d" % top, 10, "back at the end")
         assert page_value("document.getElementById('latest').hidden") is True
 
+        # ---- a program that offers its own way back to the end, in words over the last row of its list (Claude Code):
+        # that row is shown as the app's own, the button in the corner is not shown, and a tap takes the offer up
+        op(action="input", terminal=terminal, data="j")
+        drag(6)
+        until("document.getElementById('offer').hidden === false", 8, "the row of the offer is shown as the app's own")
+        time.sleep(0.5)
+        row = next(n for n, text in enumerate(page_value(SCREEN).split("\n")) if "Jump to bottom (ctrl+End)" in text)
+        over = page_value("(() => { const o = document.getElementById('offer').getBoundingClientRect(), c = document.querySelector('#terminal .xterm-screen > canvas:not(.xterm-link-layer)').getBoundingClientRect(), high = c.height / TerminalUI.terminal.rows;"
+                          " return [(o.top - c.top) / high, o.height / high, o.left - c.left, o.width - c.width, document.getElementById('offer').textContent]; })()")
+        report["row_of_the_offer"] = [row] + [round(part, 2) for part in over[:4]]
+        assert abs(over[0] - row) < 0.1 and abs(over[1] - 1) < 0.1 and abs(over[2]) < 1 and abs(over[3]) < 1 and over[4] == "回到最新", (row, over)
+        assert page_value("document.getElementById('latest').hidden") is True, "one way back is shown, not two"
+        picture("offer.png")
+        # a finger scrolls on: the row stays where the program draws it, over the rows that slide
+        drag(3, halfway=lambda: report.update(offer_while_sliding=page_value("[document.getElementById('offer').hidden, TerminalUI.strip.shown, document.getElementById('latest').hidden]")))
+        assert report["offer_while_sliding"] == [False, True, True], report
+        assert tap("offer") == ["click offer"]
+        until(TOP + " === %d && document.getElementById('offer').hidden" % top, 10, "back at the end by the program's own way")
+        assert page_value(COUNT("end")) == 1 and page_value("document.getElementById('latest').hidden") is True, page_value(SCREEN)
+        op(action="input", terminal=terminal, data="j")
+        assert "other= " in page_value(SCREEN) + " " or "other=\n" in page_value(SCREEN) + "\n", page_value(SCREEN)
+        assert not said, said
         # ---- a phone on which the strip cannot be had: the graphics card gives it nothing, or takes away what it had.
         # The list is scrolled all the same, by the row, with the terminal seen as it draws itself; and once the card is
         # back, so is the strip.

@@ -61,7 +61,7 @@ function fixture(kind = 'local', reduced = false) {
   let tool = 'codex';
   const sent = [], handlers = {};
   const term = { cols: 80, rows: 24, modes: { mouseTrackingMode: 'any' },
-    buffer: { active: { type: 'normal', viewportY: 100, baseY: 100 } },
+    buffer: { active: { type: 'normal', viewportY: 100, baseY: 100, getLine: () => null } },
     parser: { registerCsiHandler(id, handler) { handlers[id.final] = handler; } },
     scrollLines(lines) { this.buffer.active.viewportY = Math.max(0, Math.min(100, this.buffer.active.viewportY + lines)); },
     scrollToBottom() { this.buffer.active.viewportY = this.buffer.active.baseY; }
@@ -110,11 +110,37 @@ function fixture(kind = 'local', reduced = false) {
   assert.equal(router.scroll(-1), false, 'a local scroll at the boundary must stop inertia');
 }
 {
+  // Claude Code, scrolled away from the end, writes its own way back over the middle of the last row it scrolls.
+  // That row is found, and "回到最新" takes the program up on it: Ctrl+End, as a terminal sends it. The same words
+  // elsewhere on a row, or high up on the screen, are somebody's text.
+  const sent = [], rows = new Array(24).fill('');
+  const term = { cols: 52, rows: 24, modes: { mouseTrackingMode: 'any' }, parser: { registerCsiHandler() {} }, scrollLines() {}, scrollToBottom() {},
+    buffer: { active: { type: 'alternate', viewportY: 0, baseY: 0, getLine: y => ({ translateToString: () => rows[y] }) } } };
+  const router = new TerminalScrollRouter(term, text => { sent.push(text); return true; }, () => 'claude');
+  router.sgr = true;
+  assert.equal(router.offered(), -1); assert.equal(router.offers, false);
+  rows[18] = '\u25cf agents-md: Jump to bottom (ctrl+End) \u2193 d';
+  assert.equal(router.offered(), 18, 'the offer, in the middle of a row');
+  assert.equal(router.offers, true, 'and from then on the program is known to say itself when it is away from the end');
+  router.remoteUp = 40;
+  assert.equal(router.latest(), true);
+  assert.deepEqual(sent, ['\x1b[1;5F'], 'the way back is the program\'s own, not forty rows of the wheel');
+  assert.equal(router.remoteUp, 0);
+  rows[18] = '  Jump to bottom (ctrl+End) is what it says when';
+  assert.equal(router.offered(), -1, 'the words at the beginning of a row are text');
+  rows[18] = ''; rows[3] = ' '.repeat(13) + 'Jump to bottom (ctrl+End) \u2193';
+  assert.equal(router.offered(), -1, 'and so are they high up on the screen');
+  rows[3] = ''; router.remoteUp = 5; router.latest();
+  assert.equal(sent.at(-1), '\x1b[<65;26;12M'.repeat(17), 'with no offer on the screen the program is scrolled back by the wheel');
+  term.modes.mouseTrackingMode = 'none'; rows[18] = ' '.repeat(13) + 'Jump to bottom (ctrl+End) \u2193';
+  assert.equal(router.offered(), -1, 'a program that does not read the mouse does not scroll itself');
+}
+{
   // Claude Code moves 3 lines for one wheel step, 4 for two written together and 6 for four, and further still when
   // steps follow within 80 ms: the page sends at most one group every 110 ms and counts what each group moves.
   let now = 1000;
   const sent = [];
-  const term = { cols: 80, rows: 24, modes: { mouseTrackingMode: 'any' }, buffer: { active: { type: 'alternate', viewportY: 0, baseY: 0 } },
+  const term = { cols: 80, rows: 24, modes: { mouseTrackingMode: 'any' }, buffer: { active: { type: 'alternate', viewportY: 0, baseY: 0, getLine: () => null } },
     parser: { registerCsiHandler() {} }, scrollLines() {}, scrollToBottom() {} };
   const router = new TerminalScrollRouter(term, text => { sent.push({ at: now, steps: text.split('\x1b[').length - 1, up: text.includes(String.fromCharCode(96)) || text.includes('<64;') }); return true; }, () => 'claude', () => now);
   router.sgr = true;
@@ -168,7 +194,7 @@ function fixture(kind = 'local', reduced = false) {
   const screen = () => { const text = ['heading'];
     for (let i = 0; i < rows - head - foot; i++) text.push('line ' + (top + i));
     return text.concat(['', '* working (' + (500 - top) + ')', '> message', 'box bottom']); };
-  const term = { cols: 80, rows, modes: { mouseTrackingMode: 'any' }, buffer: { active: { type: 'alternate', viewportY: 0, baseY: 0 } },
+  const term = { cols: 80, rows, modes: { mouseTrackingMode: 'any' }, buffer: { active: { type: 'alternate', viewportY: 0, baseY: 0, getLine: () => null } },
     parser: { registerCsiHandler() {} }, scrollLines() {}, scrollToBottom() {} };
   const router = new TerminalScrollRouter(term, text => { const steps = text.split('\x1b[').length - 1, up = text.includes('<64;');
     due.push({ at: now + latency, rows: (up ? 1 : -1) * { 1: 3, 2: 4, 4: 6 }[steps] }); return true; }, () => 'claude', () => now);

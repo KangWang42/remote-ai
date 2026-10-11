@@ -8,6 +8,9 @@
   // Steps that follow one another within about 80 ms move further each time (3, 7, 10, 13 ...), so they are sent
   // SLOT ms apart, where every step moves what it says here. Measured on Claude Code 2.1.
   const SLOT = 110, MOVES = [[6, 4], [4, 2], [3, 1]], OWED = 45;
+  // Scrolled away from the end of its conversation, Claude Code writes these words over the middle of the last row
+  // it scrolls: its own way back to the end, which is Ctrl+End (END, as a terminal sends it).
+  const OFFER = 'Jump to bottom (ctrl+End)', END = '\x1b[1;5F';
   // A terminal moves by whole rows, and a program that scrolls its own view moves it a few rows at a time, a moment
   // after it was asked. What is seen is to move with the finger by the pixel all the same, and whole: with rows
   // coming into sight at one edge as they leave at the other. So while a finger scrolls, what is seen is shown from a
@@ -289,6 +292,7 @@
       this.clock = clock || (() => performance.now());
       this.remoteUp = 0; this.pageLines = 0; this.sgr = false;
       this.owed = 0; this.way = 0; this.wheelAt = -1e9;
+      this.offers = false;    // the program has offered its own way back to the end: it says itself when it is away from it
       this.asked = 0;         // the rows the last call of scroll() asked the terminal or the program to move by
       // Mouse tracking and mouse encoding are independent terminal modes.
       for (const [final, enabled] of [['h', true], ['l', false]]) {
@@ -321,6 +325,17 @@
       return { steps: way * move[1], moved: way * move[0] };
     }
     owing() { return this.tool() === 'claude' && this.owed * (this.way || 0) >= 1.5 && this.mode() === 'mouse'; }
+    // The row on which the program itself offers the way back to the end, or -1: the offer's words, in the middle
+    // of a row of the lower part of the screen. The same words anywhere else are somebody's text.
+    offered() {
+      if (this.mode() !== 'mouse') return -1;
+      const buffer = this.term.buffer.active, rows = this.term.rows;
+      for (let y = rows - 1; y >= Math.floor(rows / 3); y--) {
+        const line = buffer.getLine(buffer.viewportY + y), at = line ? line.translateToString(true).indexOf(OFFER) : -1;
+        if (at >= 0 && Math.abs(at + OFFER.length / 2 - this.term.cols / 2) <= 3) { this.offers = true; return y; }
+      }
+      return -1;
+    }
     wheel(lines) {
       const column = Math.max(1, Math.floor(this.term.cols / 2)), row = Math.max(1, Math.floor(this.term.rows / 2));
       const button = lines > 0 ? 64 : 65;
@@ -356,7 +371,9 @@
     }
     latest() {
       const mode = this.mode();
-      if (this.remoteUp > 0 && mode !== 'local') {
+      // a program that offers the way back itself is taken up on it; another is scrolled back as far as it was scrolled
+      if (this.offered() >= 0) { if (!this.send(END)) return false; }
+      else if (this.remoteUp > 0 && mode !== 'local') {
         const keys = mode === 'page' ? '\x1b[6~'.repeat(Math.min(80, Math.ceil(this.remoteUp / 8) + 2))
           : this.wheel(-Math.min(600, this.remoteUp + 12));
         if (!this.send(keys)) return false;
