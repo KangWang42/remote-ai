@@ -300,6 +300,98 @@ class Pure(unittest.TestCase):
             with self.assertRaises(agent.OpError):
                 sessions.read(*wrong, dirs)
 
+    def test_marks_are_kept_by_tool_and_conversation(self):
+        data = tempfile.mkdtemp()
+        one = str(uuid.uuid4())
+        marks = agent.Marks(data)
+        self.assertFalse(marks.has("pinned", "claude", one))
+        self.assertFalse(os.path.exists(os.path.join(data, "conversation-marks.json")))     # nothing is written until something is said
+        self.assertTrue(marks.set("pinned", "claude", one, True))
+        self.assertFalse(marks.set("pinned", "claude", one, True))                          # said again, nothing changes
+        self.assertEqual((marks.has("pinned", "claude", one), marks.has("hidden", "claude", one), marks.has("pinned", "codex", one)), (True, False, False))
+        marks.set("hidden", "codex", one, True)
+        again = agent.Marks(data)                                                         # another start of the agent
+        self.assertTrue(again.has("pinned", "claude", one) and again.has("hidden", "codex", one))
+        self.assertEqual(os.stat(os.path.join(data, "conversation-marks.json")).st_mode & 0o777, 0o600)
+        self.assertTrue(again.set("pinned", "claude", one, False))
+        self.assertEqual((agent.Marks(data).has("pinned", "claude", one), agent.Marks(data).has("hidden", "codex", one)), (False, True))
+        with self.assertRaises(agent.OpError):
+            marks.set("starred", "claude", one, True)
+        for n in range(agent.MAX_MARKS + 5):                                              # the ones marked longest ago give way
+            again.set("hidden", "claude", "s%d" % n, True)
+        full = agent.Marks(data)
+        self.assertEqual((full.has("hidden", "claude", "s0"), full.has("hidden", "claude", "s%d" % (agent.MAX_MARKS + 4)), full.has("hidden", "codex", one)), (False, True, False))
+        for broken in ("not json", "[1, 2]", '{"pinned": "claude:x", "hidden": [3, null, "claude:kept"]}'):
+            with open(os.path.join(data, "conversation-marks.json"), "w", encoding="utf-8") as stream:
+                stream.write(broken)
+            read = agent.Marks(data)
+            self.assertEqual((read.has("pinned", "claude", "x"), read.has("hidden", "claude", "kept")), (False, "kept" in broken), broken)
+            self.assertTrue(read.set("pinned", "codex", one, True) and agent.Marks(data).has("pinned", "codex", one))
+
+    def test_conversations_open_outside_every_project_and_marked_ones(self):
+        home, data = tempfile.mkdtemp(), tempfile.mkdtemp()
+        project = tempfile.mkdtemp() + "/项目"
+        os.makedirs(project)
+        apart, passing = "/srv/读书 笔记", "/tmp/rcli-scratch"        # folders that are no projects; the second is the system's own
+        inside, outside, silent, scratch, codex_out, codex_idle, old = (str(uuid.uuid4()) for _ in range(7))
+
+        def claude(folder, session, title, at):
+            saved = os.path.join(home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", folder))
+            os.makedirs(saved, exist_ok=True)
+            path = os.path.join(saved, session + ".jsonl")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"type": "user", "message": {"role": "user", "content": title}}, ensure_ascii=False) + "\n" if title else "{}\n")
+            os.utime(path, (at, at))
+
+        claude(project, inside, "项目里的对话", 1000)
+        claude(project, old, "更早的对话", 500)
+        claude(apart, outside, "整理读书笔记", 2000)
+        claude(apart, silent, "", 2000)                   # open, and nothing said in it yet
+        claude(passing, scratch, "临时的", 2000)
+        rollouts = os.path.join(home, ".codex", "sessions", "2026", "10", "11")
+        os.makedirs(rollouts)
+        files = {}
+        for session, folder in ((codex_out, apart + "/"), (codex_idle, apart)):
+            files[session] = os.path.join(rollouts, "rollout-2026-10-11T10-00-00-%s.jsonl" % session)
+            with open(files[session], "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"type": "session_meta", "payload": {"id": session, "cwd": folder}}, ensure_ascii=False) + "\n")
+        marks = agent.Marks(data)
+        marks.set("pinned", "claude", old, True)
+        marks.set("hidden", "claude", inside, True)
+        sessions = agent.Sessions(marks)
+        sessions.home = home
+        # which conversations a program has open is read from /proc; here it is said
+        sessions._claude_open = lambda terminals: {outside: apart, silent: apart, scratch: passing, inside: project}
+        sessions._codex_open = lambda root: {files[codex_out]: 4000000}
+        before = os.environ.pop("CODEX_HOME", None)
+        try:
+            found = sessions.scan({"项目": project}, [])
+            by = {s["id"]: s for s in found}
+            # those a program has open elsewhere are listed without a project, with their folder; not one in which
+            # nothing was said, not one in the system's folder for passing things, not one that nothing has open
+            self.assertEqual(set(by), {inside, old, outside, codex_out})
+            self.assertEqual([(by[s]["dir"], by[s]["folder"], by[s]["live"], by[s]["tool"]) for s in (outside, codex_out)],
+                             [("", apart, True, "claude"), ("", apart, True, "codex")])
+            self.assertEqual((by[inside]["dir"], by[inside]["folder"], by[inside]["live"]), ("项目", "", True))
+            self.assertEqual([(by[s]["pinned"], by[s]["hidden"]) for s in (inside, old, outside)], [(False, True), (True, False), (False, False)])
+            # the ones that are open and the pinned one come first, whatever their age
+            self.assertEqual({s["id"] for s in found[:3]} | {found[3]["id"]}, set(by))
+            self.assertTrue(all(s["live"] or s["pinned"] for s in found))
+            # it is read where it is; one of a project is read by its project as before
+            self.assertEqual(sessions.read(outside, "claude", "", {"项目": project})["messages"], [{"role": "user", "text": "整理读书笔记"}])
+            self.assertEqual(sessions.read(codex_out, "codex", "", {"项目": project})["messages"], [])
+            for wrong in ((inside, "claude", ""), (scratch, "claude", ""), (outside, "codex", "")):
+                with self.assertRaises(agent.OpError):
+                    sessions.read(*wrong, {"项目": project})
+            # once its folder is a project it is one of that project's
+            joined = {s["id"]: s for s in sessions.scan({"项目": project, "笔记": apart}, [])}
+            self.assertEqual([(joined[s]["dir"], joined[s]["folder"]) for s in (outside, codex_out, codex_idle)], [("笔记", ""), ("笔记", ""), ("笔记", "")])
+        finally:
+            if before is not None:
+                os.environ["CODEX_HOME"] = before
+        for folder, said in ((apart, True), ("/", False), ("relative/x", False), ("/tmp", False), ("/var/tmp/x", False), ("/tmpfiles", True), ("", False), (None, False), ("/a\nb", False)):
+            self.assertEqual(agent.elsewhere(folder), said, folder)
+
     def test_qr_code(self):
         text = "remotecli://connect?u=https%3A%2F%2Fa-b-c-d.trycloudflare.com&p=3AasQ_tDwOpmumz1aqxb6znL&n=ubuntu"
         code = agent.qr_code(text)
@@ -540,6 +632,20 @@ class EndToEnd(unittest.TestCase):
                                  token=self.token, timeout=30)
         self.assertEqual(status, 200, looked)
         self.assertEqual((looked["title"], looked["messages"]), ("上次的对话", [{"role": "user", "text": "上次说到哪了"}]))
+        # it is pinned from the phone, and the computer keeps that: its own later lists say so too
+        self.assertIn("marks", device.get("features", []))
+        self.assertEqual((view["sessions"][0]["pinned"], view["sessions"][0]["hidden"], view["sessions"][0]["folder"]), (False, False, ""))
+        status, marked = request("POST", self.base + "/api/conversation", {"id": secrets.token_hex(16), "session": self.saved, "action": "mark", "pinned": True},
+                                 token=self.token, timeout=30)
+        self.assertEqual((status, marked), (200, {}))
+        self.assertTrue(self.overview()["sessions"][0]["pinned"])
+        time.sleep(12)                  # the agent lists its conversations anew at least every ten seconds
+        self.assertEqual((self.overview()["sessions"][0]["pinned"], self.overview()["sessions"][0]["hidden"]), (True, False))
+        status, marked = request("POST", self.base + "/api/conversation", {"id": secrets.token_hex(16), "session": self.saved, "action": "mark", "pinned": False, "hidden": True},
+                                 token=self.token, timeout=30)
+        self.assertEqual((status, marked), (200, {}))
+        self.poll(lambda: self.overview(), lambda v: (v["sessions"][0]["pinned"], v["sessions"][0]["hidden"]) == (False, True))
+        request("POST", self.base + "/api/conversation", {"id": secrets.token_hex(16), "session": self.saved, "action": "mark", "hidden": False}, token=self.token, timeout=30)
         again = self.op({"action": "start", "tool": "claude", "dir": "项目", "session": self.saved})["terminal"]
         self.assertIn("STANDIN_CLAUDE[--resume %s]" % self.saved, self.read_until(again, "STANDIN_CLAUDE["))
         for terminal in (new, again):

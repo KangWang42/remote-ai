@@ -45,7 +45,7 @@ import time
 import uuid
 from urllib.parse import quote, urlsplit
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -54,7 +54,9 @@ PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 FILE_ACTIONS = ("file_list", "file_read")
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "peek"]
+FEATURES = ["terminal-exit", "files", "peek", "marks"]
+MARKS = ("pinned", "hidden")     # what the owner says of single conversations from the phone
+MAX_MARKS = 300                 # of each kind; with more, the ones marked longest ago give way
 SAID_MESSAGES = 40      # of a conversation, the last this many things said are shown on the phone
 SAID_CHARS = 1500       # and of each, this much
 # where the tools' own installers put them; a service's PATH seldom has these
@@ -342,12 +344,63 @@ def owner_of(pid, terminals):
     return None
 
 
+class Marks:
+    """What the owner has said of single conversations from the phone: a pinned one stands
+    first in the phone's lists, a hidden one is left out of them. Kept in one small file of
+    the data folder, by tool and conversation, so that every phone says the same."""
+
+    def __init__(self, data):
+        self.file = os.path.join(data, "conversation-marks.json")
+        self.kept = {kind: [] for kind in MARKS}
+        try:
+            with open(self.file, encoding="utf-8") as stream:
+                read = json.load(stream)
+            for kind in MARKS:
+                items = read.get(kind) if isinstance(read, dict) else None
+                for key in items if isinstance(items, list) else []:
+                    if isinstance(key, str) and 0 < len(key) <= 80 and key not in self.kept[kind]:
+                        self.kept[kind].append(key)
+                del self.kept[kind][MAX_MARKS:]
+        except (OSError, ValueError):
+            pass                        # a file that cannot be read marks nothing
+
+    def has(self, kind, tool, session):
+        return "%s:%s" % (tool, session) in self.kept[kind]
+
+    def set(self, kind, tool, session, on):
+        """Says that a conversation is of a kind, or no longer is; whether that changed anything."""
+        if kind not in MARKS:
+            raise OpError("没有这种标记")
+        keys, key = self.kept[kind], "%s:%s" % (tool, session)
+        if (key in keys) == on:
+            return False
+        if on:
+            keys.append(key)
+            del keys[:-MAX_MARKS]
+        else:
+            keys.remove(key)
+        write_private(self.file + ".tmp", json.dumps(self.kept, ensure_ascii=False))
+        os.replace(self.file + ".tmp", self.file)
+        return True
+
+
+def elsewhere(folder):
+    """Whether a folder that is no project is spoken of to the phone: a full path, and not one
+    of the system's own folders for passing things."""
+    return isinstance(folder, str) and folder.startswith("/") and 1 < len(folder) <= 240 \
+        and not any(ord(c) < 32 for c in folder) \
+        and not any(folder == temp or folder.startswith(temp + "/") for temp in ("/tmp", "/var/tmp", "/dev/shm"))
+
+
 class Sessions:
     """Conversations Claude Code and Codex saved on this computer for the projects, and
     which of them a program has open right now. A conversation that is open outside our
-    terminals is listed as taken, so the phone does not open it a second time."""
+    terminals is listed as taken, so the phone does not open it a second time. One that a
+    program has open in a folder that is no project is listed too, without a project
+    (dir "") and with its folder: the phone can look at it, and make the folder a project."""
 
-    def __init__(self):
+    def __init__(self, marks=None):
+        self.marks = marks
         self.home = os.path.expanduser("~")
         self.titles = {}                # path -> (mtime, size, title)
         self.folders = {}               # codex rollout path -> the folder it worked in
@@ -360,10 +413,12 @@ class Sessions:
     def read(self, session, tool, name, dirs):
         """What was last said in a conversation of a project, for the phone to look at."""
         saved = self.known(session, tool, name) if UUID_RE.match(session) else None
-        if saved is None or name not in dirs:
+        # one that is open in a folder that is no project is read where it is
+        folder = dirs.get(name) if name else saved and saved["live"] and saved["folder"]
+        if saved is None or not folder:
             raise OpError("电脑上没有找到这个对话，请刷新后重试")
         if tool == "claude":
-            found = [os.path.join(self.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", dirs[name]), session + ".jsonl")]
+            found = [os.path.join(self.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")]
         else:
             home = os.environ.get("CODEX_HOME") or os.path.join(self.home, ".codex")
             found = glob.glob(os.path.join(home, "sessions", "**", "rollout-*%s.jsonl" % session), recursive=True)
@@ -382,6 +437,11 @@ class Sessions:
             found += self._codex(dirs, terminals)
         except OSError:
             pass
+        for entry in found:
+            for kind in MARKS:
+                entry[kind] = bool(self.marks and self.marks.has(kind, entry["tool"], entry["id"]))
+        # the ones a program has open and the ones their owner pinned are listed whatever their age
+        found.sort(key=lambda entry: (not (entry["live"] or entry["pinned"]), -entry["updated"]))
         self.found = found
         return found
 
@@ -398,8 +458,10 @@ class Sessions:
         self.titles[path] = (info.st_mtime, info.st_size, title)
         return title
 
-    def _claude(self, dirs, terminals):
-        taken = set()                   # open in a program that is not one of our terminals
+    def _claude_open(self, terminals):
+        """Conversations Claude Code has open in a program that is not one of our terminals,
+        as conversation -> the folder it works in."""
+        taken = {}
         for path in glob.glob(os.path.join(self.home, ".claude", "sessions", "*.json")):
             try:
                 with open(path, encoding="utf-8") as stream:
@@ -415,10 +477,14 @@ class Sessions:
                 continue                # the program has left; its note stayed behind
             owner = owner_of(pid, terminals)
             if owner is None:
-                taken.add(session)
+                taken[session] = str(record.get("cwd") or "")
             elif owner.tool == "claude":
                 owner.session = session
                 owner.status = record.get("status") if record.get("status") in ("idle", "busy") else ""
+        return taken
+
+    def _claude(self, dirs, terminals):
+        taken = self._claude_open(terminals)
         found = []
         for name, folder in dirs.items():
             saved = os.path.join(self.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder))
@@ -436,6 +502,19 @@ class Sessions:
                 title = self._title(path, info)
                 if title:
                     found.append(self._entry(session, "claude", name, title, info, session in taken))
+        listed = {entry["id"] for entry in found}
+        for session, folder in taken.items():
+            folder = os.path.normpath(folder) if folder else ""
+            if session in listed or not elsewhere(folder) or folder in dirs.values():
+                continue
+            path = os.path.join(self.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")
+            try:
+                info = os.stat(path)
+            except OSError:
+                continue                # nothing has been said in it yet
+            title = self._title(path, info)
+            if title:
+                found.append(self._entry(session, "claude", "", title, info, True, folder))
         return found
 
     def _codex(self, dirs, terminals):
@@ -475,13 +554,18 @@ class Sessions:
                 self.folders[path] = "" if '"parent_thread_id"' in head else str(payload.get("cwd") or "")
             folder = self.folders[path]
             name = next((n for n, p in dirs.items() if folder and os.path.normpath(folder) == p), None)
-            if name is None:
-                continue
             pid = open_now.get(path)
             owner = owner_of(pid, terminals) if pid else None
+            live = pid is not None and owner is None
+            if name is None:
+                # one that a program has open in a folder that is no project is listed with its folder
+                if live and elsewhere(os.path.normpath(folder) if folder else ""):
+                    title = tidy(str(self.names[1].get(session) or "")) \
+                        or "Codex 对话 " + time.strftime("%m-%d %H:%M", time.localtime(info.st_mtime))
+                    found.append(self._entry(session, "codex", "", title, info, True, os.path.normpath(folder)))
+                continue
             if owner is not None and owner.tool == "codex" and not owner.session:
                 owner.session = session
-            live = pid is not None and owner is None
             if not live and counts.get(name, 0) >= 15:
                 continue
             if not live:
@@ -509,8 +593,8 @@ class Sessions:
         return held
 
     @staticmethod
-    def _entry(session, tool, name, title, info, live):
-        return {"id": session, "tool": tool, "dir": name, "title": title, "updated": int(info.st_mtime * 1000),
+    def _entry(session, tool, name, title, info, live, folder=""):
+        return {"id": session, "tool": tool, "dir": name, "folder": folder, "title": title, "updated": int(info.st_mtime * 1000),
                 "live": live, "host": "cli" if live else "", "status": "", "can_takeover": False,
                 "ownership_known": True, "takeover_reason": "请先在电脑上结束正在使用这个对话的程序" if live else ""}
 
@@ -886,7 +970,8 @@ class Agent:
         self.password = password
         self.instance = secrets.token_hex(16)
         self.projects = Projects(data)
-        self.sessions = Sessions()
+        self.marks = Marks(data)
+        self.sessions = Sessions(self.marks)
         self.sessions_at = 0.0          # when the conversations were last looked up
         self.sessions_sent = ("", 0.0)  # what the relay was last told, and when
         self.tools = (["shell"], 0.0)
@@ -1065,7 +1150,7 @@ class Agent:
         the held pull; the same id is never carried out twice."""
         try:
             op_id, terminal = check_op(op, need_terminal=op.get("action") not in
-                                       PROJECT_ACTIONS + FILE_ACTIONS + ("session_read",))
+                                       PROJECT_ACTIONS + FILE_ACTIONS + ("session_read", "session_mark"))
         except OpError as error:
             say("拒绝操作：%s" % error)
             return
@@ -1087,6 +1172,15 @@ class Agent:
             elif action == "session_read":
                 result = self.sessions.read(str(op.get("session") or ""), str(op.get("tool") or ""),
                                             str(op.get("dir") or ""), dirs)
+            elif action == "session_mark":
+                # pinned or hidden, or no longer: of a conversation this computer listed
+                session, tool = str(op.get("session") or ""), str(op.get("tool") or "")
+                if not any(s["id"] == session and s["tool"] == tool for s in self.sessions.found):
+                    raise OpError("电脑上没有找到这个对话，请刷新后重试")
+                for kind in MARKS:
+                    if isinstance(op.get(kind), bool):
+                        self.marks.set(kind, tool, session, op[kind])
+                self.sessions_at, result = 0.0, {}      # the next report lists the conversations as they now stand
             elif action == "start":
                 self.start_terminal(op, dirs, terminal)
             else:
