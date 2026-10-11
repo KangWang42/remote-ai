@@ -332,6 +332,15 @@ function fixture(kind = 'local', reduced = false) {
   plain.begin('local', 0); plain.moved(30);
   assert.equal(plain.active, false, 'a terminal that has no picture to copy is not slid: it scrolls by the row');
   assert.equal(plain.frame(16, false), false);
+  // The picture can be lost while a finger scrolls (a phone's graphics card takes back what was on it): the
+  // terminal scrolls by the row from there, and the rows it was kept ahead by are asked back.
+  let ahead = 0, there = true;
+  const lost = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => viewport, read: () => [], draw() {},
+    keep: () => there, show() {}, nudge(count) { ahead += count; } });
+  lost.begin('local', 0); lost.drawn(); lost.moved(30);
+  assert.equal(ahead, 1, 'the terminal is kept a row ahead');
+  there = false; lost.drawn();
+  assert.equal(lost.active, false); assert.equal(ahead, 0, 'and is asked back that row when there is no picture any more');
   assert.equal(100 - viewport, Math.trunc(moved / cell), 'the terminal is at the row the finger left it in, not ahead of it: ' + (100 - viewport));
 }
 console.log('Terminal scroll behavior checks passed');

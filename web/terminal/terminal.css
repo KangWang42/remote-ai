@@ -34,12 +34,11 @@ button:disabled { opacity: .45; cursor: default; }
 /* The terminal's own layers are ordered among themselves only (isolation): the layer for links has a z-index, and
    would otherwise lie over what is laid over the terminal here, and take the taps meant for "回到最新". */
 #terminal { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 10px; isolation: isolate; }
-/* While a finger scrolls, the rows that move are shown here, over the terminal's picture (terminal-strip.js): tiles
-   on a track that is moved by a transform, which costs a frame no painting. Above the terminal's layer for links. */
+/* While a finger scrolls, the rows that move are shown here, over the terminal's picture (terminal-strip.js): a canvas
+   that is moved by a transform, which costs a frame no painting, and is shown pixel for pixel, never smoothed, so
+   its text stays sharp wherever it is moved to. Above the terminal's layer for links. */
 #slid { position: absolute; left: 0; z-index: 3; overflow: hidden; contain: strict; pointer-events: none; }
-#slid > div { position: absolute; left: 0; top: 0; will-change: transform; }
-/* a tile is shown pixel for pixel, never smoothed: its text stays sharp wherever it is moved to */
-#slid canvas { position: absolute; left: 0; top: 0; image-rendering: pixelated; }
+#slid canvas { position: absolute; left: 0; top: 0; will-change: transform; image-rendering: pixelated; }
 #latest { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 5px; height: 34px; padding: 0 14px 0 10px; border-radius: 17px; background: var(--panel); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
 #latest svg { color: var(--accent); }
 #latest:active { background: var(--raised); }

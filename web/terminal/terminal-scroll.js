@@ -154,7 +154,9 @@
         if (!first.rows) this.asked.shift();
       }
       this.base -= shift;
-      if (!this.keep()) { this.cancel(); return; }
+      // No picture to copy any more (the strip was lost): the terminal scrolls by the row from here on, and is asked
+      // back the rows it was kept ahead of the finger by.
+      if (!this.keep()) { const ahead = this.led; this.cancel(); if (ahead) this.options.nudge(-ahead); return; }
       if (made) { this.went = way; this.stuck = 0; this.madeAt = this.at; }
       // What is seen stays where it was: a move that changes where the picture may be is come on to, not jumped to.
       if (shift) { const most = LATE * cell; this.ease = Math.max(-most, Math.min(most, this.ease + before - shift * cell - this.within())); }
