@@ -215,7 +215,7 @@ public sealed class TerminalAgent {
     // ("") and says the folder instead (Folder): the phone can look at it, answer it and tell it things, and its folder
     // can be made a project from there.
     // Live: a program on this computer holds it. Now: it is in use (InUse); only then is it something that is going on.
-    // Wakes: a message for it can be handed to it where it is even while it sits idle (ClaudeRelay).
+    // Wakes: a message for it can be handed to it where it is even while it sits idle (ClaudeRelay, CodexQueue).
     public sealed class SessionInfo { public bool Now, Wakes; public string Id, Tool, Dir, Folder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
     /// the tools' settings; whether or not it has, this listens for them.
@@ -228,7 +228,8 @@ public sealed class TerminalAgent {
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
         string status = known != null ? known.Status : s.Status;
         // A message reaches it through its hooks while it is at work or kept waiting; one that sits idle is woken by
-        // a message handed to it as Claude Code's own sessions hand each other messages. Either way it stays where it is.
+        // a message handed to it by its tool's own means: as Claude Code's sessions hand each other messages, or
+        // through Codex's queue. Either way it stays where it is.
         bool hooked = known != null && known.Sayable, wake = s.Live && s.Wakes && !hooked && !(known != null && known.Status == "confirm");
         return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = s.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
             reach = known == null && !wake ? null : new[] { hooked || wake ? "say" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
@@ -435,6 +436,7 @@ public sealed class TerminalAgent {
             var counts = new Dictionary<string, int>();
             codexSessions.Refresh();
             var ownerParents = Parents();
+            bool queues = CodexQueue.Supported(FindTool("codex"));
             if (root.Exists) foreach (FileInfo file in root.GetFiles("rollout-*.jsonl", SearchOption.AllDirectories).OrderByDescending(f => f.LastWriteTimeUtc).Take(150)) {
                 string name = Path.GetFileNameWithoutExtension(file.Name), id = name.Length > 36 ? name.Substring(name.Length - 36) : "", folder;
                 if (!Regex.IsMatch(id, Uuid)) continue;
@@ -457,13 +459,13 @@ public sealed class TerminalAgent {
                     // (one that a terminal of the phone's has taken on from there is listed too, as that terminal's)
                     bool taken = running.Any(t => t.Tool == "codex" && t.Session == id && t.Folder.Length > 0 && !t.Pty.Closed);
                     bool used = live && !phone && InUse(owner.Host, owner.Origin, "", Reach.Of("codex", id), Milliseconds(file.LastWriteTimeUtc), DateTime.UtcNow);
-                    if ((used || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
+                    if ((used || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Wakes = live && !phone && queues, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
                     continue;
                 }
                 int count; counts.TryGetValue(dir, out count);
                 if (!live && count >= 15) continue;
                 if (!live) counts[dir] = count + 1;
-                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? owner.Host : "", Origin = live ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
+                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
         foreach (SessionInfo held in found.Where(s => s.Live)) held.Now = InUse(held.Host, held.Origin, held.Status, Reach.Of(held.Tool, held.Id), held.Updated, DateTime.UtcNow);
@@ -970,13 +972,13 @@ public sealed class TerminalAgent {
                         string text = (Get(op, "text") ?? "").Trim();
                         if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字");
                         if (!relaying.Add(id)) return;
-                        string launcher = FindTool("claude"), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
+                        string launcher = FindTool(tool), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
                         Task.Run(() => {
                             string failed = "";
-                            try { ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), text); }
+                            try { if (tool == "codex") CodexQueue.Send(launcher, session, text); else ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), text); }
                             catch (InvalidOperationException refused) { failed = refused.Message; }
-                            catch (IOException) { failed = "消息没有送出：电脑上启动不了 Claude Code"; }
-                            catch (System.ComponentModel.Win32Exception) { failed = "消息没有送出：电脑上启动不了 Claude Code"; }
+                            catch (IOException) { failed = "消息没有送出：电脑上启动不了这个工具"; }
+                            catch (System.ComponentModel.Win32Exception) { failed = "消息没有送出：电脑上启动不了这个工具"; }
                             lock (work) {
                                 completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
                                 if (failed.Length == 0) completed[id]["result"] = new Dictionary<string, object> { { "now", true }, { "woke", true } };

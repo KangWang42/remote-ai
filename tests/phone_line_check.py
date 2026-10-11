@@ -158,7 +158,8 @@ def pages(chrome, out, folder, first, addresses, config):
         until(lambda: next((t for t in first.get("/api/terminal")["terminals"] if t["id"] == terminal and t["state"] == "running"), None), "the terminal to run", 30)
         time.sleep(3)
         ask("Page.navigate", url=addresses[0] + "/#p=" + first.password)
-        press("document.querySelector('#overview .side.say')")
+        # the button of that terminal's own card
+        press("document.querySelector('#overview [data-peek=\"%s\"]').closest('.card').querySelector('.side.say')" % terminal)
         until(lambda: value("!!document.querySelector('#sheet[open] textarea')"), "the sheet", 10)
         picture("say.png")
         ask("Input.insertText", text="echo (20000+261)")
@@ -222,7 +223,12 @@ def main():
         passwords = {port: "relay-" + secrets.token_hex(8) for port in (FIRST, SECOND, EARLIER)}
         local_password = "local-" + secrets.token_hex(8)
         origin = lambda port: "http://127.0.0.1:%d" % port
-        environment = dict(os.environ, REMOTECLI_DATA=str(data), REMOTECLI_RELAYS=str(listed), REMOTECLI_LAN="127.0.0.1", REMOTECLI_TRIAL=str(TRIAL), PYTHONUTF8="1")
+        # The program is given homes of the tools that hold nothing: it lists, and can be asked to tell, the conversations
+        # it finds open on the computer, and a check must never reach a real one (the message below once did).
+        for made in ("claude-home", "codex-home"):
+            (folder / made).mkdir()
+        environment = dict(os.environ, REMOTECLI_DATA=str(data), REMOTECLI_RELAYS=str(listed), REMOTECLI_LAN="127.0.0.1", REMOTECLI_TRIAL=str(TRIAL), PYTHONUTF8="1",
+                           CLAUDE_CONFIG_DIR=str(folder / "claude-home"), CODEX_HOME=str(folder / "codex-home"))
         relays = [subprocess.Popen([sys.executable, str(script), "--port", str(port), "--data", str(folder / ("relay-%d" % port)), "--web", str(ROOT / "web")],
                                    env=dict(os.environ, RCLI_PASSWORD=passwords[port], PYTHONUTF8="1"), stdout=subprocess.DEVNULL, **hidden)
                   for port, script in ((FIRST, ROOT / "relay" / "server.py"), (SECOND, ROOT / "relay" / "server.py"), (EARLIER, old / "server.py"))]

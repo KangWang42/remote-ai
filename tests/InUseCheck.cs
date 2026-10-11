@@ -40,6 +40,9 @@ public static class InUseCheck {
         Func<string, string> refused = said => { try { ClaudeRelay.Taken(said); return ""; } catch (InvalidOperationException error) { return error.Message; } };
         Require(refused("{\"result\":\"FAILED: no session at that address\"}").Contains("no session at that address") && refused("not json").Contains("没有把消息送出") && refused("{\"result\":\"\"}").Length > 0 && refused(null).Length > 0, "what was not taken says why");
         Require(ClaudeRelay.Address("11111111-2222-3333-4444-555555555555") == "", "a conversation nothing has open has no address");
+        // a message for a Codex conversation is given to the program itself, whole, whatever signs it holds
+        Require(CodexQueue.Quoted("say \"hi\" & echo %PATH%\nnext") == "\"say \\\"hi\\\" & echo %PATH%\nnext\"" && CodexQueue.Quoted("C:\\dir\\") == "\"C:\\dir\\\\\"" && CodexQueue.Quoted("a\\\"b") == "\"a\\\\\\\"b\"", "quoted as a program reads it: " + CodexQueue.Quoted("a\\\"b"));
+        Require(CodexQueue.Program(null) == null && CodexQueue.Program("C:\\tools\\codex.exe") == "C:\\tools\\codex.exe" && CodexQueue.Program("C:\\no-such-folder\\codex.cmd") == null && !CodexQueue.Supported("C:\\no-such-folder\\codex.cmd"), "a script's launcher is not given the message; the program beside it is");
         Console.WriteLine("in use now: a window of its own, at work or asking, or used a moment ago; a press on the update button is always answered");
         return 0;
     }

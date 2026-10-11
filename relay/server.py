@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # an embedded P
 import relay  # noqa: E402
 import websocket  # noqa: E402
 
-VERSION = "1.5.3"
+VERSION = "1.5.4"
 SESSION_DAYS = 90
 LOGIN_TRIES, LOGIN_LOCK, LOGIN_TRIES_ALL = 6, 900, 40
 BODY_LIMIT = 4 * 1024 * 1024

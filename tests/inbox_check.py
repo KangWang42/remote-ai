@@ -62,7 +62,7 @@ def main():
     homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5)
     homes.claude_open(shop, IDLE)
     environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600")       # nobody is at the computer
-    environment["PATH"] = str(homes.stand_ins(temp.name)) + ";" + environment["PATH"]
+    environment["PATH"] = str(homes.stand_ins(temp.name, queue=True)) + ";" + environment["PATH"]
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full",
                                                   "RemoteDirs": ["web-shop=" + str(shop), "thesis=" + str(thesis)]}), encoding="utf-8")
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(PORT), "--data", str(Path(temp.name) / "relay")], env=environment, stdout=subprocess.DEVNULL)
@@ -226,6 +226,16 @@ def main():
         assert handed["arguments"][0] == "-p" and handed["arguments"][handed["arguments"].index("--tools") + 1] == "SendMessage" and "--no-session-persistence" in handed["arguments"] and '"disableAllHooks": true' in handed["settings"], handed
         assert listed(IDLE)["live"] is True and len(call("/api/terminal")["terminals"]) == started, "the conversation is where it was, and no terminal was started for it"
         page_value("(() => { document.getElementById('sheet').close(); return 1; })()")
+
+        # ---- and so is a Codex conversation that a program holds idle: through Codex's own queue, as what its user says
+        # next, whatever signs the message holds
+        held = listed(HELD)
+        assert (held["live"], held["reach"], held["wake"], held["activity"]) == (True, ["say"], True, "locked"), held
+        words = '把 "结论" 再写短一点 & 100% 保留 <原样>\n第二行 \\ 结尾\\'
+        assert call("/api/conversation", {"id": new_id(), "session": HELD, "action": "say", "text": words}) == {"now": True, "woke": True}
+        assert homes.queued.read_text(encoding="utf-8") == HELD + "\n" + words, homes.queued.read_text(encoding="utf-8")
+        # one that asks is answered first, and one that is at work is left its message as before: neither is woken
+        assert (listed(ASKING)["wake"], listed(WORKING)["wake"]) == (False, False)
 
         # ---- told apart by tool, and by where a thing runs
         press("Claude Code")

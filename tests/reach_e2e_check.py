@@ -64,6 +64,12 @@ def main():
     lock_apart.write(b"held"); lock_apart.flush(); lock_apart.seek(0)
     msvcrt.locking(lock_apart.fileno(), msvcrt.LK_NBLCK, 4)
     environment = dict(os.environ, RCLI_PASSWORD=password, PYTHONUTF8="1", CODEX_HOME=str(codex), REMOTECLI_UNATTENDED="600")       # nobody is at the computer
+    # The Codex of this check is a script that does nothing: what is checked here is what the hooks alone make
+    # possible, and nothing is ever handed to the Codex that is installed on this computer.
+    tools = Path(temp.name) / "tools"
+    tools.mkdir()
+    (tools / "codex.cmd").write_text("@exit /b 2\r\n", encoding="mbcs")
+    environment["PATH"] = str(tools) + ";" + environment["PATH"]
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full", "RemoteDirs": ["demo=" + str(work)]}), encoding="utf-8")
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(PORT), "--data", str(Path(temp.name) / "relay")], env=environment, stdout=subprocess.DEVNULL)
     agent_exe = ROOT / "agent-windows" / "bin" / "RemoteCliAgent.exe"

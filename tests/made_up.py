@@ -66,7 +66,21 @@ class Homes:
             {"pid": holder.pid, "sessionId": session, "cwd": str(folder), "status": status, "kind": "interactive", "entrypoint": entry, "messagingSocketPath": socket}), encoding="utf-8")
         return holder
 
-    def stand_ins(self, folder):
+    QUEUE = '''using System; using System.IO; using System.Text;
+static class StandIn {
+    static int Main(string[] given) {
+        Console.OutputEncoding = new UTF8Encoding(false);
+        if (given.Length >= 2 && given[0] == "queue" && given[1] == "--help") { Console.WriteLine("Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>"); return 0; }
+        if (given.Length == 5 && given[0] == "queue" && given[1] == "--thread" && given[3] == "--message") {
+            File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "queued.txt"), given[2] + "\\n" + given[4], new UTF8Encoding(false));
+            Console.WriteLine("Queued message 0 for thread " + given[2] + ".");
+            return 0;
+        }
+        return 2;
+    }
+}'''
+
+    def stand_ins(self, folder, queue=False):
         """Programs that take the place of the tools: what a check starts, on purpose or by mistake, is never a real
         tool. A stand-in says the folder it was started in and what it was started with, and stays; asked for its help
         (the agent does that to learn what a tool can do) it answers and leaves. Returns the folder to put first in PATH."""
@@ -84,6 +98,15 @@ class Homes:
             "time.sleep(600)\n", encoding="utf-8")
         for name in ("claude", "codex"):
             (tools / (name + ".cmd")).write_text('@"%s" "%s" %s %%*\r\n' % (sys.executable, tools / "standin.py", name), encoding="mbcs")
+        if queue:
+            # Codex as npm lays it out: the script above, and the program itself beside it. This one only knows the
+            # command that queues a message for a conversation, and writes down what it was given (queued.txt).
+            import subprocess
+            inside = tools / "node_modules" / "@openai" / "codex" / "vendor"
+            inside.mkdir(parents=True)
+            (inside / "codex.cs").write_text(self.QUEUE, encoding="utf-8")
+            subprocess.run([str(Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"), "/nologo", "/out:" + str(inside / "codex.exe"), str(inside / "codex.cs")], check=True, capture_output=True)
+            self.queued = inside / "queued.txt"
         return tools
 
     def close(self):
