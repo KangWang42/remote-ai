@@ -294,13 +294,14 @@ def _reached(session):
 
 
 def _placed(session):
-    """Where a conversation belongs: a project by its name, or, for one that a program has open in a folder that is
-    no project, no project and that folder. None for anything else."""
+    """Where a conversation belongs: a project by its name, or, for one that is open in a folder that is no project
+    (in a program on the computer, or in a terminal that took it on from there), no project and that folder. None
+    for anything else."""
     if not isinstance(session.get("dir"), str):
         return None
     if session["dir"]:
         return {"dir": session["dir"], "folder": ""}
-    return {"dir": "", "folder": session["folder"]} if session.get("live") is True and _name(session.get("folder"), 260) else None
+    return {"dir": "", "folder": session["folder"]} if _name(session.get("folder"), 260) else None
 
 
 class Relay:
@@ -414,7 +415,9 @@ class Relay:
         ended one is taken only where it would be kept: not beside a terminal of the same conversation, and not when
         the list is full of newer ones."""
         key, tool, folder, created, session = item.get("id"), item.get("tool"), item.get("dir"), item.get("created"), item.get("session")
-        if not isinstance(key, str) or not _terminal.fullmatch(key) or tool not in LABELS or not _name(folder, 60) \
+        # a terminal belongs to a project, or runs in a folder that is none and says which
+        apart = item.get("folder") if folder == "" and _name(item.get("folder"), 260) else ""
+        if not isinstance(key, str) or not _terminal.fullmatch(key) or tool not in LABELS or not (_name(folder, 60) or apart) \
                 or type(created) is not int or created <= 0 or item.get("state") not in ("running", "closed"):
             return None
         session = session if isinstance(session, str) and _session.fullmatch(session) else ""
@@ -426,7 +429,7 @@ class Relay:
             if len(threads) >= MAX_HISTORY and not any(at < created for at in closed):
                 return None
         named = _name(item.get("title"), 60)
-        term = {"id": key, "tool": tool, "dir": folder, "title": item["title"].strip() if named else self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool],
+        term = {"id": key, "tool": tool, "dir": folder, "folder": apart, "title": item["title"].strip() if named else self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool],
                 "session": session, "status": "", "created": created, "state": item["state"], "error": "", "seq": 0, "output": [], "size": 0, "cols": 80, "rows": 24,
                 "instance": instance, "previous": "", "history": False, "touched": True}
         if named:
@@ -630,7 +633,11 @@ class Relay:
                         raise RemoteError("名称需为 1 至 40 字")
             elif action == "start":
                 tool, folder = payload.get("tool"), payload.get("dir")
-                if tool not in self._device["tools"] or folder not in self._device["workspaces"]:
+                # A terminal is started in a project. Only one that goes on with a conversation that is open in a
+                # folder that is no project runs there instead (`dir` is then empty): which folder is what the
+                # computer said of that conversation, never what the viewer says.
+                apart, where, called = folder == "", "", ""
+                if tool not in self._device["tools"] or not (apart or folder in self._device["workspaces"]):
                     raise RemoteError("电脑没有报告这个工具或目录")
                 previous = payload.get("previous", "")
                 if previous and (not isinstance(previous, str) or not _id.fullmatch(previous)):
@@ -652,10 +659,22 @@ class Relay:
                         raise RemoteError("原对话仍被占用，请选择接管原对话，先结束原终端")
                     if not fork and any(t.get("session") == session and t["state"] in ("starting", "running") for t in state["threads"].values()):
                         raise RemoteError("这个对话已经在手机终端里打开")
+                    where, called = saved["folder"], saved["title"]
+                elif apart:
+                    # going on from a terminal that ran in such a folder: the folder is that terminal's
+                    earlier = state["threads"].get(previous) if previous else None
+                    where = earlier.get("folder", "") if earlier and earlier["tool"] == tool and earlier["dir"] == "" else ""
+                    called = self._public(earlier)["title"] if where else ""
+                if apart and not where:
+                    raise RemoteError("电脑没有报告这个工具或目录")
+                if apart:
+                    asked, payload = payload, dict(payload, folder=where)       # what the viewer sent is kept, to know the same request again
                 if sum(t["state"] in ("starting", "running") for t in state["threads"].values()) >= MAX_TERMINALS:
                     raise RemoteError("最多同时运行 8 个终端，请先结束一个")
                 terminal = uuid.uuid4().hex
-                term = {"id": terminal, "tool": tool, "dir": folder, "title": (self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool]) + (" · 副本" if fork else ""), "session": "" if fork else session, "status": "",
+                term = {"id": terminal, "tool": tool, "dir": folder, "folder": where,
+                        # one outside every project is called what its conversation is: the computer lists that conversation only while it is open
+                        "title": (called[:60] if apart and called else self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool]) + (" · 副本" if fork else ""), "session": "" if fork else session, "status": "",
                         "created": int(now * 1000), "state": "starting", "error": "", "seq": 0, "output": [], "size": 0, "cols": 80, "rows": 24,
                         "instance": self._device["instance"], "previous": previous, "history": bool(payload.get("history")), "touched": False}
                 state["threads"][terminal] = term

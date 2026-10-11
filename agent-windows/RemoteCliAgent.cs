@@ -160,7 +160,7 @@ public sealed class TerminalAgent {
     public void KeepForRestart() {
         lock (work) lock (gate) {
             foreach (var t in terminals.Values) Seal(t);
-            var open = terminals.Values.Where(t => !t.Pty.Closed).Select(t => new Dictionary<string, object> { { "id", t.Id }, { "tool", t.Tool }, { "dir", t.Dir }, { "session", t.Session }, { "seq", t.Seq }, { "cols", t.Pty.Cols }, { "rows", t.Pty.Rows } }).ToArray();
+            var open = terminals.Values.Where(t => !t.Pty.Closed).Select(t => new Dictionary<string, object> { { "id", t.Id }, { "tool", t.Tool }, { "dir", t.Dir }, { "folder", t.Folder }, { "session", t.Session }, { "seq", t.Seq }, { "cols", t.Pty.Cols }, { "rows", t.Pty.Rows } }).ToArray();
             try { File.WriteAllText(RestartFile, json.Serialize(new Dictionary<string, object> { { "instance", instance }, { "at", DateTime.UtcNow.ToString("o") }, { "terminals", open } }), new UTF8Encoding(false)); } catch { }
         }
     }
@@ -170,10 +170,11 @@ public sealed class TerminalAgent {
         string id = Get(kept, "id"), tool = Get(kept, "tool"), dir = Get(kept, "dir"), session = Get(kept, "session");
         var dirs = AllDirs(prefs);
         string launcher = FindTool(tool);
-        if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || !dirs.ContainsKey(dir)) return;
-        var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Session = session, Seq = Convert.ToInt64(kept["seq"]) };
+        var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
+        string where = Place(live, dirs);
+        if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || where == null || !Directory.Exists(where)) return;
         live.Pending.Append("\r\n\x1b[2m" + (tool == "shell" ? "Remote CLI 已更新，这是重新打开的 PowerShell。" : session.Length > 0 ? "Remote CLI 已更新，正在接回原来的对话…" : "Remote CLI 已更新；原对话保存在电脑上，可从历史对话继续。") + "\x1b[0m\r\n");
-        live.Pty = new PseudoTerminal(Command(tool, launcher, session, false, Get(prefs, "RemoteMaxMode"), false, tool == "codex" && SupportsStandalone(launcher), false), dirs[dir],
+        live.Pty = new PseudoTerminal(Command(tool, launcher, session, false, Get(prefs, "RemoteMaxMode"), false, tool == "codex" && SupportsStandalone(launcher), false), where,
             Math.Max(20, Math.Min(240, Convert.ToInt32(kept["cols"]))), Math.Max(6, Math.Min(100, Convert.ToInt32(kept["rows"]))), text => {
                 lock (gate) { live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
                 Wake();
@@ -190,6 +191,9 @@ public sealed class TerminalAgent {
     DateTime nextLogin = DateTime.MinValue;
     public sealed class LiveTerminal {
         public string Id, Tool, Dir, Session = "", Status = "", Title = ""; public PseudoTerminal Pty; public long Seq;
+        // A terminal runs in a project (Dir). One that took on a conversation that was open in a folder that is no
+        // project runs in that folder instead: it has no project ("") and says the folder.
+        public string Folder = "";
         public DateTime Started = DateTime.UtcNow, ClosedSeen = DateTime.MinValue, Printed = DateTime.MinValue;
         public StringBuilder Pending = new StringBuilder();   // read from the program, not yet numbered
         public List<Dictionary<string, object>> Output = new List<Dictionary<string, object>>();
@@ -203,7 +207,7 @@ public sealed class TerminalAgent {
     readonly List<LiveTerminal> ended = new List<LiveTerminal>();
     public const int KeepRunning = 600000, KeepEnded = 120000, EndedMost = 12;
     public sealed class ComputerTakeover {
-        public string Tool, Dir, Session, Launcher;
+        public string Tool, Dir, Session, Launcher;         // Dir: the folder the window opens in
         public bool PhoneTerminal;
     }
     // Dir: the project a conversation belongs to. One that a program has open in a folder that is no project has none
@@ -324,6 +328,12 @@ public sealed class TerminalAgent {
     public static string ProjectFolder(string path) { return Regex.Replace(path, "[^a-zA-Z0-9]", "-"); }
     // A folder that is no project is spoken of to the phone unless it is one of the system's own for passing things.
     static bool Elsewhere(string folder) { return folder.Length >= 3 && folder.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) < 0 && !folder.EndsWith(@"\AppData\Local\Temp", StringComparison.OrdinalIgnoreCase); }
+    /// The folder a terminal runs in: its project's, or its own where it has no project. Null when that is gone.
+    static string Place(LiveTerminal terminal, Dictionary<string, string> dirs) {
+        string path;
+        if (terminal.Dir.Length == 0) return terminal.Folder.Length > 0 ? terminal.Folder : null;
+        return dirs.TryGetValue(terminal.Dir, out path) ? path : null;
+    }
     static bool SamePath(string a, string b) { return String.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
     static long Milliseconds(DateTime utc) { return (long)(utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
     // Reading the conversation lists can take seconds. The reports start it beside themselves, with the terminals as
@@ -386,7 +396,16 @@ public sealed class TerminalAgent {
                 string title = file.Exists ? ClaudeTitle(file, out same) : "";
                 if (title.Length == 0) continue;        // nothing has been said in it yet
                 var source = held.Value;
-                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Host = source.Host, Origin = source.Origin, CanTakeover = false, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = "这段对话所在的文件夹还不是项目，请先把它加为项目", Same = "" });
+                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
+            } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
+        }
+        // and the ones a terminal of the phone's has taken on from there: listed so that the terminal keeps the conversation's name and marks
+        foreach (LiveTerminal own in running.Where(t => t.Tool == "claude" && t.Folder.Length > 0 && t.Session.Length > 0 && !t.Pty.Closed && !found.Any(s => s.Tool == "claude" && s.Id == t.Session))) {
+            try {
+                string same;
+                var file = new FileInfo(Path.Combine(ClaudeHome, "projects", ProjectFolder(own.Folder), own.Session + ".jsonl"));
+                string title = file.Exists ? ClaudeTitle(file, out same) : "";
+                if (title.Length > 0) found.Add(new SessionInfo { Id = own.Session, Tool = "claude", Dir = "", Folder = own.Folder, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = false, OwnershipKnown = true, Same = "" });
             } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
         try {
@@ -434,7 +453,9 @@ public sealed class TerminalAgent {
                     note(folder, "codex", file.LastWriteTimeUtc, live);
                     // one that a program has open in a folder that is no project is listed with its folder
                     string where = folder.TrimEnd('\\', '/');
-                    if (live && !phone && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Host = owner.Host, Origin = owner.Origin, OwnershipKnown = owner.Known, CanTakeover = false, TakeoverReason = "这段对话所在的文件夹还不是项目，请先把它加为项目", Same = "" });
+                    // (one that a terminal of the phone's has taken on from there is listed too, as that terminal's)
+                    bool taken = running.Any(t => t.Tool == "codex" && t.Session == id && t.Folder.Length > 0 && !t.Pty.Closed);
+                    if ((live && !phone || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
                     continue;
                 }
                 int count; counts.TryGetValue(dir, out count);
@@ -681,7 +702,7 @@ public sealed class TerminalAgent {
         var saved = sessions.FirstOrDefault(s => s.Id == session && s.Tool == tool && s.Dir == dir);
         if (saved == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         // one that is open in a folder that is no project is read where it is
-        if (dir.Length == 0 && saved.Live && saved.Folder.Length > 0) root = saved.Folder;
+        if (dir.Length == 0 && saved.Folder.Length > 0) root = saved.Folder;
         else if (!AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         try {
             string file = tool == "claude"
@@ -849,7 +870,7 @@ public sealed class TerminalAgent {
         try {
             lock (work) {
                 var active = terminals.Values.Where(t => t.Pty != null && !t.Pty.Closed).ToArray();
-                var list = active.Select(t => new[] { t.Tool, t.Dir, t.Status ?? "", t.Started.ToString("o"), sessions.Where(s => s.Id == t.Session).Select(s => s.Title).FirstOrDefault() ?? "", "手机 Remote CLI", "phone", t.Id }).ToList();
+                var list = active.Select(t => new[] { t.Tool, t.Dir.Length > 0 ? t.Dir : Path.GetFileName(t.Folder), t.Status ?? "", t.Started.ToString("o"), sessions.Where(s => s.Id == t.Session).Select(s => s.Title).FirstOrDefault() ?? "", "手机 Remote CLI", "phone", t.Id }).ToList();
                 // A writer lock is not evidence of a visible computer window. Only an
                 // independently owned CLI belongs in the desktop activity list; shared
                 // app-server and foreign/unknown locks remain available in the phone's
@@ -866,7 +887,8 @@ public sealed class TerminalAgent {
             if (!terminals.TryGetValue(terminalId, out live) || live.Pty == null || live.Pty.Closed) throw new InvalidOperationException("手机终端已经结束，请刷新活动列表");
             var prefs = Preferences();
             var dirs = AllDirs(prefs);
-            if (!dirs.ContainsKey(live.Dir)) throw new InvalidOperationException("这个项目已经从电脑端移除");
+            string where = Place(live, dirs);
+            if (where == null) throw new InvalidOperationException("这个项目已经从电脑端移除");
             if (live.Tool == "codex" && live.Session.Length == 0) { Scan(dirs); }
             string session = live.Session;
             if ((live.Tool == "claude" || live.Tool == "codex") && session.Length == 0) throw new InvalidOperationException("正在等待会话编号，请刷新活动后再接管");
@@ -881,7 +903,7 @@ public sealed class TerminalAgent {
             }
             if (live.Tool != "claude" && live.Tool != "codex") {
                 live.Pty.Dispose();
-                return new ComputerTakeover { Tool = live.Tool, Dir = live.Dir, Session = "", Launcher = FindTool(live.Tool), PhoneTerminal = true };
+                return new ComputerTakeover { Tool = live.Tool, Dir = where, Session = "", Launcher = FindTool(live.Tool), PhoneTerminal = true };
             }
             live.Pty.Dispose();
             for (int n = 0; n < 60; n++) {
@@ -890,7 +912,7 @@ public sealed class TerminalAgent {
                 Thread.Sleep(50);
             }
             if (live.Tool == "codex" && CodexSessions.Inspect(session).Live) throw new InvalidOperationException("原 Codex 进程没有及时结束，已取消接管");
-            return new ComputerTakeover { Tool = live.Tool, Dir = live.Dir, Session = session, Launcher = FindTool(live.Tool), PhoneTerminal = true };
+            return new ComputerTakeover { Tool = live.Tool, Dir = where, Session = session, Launcher = FindTool(live.Tool), PhoneTerminal = true };
         }
     }
     async Task<bool> Login(Dictionary<string, object> prefs) {
@@ -953,11 +975,14 @@ public sealed class TerminalAgent {
                 bool fork = Get(op, "fork") == "True";
                 if (fork && (tool != "codex" || session.Length == 0 || Get(op, "takeover") == "True")) throw new ArgumentException("副本选项无效");
                 var dirs = AllDirs(prefs);
-                if (!dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
+                // In a project; or, to go on with a conversation that is open in a folder that is no project, in that
+                // folder (the relay says which, from what this computer listed).
+                string folder = dir.Length == 0 && (session.Length > 0 || previous.Length > 0) && (tool == "claude" || tool == "codex") ? NormalFolder(Get(op, "folder")) : "";
+                if (dir.Length == 0 ? folder.Length == 0 || !Directory.Exists(folder) : !dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
                 string launcher = FindTool(tool);
                 if (launcher == null) throw new ArgumentException("电脑未安装这个工具");
                 if (session.Length > 0) {
-                    if (!Scan(dirs).Any(s => s.Id == session && s.Tool == tool && s.Dir == dir)) throw new ArgumentException("电脑上没有找到这个对话");
+                    if (!Scan(dirs).Any(s => s.Id == session && s.Tool == tool && s.Dir == dir && (dir.Length > 0 || SamePath(s.Folder, folder)))) throw new ArgumentException("电脑上没有找到这个对话");
                     if (tool == "claude") ClaudeExclusive(session, Get(op, "takeover") == "True");
                     if (tool == "codex" && !fork) {
                         var roots = terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray();
@@ -974,8 +999,8 @@ public sealed class TerminalAgent {
                 }
                 bool fresh = tool == "claude" && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
-                var live = new LiveTerminal { Id = terminal, Tool = tool, Dir = dir, Session = fork ? "" : session };
-                live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, tool == "codex" && SupportsStandalone(launcher), fresh), dirs[dir], 80, 24, text => {
+                var live = new LiveTerminal { Id = terminal, Tool = tool, Dir = dir, Folder = folder, Session = fork ? "" : session };
+                live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, tool == "codex" && SupportsStandalone(launcher), fresh), Place(live, dirs), 80, 24, text => {
                     lock (gate) { live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
                     Wake();
                 });
@@ -983,7 +1008,7 @@ public sealed class TerminalAgent {
             } else {
                 LiveTerminal live;
                 if (!terminals.TryGetValue(terminal, out live) || live.Pty.Closed) throw new ArgumentException("终端已结束");
-                if (!AllDirs(prefs).ContainsKey(live.Dir)) throw new ArgumentException("目录不再获允许");
+                if (Place(live, AllDirs(prefs)) == null) throw new ArgumentException("目录不再获允许");
                 if (action == "input") { lastInput = DateTime.UtcNow; string text = Get(op, "data"); if (text.Length == 0 || text.Length > 16000) throw new ArgumentException("输入无效"); live.Pty.Write(text); }
                 else if (action == "resize") { int cols = Convert.ToInt32(op["cols"]), rows = Convert.ToInt32(op["rows"]); if (cols < 20 || cols > 240 || rows < 6 || rows > 100) throw new ArgumentException("尺寸无效"); live.Pty.Resize(cols, rows); }
                 else if (action == "close") live.Pty.Dispose();
@@ -1035,7 +1060,7 @@ public sealed class TerminalAgent {
                     candidates = candidates.ToArray() } },
                 // Every terminal says what it is, so that a relay that did not start it can list it: the computer may turn to another relay.
                 { "terminals", terminals.Values.Concat(ended).Select(t => new { id = t.Id, state = t.Pty.Closed ? "closed" : "running", cols = t.Pty.Cols, rows = t.Pty.Rows, session = t.Session, status = t.Status, exit_code = t.Pty.ExitCode, error = t.Pty.ExitCode.HasValue && t.Pty.ExitCode.Value != 0 ? "程序退出（代码 " + t.Pty.ExitCode.Value + "），请检查终端画面中的原因" : "",
-                    tool = t.Tool, dir = t.Dir, created = Milliseconds(t.Started), title = t.Title }).ToArray() },
+                    tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title }).ToArray() },
                 { "output", output }, { "acks", acknowledgments }
             };
             // The list of conversations is long: it goes out when it changed, and now and then in case the relay restarted.

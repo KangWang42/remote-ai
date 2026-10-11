@@ -24,11 +24,11 @@ final class AggregateSessions {
         boolean reached, canSay;
         String origin = "";     // where a conversation on the computer runs, as the computer says it: "Codex 桌面版", "命令行", "VS Code"
         long used;              // latest terminal phase change or saved conversation update; 0 when not known
-        /** The folder of a conversation that a program has open where there is no project (its project is then ""). */
+        /** The folder of a conversation that is open where there is no project, or of the terminal that took it on (the project is then ""). */
         String folder = "";
         /** What the owner said of the conversation, kept by the computer: it stands first, or is left out of the lists. */
         boolean pinned, hidden;
-        boolean apart() { return !terminal && project.isEmpty() && !folder.isEmpty(); }
+        boolean apart() { return project.isEmpty() && !folder.isEmpty(); }
         /** Where it is, in a word: its project, or the name of the folder it is open in. */
         String place() {
             if (!project.isEmpty() || folder.isEmpty()) return project;
@@ -194,7 +194,7 @@ final class AggregateSessions {
         Set<String> phoneSessions = new HashSet<>();
         for (Entry entry : entries) if (entry.terminal && entry.running() && !entry.session.isEmpty()) phoneSessions.add(entry.tool + ":" + entry.session);
         for (Entry entry : entries) {
-            // a conversation that is open where there is no project stands in a group without a name, the last one
+            // what is open where there is no project stands in a group without a name, the last one
             if (entry.project.isEmpty()) continue;
             if (!groups.containsKey(entry.project)) groups.put(entry.project, new Project(entry.project));
             if (!entry.terminal && (!entry.attached.isEmpty() || phoneSessions.contains(entry.tool + ":" + entry.id))) continue;
@@ -203,8 +203,11 @@ final class AggregateSessions {
             else if (entry.running()) group.active.add(entry); else group.history.add(entry);
         }
         Project apart = new Project("");
-        for (Entry entry : entries) if (entry.project.isEmpty() && entry.apart() && entry.live) (entry.running() ? apart.active : apart.history).add(entry);
-        if (!apart.active.isEmpty() || !apart.history.isEmpty()) groups.put("", apart);
+        for (Entry entry : entries) {
+            if (!entry.apart() || !entry.terminal && (!entry.live || !entry.attached.isEmpty() || phoneSessions.contains(entry.tool + ":" + entry.id))) continue;
+            (entry.running() ? apart.active : entry.terminal ? apart.ended : apart.history).add(entry);
+        }
+        if (!apart.active.isEmpty() || !apart.ended.isEmpty() || !apart.history.isEmpty()) groups.put("", apart);
         for (Project group : groups.values()) {
             Collections.sort(group.active, Comparator.comparingInt(Entry::rank));
             Collections.sort(group.ended, (a, b) -> Long.compare(recent(b), recent(a)));

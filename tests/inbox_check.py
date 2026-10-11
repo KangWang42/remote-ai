@@ -7,8 +7,9 @@ Checked on the page: what waits for an answer, what is at work and what was used
 across the projects; a conversation that is open in a folder that is no project is among them, with its folder; the
 filters by tool and by where a thing runs; one search over all of it, the projects too; a held press (a finger's,
 and a mouse's other button) asks what to do with a card and opens nothing; pinning, hiding and finding the hidden
-again; making the folder of a conversation a project. Uses a temporary data folder and port 8747 (RCLI_TEST_PORT
-changes it). Nothing of the real tools is read or started.
+again; taking on a conversation that is open outside every project, in its own folder, without making that folder
+a project; and making it one. Uses a temporary data folder and port 8747 (RCLI_TEST_PORT changes it). Nothing of the
+real tools is read or started: stand-ins take their place.
 """
 import base64
 import hashlib
@@ -278,6 +279,32 @@ def main():
         until(lambda: listed(uuid(14))["hidden"] is False, 10, "no longer hidden")
         page_value("(() => { document.getElementById('back').click(); return 1; })()")
         lists(lambda seen: seen["recent"] and "摘要翻译" in seen["recent"], "back among what was used lately")
+
+        # ---- a conversation outside every project is taken on as it is: the terminal runs in its folder, and no project
+        # is made of it. Here by a copy: what holds this one open is a made-up lock, which cannot be asked to close.
+        page_value("(() => { %s('整理读书笔记').querySelector('button.open').click(); return 1; })()" % CARD)
+        offered = until(lambda: page_value(SHEET), 5, "what can be done with the one outside")
+        report["offered_for_the_one_outside"] = offered
+        assert offered[-3:] == ["已在电脑上关闭，在手机上继续", "另开一份继续", "把所在文件夹加为项目"], offered
+        choose("另开一份继续")
+        apart = until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["dir"] == "" and t["state"] == "running"), None), 30, "a terminal outside every project runs")
+        assert (apart["folder"], apart["tool"], apart["title"]) == (str(notes), "codex", "整理读书笔记 · 副本"), apart
+        printed = until(lambda: (lambda text: text if "STAND-IN" in text and "]" in text.split("with [")[-1] else None)("".join(c["data"] for c in call("/api/terminal?terminal=%s&after=0" % apart["id"])["chunks"])), 20, "what the stand-in printed")
+        report["started_outside_every_project"] = printed[printed.index("STAND-IN"):].split("\r")[0][:200]
+        assert ("in [%s]" % notes).lower() in printed.lower() and "fork" in printed and WORKING in printed, printed       # in the conversation's folder, as a copy of it
+        assert "reading-notes" not in call("/api/terminal")["device"]["workspaces"]
+        until(lambda: "/terminal/" in page_value("location.pathname"), 10, "the page has gone to the terminal")
+        on_page = until(lambda: (lambda text: text if "reading-notes" in text else None)(page_value("document.getElementById('status') ? document.getElementById('status').textContent : ''") or ""), 15, "the terminal's page says where it runs")
+        assert on_page.startswith("Codex · reading-notes") and page_value("document.getElementById('files').hidden") is True, on_page
+        ask("Page.navigate", url="http://127.0.0.1:%d/" % PORT)
+        until(lambda: about("整理读书笔记 · 副本"), 15, "the terminal is in the lists")
+        copy = about("整理读书笔记 · 副本")
+        assert copy["apart"] and copy["meta"][:2] == ["reading-notes", "未加入项目"] and copy["meta"][2].startswith("Codex · 手机终端"), copy
+        # typed into like any terminal; and ended
+        call("/api/terminal", {"action": "input", "id": new_id(), "terminal": apart["id"], "data": "x"})
+        call("/api/terminal", {"action": "close", "id": new_id(), "terminal": apart["id"]})
+        until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["id"] == apart["id"] and t["state"] != "running"), None), 20, "it has ended")
+        started = len(call("/api/terminal")["terminals"])
 
         # ---- the folder of the conversation that is open outside every project is made one
         page_value("(() => { %s('整理读书笔记').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)

@@ -188,7 +188,7 @@
     const text = await openSheet((form, finish) => {
       const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '发送消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
       // what the program said last is shown, to tell which terminal this is and where it stands
-      form.append(el('h3', { textContent: t.title }), el('p', { textContent: t.said || TOOLS[t.tool] + ' · ' + t.dir }), box,
+      form.append(el('h3', { textContent: t.title }), el('p', { textContent: t.said || TOOLS[t.tool] + ' · ' + (t.dir || base(t.folder)) }), box,
         el('button', { type: 'button', className: 'choice solid', onclick: () => { if (box.value.trim()) finish(box.value); else box.focus(); } }, el('span', { textContent: '发送' })));
       setTimeout(() => box.focus(), 80);
     });
@@ -223,8 +223,6 @@
   // things said are read from the conversation's file. Carrying on from the phone is a separate, deliberate step,
   // offered below what was said, in the words of what will happen on the computer.
   function ways(session) {
-    // open in a folder that is no project: a terminal of the phone's can only take it on once the folder is one
-    if (!session.dir) return { why: '', choices: session.folder ? [{ label: '把所在文件夹加为项目', sub: session.folder + '。之后可以在手机上继续这段对话', value: 'add', kind: Array.isArray(session.reach) ? '' : 'solid' }] : [] };
     const host = sessionHost(session), locked = sessionActivity(session) === 'locked';
     const canClose = session.can_takeover === true && !locked;
     // one that can be told things from here stays on the computer: moving it to the phone is not the first thing offered
@@ -237,6 +235,9 @@
     const why = canClose ? ''
       : host === 'shared' ? '这段对话正由电脑上的 Codex 应用或编辑器使用，手机无法关闭它。请先在该应用中结束这段对话。'
       : session.takeover_reason || '无法确定使用这段对话的程序，因此不会关闭它。请先在电脑上结束该程序。';
+    // One that is open in a folder that is no project is taken on in the same ways; the terminal then runs in that
+    // folder. Making the folder a project is offered beside them, for whoever wants it among the projects.
+    if (!session.dir && session.folder) choices.push({ label: '把所在文件夹加为项目', sub: session.folder, value: 'add' });
     return { choices, why };
   }
   // What was said, laid out to be read: the tools answer in Markdown, which is set as text with headings, lists, code
@@ -352,7 +353,7 @@
     const out = (data.terminals || []).map(t => {
       const s = t.session ? saved[t.tool + ':' + t.session] || null : null, phase = phaseOf(t), live = running(t);
       // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
-      return { t, s, tool: t.tool, title: t.title, place: t.dir, project: t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
+      return { t, s, tool: t.tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
         source: live ? 'phone' : '', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
     });
     sessions.filter(s => !s.terminal).forEach(s => {
@@ -410,20 +411,21 @@
     refresh();
   }
   async function addFolder(path) {
-    if (await run({ action: 'project_add', path, name: '', create: false }, '正在添加…')) { toast('已加为项目，这段对话稍后归到它名下'); refresh(); }
+    if (await run({ action: 'project_add', path, name: '', create: false }, '正在添加…')) { toast('已加为项目'); refresh(); }
   }
   async function manage(x) {
     const s = x.s, choices = [];
     if (s && marks()) choices.push(s.pinned ? { label: '取消置顶', value: 'pin' } : { label: '置顶', sub: '排在列表最前面', value: 'pin' });
     if (s && !x.t && !s.live && marks()) choices.push(s.hidden ? { label: '取消隐藏', value: 'hide' } : { label: '从列表隐藏', sub: '对话仍保存在电脑上：能搜索到，也能在项目的“已隐藏”里找回', value: 'hide' });
-    if (x.apart && s.folder && usable()) choices.push({ label: '把所在文件夹加为项目', sub: s.folder, value: 'add' });
+    const folder = x.apart ? (x.t ? x.t.folder : s.folder) || '' : '';
+    if (folder && usable()) choices.push({ label: '把所在文件夹加为项目', sub: folder, value: 'add' });
     if (!project && x.project) choices.push({ label: '进入项目 ' + x.project, value: 'enter' });
     if (x.t && x.live) choices.push({ label: '结束终端', sub: '正在运行的任务会被中断', value: 'end', kind: 'danger' });
     if (!choices.length) return;
     const choice = await ask(x.title, whereOf(x) + (x.place ? ' · ' + x.place : ''), choices);
     if (choice === 'pin') mark(s, { pinned: !s.pinned });
     else if (choice === 'hide') mark(s, s.hidden ? { hidden: false } : { hidden: true, pinned: false });
-    else if (choice === 'add') addFolder(s.folder);
+    else if (choice === 'add') addFolder(folder);
     else if (choice === 'enter') enter(x.project);
     else if (choice === 'end') endTerminal(x.t);
   }

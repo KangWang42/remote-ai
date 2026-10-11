@@ -115,6 +115,18 @@ public final class AggregateSessionsCheck {
         require(withOutside.size() == 2 && withOutside.get(1).name.isEmpty() && withOutside.get(1).active.size() == 2, "the ones outside every project stand in a group without a name, the last");
         require(AggregateSessions.counts(withOutside, null)[3] == 3 && !AggregateSessions.signature(withOutside).equals(AggregateSessions.signature(desk)), "and count with the tasks");
 
+        // A terminal that took such a conversation on runs in its folder and has no project either: it stands in the same group.
+        AggregateSessions.Entry took = new AggregateSessions.Entry(true, "d" + TERMINAL.substring(1), "", "整理读书笔记", "codex", "running", "busy", "", false, "", "", "out-2");
+        took.folder = "D:\\notes\\reading-notes";
+        AggregateSessions.Entry left = new AggregateSessions.Entry(true, "e" + TERMINAL.substring(1), "", "昨天接过来的", "claude", "closed", "", "", false, "", "", "");
+        left.folder = "D:\\notes\\reading-notes";
+        AggregateSessions.Entry its = new AggregateSessions.Entry(false, "out-2", "", "整理读书笔记", "codex", "", "", "", false, "", "", "");
+        its.folder = took.folder;
+        require(took.apart() && "reading-notes".equals(took.place()) && "phone".equals(took.source()) && "手机终端 · reading-notes（未加入项目）".equals(AggregateSessions.where(took)), AggregateSessions.where(took));
+        List<AggregateSessions.Project> taken = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(took, left, its, outside));
+        AggregateSessions.Project nameless = taken.get(taken.size() - 1);
+        require(nameless.name.isEmpty() && nameless.active.size() == 2 && nameless.ended.size() == 1 && nameless.history.isEmpty(), "a terminal outside every project is listed, its own conversation is not listed beside it: " + nameless.active.size() + " " + nameless.ended.size() + " " + nameless.history.size());
+
         // The workbench's lists: what waits for an answer, what is pinned, what is at work, what was used lately.
         String pc = "https://pc.example", other2 = "https://other.example";
         AggregateSessions.Entry shell = new AggregateSessions.Entry(true, TERMINAL, "thesis", "看日志", "shell", "running", "idle", "", false, "", "", "");

@@ -328,7 +328,7 @@
       theirs = reported;
       if (nudge && reported === nudge) settle();
       slash.hidden = !(COMMANDS[tool] || []).length;
-      if ($('files').hidden) $('files').hidden = false;        // the folder this terminal works in is known now
+      if ($('files').hidden === !!t.dir) $('files').hidden = !t.dir;        // the files of its project; a terminal outside every project has none to show
       if (!initialized || payload.reset) {
         restoring = true; running = false;
         scroller.stop(); unslide(); slide.forget();
@@ -340,7 +340,8 @@
       const more = payload.after < t.seq;
       // Output arrives many times a second: the page around the terminal is touched only where something changed.
       const plain = device.shell || 'PowerShell';      // what the computer calls its plain terminal
-      const where = (tool === 'codex' ? 'Codex' : tool === 'shell' ? plain : 'Claude Code') + ' · ' + t.dir;
+      // its project; one that took on a conversation outside every project runs in that conversation's folder
+      const where = (tool === 'codex' ? 'Codex' : tool === 'shell' ? plain : 'Claude Code') + ' · ' + (t.dir || String(t.folder || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop());
       // Someone else's size on the screen means the terminal is open in another place too.
       $('shared').hidden = !(running && elsewhere);
       const loading = restoring && more ? `载入输出 ${Math.round(100 * (payload.after - start) / Math.max(1, t.seq - start))}%` : '';

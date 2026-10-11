@@ -462,12 +462,44 @@ class TerminalRelayTests(unittest.TestCase):
         outside = {"id": sid, "tool": "claude", "dir": "", "folder": "D:\\notes\\reading", "title": "读书笔记", "updated": 1, "live": True, "host": "cli", "reach": ["say"], "status": "waiting"}
         self.relay.agent({"info": info, "sessions": [outside, dict(outside, id=other, live=False), dict(outside, id=third, folder=""), {"id": third, "tool": "codex", "dir": "demo", "folder": "D:\\x", "title": "项目里的", "updated": 1}]}, now=1001)
         shown = self.relay.overview(now=1001)["sessions"]
-        # only one that a program has open is listed without a project, and only with its folder; a project's own says no folder
-        self.assertEqual([(s["id"], s["dir"], s["folder"]) for s in shown], [(sid, "", "D:\\notes\\reading"), (third, "demo", "")])
+        # one without a project is listed only with its folder; a project's own says no folder
+        self.assertEqual([(s["id"], s["dir"], s["folder"], s["live"]) for s in shown], [(sid, "", "D:\\notes\\reading", True), (other, "", "D:\\notes\\reading", False), (third, "demo", "")][:2] + [(third, "demo", "", False)])
         self.assertEqual(shown[0]["activity"], "active")
-        # it cannot be continued in a terminal from the phone until its folder is a project: the relay knows no such folder
-        with self.assertRaisesRegex(RemoteError, "没有报告这个工具或目录"):
-            self.relay.command({"action": "start", "id": "d" * 32, "tool": "claude", "dir": "", "session": sid, "takeover": True}, now=1002)
+        # It is taken on from the phone like any other: the terminal runs in the conversation's folder and has no
+        # project. Which folder is what the computer said, whatever the viewer says.
+        start = {"action": "start", "id": "d" * 32, "tool": "claude", "dir": "", "session": sid, "takeover": True, "folder": "C:\\Windows"}
+        with self.assertRaisesRegex(RemoteError, "接管"):
+            self.relay.command(dict(start, takeover=False), now=1002)
+        started = self.relay.command(start, now=1002)
+        self.assertEqual(self.relay.command(start, now=1003), started)           # the same request again is the same one
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"]
+        self.assertEqual([(o["action"], o["dir"], o["folder"], o["session"], o["takeover"]) for o in asked], [("start", "", "D:\\notes\\reading", sid, True)])
+        terminal = self.relay.overview(started["terminal"], now=1003)["terminal"]
+        self.assertEqual((terminal["dir"], terminal["folder"], terminal["session"], terminal["title"]), ("", "D:\\notes\\reading", sid, "读书笔记"))
+        # the computer lists the conversation as that terminal's from then on, and it is no longer one that a program has open
+        self.relay.agent({"info": info, "acks": [{"id": start["id"]}], "terminals": [{"id": started["terminal"], "state": "running"}], "sessions": [dict(outside, live=False, reach=None, status="")]}, now=1004)
+        listed = self.relay.overview(now=1004)
+        self.assertEqual([(s["id"], s["terminal"], s["live"]) for s in listed["sessions"]], [(sid, started["terminal"], False)])
+        self.assertEqual([(t["dir"], t["folder"], t["title"]) for t in listed["terminals"]], [("", "D:\\notes\\reading", "读书笔记")])
+        # going on from that terminal once it has ended: in the same folder
+        self.relay.agent({"info": info, "terminals": [{"id": started["terminal"], "state": "closed"}], "sessions": []}, now=1005)
+        self.assertEqual(self.relay.overview(now=1005)["terminals"][0]["title"], "读书笔记")          # it keeps the conversation's name
+        again = {"action": "start", "id": "e" * 32, "tool": "claude", "dir": "", "previous": started["terminal"], "history": True}
+        self.assertEqual(self.relay.overview(self.relay.command(again, now=1006)["terminal"], now=1006)["terminal"]["title"], "读书笔记")
+        asked = [o for o in self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"] if o["id"] == again["id"]]
+        self.assertEqual([(o["dir"], o["folder"], o["previous"]) for o in asked], [("", "D:\\notes\\reading", started["terminal"])])
+        # nothing else is started where there is no project: not a new terminal, not a conversation the computer did not list there
+        for bad in ({"tool": "shell"}, {"tool": "claude"}, {"tool": "claude", "session": third}, {"tool": "claude", "previous": "f" * 32, "history": True}, {"tool": "codex", "previous": started["terminal"], "history": True}):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict({"action": "start", "id": "9" * 32, "dir": ""}, **bad), now=1007)
+
+    def test_a_terminal_outside_every_project_is_taken_as_the_computer_tells_of_it(self):
+        info = dict(self.info, features=["peek"])
+        told = {"id": "c" * 32, "state": "running", "tool": "codex", "dir": "", "folder": "D:\\notes\\reading", "created": 5000, "title": "", "session": "11111111-2222-3333-4444-555555555555"}
+        self.relay.agent({"info": info, "terminals": [told, dict(told, id="d" * 32, folder=""), dict(told, id="e" * 32, dir="demo", folder="D:\\x")]}, now=1001)
+        shown = {t["id"]: t for t in self.relay.overview(now=1001)["terminals"]}
+        # one without a project and without a folder is nothing; a project's own says no folder
+        self.assertEqual({key: (t["dir"], t["folder"]) for key, t in shown.items()}, {"c" * 32: ("", "D:\\notes\\reading"), "e" * 32: ("demo", "")})
 
     def test_a_conversation_open_on_the_computer_is_answered_and_told_from_the_phone(self):
         import threading

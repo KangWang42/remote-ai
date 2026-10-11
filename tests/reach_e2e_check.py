@@ -171,9 +171,9 @@ def main():
         assert call("/api/conversation", {"id": new_id(), "session": OUTSIDE, "action": "say", "text": "再加一节小结"}) == {"now": False}
         went = json.loads(said(hook("Stop", OUTSIDE, last_assistant_message="提纲写好了。", stop_hook_active=False)))
         assert went["decision"] == "block" and "再加一节小结" in went["reason"], went
-        # a terminal of the phone's cannot take it on while its folder is no project
-        refused = call("/api/terminal", {"action": "start", "id": new_id(), "tool": "codex", "dir": "", "session": OUTSIDE, "takeover": True}, expect=400)
-        assert "目录" in refused["error"], refused
+        # a terminal of the phone's takes it on like any other, by closing what has it open or by a copy: without either it is refused, as one in a project is
+        refused = call("/api/terminal", {"action": "start", "id": new_id(), "tool": "codex", "dir": "", "session": OUTSIDE}, expect=400)
+        assert "接管" in refused["error"], refused
         # once the folder is a project, the conversation is one of that project
         assert call("/api/terminal", {"action": "project_add", "id": new_id(), "path": str(elsewhere), "name": "", "create": False})["state"] in ("queued", "done")
         joined = until(lambda: (lambda s: s if s and s["dir"] else None)(listed(OUTSIDE)), 30, "the conversation belongs to the new project")

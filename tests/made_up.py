@@ -53,12 +53,18 @@ class Homes:
         return path
 
     def stand_ins(self, folder):
-        """Programs that take the place of the tools: what a check starts by mistake is never a real tool. Returns the
-        folder to put first in PATH."""
+        """Programs that take the place of the tools: what a check starts, on purpose or by mistake, is never a real
+        tool. A stand-in says the folder it was started in and what it was started with, and stays; asked for its help
+        (the agent does that to learn what a tool can do) it answers and leaves. Returns the folder to put first in PATH."""
         tools = Path(folder) / "tools"
         tools.mkdir(parents=True, exist_ok=True)
+        (tools / "standin.py").write_text(
+            "import os, sys, time\n"
+            "if '--help' in sys.argv: print('stand-in'); sys.exit(0)\n"
+            "print('STAND-IN %s in [%s] with [%s]' % (sys.argv[1], os.getcwd(), ' '.join(sys.argv[2:])), flush=True)\n"
+            "time.sleep(600)\n", encoding="utf-8")
         for name in ("claude", "codex"):
-            (tools / (name + ".cmd")).write_text('@"%s" -c "import time; print(\'STAND-IN %s\'); time.sleep(600)"\r\n' % (sys.executable, name), encoding="mbcs")
+            (tools / (name + ".cmd")).write_text('@"%s" "%s" %s %%*\r\n' % (sys.executable, tools / "standin.py", name), encoding="mbcs")
         return tools
 
     def close(self):

@@ -46,10 +46,15 @@ the computer; `live` means a program on the computer has it open, `terminal` is 
 terminals already shows it. `state` is `starting`, `running` or `closed`; `status` is `busy`, `idle` or empty.
 
 A conversation belongs to a project, named in `dir`. One that a program has open in a folder that is no project is
-listed too: its `dir` is empty and `folder` is the full path of that folder. It can be looked at, and answered and
-told things where its tool lets it be reached; a terminal cannot be started for it until the folder is a project
-(`project_add` with that path), after which the computer lists it under that project. Saved conversations of
-folders that are no projects are not listed.
+listed too: its `dir` is empty and `folder` is the full path of that folder. It can be looked at, answered and told
+things where its tool lets it be reached, and taken on by a terminal like any other: `start` with an empty `dir` and
+its `session` (and `takeover` or `fork` as for a conversation of a project). That terminal runs in the
+conversation's folder and belongs to no project: its own `dir` is empty and it says the same `folder`; which folder
+is what the computer listed, never what the viewer sends. While the terminal runs, the computer goes on listing the
+conversation (not `live` any more), so that the terminal keeps its name and marks. Nothing else is started where
+there is no project: not a new terminal, and not a conversation the computer did not list there. Saved
+conversations of folders that are no projects, which nothing has open, are not listed. Once the folder is made a
+project (`project_add` with that path) the computer lists its conversations under that project.
 
 `pinned` and `hidden` are what the owner said of a conversation from a phone (see "A conversation that is open on
 the computer", the action `mark`). The computer keeps them, so every phone and every line shows the same; they are

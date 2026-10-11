@@ -320,7 +320,8 @@ final class Workbench {
                 made.said = entry.optString(terminal ? "said" : "last");
                 JSONArray reach = terminal ? null : entry.optJSONArray("reach");
                 made.reached = reach != null;
-                if (!terminal) { made.origin = entry.optString("origin"); made.folder = entry.optString("folder"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
+                made.folder = entry.optString("folder");
+                if (!terminal) { made.origin = entry.optString("origin"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
                 for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
                 made.shell = device.optString("shell");
                 made.used = terminal ? (made.at > 0 ? made.at : entry.optLong("created")) : entry.optLong("updated");
