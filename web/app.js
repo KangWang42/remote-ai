@@ -1,4 +1,6 @@
-/* The list pages: every project at a glance (what is running and what needs you), and one project in detail. */
+/* The list pages: everything on the computer at a glance, by what needs you (what waits for an answer, what is pinned,
+   what is at work, what was used lately), found by one search and told apart by tool and by where it runs; and one
+   project in detail. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -33,6 +35,7 @@
     folder: svg('<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
     claude: svg('<path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6L6 18"/>'), codex: svg('<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>'),
     say: svg('<path d="M20.5 3.5L3.5 10.5l6.5 3 3 6.5zM10 13.5L20.5 3.500"/>', 18),
+    pin: svg('<path d="M9 3.5h6l-1 6 3.5 3.5v1.5h-11V13L10 9.5zM12 14.5V21"/>', 13),
     shell: svg('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7.5 10l3 2.2-3 2.2M12.5 15h4"/>'), mark: svg('<path d="M7 8l5 4-5 4M13.5 16.5h4.5"/>', 30)
   };
   function el(tag, props, ...children) {
@@ -197,7 +200,7 @@
     if (!usable()) return toast('电脑离线，暂时不能发送');
     const text = await openSheet((form, finish) => {
       const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '发送消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
-      form.append(el('h3', { textContent: s.title }), el('p', { textContent: s.last || TOOLS[s.tool] + ' · ' + s.dir }), box,
+      form.append(el('h3', { textContent: s.title }), el('p', { textContent: s.last || TOOLS[s.tool] + ' · ' + (s.dir || base(s.folder)) }), box,
         el('button', { type: 'button', className: 'choice solid', onclick: () => { if (box.value.trim()) finish(box.value); else box.focus(); } }, el('span', { textContent: '发送' })));
       setTimeout(() => box.focus(), 80);
     });
@@ -220,6 +223,8 @@
   // things said are read from the conversation's file. Carrying on from the phone is a separate, deliberate step,
   // offered below what was said, in the words of what will happen on the computer.
   function ways(session) {
+    // open in a folder that is no project: a terminal of the phone's can only take it on once the folder is one
+    if (!session.dir) return { why: '', choices: session.folder ? [{ label: '把所在文件夹加为项目', sub: session.folder + '。之后可以在手机上继续这段对话', value: 'add', kind: Array.isArray(session.reach) ? '' : 'solid' }] : [] };
     const host = sessionHost(session), locked = sessionActivity(session) === 'locked';
     const canClose = session.can_takeover === true && !locked;
     // one that can be told things from here stays on the computer: moving it to the phone is not the first thing offered
@@ -275,7 +280,7 @@
     const { choices, why } = ways(session), canPeek = (data.device.features || []).includes('peek');
     const choice = await openSheet((form, finish) => {
       form.append(el('h3', { textContent: session.title }),
-        el('p', { textContent: (hostLabel[sessionHost(session)] || hostLabel.unknown) + ' · ' + TOOLS[session.tool] + ' · ' + session.dir }));
+        el('p', { textContent: (hostLabel[sessionHost(session)] || hostLabel.unknown) + ' · ' + TOOLS[session.tool] + ' · ' + (session.dir || base(session.folder) + '（未加入项目）') }));
       if (canPeek) {
         const said = el('div', { className: 'said' }, el('p', { className: 'quiet', textContent: '正在读取对话…' }));
         form.append(said, el('p', { className: 'quiet', textContent: Array.isArray(session.reach) ? '这段对话照常开在电脑上。在这里查看和发消息，都不影响电脑上的使用。' : '只是查看，不影响电脑上的程序。' }));
@@ -301,6 +306,7 @@
     });
     if (choice === 'allow' || choice === 'deny') answerAsk(session, choice === 'allow');
     else if (choice === 'tell') tell(session);
+    else if (choice === 'add') addFolder(session.folder);
     else if (choice) start(session.tool, session.dir, session.id, choice === 'close', choice === 'copy');
   }
   // ?new=1 comes from the app's workbench: a terminal is started without walking to a project first. The projects
@@ -331,32 +337,149 @@
     if (await run({ action: 'project_add', path, name: answer.choice ? '' : answer.name, create: false }, '正在添加…')) refresh();
   }
 
+  // ---- everything there is to work with, said one way
+  // A terminal of the phone's, a conversation that is open on the computer, a conversation that is only saved: each
+  // is a thing with a name, a place (its project, or the folder it is open in), a tool, a source (where it runs), a
+  // phase, and the time it was last used. The lists, the search and the filters all work on these.
+  const SOURCE = { phone: '手机终端', cli: '命令行', app: '应用' };
+  const marks = () => (data.device.features || []).includes('marks');
+  const base = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(path || '');
+  // where a conversation that a program has open runs: the desktop app or an editor ('app'), or a command line
+  const sourceOf = s => !s.live ? '' : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'cli';
+  function things() {
+    const sessions = data.sessions || [], saved = {};
+    sessions.forEach(s => { saved[s.tool + ':' + s.id] = s; });
+    const out = (data.terminals || []).map(t => {
+      const s = t.session ? saved[t.tool + ':' + t.session] || null : null, phase = phaseOf(t), live = running(t);
+      // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
+      return { t, s, tool: t.tool, title: t.title, place: t.dir, project: t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
+        source: live ? 'phone' : '', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
+    });
+    sessions.filter(s => !s.terminal).forEach(s => {
+      const phase = s.live ? reachPhase(s) : '';
+      out.push({ s, tool: s.tool, title: s.title, place: s.dir || base(s.folder), project: s.dir, apart: !s.dir, live: !!s.live, phase, rank: phase ? PHASE[phase][1] : 6, at: s.updated,
+        source: sourceOf(s), pinned: !!s.pinned, hidden: !!s.hidden && !s.live, state: sessionActivity(s) });
+    });
+    return out;
+  }
+  const needsYou = x => x.live && (x.phase === 'confirm' || x.phase === 'done' || x.phase === 'waiting');
+  const byRank = (a, b) => a.rank - b.rank || b.at - a.at, byTime = (a, b) => b.at - a.at;
+  // by what it runs and where, in the words of the cards
+  const whereOf = x => {
+    const tool = TOOLS[x.tool];
+    if (x.t) return tool + (x.live ? ' · ' + SOURCE.phone : '');
+    const origin = x.live && x.s.origin && x.s.origin !== '电脑独立终端' ? x.s.origin : '';
+    return !origin ? tool : /桌面版|后台服务/.test(origin) ? origin : tool + ' · ' + origin;
+  };
+  // what a search looks through
+  const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.s && x.s.origin || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
+  // what a card shows: it is built again when any of this changes
+  const signed = x => x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned]
+    : [x.s.id, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), x.s.ask ? x.s.ask.id : '', x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state];
+
+  // ---- the filters: by tool, and by where a thing runs. They last as long as the page is kept open.
+  let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 6, hiddenShown = false;
+  try { filter = Object.assign(filter, JSON.parse(sessionStorage.getItem('rcli-filter') || '{}')); } catch (error) { /* no storage */ }
+  const pass = x => (!filter.tool || x.tool === filter.tool) && (!filter.source || x.source === filter.source);
+  function choose(change) {
+    filter = Object.assign({}, filter, change);
+    try { sessionStorage.setItem('rcli-filter', JSON.stringify(filter)); } catch (error) { /* no storage */ }
+    resultsShown = 30; recentShown = 6; draw();
+  }
+  function drawFilters(all) {
+    // a row is offered only where it tells something apart, or to take back what was chosen
+    const tools = Object.keys(TOOLS).filter(tool => tool === filter.tool || all.some(x => x.tool === tool));
+    const sources = Object.keys(SOURCE).filter(source => source === filter.source || all.some(x => x.source === source));
+    const offered = (tools.length > 1 ? tools : filter.tool ? [filter.tool] : []), places = (sources.length > 1 ? sources : filter.source ? [filter.source] : []);
+    const box = $('filters'), signature = JSON.stringify([offered, places, filter, TOOLS.shell]);
+    box.hidden = !offered.length && !places.length;
+    if (box.dataset.signature === signature) return;
+    box.dataset.signature = signature;
+    const chip = (text, on, act) => el('button', { type: 'button', className: on ? 'on' : '', ariaPressed: String(on), textContent: text, onclick: act });
+    const row = [chip('全部', !filter.tool && !filter.source, () => choose({ tool: '', source: '' }))];
+    offered.forEach(tool => row.push(chip(TOOLS[tool], filter.tool === tool, () => choose({ tool: filter.tool === tool ? '' : tool }))));
+    if (offered.length && places.length) row.push(el('i'));
+    places.forEach(source => row.push(chip(SOURCE[source], filter.source === source, () => choose({ source: filter.source === source ? '' : source }))));
+    box.replaceChildren(...row);
+  }
+
+  // ---- what is done with a thing besides opening it: asked for by a held press on its card
+  async function mark(s, change) {
+    try { await api('api/conversation', Object.assign({ id: newId(), session: s.id, action: 'mark' }, change)); Object.assign(s, change); draw(); }
+    catch (error) { toast(error.message); }
+    refresh();
+  }
+  async function addFolder(path) {
+    if (await run({ action: 'project_add', path, name: '', create: false }, '正在添加…')) { toast('已加为项目，这段对话稍后归到它名下'); refresh(); }
+  }
+  async function manage(x) {
+    const s = x.s, choices = [];
+    if (s && marks()) choices.push(s.pinned ? { label: '取消置顶', value: 'pin' } : { label: '置顶', sub: '排在列表最前面', value: 'pin' });
+    if (s && !x.t && !s.live && marks()) choices.push(s.hidden ? { label: '取消隐藏', value: 'hide' } : { label: '从列表隐藏', sub: '对话仍保存在电脑上：能搜索到，也能在项目的“已隐藏”里找回', value: 'hide' });
+    if (x.apart && s.folder && usable()) choices.push({ label: '把所在文件夹加为项目', sub: s.folder, value: 'add' });
+    if (!project && x.project) choices.push({ label: '进入项目 ' + x.project, value: 'enter' });
+    if (x.t && x.live) choices.push({ label: '结束终端', sub: '正在运行的任务会被中断', value: 'end', kind: 'danger' });
+    if (!choices.length) return;
+    const choice = await ask(x.title, whereOf(x) + (x.place ? ' · ' + x.place : ''), choices);
+    if (choice === 'pin') mark(s, { pinned: !s.pinned });
+    else if (choice === 'hide') mark(s, s.hidden ? { hidden: false } : { hidden: true, pinned: false });
+    else if (choice === 'add') addFolder(s.folder);
+    else if (choice === 'enter') enter(x.project);
+    else if (choice === 'end') endTerminal(x.t);
+  }
+  // A press that is held on a card asks what to do with it. A finger that moves is scrolling; the press that ends a
+  // held one opens nothing. A mouse asks with its other button, and so does a phone that says a held press that way.
+  function held(node, action) {
+    let timer = 0, fired = false, x = 0, y = 0;
+    const clear = () => { clearTimeout(timer); timer = 0; };
+    const act = () => { if (!$('sheet').open) action(); };
+    node.addEventListener('touchstart', event => {
+      clear(); fired = false;
+      if (event.touches.length !== 1) return;
+      x = event.touches[0].clientX; y = event.touches[0].clientY;
+      timer = setTimeout(() => { timer = 0; fired = true; act(); }, 520);
+    }, { passive: true });
+    node.addEventListener('touchmove', event => { const at = event.touches[0]; if (Math.abs(at.clientX - x) > 10 || Math.abs(at.clientY - y) > 10) clear(); }, { passive: true });
+    node.addEventListener('touchend', event => { clear(); if (fired && event.cancelable) event.preventDefault(); });
+    node.addEventListener('touchcancel', clear);
+    node.addEventListener('contextmenu', event => { event.preventDefault(); clear(); if (!fired) act(); });
+    return node;
+  }
+
   // ---- cards
   function pill(kind, text) { return el('span', { className: 'pill ' + kind, textContent: text }); }
+  const named = x => el('b', null, x.pinned ? el('i', { className: 'pin', html: ICON.pin }) : '', x.title);
+  // where it is: its project, or the folder a conversation is open in when that is no project
+  function placed(meta, x, withProject) {
+    if (!withProject || !x.place) return;
+    meta.append(el('span', { className: 'chip' + (x.apart ? ' apart' : ''), textContent: x.place }));
+    if (x.apart) meta.append(el('span', { textContent: '未加入项目' }));
+  }
+  const card = (x, withProject) => held(x.t ? terminalCard(x, withProject) : sessionCard(x, withProject), () => manage(x));
   // A terminal opened from the phone.
-  function terminalCard(t, withProject) {
-    const phase = phaseOf(t), meta = el('span', { className: 'meta' }, pill(phase, PHASE[phase][0]));
-    if (withProject) meta.append(el('span', { className: 'chip', textContent: t.dir }));
-    meta.append(el('span', { textContent: TOOLS[t.tool] + (t.phase_at ? ' · ' + ago(t.phase_at) : '') }));
+  function terminalCard(x, withProject) {
+    const t = x.t, phase = x.phase, meta = el('span', { className: 'meta' }, pill(phase, PHASE[phase][0]));
+    placed(meta, x, withProject);
+    meta.append(el('span', { textContent: whereOf(x) + (t.phase_at ? ' · ' + ago(t.phase_at) : '') }));
     // What the program last said. It changes far more often than the card, so peeks() writes it without a rebuild.
     const peek = el('span', { className: 'peek', hidden: true });
     peek.dataset.peek = t.id;
-    const card = el('li', { className: 'card ' + phase }, el('button', { type: 'button', className: 'open', onclick: () => open(t.id) },
-      el('span', { className: 'tool ' + t.tool, html: ICON[t.tool] }), el('span', { className: 'text' }, el('b', { textContent: t.title }), meta, peek)));
+    const made = el('li', { className: 'card ' + phase }, el('button', { type: 'button', className: 'open', onclick: () => open(t.id) },
+      el('span', { className: 'tool ' + t.tool, html: ICON[t.tool] }), el('span', { className: 'text' }, named(x), meta, peek)));
     // A terminal that waits on a question is answered below, where the question is read: Enter would say yes to it.
-    if (t.state === 'running' && phase !== 'confirm') card.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这个终端发消息', html: ICON.say, onclick: () => say(t) }));
-    if (running(t)) card.append(el('button', { type: 'button', className: 'side', ariaLabel: '结束这个终端', html: ICON.stop, onclick: () => endTerminal(t) }));
+    if (t.state === 'running' && phase !== 'confirm') made.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这个终端发消息', html: ICON.say, onclick: () => say(t) }));
+    if (running(t)) made.append(el('button', { type: 'button', className: 'side', ariaLabel: '结束这个终端', html: ICON.stop, onclick: () => endTerminal(t) }));
     // A question the program waits on is answered here, under what it asks: the question is on the card, so nothing
     // is allowed unseen. The two keys are the ones Claude Code and Codex take for "yes" and "no".
     if (phase === 'confirm' && (t.asks || []).length) {
       const answer = (key, done) => async () => { if (await run({ action: 'input', terminal: t.id, data: key }, '')) { toast(done); refresh(); } };
-      card.classList.add('asking');
-      card.append(el('div', { className: 'ask' }, el('pre', { textContent: t.asks.join('\n') }), el('div', { className: 'answers' },
+      made.classList.add('asking');
+      made.append(el('div', { className: 'ask' }, el('pre', { textContent: t.asks.join('\n') }), el('div', { className: 'answers' },
         el('button', { type: 'button', className: 'yes', textContent: '允许（回车）', onclick: answer('\r', '已允许') }),
         el('button', { type: 'button', className: 'no', textContent: '拒绝（Esc）', onclick: answer('\x1b', '已拒绝') }),
         el('button', { type: 'button', className: 'see', textContent: '进去看', onclick: () => open(t.id) }))));
     }
-    return card;
+    return made;
   }
   // A writer lock means the conversation is held, not that a computer window is showing it.
   function sessionHost(s) {
@@ -370,47 +493,43 @@
     return sessionHost(s) === 'cli' ? 'active' : 'locked';
   }
   const hostLabel = { cli: '电脑上打开着', shared: '被电脑上的应用占用', remote: '被另一个远程终端占用', unknown: '被电脑上的程序占用' };
-  function sessionCard(s, withProject) {
-    const meta = el('span', { className: 'meta' }), phase = s.live ? reachPhase(s) : '';
-    // where it runs, in the computer's words: the desktop app, an editor, or a command line
-    const where = s.origin && s.origin !== '电脑独立终端' ? (/桌面版|后台服务/.test(s.origin) ? s.origin : TOOLS[s.tool] + ' · ' + s.origin) : TOOLS[s.tool] + ' · 电脑上开着';
+  function sessionCard(x, withProject) {
+    const s = x.s, meta = el('span', { className: 'meta' }), phase = x.phase;
     if (phase) {
       // told of by its tool: a card like a terminal's, with where it runs in place of "from the phone"
       const see = () => { if (!usable()) return toast('电脑离线，暂时无法打开'); takeOver(s); };
       meta.append(pill(phase, PHASE[phase][0]));
-      if (withProject) meta.append(el('span', { className: 'chip', textContent: s.dir }));
+      placed(meta, x, withProject);
       // it is open on the computer and stays there: said so, not as something a program holds
-      meta.append(el('span', { textContent: where }));
-      const card = el('li', { className: 'card ' + (phase === 'waiting' ? 'done' : phase) }, el('button', { type: 'button', className: 'open', onclick: see },
-        el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, el('b', { textContent: s.title }), meta, el('span', { className: 'peek', hidden: !s.last || phase === 'confirm', textContent: s.last || '' }))));
-      if (can(s, 'say') && phase !== 'confirm') card.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这段对话发消息', html: ICON.say, onclick: () => tell(s) }));
+      meta.append(el('span', { textContent: whereOf(x) }));
+      const made = el('li', { className: 'card ' + (phase === 'waiting' ? 'done' : phase) }, el('button', { type: 'button', className: 'open', onclick: see },
+        el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, named(x), meta, el('span', { className: 'peek', hidden: !s.last || phase === 'confirm', textContent: s.last || '' }))));
+      if (can(s, 'say') && phase !== 'confirm') made.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这段对话发消息', html: ICON.say, onclick: () => tell(s) }));
       if (phase === 'confirm' && s.ask) {
-        card.classList.add('asking');
+        made.classList.add('asking');
         const answers = el('div', { className: 'answers' });
         if (can(s, 'answer')) answers.append(el('button', { type: 'button', className: 'yes', textContent: '允许', onclick: () => answerAsk(s, true) }), el('button', { type: 'button', className: 'no', textContent: '拒绝', onclick: () => answerAsk(s, false) }));
         else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
         answers.append(el('button', { type: 'button', className: 'see', textContent: '看对话', onclick: see }));
-        card.append(el('div', { className: 'ask' }, el('pre', { textContent: s.ask.text }), answers));
+        made.append(el('div', { className: 'ask' }, el('pre', { textContent: s.ask.text }), answers));
       }
-      return card;
+      return made;
     }
-    if (s.live) {
-      const state = sessionActivity(s);
-      meta.append(pill(state === 'active' && s.status === 'busy' ? 'busy' : state === 'active' ? 'pc' : 'locked', (s.origin && s.origin !== '电脑独立终端' ? s.origin + ' · ' : '') + (hostLabel[sessionHost(s)] || hostLabel.unknown)));
-    }
-    if (withProject) meta.append(el('span', { className: 'chip', textContent: s.dir }));
-    meta.append(el('span', { textContent: TOOLS[s.tool] + ' · ' + ago(s.updated) }));
+    if (s.live) meta.append(pill(x.state === 'active' && s.status === 'busy' ? 'busy' : x.state === 'active' ? 'pc' : 'locked', hostLabel[sessionHost(s)] || hostLabel.unknown));
+    else if (x.hidden) meta.append(pill('locked', '已隐藏'));
+    placed(meta, x, withProject);
+    meta.append(el('span', { textContent: whereOf(x) + ' · ' + ago(s.updated) }));
     return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => { if (!usable()) return toast('电脑离线，暂时无法打开'); if (s.live) takeOver(s); else start(s.tool, s.dir, s.id, false); } },
-      el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, el('b', { textContent: s.title }), meta), el('span', { className: 'chev', html: ICON.chev })));
+      el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, named(x), meta), el('span', { className: 'chev', html: ICON.chev })));
   }
-  // what a card of a conversation shows: it is built again when any of this changes
-  const signed = s => [s.id, s.status, s.title, s.host, s.origin, (s.reach || ['-']).join(), s.ask ? s.ask.id : '', s.last || ''];
   // Lists are rebuilt only when what they show has changed, so a press or a scroll is not interrupted every few seconds.
   function fill(list, cards, signature) {
     if (list.dataset.signature === signature) return;
     list.dataset.signature = signature;
     list.replaceChildren(...cards);
   }
+  // one list of things: its cards, and what they are known by
+  const show = (list, shown, withProject, more) => fill(list, shown.map(x => card(x, withProject)), JSON.stringify([shown.map(signed), more, data.device.features, usable()]));
   const stamp = minutes => Math.floor(Date.now() / (minutes * 60000));
   function peeks() {
     const said = {};
@@ -431,38 +550,60 @@
     if (!ready) offline.replaceChildren(el('b', { textContent: device.online ? '电脑端暂停了手机访问' : '电脑离线' }),
       el('span', { textContent: device.online ? '在电脑上的 Remote CLI“设置”里打开“允许手机访问”。' : '请确认电脑已开机且 Remote CLI 正在运行。使用公网隧道时，退出程序或重启电脑后地址会变更，需要重新扫码。' }));
     if (project && !names.includes(project)) { project = ''; }
-    const terminals = data.terminals || [], sessions = (data.sessions || []).filter(s => !s.terminal);
-    const mine = terminals.filter(running).map(t => Object.assign({ rank: PHASE[phaseOf(t)][1], at: t.phase_at || t.created }, t));
-    const live = sessions.filter(s => sessionActivity(s) === 'active');
-    const background = sessions.filter(s => sessionActivity(s) === 'locked');
+    const everything = things(), mine = everything.filter(x => x.t && x.live);
     $('overview').hidden = !!project; $('project').hidden = !project;
     // In the app the arrow on the first page leads to the workbench, where every computer is listed.
     $('back').hidden = !project && !(native && native.home);
     $('back').setAttribute('aria-label', project ? '返回全部项目' : '返回工作台');
     $('heading').textContent = project || 'Remote CLI';
     // conversations open on the computer are counted with the terminals, by how they stand
-    const stands = phase => mine.filter(t => phaseOf(t) === phase).length + live.filter(s => reachPhase(s) === phase).length;
-    const waiting = stands('confirm'), done = stands('done') + stands('waiting'), working = stands('busy');
+    const stands = (list, ...phases) => list.filter(x => x.live && phases.includes(x.phase)).length;
+    const waiting = stands(everything, 'confirm'), done = stands(everything, 'done', 'waiting'), working = stands(everything, 'busy');
     $('device-text').textContent = !ready ? (device.online ? '已暂停访问' : '电脑离线')
       : project ? '电脑在线' : waiting ? waiting + ' 个任务等你确认' : done ? done + ' 个任务已完成' : working ? working + ' 个任务在执行' : '电脑在线';
 
     if (!project) {
-      // one list for both: what waits for an answer first, whichever kind it is; a conversation whose tool tells nothing comes last
-      const order = mine.map(t => ({ t, rank: t.rank, at: t.at })).concat(live.map(s => ({ s, rank: reachPhase(s) ? PHASE[reachPhase(s)][1] : 6, at: s.updated })))
-        .sort((a, b) => a.rank - b.rank || b.at - a.at);
-      const cards = order.map(one => one.t ? terminalCard(one.t, true) : sessionCard(one.s, true));
-      $('active').hidden = !cards.length;
-      fill($('active-list'), cards, JSON.stringify([order.map(one => one.t ? [one.t.id, phaseOf(one.t), one.t.title, one.t.phase_at] : signed(one.s)), stamp(1), ready]));
-      $('background').hidden = !background.length;
-      $('background-summary').textContent = background.length + ' 段 · 不计入运行中';
-      fill($('background-list'), background.map(s => sessionCard(s, true)), JSON.stringify([background.map(s => [s.id, s.status, s.title, s.host, s.origin]), stamp(1), ready]));
-      const parts = [];
-      if (waiting) parts.push(waiting + ' 个等你确认'); if (done) parts.push(done + ' 个已完成'); if (working) parts.push(working + ' 个在执行');
-      $('active-summary').textContent = parts.join(' · ') || (cards.length + ' 个在运行');
-      const list = names.map(name => {
+      const all = everything.filter(pass), asked = $('query').value.trim().toLowerCase().split(/\s+/).filter(Boolean), searching = asked.length > 0, tick = [stamp(1), ready];
+      $('find').hidden = !everything.length;
+      drawFilters(everything);
+      $('results').hidden = !searching; $('sections').hidden = searching;
+      $('held-hint').hidden = !everything.length;
+      if (searching) {
+        // everything is looked through, what is hidden too; what is open comes first
+        const found = all.filter(x => !x.twice && asked.every(word => wordsOf(x).includes(word))).sort((a, b) => (b.live - a.live) || (b.pinned - a.pinned) || (a.live ? byRank(a, b) : byTime(a, b)));
+        show($('results-list'), found.slice(0, resultsShown), true, tick);
+        $('results-summary').textContent = found.length ? found.length + ' 个' : '没有找到';
+        $('more-results').hidden = found.length <= resultsShown;
+      } else {
+        const listed = all.filter(x => !x.twice), needs = listed.filter(needsYou).sort(byRank), rest = listed.filter(x => !needsYou(x));
+        const pinned = rest.filter(x => x.pinned).sort((a, b) => (b.live - a.live) || (a.live ? byRank(a, b) : byTime(a, b))), free = rest.filter(x => !x.pinned);
+        const active = free.filter(x => x.state === 'active').sort(byRank), background = free.filter(x => x.state === 'locked').sort(byTime);
+        const recent = free.filter(x => (x.state === 'history' && !x.hidden) || x.state === 'ended').sort(byTime);
+        const count = (list, phases, words) => { const n = stands(list, ...phases); return n ? [n + words] : []; };
+        $('needs').hidden = !needs.length;
+        show($('needs-list'), needs, true, tick);
+        $('needs-summary').textContent = count(needs, ['confirm'], ' 个等你确认').concat(count(needs, ['done', 'waiting'], ' 个已完成')).join(' · ');
+        $('pinned').hidden = !pinned.length;
+        show($('pinned-list'), pinned, true, tick);
+        $('pinned-summary').textContent = pinned.length + ' 个';
+        $('active').hidden = !active.length;
+        show($('active-list'), active, true, tick);
+        $('active-summary').textContent = count(active, ['busy'], ' 个在执行').join('') || active.length + ' 个开着';
+        $('recent').hidden = !recent.length;
+        show($('recent-list'), recent.slice(0, recentShown), true, [stamp(5), ready]);
+        $('recent-summary').textContent = recent.length + ' 个';
+        $('more-recent').hidden = recent.length <= recentShown;
+        $('background').hidden = !background.length;
+        $('background-summary').textContent = background.length + ' 段 · 不计入运行中';
+        show($('background-list'), background, true, tick);
+        $('nothing').hidden = !(filter.tool || filter.source) || needs.length + pinned.length + active.length + recent.length + background.length > 0;
+      }
+      // the projects: all of them, or those the search names
+      const sessions = everything.filter(x => !x.t), wanted = searching ? names.filter(name => asked.every(word => name.toLowerCase().includes(word))) : names;
+      const list = wanted.map(name => {
         const folder = (device.projects || []).find(p => p.name === name) || {};
-        const own = mine.filter(t => t.dir === name), count = sessions.filter(s => s.dir === name).length;
-        const need = own.filter(t => phaseOf(t) === 'confirm').length, done = own.filter(t => phaseOf(t) === 'done').length, work = own.filter(t => phaseOf(t) === 'busy').length;
+        const own = mine.filter(x => x.project === name), count = sessions.filter(x => x.project === name).length;
+        const need = stands(own, 'confirm'), done = stands(own, 'done'), work = stands(own, 'busy');
         const meta = el('span', { className: 'meta' });
         if (need) { const c = el('span', { className: 'count', textContent: need + ' 个等你确认' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--bad)'); c.style.color = 'var(--bad)'; meta.append(c); }
         if (done) { const c = el('span', { className: 'count', textContent: done + ' 个已完成' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--good)'); c.style.color = 'var(--good)'; meta.append(c); }
@@ -473,9 +614,10 @@
           el('span', { className: 'tool folder', html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev }))), sign: [name, need, done, work, own.length, count, folder.path] };
       });
       const cardsP = list.map(x => x.card);
-      if (ready) cardsP.push(el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', onclick: addProject, html: ICON.plus + '<span>添加项目</span>' })));
-      fill($('project-list'), cardsP, JSON.stringify([list.map(x => x.sign), ready]));
-      $('project-summary').textContent = names.length ? names.length + ' 个' : '还没有项目';
+      if (ready && !searching) cardsP.push(el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', onclick: addProject, html: ICON.plus + '<span>添加项目</span>' })));
+      $('projects').hidden = searching && !list.length;
+      fill($('project-list'), cardsP, JSON.stringify([list.map(x => x.sign), ready, searching]));
+      $('project-summary').textContent = searching ? list.length + ' 个' : names.length ? names.length + ' 个' : '还没有项目';
       return;
     }
 
@@ -489,32 +631,37 @@
         el('span', { className: 'tool ' + tool, html: ICON[tool] }), el('span', null, '新建 ' + TOOLS[tool], el('small', { textContent: ABOUT[tool] })))));
       if (ready && !tools.length) launch.append(el('p', { textContent: '电脑上没有找到 claude、codex 或命令行终端。' }));
     }
-    const own = mine.filter(t => t.dir === project).sort((a, b) => a.rank - b.rank || b.at - a.at);
+    const inside = everything.filter(x => x.project === project), tick = [stamp(1), ready];
+    const own = inside.filter(x => x.t && x.live).sort(byRank);
     $('p-active').hidden = !own.length;
-    fill($('p-active').querySelector('ul'), own.map(t => terminalCard(t, false)), JSON.stringify([own.map(t => [t.id, phaseOf(t), t.title, t.phase_at]), stamp(1)]));
-    const here = sessions.filter(s => s.dir === project), open2 = here.filter(s => sessionActivity(s) === 'active'), held = here.filter(s => sessionActivity(s) === 'locked');
+    show($('p-active').querySelector('ul'), own, false, tick);
+    const here = inside.filter(x => !x.t), open2 = here.filter(x => x.state === 'active'), held2 = here.filter(x => x.state === 'locked');
     $('p-live').hidden = !open2.length;
-    fill($('p-live').querySelector('ul'), open2.map(s => sessionCard(s, false)), JSON.stringify([open2.map(signed), stamp(1)]));
-    $('p-background').hidden = !held.length;
-    $('p-background-summary').textContent = held.length + ' 段 · 不计入运行中';
-    fill($('p-background').querySelector('ul'), held.map(s => sessionCard(s, false)), JSON.stringify([held.map(s => [s.id, s.status, s.title, s.host, s.origin]), stamp(1)]));
-    const all = here.filter(s => !s.live).sort((a, b) => b.updated - a.updated), wanted = $('search').value.trim().toLowerCase();
-    const found = wanted ? all.filter(s => s.title.toLowerCase().includes(wanted)) : all;
-    $('p-history').hidden = !all.length;
+    show($('p-live').querySelector('ul'), open2, false, tick);
+    $('p-background').hidden = !held2.length;
+    $('p-background-summary').textContent = held2.length + ' 段 · 不计入运行中';
+    show($('p-background').querySelector('ul'), held2, false, tick);
+    // what was pinned comes first; what was hidden is left out until it is asked for
+    const saved = here.filter(x => x.state === 'history').sort((a, b) => (b.pinned - a.pinned) || byTime(a, b)), put = saved.filter(x => x.hidden).length;
+    const all = saved.filter(x => hiddenShown || !x.hidden), wanted = $('search').value.trim().toLowerCase();
+    const found = wanted ? all.filter(x => x.title.toLowerCase().includes(wanted)) : all;
+    $('p-history').hidden = !saved.length;
     $('search').hidden = all.length <= 8;
     $('history-count').textContent = wanted ? found.length + ' / ' + all.length + ' 段' : all.length + ' 段';
-    fill($('p-history').querySelector('ul'), found.slice(0, shown).map(s => sessionCard(s, false)), JSON.stringify([found.slice(0, shown).map(s => [s.id, s.title]), stamp(5), ready]));
+    show($('p-history').querySelector('ul'), found.slice(0, shown), false, [stamp(5), ready]);
     $('more-history').hidden = found.length <= shown;
+    $('hidden-history').hidden = !put;
+    $('hidden-history').textContent = hiddenShown ? '不显示已隐藏的 ' + put + ' 段' : '已隐藏 ' + put + ' 段 · 显示';
     // Kept terminal screens and saved conversations have different actions: view a screen or resume a conversation.
-    const ended = terminals.filter(t => t.dir === project && !running(t)).sort((a, b) => (b.phase_at || b.created) - (a.phase_at || a.created));
+    const ended = inside.filter(x => x.t && !x.live).sort(byTime);
     $('p-ended').hidden = !ended.length;
-    fill($('p-ended').querySelector('ul'), ended.slice(0, endedShown).map(t => terminalCard(t, false)), JSON.stringify([ended.slice(0, endedShown).map(t => [t.id, t.phase, t.title]), stamp(5)]));
+    show($('p-ended').querySelector('ul'), ended.slice(0, endedShown), false, [stamp(5), ready]);
     $('more-ended').hidden = ended.length <= endedShown;
     $('empty').hidden = own.length + here.length + ended.length > 0;
   }
 
   // ---- moving between the overview and one project; the phone's back key goes back to the overview
-  function enter(name) { project = name; shown = 12; endedShown = 8; $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
+  function enter(name) { project = name; shown = 12; endedShown = 8; hiddenShown = false; $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
   window.addEventListener('popstate', event => { project = event.state && event.state.project || ''; if (data) draw(); });
   // A project opened by a link (the workbench does that) has no overview behind it in the history.
   $('back').addEventListener('click', () => {
@@ -525,6 +672,10 @@
   $('search').addEventListener('input', () => { shown = 12; draw(); });
   $('more-history').addEventListener('click', () => { shown += 30; draw(); });
   $('more-ended').addEventListener('click', () => { endedShown += 30; draw(); });
+  $('hidden-history').addEventListener('click', () => { hiddenShown = !hiddenShown; draw(); });
+  $('query').addEventListener('input', () => { resultsShown = 30; draw(); });
+  $('more-results').addEventListener('click', () => { resultsShown += 30; draw(); });
+  $('more-recent').addEventListener('click', () => { recentShown += 20; draw(); });
 
   async function refresh() {
     clearTimeout(timer);

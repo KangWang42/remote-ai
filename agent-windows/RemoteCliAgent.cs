@@ -313,6 +313,14 @@ public sealed class TerminalAgent {
         return found.GroupBy(s => s.Same.Length > 0 ? s.Tool + "\n" + s.Dir + "\n" + s.Same : s.Id)
             .SelectMany(copies => copies.Any(s => s.Live) ? copies.Where(s => s.Live) : copies.OrderByDescending(s => s.Updated).Take(1)).ToList();
     }
+    // Where Claude Code keeps its conversations and the notes of the programs that have them open: its own folder
+    // in the person's home, or the one CLAUDE_CONFIG_DIR names, as Claude Code itself reads it.
+    public static string ClaudeHome {
+        get {
+            string named = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            return String.IsNullOrWhiteSpace(named) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude") : named;
+        }
+    }
     public static string ProjectFolder(string path) { return Regex.Replace(path, "[^a-zA-Z0-9]", "-"); }
     // A folder that is no project is spoken of to the phone unless it is one of the system's own for passing things.
     static bool Elsewhere(string folder) { return folder.Length >= 3 && folder.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) < 0 && !folder.EndsWith(@"\AppData\Local\Temp", StringComparison.OrdinalIgnoreCase); }
@@ -340,7 +348,7 @@ public sealed class TerminalAgent {
         };
         try {
             var parents = Parents();
-            foreach (string file in Directory.GetFiles(Path.Combine(home, ".claude", "sessions"), "*.json")) {
+            foreach (string file in Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json")) {
                 try {
                     var source = ClaudeSessions.Inspect(file);
                     if (!source.Live) continue;
@@ -357,7 +365,7 @@ public sealed class TerminalAgent {
         } catch { }
         foreach (var dir in dirs) {
             try {
-                var folder = new DirectoryInfo(Path.Combine(home, ".claude", "projects", ProjectFolder(dir.Value)));
+                var folder = new DirectoryInfo(Path.Combine(ClaudeHome, "projects", ProjectFolder(dir.Value)));
                 if (!folder.Exists) continue;
                 var recent = folder.GetFiles("*.jsonl").OrderByDescending(f => f.LastWriteTimeUtc).ToArray();
                 var recentNames = new HashSet<string>(recent.Take(15).Select(f => f.Name));
@@ -374,7 +382,7 @@ public sealed class TerminalAgent {
             try {
                 string where = (held.Value.Dir ?? "").TrimEnd('\\', '/'), same;
                 if (!Elsewhere(where) || dirs.Values.Any(d => SamePath(d, where)) || !Regex.IsMatch(held.Key, Uuid)) continue;
-                var file = new FileInfo(Path.Combine(home, ".claude", "projects", ProjectFolder(where), held.Key + ".jsonl"));
+                var file = new FileInfo(Path.Combine(ClaudeHome, "projects", ProjectFolder(where), held.Key + ".jsonl"));
                 string title = file.Exists ? ClaudeTitle(file, out same) : "";
                 if (title.Length == 0) continue;        // nothing has been said in it yet
                 var source = held.Value;
@@ -383,7 +391,7 @@ public sealed class TerminalAgent {
         }
         try {
             // Other folders Claude Code has worked in: its folder names lose characters, the real path is inside a conversation.
-            foreach (var folder in new DirectoryInfo(Path.Combine(home, ".claude", "projects")).GetDirectories()
+            foreach (var folder in new DirectoryInfo(Path.Combine(ClaudeHome, "projects")).GetDirectories()
                     .Select(d => new { d.Name, Newest = d.GetFiles("*.jsonl").OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault() })
                     .Where(d => d.Newest != null).OrderByDescending(d => d.Newest.LastWriteTimeUtc).Take(25)) {
                 string path;
@@ -677,7 +685,7 @@ public sealed class TerminalAgent {
         else if (!AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         try {
             string file = tool == "claude"
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects", ProjectFolder(root), session + ".jsonl")
+                ? Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl")
                 : Directory.GetFiles(Path.Combine(CodexSessions.Home, "sessions"), "rollout-*" + session + ".jsonl", SearchOption.AllDirectories).FirstOrDefault();
             if (file == null || !File.Exists(file)) throw new FileNotFoundException();
             var result = Said(file, tool); result["title"] = saved.Title;
@@ -726,7 +734,7 @@ public sealed class TerminalAgent {
     void ClaudeExclusive(string session, bool takeover) {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var parents = Parents();
-        string folder = Path.Combine(home, ".claude", "sessions");
+        string folder = Path.Combine(ClaudeHome, "sessions");
         if (!Directory.Exists(folder)) return;
         foreach (string file in Directory.GetFiles(folder, "*.json")) {
             var owner = ClaudeSessions.Inspect(file);
@@ -867,7 +875,7 @@ public sealed class TerminalAgent {
                 if (!owner.Live || owner.Pid <= 0 || !CodexSessions.Descends(owner.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Codex 进程属于手机终端，已取消接管");
             }
             if (live.Tool == "claude") {
-                string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "sessions");
+                string folder = Path.Combine(ClaudeHome, "sessions");
                 var source = Directory.Exists(folder) ? Directory.GetFiles(folder, "*.json").Select(ClaudeSessions.Inspect).FirstOrDefault(s => s.Live && s.Session == session) : null;
                 if (source == null || !CodexSessions.Descends(source.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Claude Code 进程属于手机终端，已取消接管");
             }
@@ -878,7 +886,7 @@ public sealed class TerminalAgent {
             live.Pty.Dispose();
             for (int n = 0; n < 60; n++) {
                 if (live.Tool == "codex" && !CodexSessions.Inspect(session).Live) break;
-                if (live.Tool == "claude" && !Directory.GetFiles(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "sessions"), "*.json").Select(ClaudeSessions.Inspect).Any(s => s.Live && s.Session == session)) break;
+                if (live.Tool == "claude" && !Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json").Select(ClaudeSessions.Inspect).Any(s => s.Live && s.Session == session)) break;
                 Thread.Sleep(50);
             }
             if (live.Tool == "codex" && CodexSessions.Inspect(session).Live) throw new InvalidOperationException("原 Codex 进程没有及时结束，已取消接管");

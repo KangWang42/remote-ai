@@ -40,18 +40,46 @@
 
     <!-- every project at a glance -->
     <div id="overview" hidden>
-      <section id="active" hidden>
-        <div class="section-head"><h2>进行中</h2><p id="active-summary"></p></div>
-        <ul class="cards" id="active-list"></ul>
+      <!-- one search over every terminal and conversation, and what to tell them apart by -->
+      <div id="find" hidden>
+        <input id="query" type="search" placeholder="搜索对话、终端和项目" aria-label="搜索全部对话、终端和项目" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+        <div id="filters" class="filters" role="group" aria-label="筛选" hidden></div>
+      </div>
+      <section id="results" hidden>
+        <div class="section-head"><h2>搜索结果</h2><p id="results-summary"></p></div>
+        <ul class="cards" id="results-list"></ul>
+        <button type="button" id="more-results" class="quiet wide" hidden>显示更多</button>
       </section>
-      <details id="background" class="held-sessions" hidden>
-        <summary><b>被电脑上其它程序占用的对话</b><span id="background-summary"></span></summary>
-        <ul class="cards" id="background-list"></ul>
-      </details>
-      <section>
+      <!-- by what needs you: what waits for an answer, what you pinned, what is at work, what was used lately -->
+      <div id="sections">
+        <section id="needs" hidden>
+          <div class="section-head"><h2>等你处理</h2><p id="needs-summary"></p></div>
+          <ul class="cards" id="needs-list"></ul>
+        </section>
+        <section id="pinned" hidden>
+          <div class="section-head"><h2>置顶</h2><p id="pinned-summary"></p></div>
+          <ul class="cards" id="pinned-list"></ul>
+        </section>
+        <section id="active" hidden>
+          <div class="section-head"><h2>进行中</h2><p id="active-summary"></p></div>
+          <ul class="cards" id="active-list"></ul>
+        </section>
+        <section id="recent" hidden>
+          <div class="section-head"><h2>最近</h2><p id="recent-summary"></p></div>
+          <ul class="cards" id="recent-list"></ul>
+          <button type="button" id="more-recent" class="quiet wide" hidden>显示更多</button>
+        </section>
+        <p id="nothing" hidden>没有符合筛选的对话或终端。</p>
+        <details id="background" class="held-sessions" hidden>
+          <summary><b>被电脑上其它程序占用的对话</b><span id="background-summary"></span></summary>
+          <ul class="cards" id="background-list"></ul>
+        </details>
+      </div>
+      <section id="projects">
         <div class="section-head"><h2>项目</h2><p id="project-summary"></p></div>
         <ul class="cards" id="project-list"></ul>
       </section>
+      <p id="held-hint" class="hint" hidden>长按一段对话或一个终端，可以置顶、隐藏或结束。</p>
     </div>
 
     <!-- one project -->
@@ -66,6 +94,7 @@
         <input id="search" type="search" placeholder="搜索对话标题" aria-label="搜索历史对话" hidden>
         <ul class="cards"></ul>
         <button type="button" id="more-history" class="quiet wide" hidden>显示更多</button>
+        <button type="button" id="hidden-history" class="quiet wide" hidden></button>
       </section>
       <section id="p-ended" hidden><div class="section-head"><h2>历史终端</h2></div><ul class="cards"></ul><button type="button" id="more-ended" class="quiet wide" hidden>显示更多终端</button></section>
       <p id="empty" hidden>这个项目还没有对话。用上面的按钮新建一个终端。</p>

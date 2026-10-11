@@ -407,6 +407,11 @@ class Sessions:
         self.names = (None, {})         # codex's own index of names, by its mtime
         self.found = []
 
+    def claude_home(self):
+        """Where Claude Code keeps its conversations: its folder in the person's home, or the
+        one CLAUDE_CONFIG_DIR names, as Claude Code itself reads it."""
+        return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(self.home, ".claude")
+
     def known(self, session, tool, name):
         return next((s for s in self.found if s["id"] == session and s["tool"] == tool and s["dir"] == name), None)
 
@@ -418,7 +423,7 @@ class Sessions:
         if saved is None or not folder:
             raise OpError("电脑上没有找到这个对话，请刷新后重试")
         if tool == "claude":
-            found = [os.path.join(self.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")]
+            found = [os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")]
         else:
             home = os.environ.get("CODEX_HOME") or os.path.join(self.home, ".codex")
             found = glob.glob(os.path.join(home, "sessions", "**", "rollout-*%s.jsonl" % session), recursive=True)
@@ -462,7 +467,7 @@ class Sessions:
         """Conversations Claude Code has open in a program that is not one of our terminals,
         as conversation -> the folder it works in."""
         taken = {}
-        for path in glob.glob(os.path.join(self.home, ".claude", "sessions", "*.json")):
+        for path in glob.glob(os.path.join(self.claude_home(), "sessions", "*.json")):
             try:
                 with open(path, encoding="utf-8") as stream:
                     record = json.load(stream)
@@ -487,7 +492,7 @@ class Sessions:
         taken = self._claude_open(terminals)
         found = []
         for name, folder in dirs.items():
-            saved = os.path.join(self.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder))
+            saved = os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder))
             recent = []
             for path in glob.glob(os.path.join(saved, "*.jsonl")):
                 try:
@@ -507,7 +512,7 @@ class Sessions:
             folder = os.path.normpath(folder) if folder else ""
             if session in listed or not elsewhere(folder) or folder in dirs.values():
                 continue
-            path = os.path.join(self.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")
+            path = os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")
             try:
                 info = os.stat(path)
             except OSError:

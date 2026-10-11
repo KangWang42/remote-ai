@@ -1,5 +1,7 @@
 """Screenshots of the app's pages at a narrow width (headless Chrome does not go below 500 pixels), against a
-real relay and agent on this computer, with three projects and tasks in different states.
+real relay and agent on this computer, with three projects, tasks in different states and saved conversations. The
+conversations are made up (tests/made_up.py): the agent is given homes of the tools that hold nothing else, so no
+conversation of this computer's is drawn into a picture.
 
     python tests/pages_check.py <chrome.exe> <output folder> [folder for the demo projects]
 
@@ -16,8 +18,12 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from made_up import Homes
+
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("RCLI_TEST_PORT", "8736"))
+PINNED = "0199aaaa-bbbb-7ccc-8ddd-000000000021"
 password = "test-" + secrets.token_hex(8)
 new_id = lambda: secrets.token_hex(16)
 
@@ -32,13 +38,19 @@ def main():
     for name in names:
         (base / name).mkdir(parents=True, exist_ok=True)
     data.mkdir()
+    homes = Homes(temp.name)
+    homes.claude_saved(base / "thesis", PINNED, "第三章：方法部分的修改意见", 30)
+    homes.claude_saved(base / "web-shop", "0199aaaa-bbbb-7ccc-8ddd-000000000022", "给结算页加上优惠券", 2)
+    homes.codex_saved(base / "data-tools", "0199aaaa-bbbb-7ccc-8ddd-000000000023", "把导出脚本改成增量", 6)
+    homes.claude_saved(base / "web-shop", "0199aaaa-bbbb-7ccc-8ddd-000000000024", "首页加载慢的原因", 26)
+    homes.claude_saved(base / "thesis", "0199aaaa-bbbb-7ccc-8ddd-000000000025", "摘要翻译", 72)
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full",
                                                   "RemoteDirs": ["%s=%s" % (name, base / name) for name in names]}), encoding="utf-8")
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(PORT), "--data", str(Path(temp.name) / "relay")],
                              env=dict(os.environ, RCLI_PASSWORD=password, PYTHONUTF8="1"))
     agent_exe = ROOT / "agent-windows" / "bin" / "RemoteCliAgent.exe"
     subprocess.run([str(agent_exe), "--set-password", str(data)], input=password.encode(), check=True)
-    agent = subprocess.Popen([str(agent_exe), "--data", str(data)])
+    agent = subprocess.Popen([str(agent_exe), "--data", str(data)], env=homes.environment())
     try:
         cookie = {}
 
@@ -76,6 +88,11 @@ def main():
         shell("thesis", "整理第三章的参考文献", "1..600 | ForEach-Object { 'checking reference ' + $_; Start-Sleep -Milliseconds 400 }")
         shell("web-shop", "修复结算页的金额显示", "1..4 | ForEach-Object { 'running test ' + $_; Start-Sleep -Milliseconds 500 }; 'all tests passed'")
         first = shell("data-tools", "PowerShell", "Get-Date -Format 'yyyy-MM-dd'; 'hello from the computer'")
+        for _ in range(40):
+            if any(s["id"] == PINNED for s in call("/api/terminal")["sessions"]):
+                break
+            time.sleep(0.5)
+        call("/api/conversation", {"id": new_id(), "session": PINNED, "action": "mark", "pinned": True})
         time.sleep(9)
         phases = sorted((t["title"], t.get("phase")) for t in call("/api/terminal")["terminals"])
         print("phases", json.dumps(phases, ensure_ascii=False))

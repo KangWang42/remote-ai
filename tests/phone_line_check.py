@@ -158,7 +158,7 @@ def pages(chrome, out, folder, first, addresses, config):
         until(lambda: next((t for t in first.get("/api/terminal")["terminals"] if t["id"] == terminal and t["state"] == "running"), None), "the terminal to run", 30)
         time.sleep(3)
         ask("Page.navigate", url=addresses[0] + "/#p=" + first.password)
-        press("document.querySelector('#active-list .side.say')")
+        press("document.querySelector('#overview .side.say')")
         until(lambda: value("!!document.querySelector('#sheet[open] textarea')"), "the sheet", 10)
         picture("say.png")
         ask("Input.insertText", text="echo (20000+261)")

@@ -113,6 +113,23 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 #launch button small { display: block; color: var(--muted); font-weight: 400; font-size: .74rem; }
 #launch p { grid-column: 1 / -1; color: var(--muted); font-size: .9rem; }
 #search { margin-bottom: 8px; min-height: 44px; }
+
+/* ---- finding: one search over everything, and a row of what to tell things apart by */
+#find { margin-top: 14px; display: grid; gap: 10px; }
+#query { min-height: 44px; }
+.filters { display: flex; gap: 8px; overflow-x: auto; padding: 1px 1px 3px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.filters::-webkit-scrollbar { display: none; }
+.filters button { flex: none; min-height: 34px; padding: 0 13px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: .84rem; white-space: nowrap; }
+.filters button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.filters i { flex: none; width: 1px; margin: 7px 2px; background: var(--line); }
+#nothing { color: var(--muted); margin-top: 26px; text-align: center; }
+.hint { color: var(--muted); font-size: .8rem; text-align: center; margin-top: 22px; }
+/* a held press on a card asks what to do with it: its text is not picked up as a selection instead */
+.card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.card b .pin { display: inline-block; vertical-align: -1px; margin-right: 5px; color: var(--accent); }
+.card b .pin svg { display: block; }
+/* the folder of a conversation that is open outside every project */
+.chip.apart { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
 #empty { color: var(--muted); margin-top: 30px; text-align: center; }
 
 /* A writer lock keeps a history record available, but is not proof of a visible window. */

@@ -216,7 +216,7 @@ def main():
             ask("Page.enable"); ask("Runtime.enable")
             ask("Emulation.setDeviceMetricsOverride", width=412, height=892, deviceScaleFactor=2, mobile=True)
             ask("Page.navigate", url="http://127.0.0.1:%d/#p=%s" % (PORT, password))
-            CARD = "(() => { const card = Array.from(document.querySelectorAll('#active-list .card')).find(c => c.textContent.includes('给结算页加上优惠券')); if (!card) return null;" \
+            CARD = "(() => { const card = Array.from(document.querySelectorAll('#overview .card')).find(c => c.textContent.includes('给结算页加上优惠券')); if (!card) return null;" \
                    " return { pill: card.querySelector('.pill').textContent, kind: card.className, ask: (card.querySelector('.ask pre') || {}).textContent || '', buttons: Array.from(card.querySelectorAll('.answers button')).map(b => b.textContent), say: !!card.querySelector('.side.say'), peek: (card.querySelector('.peek') || {}).textContent || '', summary: document.getElementById('device-text').textContent }; })()"
             deadline = time.time() + 20
             while time.time() < deadline and not (page_value(CARD) or {}).get("ask"):
@@ -225,7 +225,7 @@ def main():
             report["card_asking"] = card
             assert card and card["pill"] == "等你确认" and "npm test" in card["ask"] and card["buttons"] == ["允许", "拒绝", "看对话"] and "等你确认" in card["summary"], card
             picture("reach-asking.png")
-            page_value("(() => { const card = Array.from(document.querySelectorAll('#active-list .card')).find(c => c.textContent.includes('给结算页加上优惠券')); card.querySelector('.answers .yes').click(); return 1; })()")
+            page_value("(() => { const card = Array.from(document.querySelectorAll('#overview .card')).find(c => c.textContent.includes('给结算页加上优惠券')); card.querySelector('.answers .yes').click(); return 1; })()")
             verdict = json.loads(said(asking))
             assert verdict["hookSpecificOutput"]["decision"]["behavior"] == "allow", verdict
             # it stops: the card says that it waits for a message, shows what it said last, and offers to send one
