@@ -85,10 +85,15 @@ public sealed partial class App {
         }
         return states;
     }
-    // The same in a line for the window: every tool in good state is said in the colour of what is well.
+    // The same in a line for the window: every tool in good state is said in the colour of what is well. At the side
+    // of the window, which is seen on every page, stand the tools that are connected, and only those.
     void ShowReach() {
         if (reachRow == null) return;
         var states = ReachStates();
+        toolsSeen = DateTime.UtcNow;
+        var good = states.Where(s => Convert.ToString(s["state"]) == "good").Select(s => Convert.ToString(s["name"])).ToArray();
+        sideTools = good.Length == 0 ? "" : String.Join(" · ", good) + " 已连接";
+        ShowSide();
         string line = !Reaching ? "电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用"
             : states.Count == 0 ? "这台电脑上还没有用过 Claude Code 或 Codex"
             : String.Join(" · ", states.Select(s => s["name"] + (Convert.ToString(s["state"]) == "good" ? " 状态良好" : Convert.ToString(s["state"]) == "failed" ? " 的配置写不进去" : Convert.ToString(s["tool"]) == "codex" ? " 已就绪，首次需在 Codex 里确认信任" : " 已就绪")));

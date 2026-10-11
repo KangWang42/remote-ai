@@ -51,6 +51,7 @@ python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组
 python tests\android_update_check.py                      # App 更新器关闭安装流的顺序
 python tests\native_owner_check.py                        # 临时进程验证归属，不操作真实 Codex 会话
 python tests\relay_check.py                               # 电脑端对自有中转的判断：密码对、密码错、地址不是中转、端口不通
+python tests\side_status_check.py                         # 电脑端窗口左下角：手机访问状态下面列出已连接的工具（Claude Code、Codex），只列状态良好的；工具的配置用临时文件夹代替，并核对本机真实配置没有变化；先运行 tools\package_windows.py
 python tests\own_mode_check.py                            # “我的中转”页签：点开不断线，检查不通过不切换也不保存并说明原因，通过才保存并切换，之后记得它；先运行 tools\package_windows.py
 python tests\public_mode_check.py                         # “公共中转”页签：不用配置就列出，选中后自动申请自己的空间，不显示地址和密码；空间被清理后重新申请；电脑端在空间里开终端，别的空间看不到
 python tests\reach_check.py                               # 电脑上开着的对话：工具的钩子报告的事件由谁回答、何时交给手机，手机的消息怎样送达，以及写入工具配置的条目（用虚构的事件和临时文件夹；先构建电脑端）

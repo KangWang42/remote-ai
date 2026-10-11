@@ -34,7 +34,9 @@ public sealed partial class App : Form {
     TerminalAgent agent;
     int generation;
 
-    readonly StatusLine status = new StatusLine(), sideStatus = new StatusLine();
+    readonly StatusLine status = new StatusLine(), sideStatus = new StatusLine(), sideAbove = new StatusLine();
+    // What the side of the window says: how the phone's access stands and, when a tool is connected, which.
+    string sideLine = "正在启动…", sideTools = ""; Color sideColour = Theme.Busy; DateTime toolsSeen;
     readonly Segmented modePick = new Segmented();
     readonly Label modeAbout = new Label(), qrHint = new Label(), toast = new Label(), activityNote = new Label();
     readonly Field addressField = new Field(), passwordField = new Field();
@@ -594,8 +596,10 @@ public sealed partial class App : Form {
         int phones = running.Count(r => r[6] == "phone"), cli = running.Count(r => r[6] == "cli");
         nav[2].SetBadge(running.Count > 0 ? running.Count.ToString() : "");
         bool allowed = Convert.ToString(config["RemoteEnabled"]) == "True";
-        sideStatus.Set(trouble ? "还不能连接" : preparing ? "正在准备…" : !allowed ? "已暂停手机访问" : phones == 0 ? "手机可以连接" : phones + " 个共用终端运行中",
-            trouble ? Theme.Bad : preparing || !allowed ? Theme.Busy : Theme.Good);
+        sideLine = trouble ? "还不能连接" : preparing ? "正在准备…" : !allowed ? "已暂停手机访问" : phones == 0 ? "手机可以连接" : phones + " 个共用终端运行中";
+        sideColour = trouble ? Theme.Bad : preparing || !allowed ? Theme.Busy : Theme.Good;
+        // the tools' settings are looked at again now and then: something else may have taken the hooks out
+        if (reachRow != null && DateTime.UtcNow - toolsSeen > TimeSpan.FromSeconds(30)) ShowReach(); else ShowSide();
         if (mark == activityMark && running.Count > 0 && !pages[2].Visible) return;
         activityMark = mark;
         activity.Show(running.Select(r => {
@@ -606,6 +610,14 @@ public sealed partial class App : Form {
                              Tag = tag, TagColour = r[6] == "phone" || r[6] == "cli" ? Theme.Good : Theme.Busy };
         }));
         activityNote.Text = running.Count == 0 ? "" : phones + " 个共用终端 · " + cli + " 个电脑独立窗口。共用终端在手机和电脑上显示同一画面，两端均可输入。";
+    }
+    // One line, in the lower place; with a tool connected two, the tools under the phone's access.
+    void ShowSide() {
+        bool two = sideTools.Length > 0;
+        sideAbove.Visible = two;
+        var small = two ? sideAbove.Tag as Font : sideAbove.Font;
+        if (!ReferenceEquals(sideStatus.Font, small)) sideStatus.Font = small;
+        if (two) { sideAbove.Set(sideLine, sideColour); sideStatus.Set(sideTools, Theme.Good); } else sideStatus.Set(sideLine, sideColour);
     }
     // A window on this computer for the very pages the phone uses. The terminals in it are the same ones the phone
     // shows, so a terminal can be looked at and typed into from both at once, and nothing has to be handed over.
@@ -697,7 +709,9 @@ public sealed partial class App : Form {
             item.Click += (s, e) => Go(index);
             nav.Add(item);
         }
-        Place(side, sideStatus, 18, WindowHeight - 84, SideWidth - 30, 22); sideStatus.BackColor = Theme.Side; sideStatus.Set("正在启动…", Theme.Busy);
+        Place(side, sideAbove, 18, WindowHeight - 106, SideWidth - 30, 22); sideAbove.BackColor = Theme.Side; sideAbove.Visible = false;
+        sideAbove.Font = Theme.Text(); sideAbove.Tag = Theme.Text(8.25f);     // the line of the tools is the longer one, in smaller letters
+        Place(side, sideStatus, 18, WindowHeight - 84, SideWidth - 30, 22); sideStatus.BackColor = Theme.Side; sideStatus.Font = sideAbove.Font; ShowSide();
         Note(side, "关闭窗口后仍在托盘运行", 20, WindowHeight - 58, SideWidth - 30, 18, Theme.Faint, 8.25f);
         Action(side, "退出", Theme.IconPower, ButtonKind.Ghost, 12, WindowHeight - 38, 76, 28, (s, e) => Quit()).BackColor = Theme.Side;
 
@@ -1013,7 +1027,8 @@ public sealed partial class App : Form {
                         "own_relay=" + (window.relay != null && !window.relay.HasExited ? "running" : "stopped"), "field=" + window.relayPick.Title, "showing=" + (showing == null ? "" : showing.Id),
                         "address=" + window.addressBox.Text, "password_shown=" + (window.passwordBox.Text == window.password), "code=" + (window.qr.Image != null),
                         "server=" + Convert.ToString(window.config["Server"]), "saved=" + window.relays.Own().Count, "published=" + window.relays.Published().Count,
-                        "new_password_button=" + window.changePassword.Visible, "skin=" + Theme.Skin), new UTF8Encoding(false));
+                        "new_password_button=" + window.changePassword.Visible, "skin=" + Theme.Skin, "side=" + window.sideLine, "tools=" + window.sideTools,
+                        "side_lines=" + (window.sideAbove.Visible ? window.sideAbove.Line + "|" : "") + window.sideStatus.Line), new UTF8Encoding(false));
                 }
                 var until = DateTime.UtcNow.AddSeconds(4);
                 while (DateTime.UtcNow < until) { Application.DoEvents(); Thread.Sleep(30); }
