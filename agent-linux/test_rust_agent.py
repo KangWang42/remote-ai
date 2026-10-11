@@ -4,6 +4,7 @@ agent-rust/target/release/remote-cli-agent. Build it first:
 
     cargo build --release --manifest-path ../agent-rust/Cargo.toml
 """
+import base64
 import os
 import secrets
 import subprocess
@@ -20,9 +21,9 @@ BINARY = os.path.join(HERE, "..", "agent-rust", "target", "release", "remote-cli
 
 @unittest.skipUnless(os.path.isfile(BINARY), "build the Rust agent first: cargo build --release (agent-rust/)")
 class RustAgentContract(test_agent.EndToEnd):
-    """Held to the terminal-scope contract: everything in the merged agent-linux feature
-    set. The Python agent's evolved flow on the inherited class additionally covers
-    files, peek and saved-session resume, which the Rust agent does not implement yet."""
+    """Held to the terminal-and-files contract. The Python agent's evolved flow on the
+    inherited class additionally covers peek and saved-session resume, which the Rust
+    agent does not implement yet."""
 
     @classmethod
     def agent_command(cls, agent_data):
@@ -119,6 +120,31 @@ class RustAgentContract(test_agent.EndToEnd):
         device = self.overview()["device"]
         self.assertTrue(device.get("version"), "the agent reports no version")
         self.assertTrue(device.get("shell"), "the agent reports no shell")
+
+    def test_file_browsing(self):
+        # the files feature flag, a folder listing, one file piece, and a path that
+        # leaves the project refused — the phone's whole file flow, asked of /api/files
+        # the way the app asks
+        device = self.overview()["device"]
+        self.assertIn("files", device.get("features", []))
+        status, listed = request("POST", self.base + "/api/files",
+                                 {"id": secrets.token_hex(16), "action": "file_list",
+                                  "dir": "项目", "path": ""}, token=self.token)
+        self.assertEqual(status, 200, listed)
+        self.assertIn("说明.txt", [e["name"] for e in listed["entries"]])
+        self.assertTrue(listed["entries"][0]["size"] > 0)
+        self.assertFalse(listed["more"])
+        status, piece = request("POST", self.base + "/api/files",
+                                {"id": secrets.token_hex(16), "action": "file_read",
+                                 "dir": "项目", "path": "说明.txt", "offset": 0}, token=self.token)
+        self.assertEqual(status, 200, piece)
+        self.assertEqual(base64.b64decode(piece["data"]).decode("utf-8"), "文件内容 e2e\n")
+        self.assertTrue(piece["end"])
+        status, refused = request("POST", self.base + "/api/files",
+                                  {"id": secrets.token_hex(16), "action": "file_read",
+                                   "dir": "项目", "path": "../../etc/passwd"}, token=self.token)
+        self.assertEqual(status, 400, refused)
+        self.assertIn("项目文件夹", refused["error"])
 
 
 @unittest.skipUnless(os.path.isfile(BINARY), "build the Rust agent first: cargo build --release (agent-rust/)")
