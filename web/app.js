@@ -287,12 +287,20 @@
           writeSaid(said, messages, TOOLS[session.tool]).then(() => { said.scrollTop = said.scrollHeight; });      // what was said last is what one came to see
         }).catch(error => { said.textContent = ''; said.append(el('p', { className: 'quiet', textContent: error.message })); });
       }
-      if (can(session, 'say')) form.append(el('button', { type: 'button', className: 'choice solid', onclick: () => finish('tell') }, el('span', null, '发消息', el('small', { textContent: session.status === 'waiting' ? '它已停下，正等你的消息' : '它做完手上这一步后收到' }))));
+      // what it asks is answered here too, under what was said: the page of a press on the app's card
+      if (session.ask) {
+        const answers = el('div', { className: 'answers' });
+        if (can(session, 'answer')) answers.append(el('button', { type: 'button', className: 'yes', textContent: '允许', onclick: () => finish('allow') }), el('button', { type: 'button', className: 'no', textContent: '拒绝', onclick: () => finish('deny') }));
+        else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
+        form.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: session.ask.text }), answers)));
+      }
+      if (can(session, 'say') && !session.ask) form.append(el('button', { type: 'button', className: 'choice solid', onclick: () => finish('tell') }, el('span', null, '发消息', el('small', { textContent: session.status === 'waiting' ? '它已停下，正等你的消息' : '它做完手上这一步后收到' }))));
       if (why && !Array.isArray(session.reach)) form.append(el('p', { className: 'why', textContent: why }));
       choices.forEach(c => form.append(el('button', { type: 'button', className: 'choice ' + (c.kind || ''), onclick: () => finish(c.value) },
         el('span', null, c.label, el('small', { textContent: c.sub })))));
     });
-    if (choice === 'tell') tell(session);
+    if (choice === 'allow' || choice === 'deny') answerAsk(session, choice === 'allow');
+    else if (choice === 'tell') tell(session);
     else if (choice) start(session.tool, session.dir, session.id, choice === 'close', choice === 'copy');
   }
   // ?new=1 comes from the app's workbench: a terminal is started without walking to a project first. The projects

@@ -296,7 +296,10 @@ final class Workbench {
                     entry.optString("phase"), entry.optString("status"), entry.optBoolean("live"),
                     entry.optString("host"), entry.optString("terminal"), entry.optString("session"),
                     entry.optBoolean("done"), entry.optLong("phase_at"));
-                made.said = entry.optString("said");
+                made.said = entry.optString(terminal ? "said" : "last");
+                JSONArray reach = terminal ? null : entry.optJSONArray("reach");
+                made.reached = reach != null;
+                for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
                 made.shell = device.optString("shell");
                 made.used = terminal ? (made.at > 0 ? made.at : entry.optLong("created")) : entry.optLong("updated");
                 entries.add(made);
@@ -315,7 +318,7 @@ final class Workbench {
 
     // ---- drawing; a part is rebuilt only when what it shows has changed, so a press or a scroll is not interrupted
     private int color(String kind) {
-        return "confirm".equals(kind) ? kit.BAD : "done".equals(kind) ? kit.GOOD : "busy".equals(kind) || "pc-busy".equals(kind) ? kit.BUSY
+        return "confirm".equals(kind) ? kit.BAD : "done".equals(kind) || "waiting".equals(kind) ? kit.GOOD : "busy".equals(kind) || "pc-busy".equals(kind) ? kit.BUSY
             : "starting".equals(kind) || "pc-idle".equals(kind) ? kit.ACCENT : kit.MUTED;
     }
     private int toolIcon(String tool) { return "claude".equals(tool) ? R.drawable.ic_claude : "codex".equals(tool) ? R.drawable.ic_codex : R.drawable.ic_shell; }
@@ -405,7 +408,7 @@ final class Workbench {
         final AggregateSessions.Entry entry = task.entry;
         LinearLayout card = kit.row();
         card.setMinimumHeight(kit.dp(66)); card.setPadding(kit.dp(14), kit.dp(11), kit.dp(14), kit.dp(11));
-        int edge = "confirm".equals(task.kind) ? Kit.mix(kit.BAD, kit.LINE, .55f) : "done".equals(task.kind) ? Kit.mix(kit.GOOD, kit.LINE, .45f) : kit.LINE;
+        int edge = "confirm".equals(task.kind) ? Kit.mix(kit.BAD, kit.LINE, .55f) : "done".equals(task.kind) || "waiting".equals(task.kind) ? Kit.mix(kit.GOOD, kit.LINE, .45f) : kit.LINE;
         card.setBackground(kit.shape(kit.PANEL, edge, 16));
         card.addView(kit.tile(toolIcon(entry.tool), toolColor(entry.tool), 40));
         LinearLayout texts = kit.column();
@@ -422,7 +425,7 @@ final class Workbench {
             String when = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
             if (!when.isEmpty()) texts.addView(kit.text(when + "结束", 12.5f, kit.MUTED), kit.below(4));
         }
-        if (entry.terminal) {
+        if (entry.terminal || entry.reached) {
             TextView peek = kit.text(entry.said, 12.5f, kit.MUTED);
             peek.setMaxLines(2); peek.setEllipsize(android.text.TextUtils.TruncateAt.END);
             peek.setVisibility(entry.said.isEmpty() ? View.GONE : View.VISIBLE);
@@ -437,6 +440,13 @@ final class Workbench {
             // A terminal that waits on a question is answered where the question can be read: Enter would say yes to it.
             if (!"confirm".equals(task.kind)) card.addView(sayButton(task));
             card.addView(stopButton(task));
+        }
+        // A conversation open on the computer can be left a message from here; what it asks is answered where it can
+        // be read, on the page a press opens.
+        if (entry.reached && entry.canSay && !"confirm".equals(task.kind)) {
+            card.setPadding(kit.dp(14), kit.dp(11), kit.dp(10), kit.dp(11));
+            texts.setPadding(kit.dp(12), 0, kit.dp(6), 0);
+            card.addView(sayButton(task));
         }
         kit.press(card, () -> {
             if (!entry.terminal) { activity.openSession(task.url, entry.project, entry.id); return; }
@@ -466,25 +476,28 @@ final class Workbench {
     private void sayRemote(Task task, String text) {
         final String cookie = CookieManager.getInstance().getCookie(task.url);
         activity.net.execute(() -> {
-            String problem = "";
+            String problem = ""; boolean later = false;
             try {
-                JSONObject op = new JSONObject().put("action", "say").put("id", UUID.randomUUID().toString().replace("-", "")).put("terminal", task.entry.id).put("text", text);
+                JSONObject op = new JSONObject().put("action", "say").put("id", UUID.randomUUID().toString().replace("-", "")).put("text", text);
+                // a conversation that is open on the computer is told through the program that has it; a terminal through its own
+                op.put(task.entry.terminal ? "terminal" : "session", task.entry.id);
                 JSONObject result = null;
                 // the same operation asked again is the same one: a request that did not get through is made once more
                 for (int attempt = 0; result == null && attempt < 3; attempt++) {
-                    try { result = post(task.url + "/api/terminal", cookie, op); }
+                    try { result = post(task.url + (task.entry.terminal ? "/api/terminal" : "/api/conversation"), cookie, op); }
                     catch (IOException unreachable) { Thread.sleep(500); }
                 }
                 if (result == null) throw new Exception("连不上这台电脑，消息没有发出");
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "消息没有发出"));
+                if (!task.entry.terminal && !result.optBoolean("now", true)) later = true;
             } catch (Exception error) {
                 String said = error.getMessage();
                 // a relay of an earlier version answers so to anything it does not know
                 problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持在此发消息，请更新后再试" : said == null ? "消息没有发出，请稍后重试" : said;
             }
-            final String message = problem;
+            final String message = problem.isEmpty() ? (later ? "已发送，它做完手上这一步后收到" : "已发送") : problem;
             activity.runOnUiThread(() -> {
-                android.widget.Toast.makeText(activity, message.isEmpty() ? "已发送" : message, android.widget.Toast.LENGTH_SHORT).show();
+                android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show();
                 refresh();
             });
         });

@@ -84,6 +84,24 @@ public final class AggregateSessionsCheck {
         long now = 1_700_000_000_000L;
         require(AggregateSessions.ago(0, now).isEmpty() && "刚刚".equals(AggregateSessions.ago(now - 30_000, now)) && "5 分钟前".equals(AggregateSessions.ago(now - 300_000, now))
             && "3 小时前".equals(AggregateSessions.ago(now - 3 * 3600_000L, now)) && "2 天前".equals(AggregateSessions.ago(now - 2 * 86400_000L, now)), "Last use must read as on the pages");
+        // A conversation that the desktop app has open, of which its tool tells: it is at work like a terminal, stands
+        // by how it stands, and counts with the terminals. Without that it is one a program holds, as before.
+        AggregateSessions.Entry held = new AggregateSessions.Entry(false, "desk", "桌面", "桌面版对话", "codex", "", "", "busy", true, "shared", "", "");
+        require(!held.running() && "locked".equals(held.kind(null)), "a conversation a program holds, of which nothing is told, is not one at work");
+        String[][] stands = { { "confirm", "confirm", "等你确认" }, { "waiting", "waiting", "等你的消息" }, { "busy", "busy", "正在执行" }, { "idle", "stopped", "已停下" }, { "", "stopped", "已停下" } };
+        for (String[] stand : stands) {
+            AggregateSessions.Entry told = new AggregateSessions.Entry(false, "desk", "桌面", "桌面版对话", "codex", "", "", stand[0], true, "shared", "", "");
+            told.reached = true;
+            require(told.running() && stand[1].equals(told.kind(null)) && stand[2].equals(told.label()), "a conversation its tool tells of stands as " + stand[1] + ": " + told.kind(null));
+        }
+        AggregateSessions.Entry asks = new AggregateSessions.Entry(false, "a", "桌面", "问", "claude", "", "", "confirm", true, "unknown", "", "");
+        AggregateSessions.Entry waits = new AggregateSessions.Entry(false, "b", "桌面", "等", "claude", "", "", "waiting", true, "unknown", "", "");
+        AggregateSessions.Entry works = new AggregateSessions.Entry(false, "c", "桌面", "做", "codex", "", "", "busy", true, "shared", "", "");
+        asks.reached = waits.reached = works.reached = true;
+        List<AggregateSessions.Project> desk = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(works, held, waits, asks));
+        require(desk.get(0).active.size() == 3 && desk.get(0).history.size() == 1 && "a".equals(desk.get(0).active.get(0).id) && "b".equals(desk.get(0).active.get(1).id), "what asks comes first, then what waits for a message, then what works");
+        require(Arrays.equals(AggregateSessions.counts(desk, null), new int[]{1, 1, 1, 3}), "they are counted with the terminals: " + Arrays.toString(AggregateSessions.counts(desk, null)));
+        require(AggregateSessions.rank("waiting") < AggregateSessions.rank("busy") && AggregateSessions.rank("stopped") > AggregateSessions.rank("idle"), "one that waits for a message stands before those at work, one that has stopped after those that wait for input");
         System.out.println("Aggregate checks passed: computer isolation, active/history separation, recent ordering, locks, deduplication, stable refresh and exact terminal route.");
     }
 }

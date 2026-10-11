@@ -205,7 +205,7 @@ line. The program answers and decides everything; the relay checks the shape of 
 | `action` | Fields | Answer |
 | --- | --- | --- |
 | `settings_read` | none | what the program tells about itself, below |
-| `settings_change` | `name`, `value` | the same, after the change. `rights`: `full`, `edit` or `read` (the mode Claude Code and Codex are started in from the phone); `tunnel`: `auto` or `http2` (used by the next tunnel); `autostart`, `update`: `true` or `false` |
+| `settings_change` | `name`, `value` | the same, after the change. `rights`: `full`, `edit` or `read` (the mode Claude Code and Codex are started in from the phone); `tunnel`: `auto` or `http2` (used by the next tunnel); `autostart`, `update`, `reach`: `true` or `false` (`reach`: the program's hooks are in the settings of Claude Code and Codex, see "A conversation that is open on the computer") |
 | `line_switch` | `to`: the `id` of a line | the same; `change.state` is now `preparing` |
 | `line_take` | none | `{"address", "ticket", "key", "seconds"}`, when `change.state` is `ready` |
 | `line_keep` | `key` | the same as `settings_read`; sent through the new line |
@@ -215,9 +215,14 @@ line. The program answers and decides everything; the relay checks the shape of 
  "lines": [{"id": "lan", "kind": "lan", "current": false, "ready": true},
            {"id": "cloud", "kind": "cloud", "current": true, "ready": true},
            {"id": "r3f9a0c1d2e4b", "kind": "own", "name": "home", "ms": 42, "current": false, "ready": true}],
- "settings": {"rights": "full", "tunnel": "auto", "autostart": true, "update": false},
+ "settings": {"rights": "full", "tunnel": "auto", "autostart": true, "update": false, "reach": true},
+ "reach": [{"tool": "claude", "name": "Claude Code", "state": "good"}],
  "change": {"state": "", "to": "", "note": "", "left": 0}}
 ```
+
+`reach` says, while that setting is on, how each tool that is used on the computer stands: `good` (its hooks are the
+program's and it has told of a conversation through them), `ready` (they are, and it has yet to) or `failed` (they
+could not be written).
 
 `kind` is `lan`, `cloud` (the tunnel; `ready: false` when the tunnel program has to be fetched first), `own` or
 `public` (relays, with `name` and `ms`, how long the relay took to answer the computer: -1 none, -2 not asked yet).

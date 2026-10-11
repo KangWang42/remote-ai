@@ -127,6 +127,16 @@ public final class Watcher extends BroadcastReceiver {
                 tasks.add(new Watch.Task(t.optString("id"), t.optString("title"), t.optString("dir"),
                     "starting".equals(t.optString("state")) ? "starting" : t.optString("phase"), t.optBoolean("done")));
             }
+            // A conversation open on the computer, of which its tool tells, is watched like a terminal: one that asks,
+            // and one that has stopped and waits for a message, are told.
+            JSONArray sessions = data.optJSONArray("sessions");
+            for (int k = 0; sessions != null && k < sessions.length(); k++) {
+                JSONObject s = sessions.optJSONObject(k);
+                if (s == null || !s.optBoolean("live") || s.optJSONArray("reach") == null) continue;
+                String status = s.optString("status");
+                tasks.add(new Watch.Task(s.optString("id"), s.optString("title"), s.optString("dir"),
+                    "confirm".equals(status) ? "confirm" : "busy".equals(status) ? "busy" : "idle", "waiting".equals(status)));
+            }
             anything |= !tasks.isEmpty();
             Map<String, String> before = new HashMap<>();
             if (noted != null) for (Iterator<String> keys = noted.keys(); keys.hasNext(); ) { String key = keys.next(); before.put(key, noted.optString(key)); }

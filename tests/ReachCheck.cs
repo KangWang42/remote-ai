@@ -77,11 +77,14 @@ public static class ReachCheck {
                 Require(claude(one).Status == "busy" && claude(one).AskId == "", "and works again");
                 Require(Refused(() => reach.Answer("claude", one, known.AskId, true)).Contains("已经处理"), "a request is answered once");
 
-                // answered at the computer: the tool goes on writing its conversation, and the hook has nothing to say
+                // Claude Code writes to its conversation while it asks: that is not an answer
                 asked = Run("claude", Request(one, "git push", ""));
                 Require(Until(() => claude(one).Status == "confirm", 3000), "a second request");
-                Thread.Sleep(1700); File.AppendAllText(transcript, "{\"answered\":true}\n");
-                Require(Answer(asked, 3000, "answered at the computer") == "" && claude(one).Status == "busy", "a request answered at the computer is over on the phone too");
+                Thread.Sleep(1700); File.AppendAllText(transcript, "{\"progress\":true}\n");
+                Require(!asked.Program.WaitForExit(700) && claude(one).Status == "confirm" && claude(one).Answerable, "a conversation that is written to while it asks still asks");
+                // answered at the computer: the tool tells of what it does next, and the hook has nothing to say
+                Answer(Run("claude", Event("UserPromptSubmit", one)), 5000, "the tool goes on");
+                Require(Answer(asked, 3000, "answered at the computer") == "" && claude(one).Status == "busy" && claude(one).AskId == "", "a request answered at the computer is over on the phone too");
                 // or the tool lets the hook go
                 asked = Run("claude", Request(one, "git push", ""));
                 Require(Until(() => claude(one).Status == "confirm", 3000), "a third request");
@@ -176,7 +179,9 @@ public static class ReachCheck {
             ReachHooks.Set("codex", true, program, "RemoteCli.reach.abc123");
             Require(ReachHooks.Installed("codex") && !File.Exists(codexHooks + ".before-remotecli"), "installed for Codex, with nothing to keep from before");
             var line = Convert.ToString(((Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(codexHooks, Encoding.UTF8))["hooks"])["Stop"]).Cast<object>().Single())["hooks"]).Cast<object>().Single())["command"]);
-            Require(line.EndsWith(" --hook codex RemoteCli.reach.abc123") && (line.StartsWith("\"" + program + "\"") || line.IndexOf(' ') == line.IndexOf(" --hook")), "the program's path is one word for the shell, or in quotes: " + line);
+            Require(line == "& '" + program + "' --hook codex RemoteCli.reach.abc123", "a path with a space in it is called the way PowerShell calls one: " + line);
+            ReachHooks.Set("codex", true, @"D:\Tools\RemoteCliAgent.exe", "RemoteCli.reach.abc123");
+            Require(File.ReadAllText(codexHooks, Encoding.UTF8).Contains("\"D:\\\\Tools\\\\RemoteCliAgent.exe --hook codex RemoteCli.reach.abc123\"") && ReachHooks.Installed("codex", @"D:\Tools\RemoteCliAgent.exe", "RemoteCli.reach.abc123"), "one without is a command as it stands");
             ReachHooks.Set("codex", false, program, "RemoteCli.reach.abc123");
             Require(!ReachHooks.Installed("codex") && File.ReadAllText(codexHooks, Encoding.UTF8).Trim() == "{}", "and taken out");
             // a file that cannot be read is left alone

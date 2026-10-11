@@ -17,6 +17,11 @@ final class AggregateSessions {
         final long at;
         final String id, project, title, tool, state, phase, status, host, attached, session;
         String said = "";       // one line of what a running terminal last said; changes often and is left out of signatures
+        /**
+         * A conversation that a program on the computer has open, of which its tool tells (the relay's `reach`): it
+         * is at work there like a terminal, and stands among the tasks by how it stands. canSay: a message can be left for it.
+         */
+        boolean reached, canSay;
         long used;              // latest terminal phase change or saved conversation update; 0 when not known
         Entry(boolean terminal, String id, String project, String title, String tool, String state,
               String phase, String status, boolean live, String host, String attached, String session) {
@@ -31,16 +36,18 @@ final class AggregateSessions {
             this.done = done; this.at = at;
         }
         boolean running() {
-            return terminal ? "running".equals(state) || "starting".equals(state) : live && "cli".equals(host);
+            return terminal ? "running".equals(state) || "starting".equals(state) : live && ("cli".equals(host) || reached);
         }
         /**
          * A phone terminal is confirm, done, busy, starting, idle or ended; a saved conversation is pc-busy, pc-idle,
-         * locked, remote, unknown or history. seen maps a terminal to the phase change the user has already looked at:
+         * locked, remote, unknown or history, and one whose tool tells of it is confirm, waiting (it has stopped and
+         * waits for a message from the phone), busy or stopped. seen maps a terminal to the phase change the user has already looked at:
          * finished work is "done" until then, as in the pages.
          */
         String kind(Map<String, Long> seen) {
             if (!terminal) {
                 if (!live) return "history";
+                if (reached) return "confirm".equals(status) ? "confirm" : "waiting".equals(status) ? "waiting" : "busy".equals(status) ? "busy" : "stopped";
                 if ("shared".equals(host)) return "locked";
                 if ("remote".equals(host)) return "remote";
                 if (!"cli".equals(host)) return "unknown";
@@ -64,6 +71,8 @@ final class AggregateSessions {
         switch (kind) {
             case "confirm": return "等你确认";
             case "done": return "已完成";
+            case "waiting": return "等你的消息";
+            case "stopped": return "已停下";
             case "busy": return "正在执行";
             case "starting": return "正在启动";
             case "idle": return "等待输入";
@@ -78,7 +87,7 @@ final class AggregateSessions {
     }
     /** What needs the user comes first, in the order the pages use. */
     static int rank(String kind) {
-        int at = Arrays.asList("confirm", "done", "busy", "starting", "idle", "pc-busy", "pc-idle").indexOf(kind);
+        int at = Arrays.asList("confirm", "done", "waiting", "busy", "starting", "idle", "stopped", "pc-busy", "pc-idle").indexOf(kind);
         return at < 0 ? 9 : at;
     }
     /** How long ago, in the words the pages use; nothing for a time that is not known. */
@@ -119,7 +128,7 @@ final class AggregateSessions {
         for (Project project : projects) for (Entry entry : project.active) {
             String kind = entry.kind(seen);
             if ("confirm".equals(kind)) counts[0]++;
-            else if ("done".equals(kind)) counts[1]++;
+            else if ("done".equals(kind) || "waiting".equals(kind)) counts[1]++;
             else if ("busy".equals(kind) || "starting".equals(kind) || "pc-busy".equals(kind)) counts[2]++;
             counts[3]++;
         }

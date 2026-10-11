@@ -203,23 +203,23 @@ public sealed class Reach : IDisposable {
         if (name == "Stop") return Stopped(o, hooked, gone);
         return Nothing;
     }
-    // The tool asks for permission. The hook is kept waiting until the phone answers; or the question was answered
-    // at the computer (the tool lets the hook go, or goes on writing its conversation); or, for a tool that does not
-    // show its question while a hook runs, somebody is at the computer; or it has been long enough.
+    // The tool asks for permission. The hook is kept waiting until the phone answers; or the tool lets the hook go, or
+    // tells of something else (the question was answered at the computer); or, for a tool that does not show its
+    // question while a hook runs, somebody is at the computer; or it has been long enough. That the conversation is
+    // written to says nothing here: Claude Code writes to it while it asks.
     string[] Asked(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone) {
         bool beside = tool == "claude";         // its question is on the computer's screen while the hook runs
-        string id; long stamp; var began = DateTime.UtcNow; bool? verdict = null;
+        string id; var began = DateTime.UtcNow; bool? verdict = null;
         lock (gate) {
             id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null;
-            o.Status = "confirm"; o.Answerable = beside || idle() >= Unattended; o.AskedAt = began; o.AskStamp = stamp = Stamp(o.Transcript);
+            o.Status = "confirm"; o.Answerable = beside || idle() >= Unattended; o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
         }
         Tell();
         lock (gate) {
             for (;;) {
                 if (o.AskId != id) return Nothing;                                  // the tool has gone on to something else
                 if (o.Verdict.HasValue) { verdict = o.Verdict; break; }
-                bool elsewhere = gone() || (DateTime.UtcNow - began > TimeSpan.FromSeconds(1.5) && Stamp(o.Transcript) != stamp);
-                if (elsewhere) { o.AskId = o.AskText = ""; o.Answerable = false; o.Status = "busy"; break; }
+                if (gone()) { o.AskId = o.AskText = ""; o.Answerable = false; o.Status = "busy"; break; }
                 if (o.Answerable && ((!beside && idle() < Unattended) || DateTime.UtcNow - began > TimeSpan.FromSeconds(Hold))) { o.Answerable = false; if (!beside) break; }
                 if (!o.Answerable && !beside) break;
                 Monitor.Wait(gate, 300);
@@ -294,13 +294,10 @@ public static class ReachHooks {
         if (tool == "codex") return Path.Combine(CodexSessions.Home, "hooks.json");
         throw new ArgumentException("工具无效");
     }
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern uint GetShortPathNameW(string longPath, StringBuilder shortPath, uint size);
-    // Codex hands its hook to a shell as one line. A path without spaces needs no quoting, whichever shell that is.
-    static string Plain(string path) {
-        if (path.IndexOf(' ') < 0) return path;
-        var brief = new StringBuilder(520); uint n = GetShortPathNameW(path, brief, (uint)brief.Capacity);
-        return n > 0 && n < brief.Capacity && brief.ToString().IndexOf(' ') < 0 ? brief.ToString() : "\"" + path + "\"";
-    }
+    // Codex hands its hook to PowerShell as one line. A path without a space in it is a command as it stands; one
+    // with a space is called with the call operator (in double quotes alone it would be a string, not a command).
+    // Both forms were tried on Codex 0.162.
+    static string Plain(string path) { return path.IndexOf(' ') < 0 ? path : "& '" + path.Replace("'", "''") + "'"; }
     static bool Mine(object hook) {
         var one = hook as Dictionary<string, object>; object value;
         if (one == null) return false;
