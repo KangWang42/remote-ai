@@ -85,7 +85,8 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .pill.busy { --c: var(--busy); }
 .pill.busy::before { animation: pulse 1.2s ease-in-out infinite; }
 .pill.confirm { --c: var(--bad); }
-.pill.done { --c: var(--good); }
+.pill.done, .pill.waiting { --c: var(--good); }
+.pill.stopped { --c: var(--muted); }
 .pill.idle { --c: var(--muted); }
 .pill.starting, .pill.pc { --c: var(--accent); }
 .pill.locked { --c: var(--muted); }
@@ -192,6 +193,8 @@ dialog[open] { animation: rise .18s ease-out; }
 .card .ask .answers .yes { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .card .ask .answers .no { color: var(--bad); }
 .card .ask .answers .see { flex: 0 0 auto; padding: 0 14px; font-weight: 500; color: var(--muted); }
+/* a request that only the computer can answer: said where the two buttons would be */
+.card .ask .answers .there { flex: 1; align-self: center; color: var(--muted); font-size: .85rem; }
 .card.asking { flex-wrap: wrap; }
 .card.asking > .open { flex: 1 1 0; min-width: 0; }
 .card .ask .answers button { white-space: nowrap; }

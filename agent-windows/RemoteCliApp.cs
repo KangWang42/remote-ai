@@ -42,7 +42,8 @@ public sealed partial class App : Form {
     TextBox passwordBox { get { return passwordField.Box; } }
     readonly PictureBox qr = new PictureBox();
     readonly RowList folders = new RowList(), activity = new RowList();
-    readonly Switch enabledSwitch = new Switch(), autostartSwitch = new Switch(), autoUpdateSwitch = new Switch();
+    readonly Switch enabledSwitch = new Switch(), autostartSwitch = new Switch(), autoUpdateSwitch = new Switch(), reachSwitch = new Switch();
+    SettingRow reachRow;
     readonly Segmented rights = new Segmented { Items = new[] { "默认", "自动改文件", "只读" } }, protocol = new Segmented { Items = new[] { "自动", "HTTP/2" } };
     readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 10 * 60 * 1000 }, quietTimer = new System.Windows.Forms.Timer { Interval = 5000 };
     ReleaseUpdate waitingUpdate;
@@ -85,7 +86,7 @@ public sealed partial class App : Form {
         try { config = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(ConfigFile, Encoding.UTF8)); } catch { config = null; }
         if (config == null) config = new Dictionary<string, object>();
         foreach (var item in new Dictionary<string, object> { { "Mode", "lan" }, { "Port", 8722 }, { "Server", "" }, { "OwnServer", "" }, { "RemoteEnabled", true },
-                 { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default } })
+                 { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] } })
             if (!config.ContainsKey(item.Key) || config[item.Key] == null) config[item.Key] = item.Value;
         if (Array.IndexOf(new[] { "lan", "cloud", "own", "public" }, Mode) < 0) config["Mode"] = "lan";
         try { password = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(PasswordFile), null, DataProtectionScope.CurrentUser)); } catch { password = ""; }
@@ -795,11 +796,13 @@ public sealed partial class App : Form {
 
         // ---- page: settings
         var settings = Page("设置", "这些设置只影响这台电脑。");
-        var rows = Place(settings, new Card(), 28, 92, 652, 8 * 53 + 12);
+        var rows = Place(settings, new Card(), 28, 92, 652, 9 * 48 + 12);
         autoUpdateSwitch.Changed += (s, e) => Set("update", autoUpdateSwitch.On);
         enabledSwitch.On = Convert.ToString(config["RemoteEnabled"]) == "True";
         enabledSwitch.Changed += (s, e) => { Keep("RemoteEnabled", enabledSwitch.On); RefreshActivity(); Toast(enabledSwitch.On ? "已允许手机访问" : "已暂停手机访问，立即生效"); };
         autostartSwitch.Changed += (s, e) => Set("autostart", autostartSwitch.On);
+        // what cannot be done (a settings file of a tool that cannot be read) is said, and the switch shows what is
+        reachSwitch.Changed += (s, e) => { try { Set("reach", reachSwitch.On); } catch (InvalidOperationException error) { ShowSettings(); MessageBox.Show(this, error.Message, "Remote CLI", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
         rights.Changed += (s, e) => { Set("rights", Rights[rights.Chosen]); Toast("对之后新开的终端生效"); };
         // With the tunnel in use, another protocol means another tunnel.
         protocol.Changed += (s, e) => { if (Mode == "cloud" && Held()) { ShowSettings(); return; } Set("tunnel", Protocols[protocol.Chosen]); if (Mode == "cloud") Reconnect(); };
@@ -831,13 +834,14 @@ public sealed partial class App : Form {
         var all = new[] {
             new SettingRow("允许手机访问", "关闭后手机立即不能操作，正在运行的终端不受影响", enabledSwitch, 46, 26),
             new SettingRow("登录 Windows 后自动启动", "开机后在托盘里运行，不弹出窗口", autostartSwitch, 46, 26),
+            reachRow = new SettingRow("手机处理电脑上的对话", "电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用", reachSwitch, 46, 26),
             new SettingRow("新终端的权限", "Claude Code 和 Codex 从手机启动时用什么权限模式", rights, 250, 34),
             new SettingRow("公网隧道的协议", "隧道经常断开或出现 1033 时改用 HTTP/2", protocol, 170, 34),
             new SettingRow("本机端口", "局域网直连和公网隧道使用，被占用时换一个", portBox, 96, 32),
             new SettingRow("外观", "和手机 App 相同的几种配色，默认与 App 一致", skinPick, 170, 34),
             new SettingRow("自动更新", "关闭时需在此处或手机上手动发起；开启后在终端空闲时自动安装", autoUpdateSwitch, 46, 26),
             new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 34) };
-        for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 53, 648, 53);
+        for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 48, 648, 48);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 544, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
         Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 544, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-cli") { UseShellExecute = true }); } catch (Exception) { } });
         Action(settings, "退出 Remote CLI", Theme.IconPower, ButtonKind.Danger, 530, 544, 150, 36, (s, e) => Quit());
@@ -875,6 +879,14 @@ public sealed partial class App : Form {
             // The phone may ask for the update: it is looked for and installed at once, whatever the terminals are doing.
             agent.UpdateRequested = () => BeginInvoke(new Action(() => CheckForUpdate(false, true)));
             agent.Computer = Itself;
+            // The first time, the tools are given this program's hooks without being asked for: a second copy or a
+            // test, which has a data folder of its own, leaves the tools' settings alone until it is told.
+            if (Convert.ToString(config["Reach"]).Length == 0 && !offstage && String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTECLI_DATA"))) {
+                try { Reaching = true; } catch (InvalidOperationException) { } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+            // a tool that tells of a conversation for the first time is in good state from then on
+            agent.Reach.Changed += () => { if (IsHandleCreated && Reaching && Hooked.Any(tool => agent.Reach.Heard(tool))) try { BeginInvoke(new Action(ShowReach)); } catch (InvalidOperationException) { } };
+            ShowSettings();
             updateTimer.Tick += (t, a) => { CheckForUpdate(false); if (DateTime.UtcNow - listRead > TimeSpan.FromHours(6)) ReadList(); };
             ReadList();
             quietTimer.Tick += async (t, a) => {

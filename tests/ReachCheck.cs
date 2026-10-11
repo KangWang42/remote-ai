@@ -58,7 +58,7 @@ public static class ReachCheck {
                 Func<string, Reach.Open> claude = session => reach.Of("claude", session), codex = session => reach.Of("codex", session);
 
                 // ---- nothing is known of a conversation until its tool tells of it; other words are not events
-                Require(claude(one) == null, "a conversation nobody told of");
+                Require(claude(one) == null && !reach.Heard("claude"), "a conversation nobody told of");
                 Require(Answer(Run("other", Event("Stop", one)), 5000, "another tool") == "" && claude(one) == null, "a tool that is neither is not listened to");
                 Require(Answer(Run("claude", "not an event"), 5000, "not an event") == "", "words that are no event get no answer");
                 Require(Answer(Run("claude", Event("SessionStart", one)), 5000, "start") == "" && claude(one).Status == "idle", "a conversation that started waits");
@@ -140,6 +140,7 @@ public static class ReachCheck {
                 Answer(Run("claude", Event("SessionEnd", one)), 5000, "ended");
                 Require(claude(one) == null && codex(two) != null, "only the one that ended");
                 Require(told >= 12, "what changes is told at once: " + told);
+                Require(reach.Heard("claude") && reach.Heard("codex") && !reach.Heard("other"), "a tool that has told of something is known to reach this program");
             }
             Require(Answer(Run("claude", Event("Stop", Guid.NewGuid().ToString())), 5000, "nobody listens") == "", "with nothing listening the hook ends at once and says nothing");
 
@@ -155,6 +156,10 @@ public static class ReachCheck {
             ReachHooks.Set("claude", true, program, "RemoteCli.reach.abc123");
             ReachHooks.Set("claude", true, program, "RemoteCli.reach.abc123");          // twice is once
             Require(ReachHooks.Installed("claude"), "installed for Claude Code");
+            Require(ReachHooks.Installed("claude", program, "RemoteCli.reach.abc123") && !ReachHooks.Installed("claude", program, "RemoteCli.reach.other1") && !ReachHooks.Installed("claude", @"D:\moved\RemoteCliAgent.exe", "RemoteCli.reach.abc123"), "and known to be for this program at this pipe, not for another");
+            ReachHooks.Set("claude", true, @"D:\moved\RemoteCliAgent.exe", "RemoteCli.reach.abc123");       // the program moved: its hooks follow it
+            Require(ReachHooks.Installed("claude", @"D:\moved\RemoteCliAgent.exe", "RemoteCli.reach.abc123") && !File.ReadAllText(settings, Encoding.UTF8).Contains("Program Files"), "hooks for where the program was are replaced");
+            ReachHooks.Set("claude", true, program, "RemoteCli.reach.abc123");
             var read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(settings, Encoding.UTF8));
             var hooks = (Dictionary<string, object>)read["hooks"];
             Require(Convert.ToString(read["model"]) == "opus" && Convert.ToString(read["note"]) == "保留原样" && Convert.ToString(read["number"], System.Globalization.CultureInfo.InvariantCulture) == "1.5", "what else is in the file stays");

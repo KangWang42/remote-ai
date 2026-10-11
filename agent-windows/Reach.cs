@@ -59,6 +59,9 @@ public sealed class Reach : IDisposable {
 
     readonly object gate = new object();
     readonly Dictionary<string, Open> open = new Dictionary<string, Open>();
+    readonly HashSet<string> heard = new HashSet<string>();
+    /// Whether a tool has told of anything since this program started: its hooks do reach it.
+    public bool Heard(string tool) { lock (gate) return heard.Contains(tool); }
     readonly string pipe; readonly Func<int> idle;
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     volatile bool closed;
@@ -180,8 +183,9 @@ public sealed class Reach : IDisposable {
     string[] Handle(string tool, Dictionary<string, object> hooked, Func<bool> gone) {
         string name = Text(hooked, "hook_event_name"), session = Text(hooked, "session_id");
         if ((tool != "claude" && tool != "codex") || !Regex.IsMatch(session, Uuid)) return Nothing;
-        Open o;
+        Open o; bool first;
         lock (gate) {
+            first = heard.Add(tool);
             string key = Key(tool, session);
             if (name == "SessionEnd") { if (open.Remove(key)) Monitor.PulseAll(gate); o = null; }
             else {
@@ -191,7 +195,8 @@ public sealed class Reach : IDisposable {
                 if (open.Count > 200) foreach (string old in open.Where(p => DateTime.UtcNow - p.Value.Seen > TimeSpan.FromHours(24)).Select(p => p.Key).ToArray()) open.Remove(old);
             }
         }
-        if (o == null) { Tell(); return Nothing; }
+        if (o == null || first) Tell();
+        if (o == null) return Nothing;
         if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") o.Status = "idle"; } Tell(); return Nothing; }
         if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.Answerable = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
         if (name == "PermissionRequest") return Asked(o, tool, hooked, gone);
@@ -330,6 +335,15 @@ public static class ReachHooks {
             kept.Add(group);
         }
         return kept;
+    }
+    /// Whether the tool's settings hold exactly the hooks this program would write now: for this program, at this pipe.
+    public static bool Installed(string tool, string program, string pipe) {
+        try {
+            object hooks; var all = Read(FileOf(tool));
+            if (!all.TryGetValue("hooks", out hooks) || !(hooks is Dictionary<string, object>)) return false;
+            string wanted = Write(Entry(tool, program, pipe), 0);
+            return Reach.Events.All(name => { object groups; return ((Dictionary<string, object>)hooks).TryGetValue(name, out groups) && Items(groups).Any(group => group is Dictionary<string, object> && Write(group, 0) == wanted); });
+        } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } catch (InvalidOperationException) { return false; }
     }
     public static bool Installed(string tool) {
         try {

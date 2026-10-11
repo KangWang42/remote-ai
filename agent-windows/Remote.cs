@@ -52,6 +52,49 @@ public sealed partial class App {
         get { using (var key = Registry.CurrentUser.OpenSubKey(RunKey)) return key != null && key.GetValue("RemoteCli") != null; }
         set { using (var key = Registry.CurrentUser.CreateSubKey(RunKey)) { if (value) key.SetValue("RemoteCli", "\"" + Application.ExecutablePath + "\" --hidden"); else key.DeleteValue("RemoteCli", false); } }
     }
+    // Whether Claude Code and Codex run this program's hooks (Reach.cs): the phone then sees the conversations they
+    // have open on this computer, wherever they run, and can answer what they ask and tell them what to do next.
+    // The hooks go into the tools' own settings, for each tool that has been used on this computer.
+    // The first time the program runs it switches this on by itself; after that the switch says what its owner wants,
+    // and while it is on the hooks are kept in place: put back when something took them out, or the program moved.
+    static readonly string[] Hooked = { "claude", "codex" };
+    static readonly Dictionary<string, string> ToolNames = new Dictionary<string, string> { { "claude", "Claude Code" }, { "codex", "Codex" } };
+    static bool Used(string tool) { try { return Directory.Exists(Path.GetDirectoryName(ReachHooks.FileOf(tool))); } catch (ArgumentException) { return false; } }
+    static string HookProgram { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RemoteCliAgent.exe"); } }
+    bool Reaching {
+        get { return Convert.ToString(config["Reach"]) == "True"; }
+        set {
+            if (value && !File.Exists(HookProgram)) throw new InvalidOperationException("没有找到 RemoteCliAgent.exe，请重新安装电脑端");
+            foreach (string tool in Hooked.Where(tool => Used(tool) || !value)) ReachHooks.Set(tool, value, HookProgram, agent.Reach.Pipe);
+            Keep("Reach", value);
+        }
+    }
+    // How each tool that is used on this computer stands, while the switch is on: "good" (its hooks are this program's
+    // and it has told of a conversation through them), "ready" (they are, and it has yet to), "failed" (they are not,
+    // and could not be written). A tool that has told once is known to: Codex runs new hooks only once its user has
+    // said in Codex that they are trusted.
+    List<Dictionary<string, object>> ReachStates() {
+        var states = new List<Dictionary<string, object>>();
+        if (agent == null || !Reaching) return states;
+        var told = (config["ReachHeard"] as System.Collections.IEnumerable ?? new object[0]).Cast<object>().Select(Convert.ToString).ToList();
+        foreach (string tool in Hooked.Where(Used)) {
+            bool there = ReachHooks.Installed(tool, HookProgram, agent.Reach.Pipe);
+            if (!there) { try { ReachHooks.Set(tool, true, HookProgram, agent.Reach.Pipe); there = true; } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (InvalidOperationException) { } }
+            if (there && agent.Reach.Heard(tool) && !told.Contains(tool)) { told.Add(tool); Keep("ReachHeard", told.Cast<object>().ToArray()); }
+            states.Add(new Dictionary<string, object> { { "tool", tool }, { "name", ToolNames[tool] }, { "state", !there ? "failed" : told.Contains(tool) ? "good" : "ready" } });
+        }
+        return states;
+    }
+    // The same in a line for the window: every tool in good state is said in the colour of what is well.
+    void ShowReach() {
+        if (reachRow == null) return;
+        var states = ReachStates();
+        string line = !Reaching ? "电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用"
+            : states.Count == 0 ? "这台电脑上还没有用过 Claude Code 或 Codex"
+            : String.Join(" · ", states.Select(s => s["name"] + (Convert.ToString(s["state"]) == "good" ? " 状态良好" : Convert.ToString(s["state"]) == "failed" ? " 的配置写不进去" : Convert.ToString(s["tool"]) == "codex" ? " 已就绪，首次需在 Codex 里确认信任" : " 已就绪")));
+        bool well = states.Count > 0 && states.All(s => Convert.ToString(s["state"]) == "good"), bad = states.Any(s => Convert.ToString(s["state"]) == "failed");
+        reachRow.Say(line, well ? Theme.Good : bad ? Theme.Bad : Theme.Muted);
+    }
     void Set(string name, object value) {
         string word = value as string;
         if (name == "rights" && Array.IndexOf(Rights, word) >= 0) Keep("RemoteMaxMode", word);
@@ -59,6 +102,11 @@ public sealed partial class App {
         else if (name == "tunnel" && Array.IndexOf(Protocols, word) >= 0) Keep("TunnelProtocol", word);
         else if (name == "autostart" && value is bool) Autostart = (bool)value;
         else if (name == "update" && value is bool) Keep("AutoUpdate", (bool)value);
+        else if (name == "reach" && value is bool) {
+            try { Reaching = (bool)value; }
+            catch (IOException) { throw new InvalidOperationException("写不了 Claude Code 或 Codex 的配置文件，没有改动"); }
+            catch (UnauthorizedAccessException) { throw new InvalidOperationException("写不了 Claude Code 或 Codex 的配置文件，没有改动"); }
+        }
         else throw new ArgumentException("没有这项设置，或它的值无效");
         if (InvokeRequired) BeginInvoke(new Action(() => Applied(name))); else Applied(name);
     }
@@ -68,6 +116,8 @@ public sealed partial class App {
         protocol.Chosen = Math.Max(0, Array.IndexOf(Protocols, Convert.ToString(config["TunnelProtocol"])));
         autostartSwitch.On = Autostart;
         autoUpdateSwitch.On = Convert.ToString(config["AutoUpdate"]) == "True";
+        reachSwitch.On = Reaching;
+        ShowReach();
     }
 
     // ---------- what the phone is told
@@ -93,7 +143,7 @@ public sealed partial class App {
         }
         return new Dictionary<string, object> { { "name", ComputerName }, { "version", Version }, { "lines", lines }, { "change", now },
             { "settings", new Dictionary<string, object> { { "rights", Convert.ToString(config["RemoteMaxMode"]) }, { "tunnel", Convert.ToString(config["TunnelProtocol"]) },
-                { "autostart", Autostart }, { "update", Convert.ToString(config["AutoUpdate"]) == "True" } } } };
+                { "autostart", Autostart }, { "update", Convert.ToString(config["AutoUpdate"]) == "True" }, { "reach", Reaching } } }, { "reach", ReachStates() } };
     }
     static string Word(Dictionary<string, object> op, string key) { object value; return op.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : ""; }
     // Called by the agent, on its thread, for each question; what takes time is done elsewhere.

@@ -109,6 +109,7 @@
     { name: 'rights', title: '新终端的权限', about: 'Claude Code 和 Codex 从手机启动时的权限模式', choices: [['full', '默认'], ['edit', '自动改文件'], ['read', '只读']] },
     { name: 'tunnel', title: '公网隧道的协议', about: '隧道经常断开时改用 HTTP/2，下次建立时生效', choices: [['auto', '自动'], ['http2', 'HTTP/2']] },
     { name: 'autostart', title: '登录 Windows 后自动启动' },
+    { name: 'reach', title: '手机处理电脑上的对话', about: '电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用' },
     { name: 'update', title: '自动更新', about: '在终端空闲时安装新版本' }];
   let device = null, told = null, busy = false, problem = '';
   const name = line => line.name || KIND[line.kind][0];
@@ -144,8 +145,19 @@
     };
     // those for everyone are offered when there are any; one's own always, to say where they are added
     $('lines').replaceChildren(...of('lan').map(one), ...of('cloud').map(one), ...(of('public').length ? [several('public')] : []), ...(told ? [several('own')] : []));
-    const rows = (told ? SETTINGS : []).map(setting => {
+    // a setting the computer's program does not tell of is one it does not have
+    // How the tools stand while the computer's program has its hooks in their settings, in place of what the switch is for.
+    const stands = { good: ' 状态良好', ready: ' 已就绪', failed: ' 的配置写不进去' };
+    const reached = told && told.settings.reach === true && (told.reach || []).length
+      ? told.reach.map(one => one.name + stands[one.state] + (one.state === 'ready' && one.tool === 'codex' ? '，首次需在 Codex 里确认信任' : '')).join(' · ') : '';
+    const well = !!reached && told.reach.every(one => one.state === 'good');
+    const rows = (told ? SETTINGS.filter(setting => setting.name in told.settings) : []).map(setting => {
       const value = told.settings[setting.name];
+      if (setting.name === 'reach' && reached) {
+        const about = text(setting.title, reached);
+        about.classList.toggle('well', well);
+        return row(null, about, el('button', { type: 'button', className: 'flip', role: 'switch', 'aria-checked': 'true', 'aria-label': setting.title, onclick: () => change(setting.name, false) }));
+      }
       const control = setting.choices
         ? el('span', { className: 'pick', role: 'group', 'aria-label': setting.title }, ...setting.choices.map(([key, label]) =>
             el('button', { type: 'button', textContent: label, 'aria-pressed': String(key === value), onclick: () => { if (key !== value) change(setting.name, key); } })))

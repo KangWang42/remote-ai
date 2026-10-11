@@ -143,7 +143,11 @@
     if (phase === 'idle' && t.done && seen()[t.id] !== t.phase_at) return 'done';
     return phase;
   }
-  const PHASE = { confirm: ['等你确认', 0], done: ['已完成', 1], busy: ['正在执行', 2], starting: ['正在启动', 3], idle: ['等待输入', 4], ended: ['已结束', 8], failed: ['异常退出', 7] };
+  const PHASE = { confirm: ['等你确认', 0], done: ['已完成', 1], waiting: ['等你的消息', 1], busy: ['正在执行', 2], starting: ['正在启动', 3], idle: ['等待输入', 4], stopped: ['已停下', 5], ended: ['已结束', 8], failed: ['异常退出', 7] };
+  // A conversation that a program on the computer has open, where its tool tells of it (docs/PROTOCOL.md, `reach`):
+  // it stands in the lists like a terminal, by how it stands. '' for one whose tool tells nothing.
+  const reachPhase = s => !Array.isArray(s.reach) ? '' : s.status === 'confirm' ? 'confirm' : s.status === 'waiting' ? 'waiting' : s.status === 'busy' ? 'busy' : 'stopped';
+  const can = (s, way) => Array.isArray(s.reach) && s.reach.includes(way);
   const running = t => t.state === 'running' || t.state === 'starting';
   const usable = () => data && data.device.online && data.device.enabled;
 
@@ -187,6 +191,26 @@
     });
     if (text && await run({ action: 'say', terminal: t.id, text }, '')) { toast('已发送'); refresh(); }
   }
+  // The same for a conversation that is open on the computer: the message goes to the program that has it, which
+  // keeps it. A tool that is at work takes it when it has done what it is doing.
+  async function tell(s) {
+    if (!usable()) return toast('电脑离线，暂时不能发送');
+    const text = await openSheet((form, finish) => {
+      const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '发送消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
+      form.append(el('h3', { textContent: s.title }), el('p', { textContent: s.last || TOOLS[s.tool] + ' · ' + s.dir }), box,
+        el('button', { type: 'button', className: 'choice solid', onclick: () => { if (box.value.trim()) finish(box.value); else box.focus(); } }, el('span', { textContent: '发送' })));
+      setTimeout(() => box.focus(), 80);
+    });
+    if (!text) return;
+    try { const got = await api('api/conversation', { id: newId(), session: s.id, action: 'say', text }); toast(got.now ? '已发送' : '已发送，它做完手上这一步后收到'); }
+    catch (error) { toast(error.message); }
+    refresh();
+  }
+  async function answerAsk(s, allow) {
+    try { await api('api/conversation', { id: newId(), session: s.id, action: 'answer', ask: s.ask.id, allow }); toast(allow ? '已允许' : '已拒绝'); }
+    catch (error) { toast(error.message); }
+    refresh();
+  }
   async function endTerminal(t) {
     if (!await ask('结束“' + t.title + '”？', '正在运行的任务会被中断。对话保存在电脑上，可以从历史对话继续。', [{ label: '结束终端', value: true, kind: 'danger' }])) return;
     await run({ action: 'close', terminal: t.id }, '正在结束…');
@@ -198,9 +222,11 @@
   function ways(session) {
     const host = sessionHost(session), locked = sessionActivity(session) === 'locked';
     const canClose = session.can_takeover === true && !locked;
+    // one that can be told things from here stays on the computer: moving it to the phone is not the first thing offered
+    const kind = Array.isArray(session.reach) ? '' : 'solid';
     const choices = [canClose
-      ? { label: '在手机上继续', sub: '电脑上的对应窗口将关闭，正在执行的任务会中断', value: 'close', kind: 'solid' }
-      : { label: '已在电脑上关闭，在手机上继续', sub: '如仍在运行，不会关闭它，并说明原因', value: 'close', kind: 'solid' }];
+      ? { label: '在手机上继续', sub: '电脑上的对应窗口将关闭，正在执行的任务会中断', value: 'close', kind }
+      : { label: '已在电脑上关闭，在手机上继续', sub: '如仍在运行，不会关闭它，并说明原因', value: 'close', kind }];
     if (session.tool === 'codex' && (data.device.features || []).includes('codex-fork'))
       choices.push({ label: '另开一份继续', sub: '以当前内容新建一段对话；电脑上的原对话不受影响，两者此后相互独立', value: 'copy' });
     const why = canClose ? ''
@@ -252,7 +278,7 @@
         el('p', { textContent: (hostLabel[sessionHost(session)] || hostLabel.unknown) + ' · ' + TOOLS[session.tool] + ' · ' + session.dir }));
       if (canPeek) {
         const said = el('div', { className: 'said' }, el('p', { className: 'quiet', textContent: '正在读取对话…' }));
-        form.append(said, el('p', { className: 'quiet', textContent: '只是查看，不影响电脑上的程序。' }));
+        form.append(said, el('p', { className: 'quiet', textContent: Array.isArray(session.reach) ? '这段对话照常开在电脑上。在这里查看和发消息，都不影响电脑上的使用。' : '只是查看，不影响电脑上的程序。' }));
         api('api/conversation', { id: newId(), session: session.id }).then(got => {
           said.textContent = '';
           const messages = got.messages || [];
@@ -261,11 +287,13 @@
           writeSaid(said, messages, TOOLS[session.tool]).then(() => { said.scrollTop = said.scrollHeight; });      // what was said last is what one came to see
         }).catch(error => { said.textContent = ''; said.append(el('p', { className: 'quiet', textContent: error.message })); });
       }
-      if (why) form.append(el('p', { className: 'why', textContent: why }));
+      if (can(session, 'say')) form.append(el('button', { type: 'button', className: 'choice solid', onclick: () => finish('tell') }, el('span', null, '发消息', el('small', { textContent: session.status === 'waiting' ? '它已停下，正等你的消息' : '它做完手上这一步后收到' }))));
+      if (why && !Array.isArray(session.reach)) form.append(el('p', { className: 'why', textContent: why }));
       choices.forEach(c => form.append(el('button', { type: 'button', className: 'choice ' + (c.kind || ''), onclick: () => finish(c.value) },
         el('span', null, c.label, el('small', { textContent: c.sub })))));
     });
-    if (choice) start(session.tool, session.dir, session.id, choice === 'close', choice === 'copy');
+    if (choice === 'tell') tell(session);
+    else if (choice) start(session.tool, session.dir, session.id, choice === 'close', choice === 'copy');
   }
   // ?new=1 comes from the app's workbench: a terminal is started without walking to a project first. The projects
   // used last come first; each offers the tools the computer has.
@@ -335,7 +363,27 @@
   }
   const hostLabel = { cli: '电脑上打开着', shared: '被电脑上的应用占用', remote: '被另一个远程终端占用', unknown: '被电脑上的程序占用' };
   function sessionCard(s, withProject) {
-    const meta = el('span', { className: 'meta' });
+    const meta = el('span', { className: 'meta' }), phase = s.live ? reachPhase(s) : '';
+    const where = (s.origin ? s.origin + ' · ' : '') + (hostLabel[sessionHost(s)] || hostLabel.unknown);
+    if (phase) {
+      // told of by its tool: a card like a terminal's, with where it runs in place of "from the phone"
+      const see = () => { if (!usable()) return toast('电脑离线，暂时无法打开'); takeOver(s); };
+      meta.append(pill(phase, PHASE[phase][0]));
+      if (withProject) meta.append(el('span', { className: 'chip', textContent: s.dir }));
+      meta.append(el('span', { textContent: TOOLS[s.tool] + ' · ' + where }));
+      const card = el('li', { className: 'card ' + (phase === 'waiting' ? 'done' : phase) }, el('button', { type: 'button', className: 'open', onclick: see },
+        el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, el('b', { textContent: s.title }), meta, el('span', { className: 'peek', hidden: !s.last || phase === 'confirm', textContent: s.last || '' }))));
+      if (can(s, 'say') && phase !== 'confirm') card.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这段对话发消息', html: ICON.say, onclick: () => tell(s) }));
+      if (phase === 'confirm' && s.ask) {
+        card.classList.add('asking');
+        const answers = el('div', { className: 'answers' });
+        if (can(s, 'answer')) answers.append(el('button', { type: 'button', className: 'yes', textContent: '允许', onclick: () => answerAsk(s, true) }), el('button', { type: 'button', className: 'no', textContent: '拒绝', onclick: () => answerAsk(s, false) }));
+        else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
+        answers.append(el('button', { type: 'button', className: 'see', textContent: '看对话', onclick: see }));
+        card.append(el('div', { className: 'ask' }, el('pre', { textContent: s.ask.text }), answers));
+      }
+      return card;
+    }
     if (s.live) {
       const state = sessionActivity(s);
       meta.append(pill(state === 'active' && s.status === 'busy' ? 'busy' : state === 'active' ? 'pc' : 'locked', (s.origin ? s.origin + ' · ' : '') + (hostLabel[sessionHost(s)] || hostLabel.unknown)));
@@ -345,6 +393,8 @@
     return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => { if (!usable()) return toast('电脑离线，暂时无法打开'); if (s.live) takeOver(s); else start(s.tool, s.dir, s.id, false); } },
       el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, el('b', { textContent: s.title }), meta), el('span', { className: 'chev', html: ICON.chev })));
   }
+  // what a card of a conversation shows: it is built again when any of this changes
+  const signed = s => [s.id, s.status, s.title, s.host, s.origin, (s.reach || ['-']).join(), s.ask ? s.ask.id : '', s.last || ''];
   // Lists are rebuilt only when what they show has changed, so a press or a scroll is not interrupted every few seconds.
   function fill(list, cards, signature) {
     if (list.dataset.signature === signature) return;
@@ -380,21 +430,25 @@
     $('back').hidden = !project && !(native && native.home);
     $('back').setAttribute('aria-label', project ? '返回全部项目' : '返回工作台');
     $('heading').textContent = project || 'Remote CLI';
-    const waiting = mine.filter(t => phaseOf(t) === 'confirm').length, done = mine.filter(t => phaseOf(t) === 'done').length, working = mine.filter(t => phaseOf(t) === 'busy').length;
+    // conversations open on the computer are counted with the terminals, by how they stand
+    const stands = phase => mine.filter(t => phaseOf(t) === phase).length + live.filter(s => reachPhase(s) === phase).length;
+    const waiting = stands('confirm'), done = stands('done') + stands('waiting'), working = stands('busy');
     $('device-text').textContent = !ready ? (device.online ? '已暂停访问' : '电脑离线')
       : project ? '电脑在线' : waiting ? waiting + ' 个任务等你确认' : done ? done + ' 个任务已完成' : working ? working + ' 个任务在执行' : '电脑在线';
 
     if (!project) {
-      const order = mine.slice().sort((a, b) => a.rank - b.rank || b.at - a.at);
-      const cards = order.map(t => terminalCard(t, true)).concat(live.sort((a, b) => b.updated - a.updated).map(s => sessionCard(s, true)));
+      // one list for both: what waits for an answer first, whichever kind it is; a conversation whose tool tells nothing comes last
+      const order = mine.map(t => ({ t, rank: t.rank, at: t.at })).concat(live.map(s => ({ s, rank: reachPhase(s) ? PHASE[reachPhase(s)][1] : 6, at: s.updated })))
+        .sort((a, b) => a.rank - b.rank || b.at - a.at);
+      const cards = order.map(one => one.t ? terminalCard(one.t, true) : sessionCard(one.s, true));
       $('active').hidden = !cards.length;
-      fill($('active-list'), cards, JSON.stringify([order.map(t => [t.id, phaseOf(t), t.title, t.phase_at]), live.map(s => [s.id, s.status, s.title, s.host, s.origin]), stamp(1), ready]));
+      fill($('active-list'), cards, JSON.stringify([order.map(one => one.t ? [one.t.id, phaseOf(one.t), one.t.title, one.t.phase_at] : signed(one.s)), stamp(1), ready]));
       $('background').hidden = !background.length;
       $('background-summary').textContent = background.length + ' 段 · 不计入运行中';
       fill($('background-list'), background.map(s => sessionCard(s, true)), JSON.stringify([background.map(s => [s.id, s.status, s.title, s.host, s.origin]), stamp(1), ready]));
       const parts = [];
       if (waiting) parts.push(waiting + ' 个等你确认'); if (done) parts.push(done + ' 个已完成'); if (working) parts.push(working + ' 个在执行');
-      $('active-summary').textContent = parts.join(' · ') || (cards.length + ' 个终端在运行');
+      $('active-summary').textContent = parts.join(' · ') || (cards.length + ' 个在运行');
       const list = names.map(name => {
         const folder = (device.projects || []).find(p => p.name === name) || {};
         const own = mine.filter(t => t.dir === name), count = sessions.filter(s => s.dir === name).length;
@@ -430,7 +484,7 @@
     fill($('p-active').querySelector('ul'), own.map(t => terminalCard(t, false)), JSON.stringify([own.map(t => [t.id, phaseOf(t), t.title, t.phase_at]), stamp(1)]));
     const here = sessions.filter(s => s.dir === project), open2 = here.filter(s => sessionActivity(s) === 'active'), held = here.filter(s => sessionActivity(s) === 'locked');
     $('p-live').hidden = !open2.length;
-    fill($('p-live').querySelector('ul'), open2.map(s => sessionCard(s, false)), JSON.stringify([open2.map(s => [s.id, s.status, s.title, s.host, s.origin]), stamp(1)]));
+    fill($('p-live').querySelector('ul'), open2.map(s => sessionCard(s, false)), JSON.stringify([open2.map(signed), stamp(1)]));
     $('p-background').hidden = !held.length;
     $('p-background-summary').textContent = held.length + ' 段 · 不计入运行中';
     fill($('p-background').querySelector('ul'), held.map(s => sessionCard(s, false)), JSON.stringify([held.map(s => [s.id, s.status, s.title, s.host, s.origin]), stamp(1)]));

@@ -42,3 +42,5 @@ button.row:disabled { opacity: 1; cursor: default; }
 .flip[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
 .flip[aria-checked="true"]::after { transform: translateX(22px); background: var(--on-accent); }
 @media (prefers-reduced-motion: reduce) { .flip, .flip::after { transition: none; } #state.busy b::before { animation: none; } }
+/* a setting that says how something stands: in the colour of what is well when it is */
+.text.well small { color: var(--good); font-weight: 600; }
