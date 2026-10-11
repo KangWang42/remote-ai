@@ -9,10 +9,12 @@ const app = fs.readFileSync(path.join(root, 'web/app.js'), 'utf8');
 const page = fs.readFileSync(path.join(root, 'web/index.html'), 'utf8');
 
 assert.match(app, /function sessionActivity\(s\)/);
-assert.match(app, /sessions\.filter\(s => sessionActivity\(s\) === 'active'\)/,
+assert.match(app, /state: sessionActivity\(s\)/, 'how a conversation stands in the lists is what sessionActivity says of it');
+assert.match(app, /free\.filter\(x => x\.state === 'active'\)/,
   'only explicitly active sessions may enter the activity list');
-assert.match(app, /sessions\.filter\(s => sessionActivity\(s\) === 'locked'\)/,
+assert.match(app, /free\.filter\(x => x\.state === 'locked'\)/,
   'retained writer locks must remain available as locked history');
+assert.match(app, /here\.filter\(x => x\.state === 'active'\)/, 'and so within a project');
 assert.match(app, /手机无法关闭它。请先在该应用中结束这段对话/,
   'a conversation held by an app needs to say what to do on the computer');
 assert.match(app, /api\('api\/conversation'/, 'a conversation open on the computer is looked at before anything is done to it');

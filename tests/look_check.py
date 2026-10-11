@@ -8,15 +8,14 @@ real agent. Build the agent first.
 - that second viewer and the first see the same terminal: what one types the other reads, and the terminal takes
   the size of whoever asked last.
 
-Claude Code keeps conversations under the real user profile, so the made-up conversation is written there, in a
-folder named after this test's temporary project, and removed afterwards.
+The made-up conversation lies in a home of Claude Code's that is made here (CLAUDE_CONFIG_DIR, and CODEX_HOME for
+Codex): the agent reads nothing of the tools on this computer, and nothing is written into the real profile.
 """
 import http.client
 import json
 import os
 import re
 import secrets
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,7 +67,8 @@ with tempfile.TemporaryDirectory(prefix="remote-cli-look-", ignore_cleanup_error
     project, data = Path(temp) / "demo", Path(temp) / "agent"
     project.mkdir()
     data.mkdir()
-    saved = Path.home() / ".claude" / "projects" / re.sub("[^a-zA-Z0-9]", "-", str(project))
+    homes = {"CLAUDE_CONFIG_DIR": str(Path(temp) / "claude-home"), "CODEX_HOME": str(Path(temp) / "codex-home")}
+    saved = Path(homes["CLAUDE_CONFIG_DIR"]) / "projects" / re.sub("[^a-zA-Z0-9]", "-", str(project))
     session = str(uuid.uuid4())
     saved.mkdir(parents=True)
     rows = [
@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix="remote-cli-look-", ignore_cleanup_error
                              env=dict(os.environ, RCLI_PASSWORD=password, PYTHONUTF8="1"), stdout=subprocess.DEVNULL, **hidden)
     agent_exe = ROOT / "agent-windows" / "bin" / "RemoteCliAgent.exe"
     subprocess.run([str(agent_exe), "--set-password", str(data)], input=password.encode(), check=True, **hidden)
-    agent = subprocess.Popen([str(agent_exe), "--data", str(data)], **hidden)
+    agent = subprocess.Popen([str(agent_exe), "--data", str(data)], env=dict(os.environ, **homes), **hidden)
     try:
         phone = Viewer()
         for _ in range(40):
@@ -153,4 +153,3 @@ with tempfile.TemporaryDirectory(prefix="remote-cli-look-", ignore_cleanup_error
                 process.wait(10)
             except subprocess.TimeoutExpired:
                 process.kill()
-        shutil.rmtree(saved, ignore_errors=True)

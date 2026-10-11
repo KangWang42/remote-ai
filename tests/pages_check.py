@@ -33,7 +33,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     temp = tempfile.TemporaryDirectory()
     data, profile = Path(temp.name) / "agent", Path(temp.name) / "profile"
-    base = Path(sys.argv[3]) if len(sys.argv) > 3 else Path(temp.name) / "projects"       # a path that may appear in a published picture
+    base = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else Path(temp.name) / "projects"       # a path that may appear in a published picture
     names = ["web-shop", "thesis", "data-tools"]
     for name in names:
         (base / name).mkdir(parents=True, exist_ok=True)
