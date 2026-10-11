@@ -43,7 +43,7 @@ python -m unittest discover -s relay -p "test_*.py"
 python3 -m unittest discover -s agent-linux -p "test_*.py"   # Linux 电脑端，在 Linux 上运行：真实中转、真实终端，Claude Code 用替身程序
 python tests\e2e_windows.py
 node tests\bridge_check.js                                # 传输选择、连接状态、延迟测量、连续输入和断线重试
-node tests\terminal_scroll_check.js                       # 拖动、惯性、网络停顿时画面的跟随、Codex 普通/全屏模式、Claude Code 的滚轮配速、鼠标编码和回到最新
+node tests\terminal_scroll_check.js                       # 拖动、惯性、画面从已显示过的行连续绘出（两侧都有内容、网络停顿时的跟随）、Codex 普通/全屏模式、Claude Code 的滚轮配速、鼠标编码和回到最新
 python tests\fullscreen_check.py <chrome.exe>             # 占满屏幕的程序：触摸拖动逐行滚动，手指点“回到最新”回到末尾；长时间运行后重新打开只读最近的输出且画面完整。真实的中转和电脑端，Codex 用替身程序
 python tests\phone_line_check.py [chrome.exe [输出文件夹]]  # 手机上切换线路和更改设置：新线路在原线路旁准备好，交接后手机到达才保留，没到则回到原线路；隧道、局域网、中转互相切换；带浏览器时在页面上实际点按，并从列表给终端发一条指令。先运行 tools\package_windows.py
 node tests\session_state_check.js                         # 运行中的会话与保留的写入锁分开显示
@@ -51,8 +51,8 @@ python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组
 python tests\android_update_check.py                      # App 更新器关闭安装流的顺序
 python tests\native_owner_check.py                        # 临时进程验证归属，不操作真实 Codex 会话
 python tests\relay_check.py                               # 电脑端对自有中转的判断：密码对、密码错、地址不是中转、端口不通
-python tests\own_mode_check.py                            # “中转”页签和自己的中转：点开不断线，检查不通过不切换也不保存并说明原因，通过才保存并切换，之后记得它；先运行 tools\package_windows.py
-python tests\public_mode_check.py                         # 公共中转：不用配置就列出，选中后自动申请自己的空间，不显示地址和密码；空间被清理后重新申请；电脑端在空间里开终端，别的空间看不到
+python tests\own_mode_check.py                            # “我的中转”页签：点开不断线，检查不通过不切换也不保存并说明原因，通过才保存并切换，之后记得它；先运行 tools\package_windows.py
+python tests\public_mode_check.py                         # “公共中转”页签：不用配置就列出，选中后自动申请自己的空间，不显示地址和密码；空间被清理后重新申请；电脑端在空间里开终端，别的空间看不到
 python tests\session_copies_check.py                      # 同一段对话只列一次，用虚构的对话文件
 python tests\said_check.py                                # 手机上看到的对话内容：问了什么、答了什么、做了什么，用虚构的对话文件
 python tests\look_check.py                                # 先看对话再接手、票据登录、手机和电脑共用一个终端；真实的中转和电脑端

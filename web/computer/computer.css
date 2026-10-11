@@ -23,6 +23,9 @@ button.row:disabled { opacity: 1; cursor: default; }
 .row .act { flex: none; color: var(--accent); font-size: .9rem; font-weight: 600; }
 .row.danger .text b { color: var(--bad); }
 .row .tool { width: 36px; height: 36px; border-radius: 11px; }
+.row .chev { flex: none; display: grid; color: var(--muted); opacity: .6; }
+.row .chev svg { width: 18px; height: 18px; }
+#sheet-form .tick { margin-left: auto; flex: none; font-style: normal; font-size: .8rem; font-weight: 600; color: var(--good); }
 
 /* ---- lines: the one in use is marked; while a line is being changed the others wait */
 #lines.held li:not(.current) { opacity: .5; }

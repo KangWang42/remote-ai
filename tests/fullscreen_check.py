@@ -230,25 +230,31 @@ def main():
         moved = top - page_value(TOP)
         report["rows_moved_by_a_10_row_drag"] = moved
         report["wheel_reports"], report["page_keys"] = page_value(COUNT("wheel")), page_value(COUNT("page"))
-        assert 9 <= moved <= 10 and report["wheel_reports"] == moved and report["page_keys"] == 0, report
+        # the program was kept some rows ahead of the finger while it moved and has come back by as many: it stands
+        # where the finger left it, and was sent that many wheel reports more, half of them each way
+        beyond = report["wheel_reports"] - moved
+        assert 9 <= moved <= 10 and 0 <= beyond <= 24 and beyond % 2 == 0 and report["page_keys"] == 0, report
         assert "other= " in page_value(SCREEN) + " " or "other=\n" in page_value(SCREEN) + "\n", page_value(SCREEN)      # nothing arrived as typed characters
         assert page_value("document.getElementById('latest').hidden") is False
         drag(-4)                    # a whole row is sent once the finger has passed it: the last one may still be under way
         assert moved - 4 <= top - page_value(TOP) <= moved - 3, (top, page_value(TOP), moved)
         # ---- a slow drag is followed by the pixel: between the program's moves the picture is slid under the finger,
         # the rows the program holds still stay where they are, and at rest the picture is where the terminal draws it
-        ask("Runtime.evaluate", expression="window.__slid = []; (function look() { const m = /,\\s*(-?[\\d.]+)px/.exec(document.getElementById('terminal').style.transform);"
-            " window.__slid.push([m ? parseFloat(m[1]) : 0, !document.getElementById('still').hidden]); if (window.__slid.length < 1200) requestAnimationFrame(look); })()")
+        ask("Runtime.evaluate", expression="window.__slid = []; (function look() { const o = document.getElementById('slid');"
+            " window.__slid.push(o.hidden ? [0, false, 0] : [Number(o.dataset.between || 0), true, Number(o.dataset.blank || 0)]); if (window.__slid.length < 1200) requestAnimationFrame(look); })()")
         slow = page_value(TOP)
         drag(5, steps=75, pause=0.02, halfway=lambda: picture("fullscreen-sliding.png"))
         time.sleep(0.6)
         samples = page_value("window.__slid.splice(0)")
         places = [sample[0] for sample in samples]
         report["frames_seen"], report["frames_slid"], report["places_between_rows"] = len(places), sum(1 for place in places if place), len(set(places))
-        report["rows_held_still_shown"] = any(sample[1] for sample in samples)
+        report["drawn_over_the_terminal"] = any(sample[1] for sample in samples)
+        report["rows_of_nothing_in_a_slow_drag"] = max(sample[2] for sample in samples)
         report["rows_moved_by_a_slow_5_row_drag"] = slow - page_value(TOP)
-        assert report["places_between_rows"] >= 15 and report["rows_held_still_shown"], report
-        assert places[-1] == 0 and page_value("document.getElementById('terminal').style.transform") == "" and page_value("document.getElementById('still').hidden") is True, places[-5:]
+        assert report["places_between_rows"] >= 15 and report["drawn_over_the_terminal"], report
+        # rows come into sight at the edge as the finger moves: at no time is a row's height of the list without text
+        assert report["rows_of_nothing_in_a_slow_drag"] < 1, report
+        assert places[-1] == 0 and page_value("document.getElementById('slid').hidden") is True, places[-5:]
         assert 4 <= report["rows_moved_by_a_slow_5_row_drag"] <= 5, report
         drag(-5)
         # a quick flick of about ten rows glides on after the finger lifts, as far as its speed carries it (the speed
@@ -279,11 +285,14 @@ def main():
         time.sleep(0.15)
         ask("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": box[0], "y": box[1]}])        # a finger put down on the moving picture
         time.sleep(0.3)
-        held = page_value(TOP)
+        place = page_value("document.getElementById('slid').dataset.place")
         time.sleep(0.8)
+        assert page_value("document.getElementById('slid').dataset.place") == place, "the picture moved on under a finger that held it"
         ask("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
+        time.sleep(1.2)             # the program comes back the rows it was kept ahead of the finger by
+        held = page_value(TOP)
         report["rows_of_a_flick_stopped_by_a_touch"] = held - still
-        assert page_value(TOP) == held and 0 < held - still < report["rows_moved_by_a_flick"], (still, held, page_value(TOP))
+        assert 0 < held - still < report["rows_moved_by_a_flick"], (still, held)
         picture("dragged.png")
         # the finger has only just lifted from the picture it held: the tap must reach the button all the same
         assert tap("latest") == ["click latest"]
@@ -312,7 +321,7 @@ def main():
         top = page_value(TOP)
         wheel = page_value(COUNT("wheel"))
         drag(5)
-        assert 4 <= top - page_value(TOP) <= 5 and page_value(COUNT("wheel")) - wheel == top - page_value(TOP) and page_value(COUNT("page")) == 0, page_value(SCREEN)
+        assert 4 <= top - page_value(TOP) <= 5 and 0 <= page_value(COUNT("wheel")) - wheel - (top - page_value(TOP)) <= 24 and page_value(COUNT("page")) == 0, page_value(SCREEN)
         picture("reopened.png")
         assert not said, said
         op(action="input", terminal=terminal, data="q")

@@ -28,8 +28,8 @@
   let drawing = 'dom';
   if (window.WebglAddon && !(bridge && bridge.renderer() === 'dom')) {
     try {
-      // The picture is kept after it is shown: the rows a program holds still are copied from it while a finger
-      // slides the rest (see `still` below).
+      // The picture is kept after it is shown: its rows are copied onto a strip, from which what is seen is drawn
+      // while a finger scrolls (see `strip` below).
       const gl = new WebglAddon.WebglAddon(true);
       gl.onContextLoss(() => { gl.dispose(); drawing = 'dom'; });
       term.loadAddon(gl);
@@ -140,44 +140,64 @@
   });
   term.onData(data => { if (!restoring) send(data); });
 
-  // Between the moves of the terminal the picture is slid under the finger (TerminalSlide). The whole terminal is
-  // moved; the rows a fullscreen program holds still, its heading and its message box, are copied onto a canvas
-  // that stays where it is, so that what scrolls passes under them.
-  const still = document.createElement('canvas');
-  still.id = 'still'; still.hidden = true;
-  screen.insertBefore(still, latest);
+  // While a finger scrolls, what is seen is drawn here, over the terminal, from a strip of the rows the terminal has
+  // shown (TerminalSlide): so it moves with the finger by the pixel, and rows come into sight at one edge as they
+  // leave at the other. The rows a fullscreen program holds still, its heading and its message box, are not covered.
+  const strip = document.createElement('canvas'), over = document.createElement('canvas');
+  over.id = 'slid'; over.hidden = true;
+  screen.insertBefore(over, latest);
   const picture = () => Array.from(holder.querySelectorAll('.xterm-screen canvas')).find(canvas => !canvas.classList.contains('xterm-link-layer')) || null;
-  let slid = 0, slideFrame = 0;
+  let slideFrame = 0, places = 0;         // places: how many rows the strip has room for; a row's place counts round it
   const slide = new TerminalSlide({
     cell: () => tall / Math.max(1, term.rows),
+    count: () => term.rows,
     viewport: () => term.buffer.active.viewportY,
     read() {
       const buffer = term.buffer.active, rows = [];
       for (let i = 0; i < term.rows; i++) { const line = buffer.getLine(buffer.viewportY + i); rows.push(line ? line.translateToString(true) : ''); }
       return rows;
     },
-    apply(pixels, top, bottom) {
-      const source = picture(), ratio = window.devicePixelRatio || 1;
-      // Without a picture to copy the still rows from, a program's own view is left as the terminal draws it.
-      if ((top || bottom) && !source) pixels = 0;
-      pixels = Math.round(pixels * ratio) / ratio;
-      if (pixels !== slid) { slid = pixels; holder.style.transform = pixels ? 'translate3d(0,' + pixels + 'px,0)' : ''; }
-      const shown = !!pixels && !!source && top + bottom > 0;
-      if (still.hidden === shown) still.hidden = !shown;
-      // Of the terminal that is slid only the rows that scroll are seen; the still ones are shown by the copy.
-      const part = tall / Math.max(1, term.rows), cut = shown ? 'inset(' + top * part + 'px 0 ' + bottom * part + 'px 0)' : '';
-      if (holder.style.clipPath !== cut) holder.style.clipPath = cut;
-      if (!shown) return;
-      const from = source.getBoundingClientRect(), frame = screen.getBoundingClientRect();
-      if (still.width !== source.width || still.height !== source.height) { still.width = source.width; still.height = source.height; }
-      // the terminal is drawn where it would be without the slide
-      still.style.left = (from.left - frame.left) + 'px'; still.style.top = (from.top - frame.top - pixels) + 'px';
-      still.style.width = from.width + 'px'; still.style.height = from.height + 'px';
-      const row = source.height / Math.max(1, term.rows), draw = still.getContext('2d');
-      draw.clearRect(0, 0, still.width, still.height);
-      if (top) draw.drawImage(source, 0, 0, source.width, Math.round(top * row), 0, 0, source.width, Math.round(top * row));
-      if (bottom) { const y = Math.round((term.rows - bottom) * row); draw.drawImage(source, 0, y, source.width, source.height - y, 0, y, source.width, source.height - y); }
-    }
+    keep(row, place, rows) {
+      const source = picture();
+      if (!source) return false;
+      const high = source.height / Math.max(1, term.rows), room = term.rows + 2 * TerminalSlide.KEPT + 2;
+      if (places !== room || strip.width !== source.width || strip.height !== Math.round(room * high)) { places = room; strip.width = source.width; strip.height = Math.round(room * high); }
+      const draw = strip.getContext('2d');
+      for (let done = 0; done < rows;) {
+        const at = ((place + done) % places + places) % places, run = Math.min(rows - done, places - at);
+        draw.drawImage(source, 0, Math.round((row + done) * high), source.width, Math.round(run * high), 0, Math.round(at * high), source.width, Math.round(run * high));
+        done += run;
+      }
+      return true;
+    },
+    show(place, top, bottom, first, last) {
+      const source = place === null ? null : picture();
+      if (!source || !places) { if (!over.hidden) over.hidden = true; return; }
+      const high = source.height / Math.max(1, term.rows), from = source.getBoundingClientRect(), frame = screen.getBoundingClientRect();
+      if (over.width !== source.width || over.height !== source.height) { over.width = source.width; over.height = source.height; }
+      over.style.left = (from.left - frame.left) + 'px'; over.style.top = (from.top - frame.top) + 'px';
+      over.style.width = from.width + 'px'; over.style.height = from.height + 'px';
+      // every row is drawn on whole pixels, all moved by the same amount: the text stays as sharp as the terminal draws it
+      const draw = over.getContext('2d'), begin = Math.round(top * high), end = Math.round((term.rows - bottom) * high), moved = Math.round(place * high);
+      const lowest = Math.max(first, Math.floor(place + top)), highest = Math.min(last, Math.ceil(place + term.rows - bottom) - 1);
+      draw.clearRect(0, 0, over.width, over.height);
+      draw.save();
+      draw.beginPath(); draw.rect(0, begin, over.width, end - begin); draw.clip();
+      draw.fillStyle = (term.options.theme && term.options.theme.background) || '#000';
+      draw.fillRect(0, begin, over.width, end - begin);
+      for (let i = lowest; i <= highest;) {
+        const at = (i % places + places) % places, run = Math.min(highest - i + 1, places - at);
+        draw.drawImage(strip, 0, Math.round(at * high), strip.width, Math.round(run * high), 0, Math.round(i * high) - moved, over.width, Math.round(run * high));
+        i += run;
+      }
+      draw.restore();
+      if (over.hidden) over.hidden = false;
+      // for the checks: where the picture stands, how far between two rows, and how many rows of it have nothing to show
+      over.dataset.place = place.toFixed(3);
+      over.dataset.between = String(((moved % Math.round(high)) + Math.round(high)) % Math.round(high));
+      over.dataset.blank = (Math.max(0, lowest - (place + top)) + Math.max(0, place + term.rows - bottom - 1 - highest)).toFixed(2);
+    },
+    nudge: rows => scroller.nudge(rows)
   });
   const resting = () => !scroller.dragging && !scroller.velocity && !scroller.frame;
   function sliding(at) { slideFrame = slide.frame(at, resting()) ? requestAnimationFrame(sliding) : 0; }

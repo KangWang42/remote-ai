@@ -21,7 +21,7 @@
   };
   const svg = path => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
   const relay = svg('<rect x="4" y="4.5" width="16" height="6" rx="2"/><rect x="4" y="13.5" width="16" height="6" rx="2"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/>');
-  const ICON = { back: svg('<path d="M15 5l-7 7 7 7"/>'), own: relay, public: relay,
+  const ICON = { back: svg('<path d="M15 5l-7 7 7 7"/>'), chev: svg('<path d="M9 6l6 6-6 6"/>'), own: relay, public: relay,
     lan: svg('<path d="M4.5 10a11 11 0 0 1 15 0M7.5 13.2a6.6 6.6 0 0 1 9 0M10.4 16.3a2.4 2.4 0 0 1 3.2 0"/><path d="M12 19.5h.01"/>'),
     cloud: svg('<path d="M7.5 18.5a4 4 0 0 1-.6-7.950 5.500 5.500 0 0 1 10.600 1.200 3.400 3.400 0 0 1-.5 6.750z"/>') };
   function el(tag, props, ...children) {
@@ -101,7 +101,10 @@
 
   // ---- what is shown
   const KIND = { lan: ['局域网', '手机和电脑连同一个 Wi-Fi 时使用，速度最快'], cloud: ['公网隧道', '任何网络都能连；每次建立，地址都会变'],
-    own: ['中转', '自己的中转 · 地址固定'], public: ['公共中转', '公共中转 · 无需配置，内容经由其服务器'] };
+    own: ['自己的中转', '部署在自己服务器上的中转，地址固定'], public: ['公共中转', '无需配置，地址固定；终端内容经由其服务器'] };
+  // Of relays there may be many of a kind: each kind is one row, and pressing it lists its relays.
+  const NONE = { own: '尚未添加，可在电脑端添加', public: '暂无可用线路' };
+  const took = line => line.ms >= 0 ? line.ms + ' ms' : line.ms === -1 ? '连不上' : '';
   const SETTINGS = [
     { name: 'rights', title: '新终端的权限', about: 'Claude Code 和 Codex 从手机启动时的权限模式', choices: [['full', '默认'], ['edit', '自动改文件'], ['read', '只读']] },
     { name: 'tunnel', title: '公网隧道的协议', about: '隧道经常断开时改用 HTTP/2，下次建立时生效', choices: [['auto', '自动'], ['http2', 'HTTP/2']] },
@@ -124,14 +127,23 @@
       : !has('settings') ? '这台电脑的电脑端不支持在手机上更改，请在电脑上操作。' : problem || '正在询问电脑…';
     $('lines').hidden = !told; $('lines-note').hidden = !!told; $('lines-note').textContent = why;
     $('lines').classList.toggle('held', busy);
-    $('lines').replaceChildren(...(told ? told.lines : []).map(line => {
-      const about = KIND[line.kind][1] + (line.kind === 'cloud' && !line.ready ? ' · 需先下载隧道程序' : '');
-      const tag = line.current ? el('span', { className: 'pill done', textContent: '使用中' }) : line.ms >= 0 ? el('span', { className: 'value', textContent: line.ms + ' ms' })
-        : line.ms === -1 ? el('span', { className: 'pill failed', textContent: '连不上' }) : '';
-      const item = row({ act: () => turn(line), disabled: line.current || busy }, el('span', { className: 'tool ' + line.kind, html: ICON[line.kind] }), text(name(line), about), tag);
+    const lines = told ? told.lines : [], of = kind => lines.filter(line => line.kind === kind);
+    const one = line => {
+      const item = row({ act: () => turn(line), disabled: line.current || busy }, el('span', { className: 'tool ' + line.kind, html: ICON[line.kind] }),
+        text(name(line), KIND[line.kind][1] + (line.kind === 'cloud' && !line.ready ? ' · 需先下载隧道程序' : '')), line.current ? el('span', { className: 'pill done', textContent: '使用中' }) : '');
       if (line.current) item.className = 'current';
       return item;
-    }));
+    };
+    const several = kind => {
+      const these = of(kind), current = these.find(line => line.current);
+      const item = row({ act: () => choose(kind, these), disabled: busy || !these.length }, el('span', { className: 'tool ' + kind, html: ICON[kind] }),
+        text(KIND[kind][0], current ? '正在使用：' + name(current) : these.length ? these.length + ' 条线路可选' : NONE[kind]),
+        current ? el('span', { className: 'pill done', textContent: '使用中' }) : '', these.length ? el('span', { className: 'chev', html: ICON.chev }) : '');
+      if (current) item.className = 'current';
+      return item;
+    };
+    // those for everyone are offered when there are any; one's own always, to say where they are added
+    $('lines').replaceChildren(...of('lan').map(one), ...of('cloud').map(one), ...(of('public').length ? [several('public')] : []), ...(told ? [several('own')] : []));
     const rows = (told ? SETTINGS : []).map(setting => {
       const value = told.settings[setting.name];
       const control = setting.choices
@@ -172,6 +184,19 @@
   }
 
   // ---- another line
+  // The relays of one kind, to choose one from: how fast each answered the computer, and which is in use.
+  function choose(kind, lines) {
+    const form = $('sheet-form'), sheet = $('sheet');
+    let picked = null;
+    form.replaceChildren(el('h3', { textContent: KIND[kind][0] }), el('p', { textContent: KIND[kind][1] }),
+      ...lines.map(line => el('button', { type: 'button', className: 'choice', onclick: () => { picked = line; sheet.close(); } },
+        el('span', null, name(line), took(line) ? el('small', { textContent: took(line) }) : ''), line.current ? el('i', { className: 'tick', textContent: '使用中' }) : '')),
+      el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
+    // the next sheet, which asks whether to change, is opened when this one has closed
+    sheet.onclose = () => { sheet.onclose = null; if (picked && !picked.current) turn(picked); };
+    sheet.onclick = event => { if (event.target === sheet) sheet.close(); };
+    sheet.showModal();
+  }
   async function turn(line) {
     if (busy) return;
     // An app that cannot follow to another address would be left behind at this one.

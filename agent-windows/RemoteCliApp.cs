@@ -56,7 +56,9 @@ public sealed partial class App : Form {
     Relay shown;                    // the relay the field in the relay tab shows while one is being chosen
     readonly Dictionary<string, int> answers = new Dictionary<string, int>();      // how long each relay took to answer, when it was asked last
     DateTime asked = DateTime.MinValue, listRead = DateTime.MinValue;
-    bool relayTab, relayTrouble, relayBusy;     // the relay tab is open while another way is in use; what it last said is a problem; a relay is being checked
+    // relayTab: a tab of relays is open while another way is in use; everyone: it is the one of the relays for
+    // everyone, not of one's own; relayTrouble: what it last said is a problem; relayBusy: a relay is being checked
+    bool relayTab, everyone, relayTrouble, relayBusy;
     string relayNote = "", said = "";       // said: the line of status shown last
     Dictionary<Control, int[]> parts;       // which colour of the skin each control has
     // A window that a test presses stays off the screen and takes no keys: someone at the computer must not mistake it for the program.
@@ -252,7 +254,7 @@ public sealed partial class App : Form {
                 string server, wrong = "";
                 if (mode == "public") {
                     // A chosen for everyone gave this computer a place of its own; one it removed meanwhile is asked for again.
-                    if (chosen == null) { Say("该公共中转已从列表中移除，请在“中转”中另选一个", true); return; }
+                    if (chosen == null) { Say("该公共中转已从列表中移除，请在“公共中转”中另选一个", true); return; }
                     Say("正在连接公共中转…");
                     string secret;
                     wrong = relays.Space(chosen, out server, out secret);
@@ -261,7 +263,7 @@ public sealed partial class App : Form {
                     if (secret != password) SetPassword(secret);
                 } else {
                     server = Relays.Clean(Convert.ToString(config["OwnServer"]), true);
-                    if (server.Length == 0) { Say("尚未选择中转，请在“中转”中选择或添加", true); return; }
+                    if (server.Length == 0) { Say("尚未选择中转，请在“我的中转”中选择或添加", true); return; }
                 }
                 Keep("Server", server);
                 if (agent != null) agent.Reset();
@@ -322,7 +324,7 @@ public sealed partial class App : Form {
     // the relay the field shows, as "连接" beside the field does.
     void Again() {
         if (Held()) return;
-        if (!relayTab || RelayMode) { Reconnect(); return; }
+        if (!relayTab) { Reconnect(); return; }
         Relay relay = Showing();
         if (relay != null) Use(relay); else relayPick.Open();
     }
@@ -395,10 +397,11 @@ public sealed partial class App : Form {
         try { Clipboard.SetText(text); Toast("已复制" + what); } catch (ExternalException) { Toast("复制失败，请再试一次"); }
     }
     // ---------- relays
-    // One tab for every relay: those for everyone from the published list, and the owner's own, saved here. The field
-    // shows which one; a press lists them all with how fast each answers, and there one is added or taken away.
-    // Choosing a relay checks it before anything is changed: the way in use goes on until the relay is reached and
-    // takes the password.
+    // Relays are of two kinds, each with a tab of its own: those for everyone, from the published list, and the
+    // owner's own, saved here. The tab's field shows one relay of its kind; a press lists them with how fast each
+    // answers, and among one's own a relay is added or taken away there. However many relays there come to be, the
+    // window keeps its four ways of connecting. Choosing a relay checks it before anything is changed: the way in use
+    // goes on until the relay is reached and takes the password.
     bool RelayMode { get { return Mode == "own" || Mode == "public"; } }
     void RelaySays(string text, bool problem) { relayNote = text; relayTrouble = problem; ShowMode(); }
     void Put(string where, string secret) { addressBox.Text = where; passwordBox.Text = secret; }
@@ -408,59 +411,65 @@ public sealed partial class App : Form {
         return all;
     }
     Relay Remembered() { string id = Convert.ToString(config["Relay"]); return id.Length == 0 ? null : Known().FirstOrDefault(r => r.Id == id); }
-    // The relay the field shows: the one in use, or while one is being chosen the one chosen last, else the first there is.
+    // The relay the field shows: the one in use; or, while one is being chosen, the one chosen last, else the one
+    // that was used last if it is of the tab's kind, else the first of that kind.
     Relay Showing() {
         if (RelayMode && !relayTab) return Remembered() ?? new Relay { Public = Mode == "public", Name = Mode == "public" ? "已从列表中移除" : Convert.ToString(config["OwnServer"]), Url = Mode == "public" ? "" : Convert.ToString(config["OwnServer"]), Password = password };
-        var all = Known();
-        if (shown != null) { Relay now = all.FirstOrDefault(r => r.Id == shown.Id); if (now != null) shown = now; }
-        return shown ?? Remembered() ?? all.FirstOrDefault();
+        var kind = Known().Where(r => r.Public == everyone).ToList();
+        // (a relay that is being added is not among them yet, and is shown all the same)
+        if (shown != null && shown.Public != everyone) shown = null;
+        if (shown != null) { Relay now = kind.FirstOrDefault(r => r.Id == shown.Id); if (now != null) shown = now; }
+        string last = Convert.ToString(config["Relay"]);
+        return shown ?? kind.FirstOrDefault(r => r.Id == last) ?? kind.FirstOrDefault();
     }
+    // Which tab of relays is looked at, and whether its kind is the way in use.
+    void Look(bool forEveryone) { everyone = forEveryone; relayTab = Mode != (forEveryone ? "public" : "own"); }
     static string Took(Relay relay) { return relay.Ms >= 0 ? relay.Ms + " ms" : relay.Ms == -1 ? "连不上" : ""; }
     // Asks every relay how fast it answers, beside what the window is doing; the answers appear as they come.
     void AskRelays() {
         asked = DateTime.UtcNow;
         foreach (Relay each in Known()) {
             Relay relay = each;
-            Task.Run(() => { int ms = Relays.Ask(relay.Url); try { BeginInvoke(new Action(() => { lock (answers) answers[relay.Id] = ms; if (modePick.Chosen == 2) ShowMode(); })); } catch (InvalidOperationException) { } });
+            Task.Run(() => { int ms = Relays.Ask(relay.Url); try { BeginInvoke(new Action(() => { lock (answers) answers[relay.Id] = ms; if (modePick.Chosen >= 2) ShowMode(); })); } catch (InvalidOperationException) { } });
         }
     }
     void ReadList() {
         listRead = DateTime.UtcNow;
-        Task.Run(() => { relays.Refresh(); try { BeginInvoke(new Action(() => { ShowMode(); if (modePick.Chosen == 2) AskRelays(); })); } catch (InvalidOperationException) { } });
+        Task.Run(() => { relays.Refresh(); try { BeginInvoke(new Action(() => { ShowMode(); if (modePick.Chosen >= 2) AskRelays(); })); } catch (InvalidOperationException) { } });
     }
+    // The relays of the tab's kind, to choose one from; among one's own, also adding one and taking one away.
     void ListRelays() {
         if (DateTime.UtcNow - asked > TimeSpan.FromSeconds(60)) AskRelays();
         var menu = Theme.Menu();
-        var all = Known();
+        var kind = Known().Where(r => r.Public == everyone).ToList();
         string inUse = RelayMode ? Convert.ToString(config["Relay"]) : "";
-        foreach (bool everyone in new[] { true, false }) {
-            if (!all.Any(r => r.Public == everyone)) continue;
-            menu.Items.Add(new ToolStripMenuItem(everyone ? "公共中转 · 无需配置" : "我的中转") { Enabled = false });
-            foreach (Relay each in all.Where(r => r.Public == everyone)) {
-                Relay relay = each;
-                var item = new ToolStripMenuItem(relay.Name) { Checked = relay.Id == inUse, ShortcutKeyDisplayString = Took(relay), ShowShortcutKeys = true };
-                item.Click += (s, e) => Use(relay);
-                menu.Items.Add(item);
+        foreach (Relay each in kind) {
+            Relay relay = each;
+            var item = new ToolStripMenuItem(relay.Name) { Checked = relay.Id == inUse, ShortcutKeyDisplayString = Took(relay), ShowShortcutKeys = true };
+            item.Click += (s, e) => Use(relay);
+            menu.Items.Add(item);
+        }
+        if (!everyone) {
+            if (menu.Items.Count > 0) menu.Items.Add(new ToolStripSeparator());
+            var add = new ToolStripMenuItem("添加自己的中转…");
+            add.Click += (s, e) => {
+                var typed = Dialog("添加自己的中转", "填写服务器上中转的地址和密码。检查通过后保存并切换。", "添加并连接", false,
+                    new[] { "地址，例如 https://cli.example.com 或 https://1.2.3.4:8443", "密码（服务器上 sudo bash install.sh password 显示的）", "名称（可不填）" }, draft);
+                if (typed != null) { draft = typed; AddRelay(typed[0], typed[1], typed[2]); }
+            };
+            menu.Items.Add(add);
+            if (kind.Count > 0) {
+                var remove = new ToolStripMenuItem("移除我的中转");
+                var inner = (ToolStripDropDownMenu)remove.DropDown;
+                inner.Renderer = menu.Renderer; inner.ShowImageMargin = false; inner.BackColor = Theme.Panel; inner.ForeColor = Theme.Ink; inner.Font = menu.Font;
+                foreach (Relay each in kind) {
+                    Relay relay = each;
+                    remove.DropDownItems.Add(relay.Name, null, (s, e) => RemoveRelay(relay));
+                }
+                menu.Items.Add(remove);
             }
         }
-        if (menu.Items.Count > 0) menu.Items.Add(new ToolStripSeparator());
-        var add = new ToolStripMenuItem("添加自己的中转…");
-        add.Click += (s, e) => {
-            var typed = Dialog("添加自己的中转", "填写服务器上中转的地址和密码。检查通过后保存并切换。", "添加并连接", false,
-                new[] { "地址，例如 https://cli.example.com 或 https://1.2.3.4:8443", "密码（服务器上 sudo bash install.sh password 显示的）", "名称（可不填）" }, draft);
-            if (typed != null) { draft = typed; AddRelay(typed[0], typed[1], typed[2]); }
-        };
-        menu.Items.Add(add);
-        if (all.Any(r => !r.Public)) {
-            var remove = new ToolStripMenuItem("移除我的中转");
-            var inner = (ToolStripDropDownMenu)remove.DropDown;
-            inner.Renderer = menu.Renderer; inner.ShowImageMargin = false; inner.BackColor = Theme.Panel; inner.ForeColor = Theme.Ink; inner.Font = menu.Font;
-            foreach (Relay each in all.Where(r => !r.Public)) {
-                Relay relay = each;
-                remove.DropDownItems.Add(relay.Name, null, (s, e) => RemoveRelay(relay));
-            }
-            menu.Items.Add(remove);
-        }
+        if (menu.Items.Count == 0) { menu.Dispose(); return; }
         menu.MinimumSize = new Size(relayPick.Width, 0);
         menu.Closed += (s, e) => BeginInvoke(new Action(menu.Dispose));
         menu.Show(relayPick, new Point(0, relayPick.Height + 2));
@@ -469,7 +478,7 @@ public sealed partial class App : Form {
     void AddRelay(string address, string secret, string name) {
         string url = Relays.Clean(address, true);
         secret = (secret ?? "").Trim(); name = TerminalAgent.Tidy(name);
-        relayTab = !RelayMode;
+        Look(false);
         if (url.Length == 0) { RelaySays("地址需完整填写，以 https:// 开头，例如 https://cli.example.com 或 https://1.2.3.4:8443", true); return; }
         if (secret.Length == 0) { RelaySays("请填写中转的密码：在服务器上运行 sudo bash install.sh password 可以查看", true); return; }
         Use(new Relay { Url = url, Name = name.Length > 0 && name.Length <= 20 ? name : new Uri(url).Authority, Password = secret });
@@ -483,7 +492,7 @@ public sealed partial class App : Form {
     }
     void Use(Relay relay) {
         if (relayBusy || Held()) return;
-        relayBusy = true; relayTab = !RelayMode; shown = relay;
+        relayBusy = true; Look(relay.Public); shown = relay;
         RelaySays("正在检查“" + relay.Name + "”…", false);
         Task.Run(() => {
             string server, secret, wrong;
@@ -512,21 +521,26 @@ public sealed partial class App : Form {
     // What is shown instead of the address and the password of a relay for everyone: the phone is given them by the code alone.
     bool Hidden { get { if (modePick.Chosen != 2) return false; Relay relay = Showing(); return relay != null && relay.Public; } }
     void ShowMode() {
-        int tab = relayTab || RelayMode ? 2 : Mode == "lan" ? 0 : 1;
+        if (RelayMode && !relayTab) everyone = Mode == "public";
+        int tab = relayTab || RelayMode ? (everyone ? 2 : 3) : Mode == "lan" ? 0 : 1;
         modePick.Chosen = tab;
-        Relay relay = tab == 2 ? Showing() : null;
-        modeAbout.ForeColor = tab == 2 && relayNote.Length > 0 ? (relayTrouble ? Theme.Bad : Theme.Busy) : Theme.Muted;
+        Relay relay = tab >= 2 ? Showing() : null;
+        bool inUse = RelayMode && !relayTab;
+        modeAbout.ForeColor = tab >= 2 && relayNote.Length > 0 ? (relayTrouble ? Theme.Bad : Theme.Busy) : Theme.Muted;
         modeAbout.Text = tab == 0 ? "手机和电脑连同一个 Wi-Fi 时用，速度最快。第一次使用时 Windows 防火墙会询问，请选“允许”。"
             : tab == 1 ? "不需要服务器和账号，手机在任何网络都能连。更新程序后地址不变；退出程序或重启电脑后地址会变，手机需要重新扫码。"
             : relayNote.Length > 0 ? relayNote
+            : tab == 2 ? (relay == null ? "暂时没有可用的公共中转。可以使用公网隧道，或在“我的中转”中添加自己的中转。"
+                : inUse ? "正在使用公共中转，地址固定。终端内容经由该中转服务器传输；如有顾虑，请使用自己的中转。"
+                : "无需配置，地址固定。在下方选一条线路后点“连接”；连接成功之前，当前连接方式保持不变。")
             : relay == null ? "尚未添加中转。可在下方添加自己服务器上的中转，部署方法见文档“自己部署中转”。"
-            : RelayMode && !relayTab ? (relay.Public ? "正在使用公共中转，地址固定。终端内容经由该中转服务器传输；如有顾虑，请使用自己的中转。" : "正在使用自己的中转，地址固定。可在下方切换或添加中转。")
-            : "选择一个中转后点“连接”。公共中转无需配置，也可以添加自己的中转。连接成功之前，当前连接方式保持不变。";
-        tunnelButton.Visible = tab == 1; relayPick.Visible = relayGo.Visible = tab == 2; changePassword.Visible = tab != 2;
-        relayPick.Set(relay == null ? "添加自己的中转…" : relay.Name + (relay.Public ? " · 公共" : ""), relay == null ? "" : Took(relay), relay != null && relay.Ms == -1 ? 2 : 0);
-        relayGo.Enabled = !relayBusy;
+            : inUse ? "正在使用自己的中转，地址固定。可在下方切换或添加中转。"
+            : "选择一个中转后点“连接”，也可以在下方添加新的中转。连接成功之前，当前连接方式保持不变。";
+        tunnelButton.Visible = tab == 1; relayPick.Visible = relayGo.Visible = tab >= 2; changePassword.Visible = tab < 2;
+        relayPick.Set(relay != null ? relay.Name : tab == 2 ? "暂无公共中转" : "添加自己的中转…", relay == null ? "" : Took(relay), relay != null && relay.Ms == -1 ? 2 : 0);
+        relayGo.Enabled = !relayBusy && (relay != null || tab == 3);
         // The two boxes show what the phone is to use; of a relay for everyone they show neither.
-        if (tab != 2) Put(address, password);
+        if (tab < 2) Put(address, password);
         else if (relay == null) Put("", "");
         else if (relay.Public) Put("公共中转 · " + relay.Name, "不显示，请用手机扫码连接");
         else Put(relay.Url, relay.Password);
@@ -700,15 +714,15 @@ public sealed partial class App : Form {
 
         var way = Place(connect, new Card(), 296, 122, 384, 318);
         Note(way, "连接方式", 20, 16, 200, 18, Theme.Muted, 8.5f, true);
-        Place(way, modePick, 20, 40, 344, 36); modePick.Items = new[] { "局域网", "公网隧道", "中转" };
+        Place(way, modePick, 20, 40, 344, 36); modePick.Items = new[] { "局域网", "公网隧道", "公共中转", "我的中转" };
         Place(way, modeAbout, 20, 84, 344, 38); modeAbout.BackColor = Theme.Panel; modeAbout.ForeColor = Theme.Muted; modeAbout.Font = Theme.Text(8.5f);
         tunnelButton = Action(way, "", "", ButtonKind.Normal, 20, 126, 230, 32, DownloadTunnel);
         Place(way, relayPick, 20, 126, 250, 32); relayPick.Opening += (s, e) => ListRelays();
         relayGo = Action(way, "连接", Theme.IconRefresh, ButtonKind.Primary, 278, 126, 86, 32, (s, e) => Again());
         modePick.Changed += (s, e) => {
             relayNote = "";
-            // The relay tab is a place to choose in: nothing is stopped or started by opening it.
-            if (modePick.Chosen == 2) { relayTab = !RelayMode; ShowMode(); AskRelays(); return; }
+            // A tab of relays is a place to choose in: nothing is stopped or started by opening it.
+            if (modePick.Chosen >= 2) { Look(modePick.Chosen == 2); shown = null; ShowMode(); AskRelays(); return; }
             relayTab = false; shown = null;
             string wanted = modePick.Chosen == 0 ? "lan" : "cloud";
             if (wanted == Mode) { ShowMode(); return; }       // back from only looking at that tab: what is running stays
@@ -969,19 +983,20 @@ public sealed partial class App : Form {
                 window.Show();
                 if (args.Length >= 3) { int page; if (Int32.TryParse(args[2], out page)) window.Go(page); }
                 Action<double> wait = seconds => { var end = DateTime.UtcNow.AddSeconds(seconds); while (DateTime.UtcNow < end) { Application.DoEvents(); Thread.Sleep(30); } };
-                // "own" after the page opens the relay tab as a click would; an address and a password after it are
-                // added as the window's own form adds them, "- - again" presses "重新连接" instead, and "public" takes the
-                // first relay for everyone. What came of it is written beside the picture, for the tests.
-                if (args.Length >= 4 && (args[3] == "own" || args[3] == "public")) {
+                // "own" after the page opens the tab of one's own relays as a click would; an address and a password
+                // after it are added as the window's own form adds them, "- - again" presses "重新连接" instead.
+                // "everyone" opens the tab of the relays for everyone, and "public" also takes the first of them.
+                // What came of it is written beside the picture, for the tests.
+                if (args.Length >= 4 && (args[3] == "own" || args[3] == "public" || args[3] == "everyone")) {
                     wait(5);
-                    window.modePick.Choose(2);
+                    window.modePick.Choose(args[3] == "own" ? 3 : 2);
                     if (args[3] == "public") { Relay first = window.Known().FirstOrDefault(r => r.Public); if (first != null) window.Use(first); }
                     else if (args.Length >= 7 && args[6] == "again") window.Again();
                     else if (args.Length >= 6) window.AddRelay(args[4], args[5], "");
                     wait(1);
                     for (int n = 0; n < 60 && window.relayBusy; n++) wait(0.5);
                     wait(6);
-                    Relay showing = window.modePick.Chosen == 2 ? window.Showing() : null;
+                    Relay showing = window.modePick.Chosen >= 2 ? window.Showing() : null;
                     File.WriteAllText(args[1] + ".txt", String.Join("\n", "mode=" + window.Mode, "tab=" + window.modePick.Chosen, "status=" + window.said, "about=" + window.modeAbout.Text,
                         "own_relay=" + (window.relay != null && !window.relay.HasExited ? "running" : "stopped"), "field=" + window.relayPick.Title, "showing=" + (showing == null ? "" : showing.Id),
                         "address=" + window.addressBox.Text, "password_shown=" + (window.passwordBox.Text == window.password), "code=" + (window.qr.Image != null),

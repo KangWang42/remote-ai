@@ -145,14 +145,16 @@ function fixture(kind = 'local', reduced = false) {
   assert.ok(rows('mouse') >= 12 + 30, 'a flick must carry on well past where the finger lifted: ' + rows('mouse'));
 }
 {
-  // Between the moves of the terminal the picture is slid under the finger. A program like Claude Code is asked by
-  // the wheel, moves its list three rows or more at a time a moment later, and keeps a heading and a message box
-  // where they are; the finger moves evenly. What is seen (the rows the program shows, plus the slide) must stay
-  // with the finger at every frame, come to rest where the program is, and leave the still rows alone.
+  // While a finger scrolls, what is seen is drawn from a strip of the rows the terminal has shown, and the program
+  // is kept some rows ahead of the finger. A program like Claude Code is asked by the wheel, moves its list three
+  // rows or more at a time a moment later, and keeps a heading and a message box where they are; the finger moves
+  // evenly. What is seen must stay with the finger at every frame, with rows at both edges and not a band of nothing
+  // where rows are yet to come; every row must stand where it belongs; and at rest the terminal itself must show
+  // what was seen, the still rows untouched.
   const { TerminalSlide } = TerminalScroller;
   const cell = 20, rows = 24, head = 1, foot = 4, latency = 150;
-  let now = 0, top = 500, slid = 0, still = [0, 0], id = 0;
-  const frames = new Map(), due = [];
+  let now = 0, top = 500, id = 0, shown = null;
+  const frames = new Map(), due = [], strip = new Map();
   const screen = () => { const text = ['heading'];
     for (let i = 0; i < rows - head - foot; i++) text.push('line ' + (top + i));
     return text.concat(['', 'box top', '> message', 'box bottom']); };
@@ -161,93 +163,129 @@ function fixture(kind = 'local', reduced = false) {
   const router = new TerminalScrollRouter(term, text => { const steps = text.split('\x1b[').length - 1, up = text.includes('<64;');
     due.push({ at: now + latency, rows: (up ? 1 : -1) * { 1: 3, 2: 4, 4: 6 }[steps] }); return true; }, () => 'claude', () => now);
   router.sgr = true;
-  const slide = new TerminalSlide({ cell: () => cell, viewport: () => 0, read: screen, apply(pixels, t, b) { slid = pixels; still = [t, b]; } });
+  const slide = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => 0, read: screen,
+    keep(row, place, count) { const text = screen(); for (let i = 0; i < count; i++) strip.set(place + i, text[row + i]); return true; },
+    show(place, t, b, first, last) { shown = place === null ? null : { place, top: t, bottom: b, first, last }; },
+    nudge: count => scroller.nudge(count) });
   const scroller = new TerminalScroller({ request: f => { frames.set(++id, f); return id; }, cancel: n => frames.delete(n), mode: () => 'mouse', lineHeight: () => cell,
     visible: () => true, reduced: () => false, owing: () => router.owing(), slide: pixels => slide.moved(pixels),
     scroll(lines, mode) { const moved = router.scroll(lines, mode); slide.ask(router.asked, now); return moved; } });
+  // What the picture shows: by how many pixels the lines stand below where they stood when `from` was the list's
+  // first line; how many rows of the list have nothing to show; and whether every line stands where it belongs.
+  const seen = from => {
+    if (!shown) return { moved: (from - top) * cell, blank: 0, whole: true, still: [0, 0] };
+    const first = Math.ceil(shown.place + shown.top - 1e-9), last = Math.floor(shown.place + rows - shown.bottom - 1 + 1e-9);
+    let moved = null, whole = true, blank = 0;
+    for (let i = first; i <= last; i++) {
+      const text = i >= shown.first && i <= shown.last ? strip.get(i) : undefined, line = /^line (\d+)$/.exec(text || '');
+      if (!line) { blank++; continue; }
+      const here = (i - shown.place - (Number(line[1]) - from + head)) * cell;
+      if (moved === null) moved = here; else if (Math.abs(here - moved) > .01) whole = false;
+    }
+    return { moved, blank, whole, still: [shown.top, shown.bottom] };
+  };
+  // One frame: the finger's callbacks, what the program has drawn by now, and the slide's own.
+  let moving = true;
+  const step = (arrives = true, drop = false) => {
+    const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(f => f(now));
+    if (drop) due.length = 0;
+    let drew = false;
+    while (arrives && due.length && due[0].at <= now) { top -= due.shift().rows; drew = true; }
+    if (drew) slide.drawn();                    // what arrived within a frame is drawn at once
+    moving = slide.frame(now, !scroller.dragging && !scroller.velocity && !scroller.frame);
+  };
   const start = top;
-  let finger = 0, worst = 0, jumps = 0, last = 0, moving = true;
+  let finger = 0, worst = 0, jumps = 0, last = 0, nothing = 0;
   scroller.start(0, 0); slide.begin('remote', 0); router.start();
-  for (let n = 1; n <= 240; n++) {
+  for (let n = 1; n <= 300; n++) {
     now = n * 1000 / 60;
     if (n <= 90) { finger = n * 4; scroller.move(finger, now); }        // 12 rows a second for a second and a half
     if (n === 91) { scroller.velocity = 0; scroller.end(now); }           // the finger is lifted without a flick
-    const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(f => f(now));
-    while (due.length && due[0].at <= now) { top -= due.shift().rows; slide.drawn(); }      // the program has drawn its list moved
-    moving = slide.frame(now, !scroller.dragging && !scroller.velocity && !scroller.frame);
-    const seen = (start - top) * cell + slid;
-    if (n <= 90) { worst = Math.max(worst, Math.abs(seen - finger)); if (Math.abs(seen - last) > cell * 1.2) jumps++; }
-    last = seen;
+    step();
+    const picture = seen(start);
+    assert.ok(picture.whole, 'every line stands where it belongs, frame ' + n);
+    if (n <= 90) {
+      worst = Math.max(worst, Math.abs(picture.moved - finger));
+      if (Math.abs(picture.moved - last) > cell * 1.2) jumps++;
+      if (n > 14) nothing = Math.max(nothing, picture.blank);           // once the program has answered for the first time
+    }
+    last = picture.moved;
   }
-  // (it runs at most three rows ahead of the program; a program this slow is a little further behind at times)
   assert.ok(worst <= cell, 'the picture must stay with the finger, within a row: ' + worst / cell);
   assert.equal(jumps, 0, 'and must not jump by rows, as the program by itself does');
-  assert.deepEqual(still, [0, 0]); assert.equal(slid, 0, 'at rest the picture is where the terminal draws it'); assert.equal(moving, false);
+  assert.equal(nothing, 0, 'rows come into sight as the finger moves, not after a band of nothing: ' + nothing);
+  assert.equal(shown, null, 'at rest the terminal is left as it draws itself'); assert.equal(moving, false);
   assert.deepEqual([slide.top, slide.bottom], [head, foot], 'the heading and the message box are found to stand still');
-  assert.ok(Math.abs((start - top) - 18) <= 1.5, 'and the program was moved by what the finger moved: ' + (start - top));
-  // at the end of its list the program does not move: the picture is pulled a little, never further, and comes back
+  assert.ok(Math.abs((start - top) - 18) <= 1.5, 'and the program is where the finger left it, not ahead of it: ' + (start - top));
+  // at the end of its list the program does not move: there is a little of nothing to see, never more, and it goes again
   const pull = () => {
     let most = 0;
+    const from = top;
     scroller.start(0, now); slide.begin('remote', now); router.start(); due.length = 0;
-    for (let n = 1; n <= 150; n++) {
+    for (let n = 1; n <= 360; n++) {
       now += 1000 / 60;
       if (n <= 60) scroller.move(n * 6, now);
       if (n === 61) { scroller.velocity = 0; scroller.end(now); }
-      const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(f => f(now));
-      due.length = 0;                                             // asked, and not done
-      moving = slide.frame(now, !scroller.dragging && !scroller.velocity && !scroller.frame);
-      most = Math.max(most, Math.abs(slid));
+      step(true, true);                                           // asked, and not done
+      most = Math.max(most, Math.abs(seen(from).moved || 0) / cell);
     }
-    assert.equal(slid, 0); assert.equal(moving, false);
-    return most / cell;
+    assert.equal(shown, null); assert.equal(moving, false); assert.equal(top, from);
+    return most;
   };
   let most = pull();
-  assert.ok(most > 1 && most <= 8, 'the program was moving this way: a pull of at most eight rows: ' + most);
+  assert.ok(most > .5 && most <= 4, 'the program was moving this way: at most four rows of nothing: ' + most);
   most = pull();
   assert.ok(most <= 1.5 + .001, 'having found the end, a second pull the same way gives only a little: ' + most);
   slide.forget();
   most = pull();
-  assert.ok(most > 1 && most <= 5, 'a way the program has not been seen to move in: at most five rows: ' + most);
-  // A network that holds messages back for a while and then delivers them at once: for a fifth of a second the
-  // picture goes on with the finger, and what comes after a longer wait is slid to, not jumped to.
-  // (the program here answers after 150 ms and moves three rows or more at a time, so it is some rows behind anyway)
-  // The last is a quicker finger: more rows arrive at once than the picture may run ahead by, and it comes on to
-  // them over a few frames.
-  for (const [held, pace, within, step] of [[200, 5, 3.5, 1], [450, 5, 3.5, 1], [450, 9, 9, 2.5]]) {
+  assert.ok(most > .5 && most <= 3, 'a way the program has not been seen to move in: at most three rows: ' + most);
+  slide.forget();
+  // A network that holds messages back for a while and then delivers them at once. The program was ahead of the
+  // finger, so for a while there are rows to go on with; what comes after a longer wait is come on to, not jumped to.
+  // (the program here answers after 150 ms and moves three rows or more at a time)
+  for (const [held, pace, within, leap] of [[200, 5, 1.5, 1], [450, 5, 2, 1], [450, 9, 5, 1.5]]) {
     let finger = 0, away = 0, jump = 0, last = null;
     scroller.start(0, now); slide.begin('remote', now); router.start(); due.length = 0;
-    const began = now, start = top;
-    for (let n = 1; n <= 200; n++) {
+    const began = now, from = top;
+    for (let n = 1; n <= 240; n++) {
       now += 1000 / 60;
       if (n <= 110) { finger = n * pace; scroller.move(finger, now); }      // fifteen rows a second, or twenty-seven
       if (n === 111) { scroller.velocity = 0; scroller.end(now); }
-      const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(f => f(now));
-      const stalled = now - began > 600 && now - began < 600 + held;         // nothing arrives in this while
-      let drew = false;
-      while (!stalled && due.length && due[0].at <= now) { top -= due.shift().rows; drew = true; }
-      if (drew) slide.drawn();                    // what arrived within a frame is drawn at once
-      moving = slide.frame(now, !scroller.dragging && !scroller.velocity && !scroller.frame);
-      const seen = (start - top) * cell + slid;
-      if (n <= 110) { away = Math.max(away, Math.abs(seen - finger)); if (last !== null) jump = Math.max(jump, Math.abs((seen - last) - pace)); }
-      last = seen;
+      step(!(now - began > 600 && now - began < 600 + held));               // nothing arrives in this while
+      const picture = seen(from);
+      assert.ok(picture.whole, 'every line stands where it belongs');
+      if (n <= 110 && picture.moved !== null) { away = Math.max(away, Math.abs(picture.moved - finger)); if (last !== null) jump = Math.max(jump, Math.abs((picture.moved - last) - pace)); last = picture.moved; }
     }
+    if (process.env.SLIDE_SAYS) console.log(held, pace, (away / cell).toFixed(2), (jump / cell).toFixed(2));
     assert.ok(away <= cell * within, held + ' ms held back: the picture stays near the finger: ' + away / cell);
-    assert.ok(jump <= cell * step, held + ' ms held back: and does not jump when the moves arrive: ' + jump / cell);
-    assert.equal(slid, 0); assert.equal(moving, false);
+    assert.ok(jump <= cell * leap, held + ' ms held back: and does not jump when the moves arrive: ' + jump / cell);
+    assert.equal(shown, null); assert.equal(moving, false);
   }
-  // the terminal's own history moves a row at a time, at once: the slide is what is left of a row
-  let viewport = 100; slid = 0;
-  const local = new TerminalSlide({ cell: () => cell, viewport: () => viewport, read: () => [], apply(pixels) { slid = pixels; } });
-  local.begin('local', 0); let moved = 0, off = 0;
+  // the terminal's own history moves a row at a time, at once: it is kept one row ahead, and the picture is under
+  // the finger with rows at both edges
+  let viewport = 100, place = null;
+  const kept = new Map();
+  const local = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => viewport, read: () => [],
+    keep(row, at, count) { for (let i = 0; i < count; i++) kept.set(at + i, viewport + row + i); return true; },
+    show(at, t, b, first, last) { place = at === null ? null : { at, first, last }; },
+    nudge(count) { viewport -= count; local.ask(count, 0); } });
+  local.begin('local', 0);
+  let moved = 0, off = 0, bare = 0;
   for (let n = 1; n <= 50; n++) {
     local.moved(3); moved += 3;
-    const lines = Math.trunc((moved - (100 - viewport) * cell) / cell);
+    const lines = Math.trunc(moved / cell) - (100 - viewport) + local.led;
     if (lines) { viewport -= lines; local.ask(lines, n * 16); }
     local.drawn(); local.frame(n * 16, false);
-    off = Math.max(off, Math.abs((100 - viewport) * cell + slid - moved));
+    // the line that stood in the terminal's first row is now `moved` pixels further down, and every row on the
+    // strip is the one that belongs at its place
+    off = Math.max(off, Math.abs(place.at * cell + moved));
+    for (let i = place.first; i <= place.last; i++) assert.equal(kept.get(i), 100 + i);
+    if (n > 1 && (Math.floor(place.at) < place.first || Math.ceil(place.at + rows) - 1 > place.last)) bare++;
   }
-  assert.ok(off < 0.01, 'in the history the picture is exactly under the finger: ' + off);
-  for (let n = 51; n < 90; n++) local.frame(n * 16, true);
-  assert.equal(slid, 0, 'and settles on a whole row');
+  assert.ok(off < 1, 'in the history the picture is under the finger, within a pixel: ' + off);
+  assert.equal(bare, 0, 'with a row to show at either edge');
+  for (let n = 51; n < 120; n++) { local.drawn(); local.frame(n * 16, true); }
+  assert.equal(place, null, 'and settles on a whole row, which the terminal then shows itself');
+  assert.equal(100 - viewport, Math.trunc(moved / cell), 'the terminal is at the row the finger left it in, not ahead of it: ' + (100 - viewport));
 }
 console.log('Terminal scroll behavior checks passed');

@@ -42,8 +42,8 @@ def main():
             listed = [{"name": "测试中转", "hidden": hide(origin, WORD)}, {"name": "not https", "url": "http://relay.example.com"}, {"name": "not a field", "hidden": "x"}]
             places = lambda: sorted(p.name for p in (store / "spaces").iterdir()) if (store / "spaces").exists() else []
             # the relay tab lists it without anything having been set up; only looking changes nothing
-            looked = press(folder, "looked", relays=listed)
-            assert (looked["mode"], looked["published"], looked["field"], looked["own_relay"]) == ("cloud", "1", "测试中转 · 公共", "running"), looked
+            looked = press(folder, "looked", relays=listed, kind="everyone")
+            assert (looked["mode"], looked["tab"], looked["published"], looked["field"], looked["own_relay"]) == ("cloud", "2", "1", "测试中转", "running"), looked
             assert looked["address"] == "公共中转 · 测试中转" and looked["password_shown"] == "False" and places() == [], looked
             # choosing it: a place of this computer's own, nothing typed, neither address nor password shown, a code for the phone
             chosen = press(folder, "chosen", kind="public", relays=listed)
