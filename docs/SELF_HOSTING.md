@@ -57,6 +57,8 @@ sudo bash install.sh --source /root/remote-cli.tar.gz
 
 程序在 `/opt/remote-cli`，密码在 `/etc/remote-cli/relay.env`（只有 root 能读），终端记录在 `/var/lib/remote-cli`。服务名是 `remote-cli-relay`，日志用 `journalctl -u remote-cli-relay` 查看。日志里不会出现终端的输入和输出。
 
+服务以 systemd 临时分配的用户运行。在 systemd 早于 244 且开着 nscd（名称缓存服务）的系统上，例如 RHEL 8 及其衍生版本，服务停止后缓存里可能还留着这个用户的名字，下一次启动会失败，日志里是 `status=217/USER` 和 `User or group with specified name already exists`，要等缓存过期（最长约一小时）才能恢复。1.2.1 起安装脚本和服务本身会在停止和启动时清掉这条缓存；仍在使用更早的安装脚本时，遇到这种情况运行 `sudo nscd -i passwd; sudo nscd -i group; sudo systemctl restart remote-cli-relay` 即可恢复。
+
 ## 第二步：配置 https
 
 ### 方式 A：有域名

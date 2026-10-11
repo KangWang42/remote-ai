@@ -87,6 +87,16 @@ find_source() {
 
 # Nothing on a server where the relay is not installed yet: asking sed for a file that is not there would end the
 # script without a word.
+# The service runs as a user that systemd makes for it while it runs (DynamicUser). A system that keeps looked-up
+# names for a while (nscd) may still know that user's name after the service has stopped; a systemd before 244 then
+# takes the name for someone else's and does not start the service ("status=217/USER"), for as long as the name is
+# kept, which can be an hour. The names are forgotten here before every start, and by the service whenever it stops.
+forget_names() {
+    command -v nscd >/dev/null 2>&1 || return 0
+    nscd -i passwd >/dev/null 2>&1
+    nscd -i group >/dev/null 2>&1
+    return 0
+}
 current_port() { [ -f "$unit" ] || return 0; sed -n 's/.*--port \([0-9][0-9]*\) .*/\1/p' "$unit" | head -1; }
 
 # Named so that it does not stand in for the system's own "install", which it uses.
@@ -136,6 +146,7 @@ StateDirectory=remote-cli
 EnvironmentFile=$settings/relay.env
 Environment=PYTHONUTF8=1
 ExecStart=$python $root/current/relay/server.py --host 127.0.0.1 --port $port --data /var/lib/remote-cli --web $root/current/web
+ExecStopPost=+-/bin/sh -c 'command -v nscd >/dev/null 2>&1 && { nscd -i passwd; nscd -i group; }; exit 0'
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=yes
@@ -148,7 +159,9 @@ WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload
     systemctl enable "$service" >/dev/null 2>&1
-    systemctl restart "$service"
+    systemctl stop "$service" >/dev/null 2>&1 || true
+    forget_names
+    systemctl start "$service"
     local tries
     for tries in 1 2 3 4 5 6 7 8 9 10; do
         if "$python" -c 'import sys, urllib.request; urllib.request.urlopen("http://127.0.0.1:%s/api/session" % sys.argv[1], timeout=2)' "$port" 2>/dev/null; then
@@ -195,6 +208,7 @@ password() {
         (umask 077; printf 'RCLI_PASSWORD=%s\n' "$("$python" -c 'import secrets; print(secrets.token_urlsafe(24))')" > "$settings/relay.env")
         # whoever signed in with the old password signs in again
         rm -f /var/lib/remote-cli/sessions.json /var/lib/private/remote-cli/sessions.json
+        forget_names
         systemctl start "$service"
         say "已换成新密码。电脑端和手机都要用它重新连接："
     fi
