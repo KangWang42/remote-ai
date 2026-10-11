@@ -173,10 +173,11 @@ def pages(chrome, out, folder, first, addresses, config):
         assert value("!document.getElementById('more') && !document.getElementById('look')")
         press("document.getElementById('settings')")
         until(lambda: (value("location.pathname") or "").endswith("/computer/") and value("document.querySelectorAll('#lines li').length") == 3
-              and value("document.querySelectorAll('#settings .pick, #settings .flip').length") == 4, "the page of settings", 20)
+              and value("document.querySelectorAll('#settings .pick, #settings .flip').length") == 5, "the page of settings", 20)
         # the lines (the local network, the tunnel, and one row for the relays of one's own: there are none for everyone
-        # here), the four settings and the version of the program; the look; signing out. The app's own row is for the app
-        assert value("document.querySelectorAll('#settings li').length") == 5 and value("document.querySelectorAll('#skins button').length") >= 6
+        # here), the five settings and the version of the program; the look; signing out. The app's own row is for the app.
+        # A copy with a data folder of its own, as this one, has not put its hooks into the tools' settings: that switch is off
+        assert value("document.querySelectorAll('#settings li').length") == 6 and value("Array.from(document.querySelectorAll('#settings li')).find(li => li.textContent.includes('手机处理电脑上的对话')).querySelector('.flip').getAttribute('aria-checked')") == "false" and value("document.querySelectorAll('#skins button').length") >= 6
         assert value("document.getElementById('part-app').hidden") is True and value("document.querySelector('#account b').textContent") == "退出登录"
         assert value("document.querySelector('#lines li.current b').textContent") == "自己的中转" and addresses[0].split("://")[1] in value("document.querySelector('#lines li.current small').textContent"), value("document.getElementById('lines').innerText")
         assert "http" not in value("document.getElementById('lines').innerText")
