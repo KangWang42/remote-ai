@@ -44,9 +44,15 @@
     // the strip, and is only called as the terminal has drawn; show(place, top, bottom, first, last) shows the rows
     // between the still ones from the strip, with the terminal's first row standing for `place` (which may lie
     // between two rows), the strip holding the places `first` to `last`; show(null) leaves the terminal as it
-    // draws itself; nudge(rows) asks the terminal for rows the finger did not move.
+    // draws itself; nudge(rows) asks the terminal for rows the finger did not move; hole() (may be left out) is
+    // the row on which the program writes its own offer of the way back to the end, or -1.
+    //
+    // A row with such an offer on it is no row of the list any more, and it would stand between the list and the
+    // program's message box as a row of its own. So, for as long as there is one, the picture is shown a row lower
+    // and over it: the list ends where that row ends. This holds with no finger on the screen too (the slide is
+    // then `idle`: nothing moves, the picture is only kept as the terminal draws).
     constructor(options) {
-      this.options = options;
+      this.options = options; this.idle = false;
       this.top = 0; this.bottom = 0; this.went = 0; this.stuck = 0;
       this.active = false; this.kind = 'local'; this.rows = null; this.seen = false; this.at = 0; this.madeAt = 0;
       this.clear();
@@ -57,25 +63,34 @@
       this.led = 0; this.nudged = 0; this.nudgedAt = 0; this.run = 0;
       this.gone = 0; this.speed = 0; this.lag = 150;      // the finger's way in this frame, its speed (rows a ms), and the ms a move takes
       this.back = false;                                  // the terminal was asked back the rows it was ahead by
+      this.low = -1;                                      // by how many rows the picture was last shown lower (a hole: 1), not known yet
     }
     begin(kind, at) {
       const fresh = !this.active || kind !== this.kind;
       if (fresh) this.clear();
-      this.kind = kind; this.active = true; this.seen = false; this.at = at; this.drain = 0;
+      this.kind = kind; this.active = true; this.seen = false; this.at = at; this.drain = 0; this.idle = false;
       this.viewport = this.options.viewport();
       this.rows = kind === 'local' ? null : this.options.read();
       // The terminal's picture can be copied only as it is drawn: it is asked to draw, and its rows go onto the
       // strip then (drawn). Without a picture there is nothing to show: it scrolls by the row, as it does by itself.
       if (fresh && this.options.draw() === false) this.active = false;
     }
+    // A hole is there and no finger: the picture is shown over it all the same.
+    pin(at) { if (this.active) return; this.begin('remote', at); this.idle = this.active; }
+    hole() { return this.kind !== 'local' && this.options.hole ? this.options.hole() : -1; }
     cancel() {
       const shown = this.active;
-      this.active = false; this.clear();
+      this.active = false; this.idle = false; this.clear();
       if (shown) this.options.show(null);
     }
     forget() { this.top = 0; this.bottom = 0; this.went = 0; this.stuck = 0; }          // another size or another screen: what stood still is not known
-    // The rows that stand still at the top and at the bottom; the terminal's own history has none.
-    edges() { return this.kind === 'local' ? [0, 0] : [this.top, this.bottom]; }
+    // The rows that stand still at the top and at the bottom; the terminal's own history has none. The row of a
+    // hole and what is under it stand still, whatever was seen to.
+    edges() {
+      if (this.kind === 'local') return [0, 0];
+      const hole = this.hole();
+      return [this.top, hole >= 0 ? Math.max(this.bottom, this.options.count() - hole) : this.bottom];
+    }
     // The rows the terminal shows now go onto the strip, each under its place.
     keep() {
       const [top, bottom] = this.edges(), from = this.base + top, to = this.base + this.options.count() - bottom - 1;
@@ -146,6 +161,7 @@
     // longer have to be made up for; and what it shows now goes onto the strip.
     drawn() {
       if (!this.active) return;
+      if (this.idle && this.hole() < 0) { this.cancel(); return; }         // the hole is gone: nothing is left to show the picture for
       let shift = 0;
       if (this.kind === 'local') { const now = this.options.viewport(); shift = this.viewport - now; this.viewport = now; }
       else { const now = this.options.read(); if (this.asked.length) shift = this.shift(this.rows, now); this.rows = now; }
@@ -199,7 +215,11 @@
         const part = this.drain * (1 - Math.exp(-dt / SETTLE)), gone = Math.abs(this.drain - part) < .5 ? this.drain : part;
         this.offset -= gone; this.drain -= gone;
       }
-      if (settled && Math.abs(this.offset) < .5 && !this.ease) { this.cancel(); return false; }
+      if (settled && Math.abs(this.offset) < .5 && !this.ease) {
+        if (this.hole() < 0) { this.cancel(); return false; }
+        this.idle = true; this.show();
+        return false;
+      }
       this.show();
       return true;
     }
@@ -208,8 +228,9 @@
     within() {
       const way = Math.sign(this.offset);
       if (!way) return 0;
-      const cell = this.options.cell(), [top, bottom] = this.edges();
-      const held = this.to < this.from ? 0 : way > 0 ? this.base + top - this.from : this.to - (this.base + this.options.count() - bottom - 1);
+      const cell = this.options.cell(), [top, bottom] = this.edges(), low = this.hole() >= 0 ? 1 : 0;
+      // (over a hole the picture stands a row lower: the first of the rows held above is in sight already)
+      const held = this.to < this.from ? 0 : way > 0 ? this.base + top - this.from - low : this.to - (this.base + this.options.count() - bottom - 1);
       const known = Math.max(0, held), beyond = Math.abs(this.offset) / cell - known;
       if (beyond <= 0) return this.offset;
       const [free, most] = BLANK[this.kind === 'local' ? 'local' : way === this.stuck ? 'stuck' : way === this.went ? 'going' : 'unsure'], give = most - free;
@@ -217,8 +238,11 @@
     }
     show() {
       if (this.to < this.from) { this.options.show(null); return; }      // no row is held yet: the terminal has not drawn
-      const [top, bottom] = this.edges();
-      this.options.show(this.base - (this.within() + this.ease) / this.options.cell(), top, bottom, this.from, this.to);
+      const [top, bottom] = this.edges(), cell = this.options.cell(), low = this.hole() >= 0 ? 1 : 0;
+      // A hole came or went under a finger: the picture goes the row down or up as it moves, not at a jump.
+      if (this.low >= 0 && low !== this.low && !this.idle) this.ease -= (low - this.low) * cell;
+      this.low = low;
+      this.options.show(this.base - (this.within() + this.ease) / cell - low, top, bottom - low, this.from, this.to);
     }
   }
   TerminalSlide.KEPT = KEPT;

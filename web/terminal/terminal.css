@@ -41,8 +41,8 @@ button:disabled { opacity: .45; cursor: default; }
 #slid canvas { position: absolute; left: 0; top: 0; will-change: transform; image-rendering: pixelated; }
 #latest { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 5px; height: 34px; padding: 0 14px 0 10px; border-radius: 17px; background: var(--panel); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
 #latest svg { color: var(--accent); }
-/* Where a program writes its own offer of the way back to the end over a row of its screen, that row is covered
-   (terminal.js): the button above does the same. The cover lies over the row, and over the rows that slide. */
+/* Where a program writes its own offer of the way back to the end over a row of its screen, the rows above it are
+   shown a row lower, over it (terminal.js). Only where there is no strip to show them from is the row covered. */
 #offer { position: absolute; left: 0; width: 100%; z-index: 4; background: var(--bg); pointer-events: none; }
 [hidden] { display: none !important; }
 

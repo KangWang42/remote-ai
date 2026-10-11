@@ -363,6 +363,36 @@ function fixture(kind = 'local', reduced = false) {
   plain.begin('local', 0); plain.moved(30);
   assert.equal(plain.active, false, 'a terminal that has no picture to copy is not slid: it scrolls by the row');
   assert.equal(plain.frame(16, false), false);
+  // A program that writes its offer of the way back over a row (a hole): that row and what is under it stand still,
+  // and the picture is shown a row lower, over it, with a finger on the screen and without.
+  {
+    let at = 20, seen = null, draws = 0, kept = [];
+    const holed = new TerminalSlide({ cell: () => cell, count: () => rows, viewport: () => 0, read: () => [], draw() { draws++; },
+      keep(row, place, count) { kept = [row, place, count]; return true; }, show(place, t, b, first, last) { seen = place === null ? null : { place, top: t, bottom: b, first, last }; },
+      nudge() {}, hole: () => at });
+    holed.pin(0);
+    assert.ok(holed.active && holed.idle && draws === 1, 'with a hole and no finger the terminal is asked to draw');
+    holed.drawn();
+    assert.deepEqual(kept, [0, 0, 20], 'the rows above the hole are kept, the hole and what is under it are not');
+    assert.deepEqual(seen, { place: -1, top: 0, bottom: rows - 20 - 1, first: 0, last: 19 }, 'and are shown a row lower, over the hole: ' + JSON.stringify(seen));
+    holed.pin(5); assert.equal(draws, 1, 'once');
+    // a finger scrolls: nothing changes in where the picture stands; when it has come to rest the picture stays
+    holed.begin('remote', 10); assert.equal(holed.idle, false);
+    assert.equal(holed.frame(26, false), true);
+    assert.equal(seen.place, -1); assert.equal(seen.bottom, rows - 21);
+    assert.equal(holed.frame(42, true), false, 'at rest no frame is needed');
+    assert.ok(holed.active && holed.idle && seen && seen.place === -1, 'and the picture is still shown over the hole');
+    // the hole goes (the program is back at the end): the terminal is left as it draws itself
+    at = -1; holed.drawn();
+    assert.ok(!holed.active && seen === null, 'without a hole and without a finger there is nothing to show the picture for');
+    // a hole that comes under a finger: the picture goes down the row as it moves, not at a jump
+    holed.begin('remote', 100); holed.drawn(); holed.frame(116, false);
+    assert.deepEqual([seen.place, seen.bottom], [0, 0]);
+    at = 20; holed.drawn();
+    assert.ok(Math.abs(seen.place) < .01 && seen.bottom === rows - 21, 'the box reaches over the hole at once, the picture is where it was: ' + seen.place);
+    for (let n = 1; n <= 40; n++) holed.frame(116 + n * 16, false);
+    assert.equal(seen.place, -1, 'and comes to stand a row lower');
+  }
   // The picture can be lost while a finger scrolls (a phone's graphics card takes back what was on it): the
   // terminal scrolls by the row from there, and the rows it was kept ahead by are asked back.
   let ahead = 0, there = true;

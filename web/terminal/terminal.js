@@ -126,24 +126,31 @@
   new ResizeObserver(layout).observe(screen);
 
   // The way back to the end is the button in the corner. A program that offers one of its own on its screen (Claude
-  // Code writes "Jump to bottom (ctrl+End)" over the last row of its conversation) has that row covered: on a phone
+  // Code writes "Jump to bottom (ctrl+End)" over the last row of its conversation) is not shown doing so: on a phone
   // it is words in another language cut into a line of text, for something the button already does.
   const offer = document.createElement('div');
   offer.id = 'offer'; offer.hidden = true;
   holder.querySelector('.xterm-screen').appendChild(offer);
-  let offered = '';
+  // That row is no row of the conversation any more: the rows above it are shown a row lower, over it (TerminalSlide,
+  // `hole`), so that nothing stands between the conversation and the program's message box. Where there is no strip
+  // to show them from, the row is covered instead.
+  let offered = '', hole = -1, pinAfter = 0;
   function follow() {
     const buffer = term.buffer.active, row = scrollRouter.offered(), now = row + ' ' + term.rows;
+    hole = row;
     if (now !== offered) {
       offered = now;
       if (row >= 0) { offer.style.top = 100 * row / term.rows + '%'; offer.style.height = 100 / term.rows + '%'; }      // the row, in the terminal's own measure
-      offer.hidden = row < 0;
     }
+    // with no finger on the screen the picture is shown for the hole's sake; a strip that cannot be had is not asked for at every picture
+    if (row >= 0 && !slide.active && performance.now() >= pinAfter) { pinAfter = performance.now() + 3000; slide.pin(performance.now()); }
+    covered();
     // away from the end: the program says so itself, or the rows it was scrolled by say so. Either is enough: the
     // button is rather there once too often than missing when the program words its offer in a way not known here.
     const away = row >= 0 || !(buffer.viewportY >= buffer.baseY && scrollRouter.remoteUp <= 0);
     if (latest.hidden === away) latest.hidden = !away;
   }
+  function covered() { const hidden = hole < 0 || strip.shown; if (offer.hidden !== hidden) offer.hidden = hidden; }
   term.onScroll(follow);
   term.onRender(follow);
   const scrollRouter = new TerminalScrollRouter(term, send, () => tool);
@@ -175,12 +182,14 @@
     },
     draw() { if (!picture()) return false; term.refresh(0, term.rows - 1); return true; },
     keep(row, place, rows) { const source = picture(); return !!source && strip.keep(source, term.rows, row, place, rows); },
-    show(place, top, bottom, first, last) { if (place === null) strip.hide(); else strip.show(place, top, bottom, first, last); },
+    show(place, top, bottom, first, last) { if (place === null) strip.hide(); else strip.show(place, top, bottom, first, last); covered(); },
+    hole: () => hole,
     nudge: rows => scroller.nudge(rows)
   });
   const resting = () => !scroller.dragging && !scroller.velocity && !scroller.frame;
   function sliding(at) { slideFrame = slide.frame(at, resting()) ? requestAnimationFrame(sliding) : 0; }
-  function unslide() { if (slideFrame) cancelAnimationFrame(slideFrame); slideFrame = 0; slide.cancel(); }
+  // (a hole that is still there has the picture shown over it again at the next frame)
+  function unslide() { if (slideFrame) cancelAnimationFrame(slideFrame); slideFrame = 0; slide.cancel(); pinAfter = 0; requestAnimationFrame(follow); }
   term.onRender(() => slide.drawn());
   // Touch movement scrolls local history or the program's fullscreen view, according to the active terminal mode.
   const scroller = new TerminalScroller({

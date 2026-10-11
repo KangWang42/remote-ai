@@ -405,23 +405,33 @@ def main():
         assert page_value("document.getElementById('latest').hidden") is True
 
         # ---- a program that offers its own way back to the end, in words over the last row of its list (Claude Code):
-        # that row is covered, the button in the corner is the one way back, and a tap on it takes the offer up
+        # that row is no row of the list any more. The rows above it are shown a row lower, over it, so that the
+        # list ends where it did and no empty row stands above the program's last rows; the button in the corner is
+        # the one way back, and a tap on it takes the offer up
         op(action="input", terminal=terminal, data="j")
         drag(6)
-        until("document.getElementById('offer').hidden === false", 8, "the row of the offer is covered")
+        until("TerminalUI.strip.shown && TerminalUI.slide.idle", 8, "the picture is shown over the row of the offer, with no finger on the screen")
         time.sleep(0.5)
         row = next(n for n, text in enumerate(page_value(SCREEN).split("\n")) if "Jump to bottom (ctrl+End)" in text)
-        over = page_value("(() => { const o = document.getElementById('offer').getBoundingClientRect(), c = document.querySelector('#terminal .xterm-screen > canvas:not(.xterm-link-layer)').getBoundingClientRect(), high = c.height / TerminalUI.terminal.rows;"
-                          " return [(o.top - c.top) / high, o.height / high, o.left - c.left, o.width - c.width, document.getElementById('offer').textContent]; })()")
-        report["row_of_the_offer"] = [row] + [round(part, 2) for part in over[:4]]
-        assert abs(over[0] - row) < 0.1 and abs(over[1] - 1) < 0.1 and abs(over[2]) < 1 and abs(over[3]) < 1 and over[4] == "", (row, over)
-        assert page_value("document.getElementById('latest').hidden") is False, "the button in the corner is the way back"
-        picture("offer.png")
-        # a finger scrolls on: the cover stays where the program draws its offer, over the rows that slide
-        drag(3, halfway=lambda: report.update(offer_while_sliding=page_value("[document.getElementById('offer').hidden, TerminalUI.strip.shown, document.getElementById('latest').hidden]")))
-        assert report["offer_while_sliding"] == [False, True, False], report
+        closed = page_value("(() => { const s = TerminalUI.strip, slide = TerminalUI.slide, b = document.getElementById('slid').getBoundingClientRect(), c = document.querySelector('#terminal .xterm-screen > canvas:not(.xterm-link-layer)').getBoundingClientRect(), high = s.high * s.unit;"
+                            " return [slide.base - s.place, (b.bottom - c.top - s.above * s.unit) / high, s.blank(), document.getElementById('offer').hidden, document.getElementById('latest').hidden]; })()")
+        report["rows_lower_over_the_offer"], report["list_ends_at_row"], report["row_of_the_offer"] = round(closed[0], 2), round(closed[1], 2), row
+        assert abs(closed[0] - 1) < 0.01 and abs(closed[1] - (row + 1)) < 0.05 and closed[3] is True, (row, closed)
+        assert closed[4] is False, "the button in the corner is the way back"
+        shot, placed = picture("offer.png"), page_value(PLACED)
+        # on the screen, the row where the offer is written shows the list's line that stood above it, not the offer and not nothing
+        high, first = placed["high"], round(placed["first"])
+        still_top = placed["still"][0]
+        band = lambda at: shot.crop((round(placed["left"]), first + (at - still_top) * high, round(placed["left"] + placed["wide"] * 0.5), first + (at - still_top + 1) * high))
+        inked = lambda image: sum(image.convert("L").histogram()[:120])
+        report["ink_on_the_offer_row"] = inked(band(row))
+        assert inked(band(row)) > 20 and abs(inked(band(row)) - inked(band(row - 1))) < inked(band(row - 1)), report
+        # a finger scrolls on: the picture goes on from where it stands, a row lower, and nothing covers the row
+        drag(3, halfway=lambda: report.update(offer_while_sliding=page_value("[document.getElementById('offer').hidden, TerminalUI.strip.shown, document.getElementById('latest').hidden, TerminalUI.strip.bottom]")))
+        assert report["offer_while_sliding"][:3] == [True, True, False] and report["offer_while_sliding"][3] == page_value("TerminalUI.terminal.rows") - row - 1, report
+        until("TerminalUI.strip.shown && TerminalUI.slide.idle", 8, "at rest the picture stays over the row of the offer")
         assert tap("latest") == ["click latest"]
-        until(TOP + " === %d && document.getElementById('offer').hidden" % top, 10, "back at the end by the program's own way")
+        until(TOP + " === %d && document.getElementById('offer').hidden && !TerminalUI.strip.shown && !TerminalUI.slide.active" % top, 10, "back at the end by the program's own way, the terminal as it draws itself")
         assert page_value(COUNT("end")) == 1 and page_value("document.getElementById('latest').hidden") is True, page_value(SCREEN)
         op(action="input", terminal=terminal, data="j")
         assert "other= " in page_value(SCREEN) + " " or "other=\n" in page_value(SCREEN) + "\n", page_value(SCREEN)
