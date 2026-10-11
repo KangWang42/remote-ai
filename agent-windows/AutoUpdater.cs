@@ -20,6 +20,13 @@ public static class AutoUpdater {
         Version a, b;
         return Version.TryParse(latest.TrimStart('v'), out a) && Version.TryParse(current.TrimStart('v'), out b) && a > b;
     }
+    /// What is done with a newer version that was found. "install": at once (the phone asked for it). "ask": the
+    /// person pressed the button in the window, and is asked on the spot whether to restart now, whatever the
+    /// automatic setting says: a press is never answered with nothing. "wait": found by the program itself with
+    /// automatic updates on, installed in the first quiet moment. "tell": found by itself otherwise; the button says so.
+    public static string Step(bool manual, bool remote, bool automatic) {
+        return remote ? "install" : manual ? "ask" : automatic ? "wait" : "tell";
+    }
     public static Task<ReleaseUpdate> CheckAsync(string current) { return Task.Run(() => Check(current)); }
     static ReleaseUpdate Check(string current) {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;

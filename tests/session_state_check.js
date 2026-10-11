@@ -20,6 +20,6 @@ assert.match(app, /手机无法关闭它。请先在该应用中结束这段对�
 assert.match(app, /api\('api\/conversation'/, 'a conversation open on the computer is looked at before anything is done to it');
 assert.doesNotMatch(app, /写入锁|app-server|归属待确认/, 'the page speaks of what happens on the computer, not of locks');
 assert.match(page, /<details id="background" class="held-sessions"/);
-assert.match(page, /被电脑上其它程序占用的对话/);
+assert.match(page, /电脑上闲置或被占用的对话/);
 assert.match(app, /DOMPurify\.sanitize\(marked\.parse\(/, 'what a tool said is set as text from Markdown, and only after it has been made harmless');
 console.log('session state checks passed');

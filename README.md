@@ -185,7 +185,7 @@ curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/agent-li
 
 Linux 电脑无需下载安装包，见 [Linux 电脑](#linux-电脑)。
 
-两个文件均未使用代码签名证书：Windows 会提示“未知发布者”（选择“更多信息 → 仍要运行”），Android 会提示“未知来源”（允许本次安装）。可用发布页的 `SHA256SUMS.txt` 核对文件，也可[从源码构建](docs/DEVELOPMENT.md)。
+两个文件均未使用代码签名证书：Windows 会提示“未知发布者”（选择“更多信息 → 仍要运行”），Android 会提示“未知来源”（允许本次安装）。也可[从源码构建](docs/DEVELOPMENT.md)。
 
 ## 文档
 

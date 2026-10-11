@@ -102,6 +102,14 @@ public final class AggregateSessionsCheck {
         require(desk.get(0).active.size() == 3 && desk.get(0).history.size() == 1 && "a".equals(desk.get(0).active.get(0).id) && "b".equals(desk.get(0).active.get(1).id), "what asks comes first, then what waits for a message, then what works");
         require(Arrays.equals(AggregateSessions.counts(desk, null), new int[]{1, 1, 1, 3}), "they are counted with the terminals: " + Arrays.toString(AggregateSessions.counts(desk, null)));
         require(AggregateSessions.rank("waiting") < AggregateSessions.rank("busy") && AggregateSessions.rank("stopped") > AggregateSessions.rank("idle"), "one that waits for a message stands before those at work, one that has stopped after those that wait for input");
+        // A conversation that a program holds without anybody being at it (a desktop app keeps what it has loaded): no task,
+        // whatever its tool says of it; it is listed with the saved ones of its project, and says how it stands.
+        AggregateSessions.Entry kept = new AggregateSessions.Entry(false, "kept", "桌面", "桌面版加载过的", "claude", "", "", "idle", true, "cli", "", "");
+        kept.now = false; kept.reached = true;
+        require(!kept.running() && "held".equals(kept.kind(null)) && "电脑上闲置".equals(kept.label()), "held and not in use: " + kept.kind(null));
+        List<AggregateSessions.Project> withKept = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(works, kept));
+        require(withKept.get(0).active.size() == 1 && withKept.get(0).history.size() == 1 && AggregateSessions.counts(withKept, null)[3] == 1, "it is no task and is not counted");
+
         // A conversation that a program has open in a folder that is no project: it has no project, says its folder,
         // stands in a group without a name, and counts with the tasks.
         AggregateSessions.Entry outside = new AggregateSessions.Entry(false, "out", "", "整理读书笔记", "codex", "", "", "busy", true, "cli", "", "");

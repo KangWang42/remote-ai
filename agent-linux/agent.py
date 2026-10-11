@@ -600,7 +600,8 @@ class Sessions:
     @staticmethod
     def _entry(session, tool, name, title, info, live, folder=""):
         return {"id": session, "tool": tool, "dir": name, "folder": folder, "title": title, "updated": int(info.st_mtime * 1000),
-                "live": live, "host": "cli" if live else "", "status": "", "can_takeover": False,
+                "live": live, "now": live,      # what a program has open here is a command line: open is in use
+                "host": "cli" if live else "", "status": "", "can_takeover": False,
                 "ownership_known": True, "takeover_reason": "请先在电脑上结束正在使用这个对话的程序" if live else ""}
 
 

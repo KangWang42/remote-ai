@@ -37,7 +37,7 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
             "projects": [{"name": "demo", "path": "D:\\demo", "fixed": true, "exists": true}],
             "candidates": [{"name": "notes", "path": "D:\\notes", "updated": 1700000000000, "tools": ["claude"]}]},
  "terminals": [{"id": "...", "tool": "shell", "dir": "demo", "title": "PowerShell", "state": "running", "status": "idle", "seq": 12, "cols": 80, "rows": 24, "session": ""}],
- "sessions": [{"id": "<uuid>", "tool": "claude", "dir": "demo", "folder": "", "title": "...", "updated": 1700000000000, "live": false, "status": "",
+ "sessions": [{"id": "<uuid>", "tool": "claude", "dir": "demo", "folder": "", "title": "...", "updated": 1700000000000, "live": false, "now": false, "status": "",
                "pinned": false, "hidden": false, "terminal": ""}]}
 ```
 
@@ -55,6 +55,13 @@ conversation (not `live` any more), so that the terminal keeps its name and mark
 there is no project: not a new terminal, and not a conversation the computer did not list there. Saved
 conversations of folders that are no projects, which nothing has open, are not listed. Once the folder is made a
 project (`project_add` with that path) the computer lists its conversations under that project.
+
+`now` says of a `live` conversation whether it is in use: at work, asking or kept waiting for the phone; or in a
+window of its own (a command line, open for as long as its program runs); or used in the last ten minutes. A desktop
+app keeps every conversation it has loaded held by a process, shown or not, so `live` alone does not say that
+anybody is at it. One that is held and not in use has the `activity` `locked`: it is kept out of what is going on,
+and can still be looked at and taken on. A computer that does not send `now` is taken to mean that every held
+conversation is in use.
 
 `pinned` and `hidden` are what the owner said of a conversation from a phone (see "A conversation that is open on
 the computer", the action `mark`). The computer keeps them, so every phone and every line shows the same; they are

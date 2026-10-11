@@ -22,6 +22,12 @@ final class AggregateSessions {
          * is at work there like a terminal, and stands among the tasks by how it stands. canSay: a message can be left for it.
          */
         boolean reached, canSay;
+        /**
+         * Whether a conversation that a program on the computer holds is in use now (the computer says: at work, asking,
+         * in a window of its own, or used a moment ago). A desktop app keeps every conversation it has loaded held; one
+         * that is held and not in use is no task. A computer that does not say takes every held one for one in use.
+         */
+        boolean now = true;
         String origin = "";     // where a conversation on the computer runs, as the computer says it: "Codex 桌面版", "命令行", "VS Code"
         long used;              // latest terminal phase change or saved conversation update; 0 when not known
         /** The folder of a conversation that is open where there is no project, or of the terminal that took it on (the project is then ""). */
@@ -57,17 +63,18 @@ final class AggregateSessions {
             this.done = done; this.at = at;
         }
         boolean running() {
-            return terminal ? "running".equals(state) || "starting".equals(state) : live && ("cli".equals(host) || reached);
+            return terminal ? "running".equals(state) || "starting".equals(state) : live && now && ("cli".equals(host) || reached);
         }
         /**
          * A phone terminal is confirm, done, busy, starting, idle or ended; a saved conversation is pc-busy, pc-idle,
-         * locked, remote, unknown or history, and one whose tool tells of it is confirm, waiting (it has stopped and
+         * held (a program has it and nobody is at it), locked, remote, unknown or history, and one whose tool tells of it is confirm, waiting (it has stopped and
          * waits for a message from the phone), busy or stopped. seen maps a terminal to the phase change the user has already looked at:
          * finished work is "done" until then, as in the pages.
          */
         String kind(Map<String, Long> seen) {
             if (!terminal) {
                 if (!live) return "history";
+                if (!now) return "held";
                 if (reached) return "confirm".equals(status) ? "confirm" : "waiting".equals(status) ? "waiting" : "busy".equals(status) ? "busy" : "stopped";
                 if ("shared".equals(host)) return "locked";
                 if ("remote".equals(host)) return "remote";
@@ -100,6 +107,7 @@ final class AggregateSessions {
             case "ended": return "已结束";
             case "pc-busy": return "电脑上正在执行";
             case "pc-idle": return "电脑上打开着";
+            case "held": return "电脑上闲置";
             case "locked": return "被电脑上的应用占用";
             case "remote": return "被另一个远程终端占用";
             case "unknown": return "被电脑上的程序占用";

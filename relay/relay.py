@@ -259,6 +259,10 @@ def _session_activity(session):
     """
     if not session.get("live"):
         return "history"
+    # A program holds it and it is not in use now (a desktop app keeps every conversation it has loaded): it is
+    # kept apart from what is going on. A computer that does not say takes every held conversation for one in use.
+    if session.get("now") is False:
+        return "locked"
     # A conversation whose tool tells of it itself is seen at work, whatever program runs it.
     return "active" if session.get("host") == "cli" or session.get("reach") is not None else "locked"
 
@@ -899,7 +903,7 @@ class Relay:
             if isinstance(payload.get("sessions"), list):
                 self._sessions[:] = [
                     {"id": s["id"], "tool": s["tool"], **_placed(s), "title": s["title"].strip()[:80], "updated": s["updated"],
-                     **{mark: s.get(mark) is True for mark in MARKS},
+                     **{mark: s.get(mark) is True for mark in MARKS}, "now": s.get("live") is True and s.get("now") is not False,
                      "live": s.get("live") is True, "status": s.get("status") if s.get("status") in ("idle", "busy", "confirm", "waiting") else "", **_reached(s),
                      "host": s.get("host") if s.get("host") in ("cli", "shared", "remote", "unknown") else "",
                      "origin": str(s.get("origin") or "")[:60],

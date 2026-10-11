@@ -456,6 +456,18 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": info, "sessions": [dict(saved, pinned=False, hidden=True)]}, now=1003)
         self.assertEqual([(s["pinned"], s["hidden"]) for s in self.relay.overview(now=1003)["sessions"]], [(False, True)])
 
+    def test_a_conversation_a_program_holds_without_using_it_is_not_one_that_is_going_on(self):
+        ids = ["11111111-2222-3333-4444-55555555555%d" % n for n in range(5)]
+        held = {"tool": "claude", "dir": "demo", "title": "桌面版加载过的对话", "updated": 1, "live": True, "host": "cli", "origin": "Claude 桌面版"}
+        self.relay.agent({"info": dict(self.info, features=["peek", "reach"]), "sessions": [
+            dict(held, id=ids[0], now=False), dict(held, id=ids[1], now=True), dict(held, id=ids[2]),          # a computer that does not say: in use
+            dict(held, id=ids[3], now=False, reach=["say"], status="idle"), dict(held, id=ids[4], live=False, now=True)]}, now=1001)
+        shown = {s["id"]: (s["activity"], s["now"], s["live"]) for s in self.relay.overview(now=1001)["sessions"]}
+        self.assertEqual([shown[i] for i in ids], [("locked", False, True), ("active", True, True), ("active", True, True), ("locked", False, True), ("history", False, False)])
+        # it is still held: going on with it elsewhere needs the program to let go, as before
+        with self.assertRaisesRegex(RemoteError, "接管"):
+            self.relay.command({"action": "start", "id": "d" * 32, "tool": "claude", "dir": "demo", "session": ids[0]}, now=1002)
+
     def test_a_conversation_open_in_a_folder_that_is_no_project_is_listed_with_its_folder(self):
         sid, other, third = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000", "aaaaaaaa-7777-8888-9999-000000000000"
         info = dict(self.info, features=["peek", "reach"])

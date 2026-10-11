@@ -214,7 +214,7 @@
   async function answerAsk(s, allow) {
     try { await api('api/conversation', { id: newId(), session: s.id, action: 'answer', ask: s.ask.id, allow }); toast(allow ? '已允许' : '已拒绝'); }
     catch (error) { toast(error.message); }
-    refresh();
+    await refresh();
   }
   async function endTerminal(t) {
     if (!await ask('结束“' + t.title + '”？', '正在运行的任务会被中断。对话保存在电脑上，可以从历史对话继续。', [{ label: '结束终端', value: true, kind: 'danger' }])) return;
@@ -278,39 +278,92 @@
       last = m.role;
     });
   }
+  // The page of a conversation that is open on the computer. It stays open on the computer and is used there as
+  // before; this page works beside it: it follows what is said there while it is looked at, what the conversation
+  // asks is answered here, and a message for it is written here. Going on with it in a terminal of the phone's
+  // (which takes it from the program that has it) is one of the choices below, for when that is what is wanted.
   async function takeOver(session) {
     if (!usable()) return;
-    const { choices, why } = ways(session), canPeek = (data.device.features || []).includes('peek');
+    const canPeek = (data.device.features || []).includes('peek');
+    let watch = 0;
     const choice = await openSheet((form, finish) => {
-      form.append(el('h3', { textContent: session.title }),
-        el('p', { textContent: (hostLabel[sessionHost(session)] || hostLabel.unknown) + ' · ' + TOOLS[session.tool] + ' · ' + (session.dir || base(session.folder) + '（未加入项目）') }));
-      if (canPeek) {
-        const said = el('div', { className: 'said' }, el('p', { className: 'quiet', textContent: '正在读取对话…' }));
-        form.append(said, el('p', { className: 'quiet', textContent: Array.isArray(session.reach) ? '这段对话照常开在电脑上。在这里查看和发消息，都不影响电脑上的使用。' : '只是查看，不影响电脑上的程序。' }));
-        api('api/conversation', { id: newId(), session: session.id }).then(got => {
-          said.textContent = '';
-          const messages = got.messages || [];
-          if (got.more) said.append(el('p', { className: 'quiet', textContent: '更早的内容没有显示' }));
-          if (!messages.length) said.append(el('p', { className: 'quiet', textContent: '这段对话还没有内容' }));
-          writeSaid(said, messages, TOOLS[session.tool]).then(() => { said.scrollTop = said.scrollHeight; });      // what was said last is what one came to see
-        }).catch(error => { said.textContent = ''; said.append(el('p', { className: 'quiet', textContent: error.message })); });
+      const now = () => (data.sessions || []).find(s => s.id === session.id && s.tool === session.tool) || session;
+      const head = el('p'), said = el('div', { className: 'said' }, el('p', { className: 'quiet', textContent: '正在读取对话…' }));
+      const note = el('p', { className: 'quiet' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
+      form.append(el('h3', { textContent: session.title }), head);
+      if (canPeek) form.append(said);
+      form.append(note, asks, write, below);
+      // ---- what is said there
+      let read = '', reading = false;
+      async function follow(current) {
+        const stamp = [current.updated, current.status, current.last || ''].join('\n');
+        if (!canPeek || reading || stamp === read) return;
+        reading = true;
+        try {
+          const got = await api('api/conversation', { id: newId(), session: session.id }), messages = got.messages || [];
+          const atEnd = !read || said.scrollHeight - said.scrollTop - said.clientHeight < 60, was = said.scrollTop;
+          const fresh = el('div');
+          if (got.more) fresh.append(el('p', { className: 'quiet', textContent: '更早的内容没有显示' }));
+          if (!messages.length) fresh.append(el('p', { className: 'quiet', textContent: '这段对话还没有内容' }));
+          await writeSaid(fresh, messages, TOOLS[session.tool]);
+          said.replaceChildren(...fresh.childNodes);
+          said.scrollTop = atEnd ? said.scrollHeight : was;      // what was said last is what one came to see; someone reading further up is left there
+          read = stamp;
+        } catch (error) { if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
+        reading = false;
       }
-      // what it asks is answered here too, under what was said: the page of a press on the app's card
-      if (session.ask) {
-        const answers = el('div', { className: 'answers' });
-        if (can(session, 'answer')) answers.append(el('button', { type: 'button', className: 'yes', textContent: '允许', onclick: () => finish('allow') }), el('button', { type: 'button', className: 'no', textContent: '拒绝', onclick: () => finish('deny') }));
-        else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
-        form.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: session.ask.text }), answers)));
+      // ---- how it stands, what it asks, and what can be done from here
+      const box = el('textarea', { rows: 2, maxLength: 8000, placeholder: '给它发消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
+      const send = el('button', { type: 'button', className: 'solid', textContent: '发送', onclick: async () => {
+        const text = box.value.trim();
+        if (!text) return box.focus();
+        send.disabled = true;
+        try {
+          const got = await api('api/conversation', { id: newId(), session: session.id, action: 'say', text });
+          box.value = ''; left = got.now ? '已发送，它接着做了' : '已留言：它做完手上这一步后收到';
+        } catch (error) { toast(error.message); }
+        send.disabled = false; refresh(); show();
+      } });
+      write.append(box, send);
+      let shown = '', left = '';
+      function show() {
+        const current = now(), phase = current.live ? reachPhase(current) : '', told = Array.isArray(current.reach);
+        const stamp = JSON.stringify([current.live, current.status, current.reach, current.ask && current.ask.id, current.host, current.now, current.dir, left]);
+        follow(current);
+        if (stamp === shown) return;
+        shown = stamp;
+        head.textContent = (phase ? PHASE[phase][0] : current.live ? (current.now === false ? '电脑上闲置' : hostLabel[sessionHost(current)] || hostLabel.unknown) : '已不在电脑上打开') + ' · ' + whereOf({ s: current, tool: current.tool, live: current.live })
+          + ' · ' + (current.dir || base(current.folder) + '（未加入项目）');
+        note.textContent = !current.live ? '' : told ? '这段对话照常开在电脑上。在这里查看、确认和发消息，都不影响电脑上的使用。' : '只是查看，不影响电脑上的程序。';
+        // what it asks is answered here, under what was said
+        asks.textContent = '';
+        if (current.ask) {
+          const answers = el('div', { className: 'answers' });
+          if (can(current, 'answer')) answers.append(el('button', { type: 'button', className: 'yes', textContent: '允许', onclick: () => answerAsk(current, true).then(show) }), el('button', { type: 'button', className: 'no', textContent: '拒绝', onclick: () => answerAsk(current, false).then(show) }));
+          else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
+          asks.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: current.ask.text }), answers)));
+        }
+        // a message: taken at once by one that waits, when it has done what it is doing by one at work
+        const sayable = can(current, 'say') && !current.ask;
+        write.hidden = !sayable;
+        box.placeholder = current.status === 'waiting' ? '它已停下，正等你的消息' : '给它发消息：它做完手上这一步后收到';
+        below.textContent = '';
+        if (left) below.append(el('p', { className: 'quiet', textContent: left }));
+        if (told && !sayable && !current.ask && current.live) below.append(el('p', { className: 'quiet', textContent: '它现在停着，等在电脑上输入，从这里发不进消息。要在手机上接着做，用下面的方式把它接过来。' }));
+        const { choices, why } = current.live ? ways(current) : { choices: current.dir ? [{ label: '在手机上继续', sub: '它已不在电脑上打开', value: 'resume', kind: 'solid' }] : [], why: '' };
+        if (why && !told) below.append(el('p', { className: 'why', textContent: why }));
+        choices.forEach(c => below.append(el('button', { type: 'button', className: 'choice ' + (c.kind || ''), onclick: () => finish({ value: c.value, session: current }) },
+          el('span', null, c.label, c.sub ? el('small', { textContent: c.sub }) : ''))));
       }
-      if (can(session, 'say') && !session.ask) form.append(el('button', { type: 'button', className: 'choice solid', onclick: () => finish('tell') }, el('span', null, '发消息', el('small', { textContent: session.status === 'waiting' ? '它已停下，正等你的消息' : '它做完手上这一步后收到' }))));
-      if (why && !Array.isArray(session.reach)) form.append(el('p', { className: 'why', textContent: why }));
-      choices.forEach(c => form.append(el('button', { type: 'button', className: 'choice ' + (c.kind || ''), onclick: () => finish(c.value) },
-        el('span', null, c.label, el('small', { textContent: c.sub })))));
+      show();
+      watch = setInterval(() => { if ($('sheet').open) show(); }, 1500);
     });
-    if (choice === 'allow' || choice === 'deny') answerAsk(session, choice === 'allow');
-    else if (choice === 'tell') tell(session);
-    else if (choice === 'add') addFolder(session.folder);
-    else if (choice) start(session.tool, session.dir, session.id, choice === 'close', choice === 'copy');
+    clearInterval(watch);
+    if (!choice) return;
+    const current = choice.session;
+    if (choice.value === 'add') addFolder(current.folder);
+    else if (choice.value === 'resume') start(current.tool, current.dir, current.id, false);
+    else start(current.tool, current.dir, current.id, choice.value === 'close', choice.value === 'copy');
   }
   // ?new=1 comes from the app's workbench: a terminal is started without walking to a project first. The projects
   // used last come first; each offers the tools the computer has.
@@ -519,7 +572,8 @@
       }
       return made;
     }
-    if (s.live) meta.append(pill(x.state === 'active' && s.status === 'busy' ? 'busy' : x.state === 'active' ? 'pc' : 'locked', hostLabel[sessionHost(s)] || hostLabel.unknown));
+    // one that a program holds without using it (a desktop app keeps what it has loaded) is said to be idle there
+    if (s.live) meta.append(pill(x.state === 'active' && s.status === 'busy' ? 'busy' : x.state === 'active' ? 'pc' : 'locked', s.now === false ? '电脑上闲置' : hostLabel[sessionHost(s)] || hostLabel.unknown));
     else if (x.hidden) meta.append(pill('locked', '已隐藏'));
     placed(meta, x, withProject);
     meta.append(el('span', { textContent: whereOf(x) + ' · ' + ago(s.updated) }));

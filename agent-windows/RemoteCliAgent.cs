@@ -213,7 +213,8 @@ public sealed class TerminalAgent {
     // Dir: the project a conversation belongs to. One that a program has open in a folder that is no project has none
     // ("") and says the folder instead (Folder): the phone can look at it, answer it and tell it things, and its folder
     // can be made a project from there.
-    public sealed class SessionInfo { public string Id, Tool, Dir, Folder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    // Live: a program on this computer holds it. Now: it is in use (InUse); only then is it something that is going on.
+    public sealed class SessionInfo { public bool Now; public string Id, Tool, Dir, Folder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
     /// the tools' settings; whether or not it has, this listens for them.
     public readonly Reach Reach;
@@ -224,7 +225,7 @@ public sealed class TerminalAgent {
     object Listed(SessionInfo s) {
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
         string status = known != null ? known.Status : s.Status;
-        return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
+        return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = s.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
             reach = known == null ? null : new[] { known.Sayable ? "say" : null, known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
             ask = known != null && known.Status == "confirm" ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
     }
@@ -249,16 +250,18 @@ public sealed class TerminalAgent {
     DateTime nextScan = DateTime.MinValue, lastActivity = DateTime.MinValue;
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
 
-    // A hook can remain attached to a conversation after its window has gone idle.  Such a record is still useful
-    // history, but it should not occupy the workbench's "进行中" section.  Claude Code and Codex use the same
-    // activity rule: only thinking, waiting for a phone message, or showing a confirmation request is active.
-    static bool ReachActive(Reach.Open open) {
-        return open != null && (open.Status == "busy" || open.Status == "confirm" || open.Status == "waiting");
-    }
-    bool SessionActive(string host, Reach.Open open) {
-        // Before a tool reports its first hook event there is no activity signal to classify. Keep the ownership
-        // entry visible until that signal arrives; once hooks are active, an idle entry is treated as history.
-        return open == null ? !String.IsNullOrEmpty(host) : ReachActive(open);
+    // Two things are said of a conversation that a program on this computer has: that the program holds it (Live:
+    // nothing else can go on with it until that program lets go), and that it is in use now (Now). They differ
+    // because a desktop app keeps every conversation it has loaded held by a process, shown or not, for hours.
+    // In use is: at work, asking, or kept waiting for the phone (its tool says so, through its hooks or its own
+    // note); or in a window of its own, a command line, which is open for as long as its program runs; or used in
+    // the last few minutes. Claude Code and Codex are judged by the same rule.
+    public const int RecentMinutes = 10;
+    public static bool InUse(string host, string origin, string status, Reach.Open told, long used, DateTime now) {
+        string stands = told != null ? told.Status : status;
+        if (stands == "busy" || stands == "confirm" || stands == "waiting") return true;
+        bool window = host == "cli" && (origin ?? "").IndexOf("桌面版", StringComparison.Ordinal) < 0 && (origin ?? "").IndexOf("后台服务", StringComparison.Ordinal) < 0;
+        return window || Milliseconds(now) - used < RecentMinutes * 60000L;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct ProcessEntry {
@@ -381,7 +384,7 @@ public sealed class TerminalAgent {
                         int parent; if (!parents.TryGetValue(at, out parent) || parent == at || parent == 0) break; at = parent;
                     }
                     if (owner != null) { owner.Session = session; owner.Status = source.Status; }
-                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), SessionActive(source.Host, Reach.Of("claude", session))); }
+                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true); }
                 } catch { }
             }
         } catch { }
@@ -394,14 +397,14 @@ public sealed class TerminalAgent {
                 foreach (FileInfo file in recent.Where(f => recentNames.Contains(f.Name) || open.ContainsKey(Path.GetFileNameWithoutExtension(f.Name)))) {
                     string id = Path.GetFileNameWithoutExtension(file.Name), title, same;
                     if (!Regex.IsMatch(id, Uuid) || (title = ClaudeTitle(file, out same)).Length == 0) continue;
-                    ClaudeSessions.Owner source; bool known = open.TryGetValue(id, out source);
-                    bool live = known && SessionActive(source.Host, Reach.Of("claude", id));
+                    ClaudeSessions.Owner source; bool live = open.TryGetValue(id, out source);
                     found.Add(new SessionInfo { Id = id, Tool = "claude", Dir = dir.Key, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? source.Host : "", Origin = live ? source.Origin : "", CanTakeover = live && source.CanTakeover, OwnershipKnown = !live || source.CanTakeover || source.Host == "remote", Status = live ? source.Status : "", TakeoverReason = live ? source.Reason : "", Same = same });
                 }
             } catch { }
         }
         // Conversations Claude Code has open in folders that are no projects: listed with their folder.
-        foreach (var held in open.Where(o => SessionActive(o.Value.Host, Reach.Of("claude", o.Key)) && !found.Any(s => s.Tool == "claude" && s.Id == o.Key))) {
+        // Of these, only the ones in use: what a desktop app holds idle in some folder is nothing the phone has to hear of.
+        foreach (var held in open.Where(o => !found.Any(s => s.Tool == "claude" && s.Id == o.Key))) {
             try {
                 string where = (held.Value.Dir ?? "").TrimEnd('\\', '/'), same;
                 if (!Elsewhere(where) || dirs.Values.Any(d => SamePath(d, where)) || !Regex.IsMatch(held.Key, Uuid)) continue;
@@ -409,6 +412,7 @@ public sealed class TerminalAgent {
                 string title = file.Exists ? ClaudeTitle(file, out same) : "";
                 if (title.Length == 0) continue;        // nothing has been said in it yet
                 var source = held.Value;
+                if (!InUse(source.Host, source.Origin, source.Status, Reach.Of("claude", held.Key), Milliseconds(file.LastWriteTimeUtc), DateTime.UtcNow)) continue;
                 found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
             } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
@@ -459,10 +463,7 @@ public sealed class TerminalAgent {
                 if (folder.Length == 0) continue;
                 string dir = dirs.Where(d => SamePath(d.Value, folder)).Select(d => d.Key).FirstOrDefault();
                 var owner = codexSessions.Get(id);
-                // The writer lock says a Codex process has the file, while the hook says whether that process is
-                // currently showing or thinking about the conversation.  An old idle app session belongs in history.
-                var signal = Reach.Of("codex", id);
-                bool live = owner.Live && SessionActive(owner.Host, signal);
+                bool live = owner.Live;
                 bool phone = owner.Pid > 0 && CodexSessions.Descends(owner.Pid, running.Select(t => t.Pty.Id), ownerParents);
                 string title; codexNames.TryGetValue(id, out title); title = Tidy(title);
                 if (dir == null) {
@@ -471,7 +472,8 @@ public sealed class TerminalAgent {
                     string where = folder.TrimEnd('\\', '/');
                     // (one that a terminal of the phone's has taken on from there is listed too, as that terminal's)
                     bool taken = running.Any(t => t.Tool == "codex" && t.Session == id && t.Folder.Length > 0 && !t.Pty.Closed);
-                    if ((live && !phone || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
+                    bool used = live && !phone && InUse(owner.Host, owner.Origin, "", Reach.Of("codex", id), Milliseconds(file.LastWriteTimeUtc), DateTime.UtcNow);
+                    if ((used || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
                     continue;
                 }
                 int count; counts.TryGetValue(dir, out count);
@@ -480,6 +482,7 @@ public sealed class TerminalAgent {
                 found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? owner.Host : "", Origin = live ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
+        foreach (SessionInfo held in found.Where(s => s.Live)) held.Now = InUse(held.Host, held.Origin, held.Status, Reach.Of(held.Tool, held.Id), held.Updated, DateTime.UtcNow);
         // Associate a phone terminal only with the verified writer process in its own process tree.
         var codexParents = Parents();
         foreach (LiveTerminal t in running.Where(t => t.Tool == "codex" && t.Session.Length == 0 && !t.Pty.Closed)) {
@@ -887,11 +890,9 @@ public sealed class TerminalAgent {
             lock (work) {
                 var active = terminals.Values.Where(t => t.Pty != null && !t.Pty.Closed).ToArray();
                 var list = active.Select(t => new[] { t.Tool, t.Dir.Length > 0 ? t.Dir : Path.GetFileName(t.Folder), t.Status ?? "", t.Started.ToString("o"), sessions.Where(s => s.Id == t.Session).Select(s => s.Title).FirstOrDefault() ?? "", "手机 Remote CLI", "phone", t.Id }).ToList();
-                // A writer lock is not evidence of a visible computer window. Only an
-                // independently owned CLI belongs in the desktop activity list; shared
-                // app-server and foreign/unknown locks remain available in the phone's
-                // locked-history section for fork/retry actions.
-                list.AddRange(sessions.Where(s => s.Live && s.Host == "cli" && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), s.Status, s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
+                // Of the conversations the computer's own programs hold, the ones in use now (InUse): a writer lock or
+                // a process kept by a desktop app is no sign that anybody is at the conversation.
+                list.AddRange(sessions.Where(s => s.Live && s.Now && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), (Reach.Of(s.Tool, s.Id) ?? new Reach.Open { Status = s.Status }).Status, s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
                 return list;
             }
         } catch (InvalidOperationException) { return null; }      // the list changed while it was read: the caller keeps what it showed

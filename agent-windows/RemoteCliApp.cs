@@ -45,7 +45,7 @@ public sealed partial class App : Form {
     readonly PictureBox qr = new PictureBox();
     readonly RowList folders = new RowList(), activity = new RowList();
     readonly Switch enabledSwitch = new Switch(), autostartSwitch = new Switch(), autoUpdateSwitch = new Switch(), reachSwitch = new Switch();
-    SettingRow reachRow;
+    SettingRow reachRow, updateRow;
     readonly Segmented rights = new Segmented { Items = new[] { "默认", "自动改文件", "只读" } }, protocol = new Segmented { Items = new[] { "自动", "HTTP/2" } };
     readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 10 * 60 * 1000 }, quietTimer = new System.Windows.Forms.Timer { Interval = 5000 };
     ReleaseUpdate waitingUpdate;
@@ -593,10 +593,11 @@ public sealed partial class App : Form {
         List<string[]> running = agent == null ? new List<string[]>() : agent.Running();
         if (running == null) return;
         string mark = String.Join("|", running.Select(r => String.Join(",", r)));
-        int phones = running.Count(r => r[6] == "phone"), cli = running.Count(r => r[6] == "cli");
+        // what is listed is open or at work: the terminals shared with the phone, and the conversations in use on the computer
+        int phones = running.Count(r => r[6] == "phone"), own = running.Count - phones, working = running.Count(r => r[2] == "busy" || r[2] == "confirm");
         nav[2].SetBadge(running.Count > 0 ? running.Count.ToString() : "");
         bool allowed = Convert.ToString(config["RemoteEnabled"]) == "True";
-        sideLine = trouble ? "还不能连接" : preparing ? "正在准备…" : !allowed ? "已暂停手机访问" : phones == 0 ? "手机可以连接" : phones + " 个共用终端运行中";
+        sideLine = trouble ? "还不能连接" : preparing ? "正在准备…" : !allowed ? "已暂停手机访问" : running.Count == 0 ? "手机可以连接" : working > 0 ? running.Count + " 个开着 · " + working + " 个在执行" : running.Count + " 个开着";
         sideColour = trouble ? Theme.Bad : preparing || !allowed ? Theme.Busy : Theme.Good;
         // the tools' settings are looked at again now and then: something else may have taken the hooks out
         if (reachRow != null && DateTime.UtcNow - toolsSeen > TimeSpan.FromSeconds(30)) ShowReach(); else ShowSide();
@@ -605,11 +606,12 @@ public sealed partial class App : Form {
         activity.Show(running.Select(r => {
             DateTime started; DateTime.TryParse(r[3], null, System.Globalization.DateTimeStyles.RoundtripKind, out started);
             string tool = r[0] == "claude" ? "Claude Code" : r[0] == "codex" ? "Codex" : "PowerShell";
-            string tag = r[6] == "shared" ? "被应用占用" : r[6] == "remote" ? "其它远程终端" : r[6] == "unknown" ? "被程序占用" : r[6] == "cli" ? "电脑自己的窗口" : r[2] == "busy" ? "正在执行" : "手机和电脑共用";
+            // how it stands first; for one that only is open, where: shared with the phone, or on the computer alone
+            string tag = r[2] == "confirm" ? "等待确认" : r[2] == "busy" ? "正在执行" : r[2] == "waiting" ? "等手机的消息" : r[6] == "phone" ? "手机和电脑共用" : "电脑上开着";
             return new Row { Glyph = Theme.IconTerminal, Title = (r[4].Length > 0 ? r[4] : tool) + " · " + r[1], About = (r[5].Length > 0 ? r[5] + " · " : "") + tool + (r[6] == "phone" ? " · 双击在电脑上打开 · " + Since(started.ToUniversalTime()) : ""), Value = r,
-                             Tag = tag, TagColour = r[6] == "phone" || r[6] == "cli" ? Theme.Good : Theme.Busy };
+                             Tag = tag, TagColour = r[2] == "confirm" ? Theme.Bad : r[2] == "busy" ? Theme.Busy : Theme.Good };
         }));
-        activityNote.Text = running.Count == 0 ? "" : phones + " 个共用终端 · " + cli + " 个电脑独立窗口。共用终端在手机和电脑上显示同一画面，两端均可输入。";
+        activityNote.Text = running.Count == 0 ? "" : phones + " 个共用终端 · " + own + " 段电脑上的对话。只列正在执行或正开着的；桌面应用里闲置的对话不算。";
     }
     // One line, in the lower place; with a tool connected two, the tools under the phone's access.
     void ShowSide() {
@@ -797,10 +799,10 @@ public sealed partial class App : Form {
         ShowProjects();
 
         // ---- page: activity
-        var activityPage = Page("活动", "手机和电脑使用同一批终端。双击终端可在电脑上打开，手机端仍可查看和输入，无需交接。");
+        var activityPage = Page("活动", "正在执行或正开着的终端和对话。共用终端双击可在电脑上打开，手机端仍可查看和输入，无需交接。");
         var liveCard = Place(activityPage, new Card(), 28, 92, 652, 362);
         Place(liveCard, activity, 8, 8, 636, 346);
-        activity.EmptyTitle = "没有正在运行的终端"; activity.EmptyAbout = "点下面的“新建或查看全部”，或在手机上选一个项目新建终端，\n它就会出现在这里，两边都能用。";
+        activity.EmptyTitle = "现在没有开着的终端或对话"; activity.EmptyAbout = "点下面的“新建或查看全部”，或在手机上选一个项目新建终端，\n它就会出现在这里，两边都能用。";
         activity.DoubleClick += (s, e) => OpenActivity();
         activity.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; OpenActivity(); } };
         Action(activityPage, "在电脑上打开", Theme.IconTerminal, ButtonKind.Primary, 28, 468, 150, 36, (s, e) => OpenActivity());
@@ -854,7 +856,7 @@ public sealed partial class App : Form {
             new SettingRow("本机端口", "局域网直连和公网隧道使用，被占用时换一个", portBox, 96, 32),
             new SettingRow("外观", "和手机 App 相同的几种配色，默认与 App 一致", skinPick, 170, 34),
             new SettingRow("自动更新", "关闭时需在此处或手机上手动发起；开启后在终端空闲时自动安装", autoUpdateSwitch, 46, 26),
-            new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 34) };
+            (updateRow = new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 34)) };
         for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 48, 648, 48);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 544, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
         Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 544, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-cli") { UseShellExecute = true }); } catch (Exception) { } });
@@ -929,16 +931,26 @@ public sealed partial class App : Form {
             if (agent != null) agent.Newer = found == null ? "" : found.Version;
             if (found == null) { updateButton.Text = "已是最新版"; updateButton.Glyph = Theme.IconCheck; if (manual) Toast("已是最新版"); return; }
             updateButton.Text = "更新到 v" + found.Version; updateButton.Kind = ButtonKind.Primary; updateButton.Glyph = Theme.IconDownload; nav[3].SetBadge("新");
-            if (remote) { updateButton.Enabled = true; await InstallUpdate(found); }
-            else if (Convert.ToString(config["AutoUpdate"]) == "True") waitingUpdate = found;      // installed by quietTimer when no terminal is at work
-            else if (manual) {      // found by itself: the button and the phone's menu say so, no question is put on the screen
-                if (Confirm("发现新版本 v" + found.Version, "现在下载并重启更新吗？手机会断开几秒，终端随后接回原对话，公网隧道的地址不变。", "下载并更新", false)) { updateButton.Enabled = true; await InstallUpdate(found); }
+            string step = AutoUpdater.Step(manual, remote, Convert.ToString(config["AutoUpdate"]) == "True");
+            if (step == "install") { updateButton.Enabled = true; await InstallUpdate(found); }
+            else if (step == "ask") {
+                // a terminal that is at work is said: the restart cuts into what it is doing, and it goes on with its conversation afterwards
+                bool working = agent != null && !agent.Quiet(20);
+                if (Confirm("发现新版本 v" + found.Version, (working ? "有终端正在工作，更新会打断它手上的这一步。" : "") + "现在下载并重启更新吗？手机会断开几秒，终端随后接回原对话，公网隧道的地址不变。", "下载并更新", false)) { waitingUpdate = null; updateButton.Enabled = true; await InstallUpdate(found); }
             }
+            else if (step == "wait") waitingUpdate = found;      // installed by quietTimer when no terminal is at work
+            ShowUpdate();
         } catch (Exception error) { updateButton.Text = "检查更新"; if (manual) Toast("检查更新失败：" + error.Message); }
         finally { updateButton.Enabled = true; }
     }
+    // What the row of the version says: that an update waits for a quiet moment, and that the button installs it now.
+    void ShowUpdate() {
+        if (updateRow == null) return;
+        if (waitingUpdate != null) updateRow.Say("v" + waitingUpdate.Version + " 会在终端都空闲时自动安装；点右侧按钮立即更新", Theme.Busy);
+        else updateRow.Say("从 GitHub 发布页检查并安装新版本；手机上也可以发起", Theme.Muted);
+    }
     async Task InstallUpdate(ReleaseUpdate found) {
-        if (Changing) { waitingUpdate = found; return; }      // the program does not restart under a phone that is changing the line
+        if (Changing) { waitingUpdate = found; ShowUpdate(); Toast("手机正在切换连接线路，切换完成后自动更新"); return; }      // the program does not restart under a phone that is changing the line
         updateButton.Enabled = false; updateButton.Text = "下载中…"; Say("正在从 GitHub 下载 v" + found.Version + "…");
         try {
             string file = await AutoUpdater.DownloadAsync(found, Path.Combine(dataDir, "updates"));

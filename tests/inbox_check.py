@@ -291,6 +291,18 @@ def main():
         page_value("(() => { %s('整理读书笔记').querySelector('button.open').click(); return 1; })()" % CARD)
         offered = until(lambda: page_value(SHEET), 5, "what can be done with the one outside")
         report["offered_for_the_one_outside"] = offered
+        # the page works beside the conversation: what is said on the computer appears on it while it is open
+        with open(homes.rollouts[WORKING], "a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "第二部分写好了。"}]}}, ensure_ascii=False) + "\n")
+        until(lambda: "第二部分写好了。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 30, "what is said on the computer appears on the open page")
+        head = page_value("document.querySelector('#sheet-form > p').textContent")
+        assert head.startswith("正在执行 · Codex") and "reading-notes（未加入项目）" in head, head
+        # a message is written on the page itself; the page stays, and says that it was left for the tool
+        page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '再加一节小结'; document.querySelector('#sheet .write button').click(); return 1; })()")
+        until(lambda: "已留言" in (page_value("document.querySelector('#sheet .below').textContent") or ""), 10, "the message is left")
+        went = hook("Stop", WORKING, notes, last_assistant_message="提纲写好了。", stop_hook_active=False)
+        assert went.wait(10) == 0 and "再加一节小结" in json.loads(went.stdout.read().decode("utf-8"))["reason"]
+        assert page_value(SHEET) == offered, "the page is still open"
         assert offered[-3:] == ["已在电脑上关闭，在手机上继续", "另开一份继续", "把所在文件夹加为项目"], offered
         choose("另开一份继续")
         apart = until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["dir"] == "" and t["state"] == "running"), None), 30, "a terminal outside every project runs")

@@ -323,6 +323,7 @@ final class Workbench {
                 JSONArray reach = terminal ? null : entry.optJSONArray("reach");
                 made.reached = reach != null;
                 made.folder = entry.optString("folder");
+                made.now = terminal || entry.optBoolean("now", true);
                 if (!terminal) { made.origin = entry.optString("origin"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
                 for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
                 made.shell = device.optString("shell");
