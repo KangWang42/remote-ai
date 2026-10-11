@@ -37,12 +37,25 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
             "projects": [{"name": "demo", "path": "D:\\demo", "fixed": true, "exists": true}],
             "candidates": [{"name": "notes", "path": "D:\\notes", "updated": 1700000000000, "tools": ["claude"]}]},
  "terminals": [{"id": "...", "tool": "shell", "dir": "demo", "title": "PowerShell", "state": "running", "status": "idle", "seq": 12, "cols": 80, "rows": 24, "session": ""}],
- "sessions": [{"id": "<uuid>", "tool": "claude", "dir": "demo", "title": "...", "updated": 1700000000000, "live": false, "status": "", "terminal": ""}]}
+ "sessions": [{"id": "<uuid>", "tool": "claude", "dir": "demo", "folder": "", "title": "...", "updated": 1700000000000, "live": false, "status": "",
+               "pinned": false, "hidden": false, "terminal": ""}]}
 ```
 
 `workspaces` are the project names a terminal may be started in. `sessions` are conversations the tools saved on
 the computer; `live` means a program on the computer has it open, `terminal` is set when one of the relay's
 terminals already shows it. `state` is `starting`, `running` or `closed`; `status` is `busy`, `idle` or empty.
+
+A conversation belongs to a project, named in `dir`. One that a program has open in a folder that is no project is
+listed too: its `dir` is empty and `folder` is the full path of that folder. It can be looked at, and answered and
+told things where its tool lets it be reached; a terminal cannot be started for it until the folder is a project
+(`project_add` with that path), after which the computer lists it under that project. Saved conversations of
+folders that are no projects are not listed.
+
+`pinned` and `hidden` are what the owner said of a conversation from a phone (see "A conversation that is open on
+the computer", the action `mark`). The computer keeps them, so every phone and every line shows the same; they are
+a matter for the lists only, which put a pinned conversation first and leave a hidden one that is not open out
+unless it is searched for. A computer that keeps them has the `marks` capability. At most 120 conversations are
+listed, those that are open or pinned first, then the ones used last.
 
 A live conversation whose tool tells of it through its hooks (the `reach` capability, see "A conversation that is
 open on the computer") carries more: `status` may also be `confirm` (it asks for permission) or `waiting` (it has
@@ -187,6 +200,12 @@ it stays open on the computer and is used there as before.
   takes it at once (it had stopped and was waiting for it), `{"now": false}` when it will take it once it has done
   what it is doing. A conversation that has stopped without waiting cannot be told anything, and says so.
 
+- `{"action": "mark", "pinned": true|false, "hidden": true|false}` (one of the two, or both) says of any listed
+  conversation, open or not, that it is pinned or hidden, or no longer is. → `{}`. It needs the `marks` capability
+  instead of `reach`. The computer is asked with the operation `session_mark` and keeps the marks by tool and
+  conversation in its data folder (`conversation-marks.json`, at most 300 of each kind); the overview says the new
+  state at once.
+
 How this reaches the tools: Claude Code and Codex run hooks of the computer's program (it puts them into the tools'
 own settings when its owner switches that on). A hook for a request for permission is answered with the phone's
 answer; a hook that runs as the tool stops is answered with the message, as something to go on with. Claude Code
@@ -260,7 +279,7 @@ the same folder. A locked source cannot be resumed concurrently; choose fork or 
 
 ```json
 {"info": {"instance": "<32 hex, new at each start>", "enabled": true, "tools": ["claude", "shell"], "workspaces": ["demo"],
-          "features": ["files", "update", "reach"], "version": "0.7.0", "newer": "", "shell": "PowerShell", "projects": [...], "candidates": [...]},
+          "features": ["files", "update", "reach", "marks"], "version": "0.7.0", "newer": "", "shell": "PowerShell", "projects": [...], "candidates": [...]},
  "terminals": [{"id": "...", "state": "running", "status": "idle", "tool": "shell", "dir": "demo", "created": 1700000000000, "title": ""}],
  "output": [{"terminal": "...", "seq": 13, "data": "..."}],
  "acks": [{"id": "<operation id>", "error": ""}],
