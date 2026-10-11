@@ -167,22 +167,30 @@ def pages(chrome, out, folder, first, addresses, config):
         until(lambda: "20261" in printed(), "the shell to have run what was said", 20)
         assert value("!document.getElementById('sheet').open")
         first.post("/api/terminal", {"id": secrets.token_hex(16), "action": "close", "terminal": terminal})
-        # ---- the computer's settings: told, a setting changed, and the line changed by pressing it
-        ask("Page.navigate", url=addresses[0] + "/computer/")
-        until(lambda: value("document.querySelectorAll('#lines .card').length") == 5 and value("document.querySelectorAll('#settings .card').length") == 4, "the page of settings", 20)
-        assert value("document.querySelector('#lines .card.current b').textContent") == addresses[0].split("://")[1], value("document.getElementById('lines').innerText")
+        # ---- the settings, reached by the one button for them: told, a setting changed, and the line changed by pressing it
+        ask("Page.navigate", url=addresses[0] + "/")
+        until(lambda: value("!!document.getElementById('settings') && !document.getElementById('home').hidden"), "the list", 20)
+        assert value("!document.getElementById('more') && !document.getElementById('look')")
+        press("document.getElementById('settings')")
+        until(lambda: (value("location.pathname") or "").endswith("/computer/") and value("document.querySelectorAll('#lines li').length") == 5
+              and value("document.querySelectorAll('#settings .pick, #settings .flip').length") == 4, "the page of settings", 20)
+        # the lines, the four settings and the version of the program; the look; signing out. The app's own row is for the app
+        assert value("document.querySelectorAll('#settings li').length") == 5 and value("document.querySelectorAll('#skins button').length") >= 6
+        assert value("document.getElementById('part-app').hidden") is True and value("document.querySelector('#account b').textContent") == "退出登录"
+        assert value("document.querySelector('#lines li.current b').textContent") == addresses[0].split("://")[1], value("document.getElementById('lines').innerText")
         assert "http" not in value("document.getElementById('lines').innerText")
         picture("computer.png")
         press("Array.from(document.querySelectorAll('#settings .pick button')).find(b => b.textContent === '自动改文件')")
         until(lambda: config()["RemoteMaxMode"] == "edit", "the setting to be kept", 15)
         until(lambda: value("Array.from(document.querySelectorAll('#settings .pick button')).find(b => b.textContent === '自动改文件').getAttribute('aria-pressed')") == "true", "the page to show it", 10)
-        press("Array.from(document.querySelectorAll('#lines .card')).find(c => c.querySelector('b').textContent === '%s').querySelector('button')" % addresses[1].split("://")[1])
+        press("Array.from(document.querySelectorAll('#lines li')).find(c => c.querySelector('b').textContent === '%s').querySelector('button')" % addresses[1].split("://")[1])
         until(lambda: value("!!document.querySelector('#sheet[open] .choice.solid')"), "the question", 10)
         picture("computer-asks.png")
         press("document.querySelector('#sheet-form .choice.solid')")
         # the page is taken to the other relay, signs in there with what it was handed, and says that it arrived
         until(lambda: value("location.origin") == addresses[1] and (value("document.getElementById('state-title').textContent") or "").startswith("已切换到"), "the page to arrive at the other relay", 60)
-        assert value("location.hash") == "" and value("document.querySelector('#lines .card.current b').textContent") == addresses[1].split("://")[1]
+        until(lambda: value("document.querySelector('#lines li.current b') && document.querySelector('#lines li.current b').textContent") == addresses[1].split("://")[1], "the line in use to be shown", 10)
+        assert value("location.hash") == ""
         assert config()["OwnServer"] == addresses[1], config()
         picture("computer-kept.png")
         assert not said, said[:3]

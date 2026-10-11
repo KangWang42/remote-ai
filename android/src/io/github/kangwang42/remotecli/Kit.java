@@ -175,9 +175,9 @@ final class Kit {
     }
 
     /** Choices on a sheet that rises from the bottom, within reach of a thumb. notes may hold null; danger marks one choice, or is -1. */
-    void sheet(String title, String note, String[] labels, String[] notes, int danger, IntConsumer picked) {
-        final Dialog dialog = new Dialog(activity);
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+    // A sheet that rises from the bottom of the screen, in the app's look: its box with the grip, the title and a
+    // line under it; and putting it on the screen.
+    private LinearLayout sheetBox(String title, String note, int noteLines) {
         LinearLayout box = column();
         box.setPadding(dp(18), dp(10), dp(18), dp(14));
         GradientDrawable back = new GradientDrawable();
@@ -189,7 +189,45 @@ final class Kit {
         middle.gravity = Gravity.CENTER_HORIZONTAL; middle.bottomMargin = dp(14);
         box.addView(grip, middle);
         box.addView(bold(title, 18, INK));
-        if (note != null && !note.isEmpty()) box.addView(text(note, 13.5f, MUTED), below(4));
+        if (note != null && !note.isEmpty()) {
+            TextView under = text(note, 13.5f, MUTED);
+            if (noteLines > 0) { under.setMaxLines(noteLines); under.setEllipsize(TextUtils.TruncateAt.END); }
+            box.addView(under, below(4));
+        }
+        return box;
+    }
+    private void raise(Dialog dialog, LinearLayout box, boolean typing) {
+        dialog.setContentView(box);
+        Window window = dialog.getWindow();
+        // a sheet to write in comes with the keyboard and stays above it
+        if (window != null && typing) window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE | android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        dialog.show();
+        if (window == null) return;
+        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.setLayout(-1, -2); window.setGravity(Gravity.BOTTOM);
+    }
+    /** A sheet with a box to write in and one button, which hands over what was written. */
+    void write(String title, String note, String hint, String yes, java.util.function.Consumer<String> written) {
+        final Dialog dialog = new Dialog(activity);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = sheetBox(title, note, 3);
+        final EditText field = field(hint, android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        field.setSingleLine(false); field.setMinLines(2); field.setMaxLines(6); field.setGravity(Gravity.TOP | Gravity.START);
+        field.setBackground(shape(BG, LINE, 14)); field.setPadding(dp(16), dp(13), dp(16), dp(13));
+        box.addView(field, below(14));
+        box.addView(button(yes, 0, () -> {
+            String text = field.getText().toString().trim();
+            if (text.isEmpty()) return;
+            dialog.dismiss(); written.accept(text);
+        }), below(10));
+        box.addView(button("取消", 2, dialog::dismiss), below(4));
+        raise(dialog, box, true);
+        field.requestFocus();
+    }
+    void sheet(String title, String note, String[] labels, String[] notes, int danger, IntConsumer picked) {
+        final Dialog dialog = new Dialog(activity);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = sheetBox(title, note, 0);
         for (int i = 0; i < labels.length; i++) {
             LinearLayout item = column();
             item.setGravity(Gravity.CENTER_VERTICAL); item.setMinimumHeight(dp(54)); item.setPadding(dp(16), dp(9), dp(16), dp(9));
@@ -201,11 +239,6 @@ final class Kit {
             box.addView(item, below(i == 0 ? 14 : 8));
         }
         box.addView(button("取消", 2, dialog::dismiss), below(4));
-        dialog.setContentView(box);
-        dialog.show();
-        Window window = dialog.getWindow();
-        if (window == null) return;
-        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        window.setLayout(-1, -2); window.setGravity(Gravity.BOTTOM);
+        raise(dialog, box, false);
     }
 }

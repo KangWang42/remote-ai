@@ -458,23 +458,9 @@ final class Workbench {
         return kit.discButton(R.drawable.ic_say, "给“" + task.entry.shownTitle() + "”发消息", () -> sayTask(task));
     }
     private void sayTask(Task task) {
-        final android.widget.EditText box = new android.widget.EditText(activity);
-        box.setHint("发送消息");
-        box.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        box.setMinLines(2); box.setMaxLines(6); box.setGravity(android.view.Gravity.TOP);
-        android.widget.FrameLayout room = new android.widget.FrameLayout(activity);
-        room.setPadding(kit.dp(20), kit.dp(6), kit.dp(20), 0);
-        room.addView(box, new android.widget.FrameLayout.LayoutParams(-1, -2));
         // what the program said last is shown, to tell which terminal this is and where it stands
-        android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(activity).setTitle(task.entry.shownTitle())
-            .setMessage(task.entry.said.isEmpty() ? task.entry.project + " · " + AggregateSessions.label(task.kind) : task.entry.said).setView(room)
-            .setNegativeButton("取消", null).setPositiveButton("发送", (d, w) -> {
-                String text = box.getText().toString().trim();
-                if (!text.isEmpty()) sayRemote(task, text);
-            }).create();
-        if (dialog.getWindow() != null) dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
-        dialog.show();
-        box.requestFocus();
+        kit.write(task.entry.shownTitle(), task.entry.said.isEmpty() ? task.entry.project + " · " + AggregateSessions.label(task.kind) : task.entry.said,
+            "发送消息", "发送", text -> sayRemote(task, text));
     }
     /** The relay puts the message the way the program takes pasted text and adds Enter (the operation "say"). */
     private void sayRemote(Task task, String text) {

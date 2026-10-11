@@ -1,23 +1,36 @@
-/* The program on the computer, seen from the phone: the lines it can be reached by and a few of its settings.
-   The lists use the cards of the other pages (../app.css). */
-.note { color: var(--muted); font-size: .86rem; text-align: center; margin: 18px 8px; }
+/* The settings of one computer, seen from the phone: the line it is reached by, a few settings of the program on
+   it, the look, the app, and signing out. Each kind is a group of rows, as settings are laid out on a phone. */
 #state.plain { border-color: var(--line); background: var(--panel); }
 #state.good { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); background: color-mix(in srgb, var(--good) 9%, var(--panel)); }
 #state.busy b::before { content: ""; display: inline-block; width: .8em; height: .8em; margin-right: .5em; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; vertical-align: -.08em; animation: turn .8s linear infinite; }
 @keyframes turn { to { transform: rotate(360deg); } }
 
-/* ---- lines */
-#lines .card.current { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
-#lines .card > button.open:disabled { opacity: 1; cursor: default; }
-#lines.held .card:not(.current) { opacity: .5; }
+/* ---- a group of rows under its title */
+.group-title { margin: 26px 4px 8px; font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.group { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
+.group > li + li { border-top: 1px solid var(--line); }
+.group.pad { display: grid; gap: 10px; padding: 14px; }
+.group.pad .label { margin: 4px 0 -4px; font-size: .82rem; color: var(--muted); }
+.group.last { margin-top: 26px; }
+.group-note { margin: 0; padding: 14px 16px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); font-size: .88rem; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; width: 100%; min-height: 58px; padding: 10px 14px; text-align: left; }
+button.row:active { background: var(--raised); }
+button.row:disabled { opacity: 1; cursor: default; }
+.row .text { flex: 1 1 10rem; min-width: 0; display: grid; gap: 2px; }
+.row .text b { font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .text small { color: var(--muted); font-size: .8rem; line-height: 1.4; }
+.row .value { flex: none; color: var(--muted); font-size: .86rem; }
+.row .act { flex: none; color: var(--accent); font-size: .9rem; font-weight: 600; }
+.row.danger .text b { color: var(--bad); }
+.row .tool { width: 36px; height: 36px; border-radius: 11px; }
+
+/* ---- lines: the one in use is marked; while a line is being changed the others wait */
+#lines.held li:not(.current) { opacity: .5; }
 .tool.lan { --tint: var(--good); }
 .tool.cloud, .tool.own { --tint: var(--accent); }
 .tool.public { --tint: var(--busy); }
 
-/* ---- settings: what it is on the left, the choice on the right; a choice of three goes below on a narrow screen */
-#settings .card { align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 14px; }
-#settings .text { flex: 1 1 12rem; }
-#settings .text span { color: var(--muted); font-size: .8rem; line-height: 1.4; }
+/* ---- a choice of two or three, and a switch */
 .pick { display: flex; flex: none; padding: 3px; gap: 2px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); }
 .pick button { min-height: 36px; padding: 0 12px; border-radius: 9px; color: var(--muted); font-size: .88rem; white-space: nowrap; }
 .pick button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }

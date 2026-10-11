@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex">
   <meta name="theme-color" content="#fbfbfc">
-  <title>电脑设置 · Remote CLI</title>
+  <title>设置 · Remote CLI</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="../app.css">
   <link rel="stylesheet" href="computer.css">
@@ -17,25 +17,38 @@
     <header class="top">
       <button type="button" class="icon" id="back" aria-label="返回"></button>
       <div class="who">
-        <h1>电脑设置</h1>
-        <p id="device" role="status" aria-live="polite"><span id="device-text">正在询问电脑…</span></p>
+        <h1>设置</h1>
+        <p id="device" role="status" aria-live="polite"><span id="dot" aria-hidden="true"></span><span id="device-text">正在连接…</span></p>
       </div>
     </header>
 
-    <div id="loading" aria-hidden="true"><i></i><i></i><i></i></div>
     <section id="state" class="notice" role="status" aria-live="polite" hidden><b id="state-title"></b><span id="state-text"></span></section>
 
-    <div id="body" hidden>
-      <section>
-        <div class="section-head"><h2>连接线路</h2><p>手机通过哪条线路连到这台电脑</p></div>
-        <ul class="cards" id="lines"></ul>
-      </section>
-      <section>
-        <div class="section-head"><h2>设置</h2><p>只影响这台电脑</p></div>
-        <ul class="cards" id="settings"></ul>
-      </section>
-      <p class="note">添加中转、修改密码和本机端口需在电脑上操作。</p>
-    </div>
+    <section>
+      <h2 class="group-title">连接线路</h2>
+      <ul class="group" id="lines" hidden></ul>
+      <p class="group-note" id="lines-note">正在询问电脑…</p>
+    </section>
+    <section>
+      <h2 class="group-title">电脑端</h2>
+      <ul class="group" id="settings" hidden></ul>
+      <p class="group-note" id="settings-note">正在询问电脑…</p>
+    </section>
+    <section>
+      <h2 class="group-title">外观</h2>
+      <div class="group pad">
+        <div class="swatches" id="skins"></div>
+        <p class="label">文字大小</p>
+        <div class="sizes" id="sizes"></div>
+      </div>
+    </section>
+    <section id="part-app" hidden>
+      <h2 class="group-title">App</h2>
+      <ul class="group" id="app"></ul>
+    </section>
+    <section>
+      <ul class="group last" id="account"></ul>
+    </section>
   </main>
 
   <div id="toast" role="status" aria-live="polite" hidden></div>

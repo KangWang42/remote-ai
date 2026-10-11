@@ -26,8 +26,9 @@
   // ---- drawing helpers
   const svg = (path, size) => `<svg viewBox="0 0 24 24" width="${size || 22}" height="${size || 22}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
   const ICON = {
-    back: svg('<path d="M15 5l-7 7 7 7"/>'), more: svg('<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>'),
-    look: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17M12 7.5a4.5 4.5 0 0 1 0 9" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" opacity=".35"/>'),
+    back: svg('<path d="M15 5l-7 7 7 7"/>'),
+    // a wheel with eight teeth: the ring of teeth is one circle drawn in dashes
+    gear: svg('<circle cx="12" cy="12" r="2.8"/><circle cx="12" cy="12" r="6.3"/><circle cx="12" cy="12" r="8.4" stroke-width="2.4" stroke-linecap="butt" stroke-dasharray="2.64 3.957"/>'),
     chev: svg('<path d="M9 6l6 6-6 6"/>', 18), stop: svg('<rect x="6" y="6" width="12" height="12" rx="3.2" fill="currentColor" stroke="none"/>', 18), plus: svg('<path d="M12 5v14M5 12h14"/>', 20),
     folder: svg('<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
     claude: svg('<path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6L6 18"/>'), codex: svg('<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>'),
@@ -54,20 +55,23 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { box.hidden = true; }, 3200);
   }
 
-  // ---- look: the skin chosen here is the one the terminal page opens with
-  const TEXT = { small: ['紧凑', '14px'], normal: ['标准', '15.5px'], large: ['大', '17px'], larger: ['特大', '19px'] };
+  // ---- look: chosen on the page of settings, and put on here
+  const TEXT = { small: '14px', normal: '15.5px', large: '17px', larger: '19px' };
   // ?skin=<name> chooses a skin from a link, for example when showing the app to someone.
   const asked = new URLSearchParams(location.search).get('skin');
   if (asked && window.RemoteCliSkins[asked]) keep('skin', asked);
   function paint() {
     const skin = window.RemoteCliPaint(saved('skin', 'paper'));
-    document.documentElement.style.fontSize = (TEXT[saved('text', 'normal')] || TEXT.normal)[1];
+    document.documentElement.style.fontSize = TEXT[saved('text', 'normal')] || TEXT.normal;
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.content = skin.t.background;
     if (native) native.chrome(skin.t.background);
   }
   paint();
-  $('back').innerHTML = ICON.back; $('look').innerHTML = ICON.look; $('more').innerHTML = ICON.more;
+  $('back').innerHTML = ICON.back; $('settings').innerHTML = ICON.gear;
+  // Everything that is set, for this computer and for these pages, is on one page: the line, the program on the
+  // computer, the look, the app, signing out.
+  $('settings').addEventListener('click', () => { location.href = 'computer/'; });
   $('project-files-icon').innerHTML = ICON.folder; $('project-files-chev').innerHTML = ICON.chev;
   $('project-files').addEventListener('click', () => {
     if (!usable()) return toast('电脑离线，暂时无法查看文件');
@@ -113,49 +117,6 @@
         el('span', null, c.label, c.sub ? el('small', { textContent: c.sub }) : ''))));
     });
   }
-  $('look').addEventListener('click', () => openSheet(form => {
-    const skins = window.RemoteCliSkins;
-    form.append(el('h3', { textContent: '外观' }), el('p', { textContent: '配色同时用于列表和终端。' }));
-    const grid = el('div', { className: 'swatches' }), sizes = el('div', { className: 'sizes' });
-    const mark = () => {
-      grid.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.key === saved('skin', 'paper'))));
-      sizes.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.key === saved('text', 'normal'))));
-    };
-    Object.keys(skins).forEach(key => {
-      const s = skins[key];
-      const preview = el('i', { style: 'background:' + s.t.background }); preview.style.background = s.t.background;
-      [[s.t.foreground, 22], [s.accent, 30], [s.t.green, 16], [s.t.yellow, 24], [s.t.red, 12]].forEach(([colour, height]) => { const bar = el('span'); bar.style.background = colour; bar.style.height = height + 'px'; preview.append(bar); });
-      const button = el('button', { type: 'button', onclick: () => { keep('skin', key); paint(); mark(); } }, preview, s.name + (s.light ? ' · 明亮' : ''));
-      button.dataset.key = key; grid.append(button);
-    });
-    Object.keys(TEXT).forEach(key => { const button = el('button', { type: 'button', textContent: TEXT[key][0], onclick: () => { keep('text', key); paint(); mark(); } }); button.dataset.key = key; sizes.append(button); });
-    form.append(grid, el('label', { textContent: '文字大小' }), sizes);
-    mark();
-  }));
-  $('more').addEventListener('click', async () => {
-    const ready = data && data.device.online && data.device.enabled;
-    const choices = [];
-    if (ready) choices.push({ label: '添加项目', sub: '添加电脑上的一个文件夹', value: 'add' });
-    if (ready && (data.device.features || []).includes('settings')) choices.push({ label: '电脑设置', sub: '切换连接线路，更改电脑端的几项设置', value: 'settings' });
-    if (native) choices.push({ label: '回到工作台', sub: '查看所有电脑和进行中的任务，或换一台电脑', value: 'switch' });
-    if (native && native.update) choices.push({ label: '检查 App 更新', sub: '当前版本 ' + (native.version ? native.version() : ''), value: 'update' });
-    const device = data ? data.device : {};
-    if (ready && (device.features || []).includes('update')) choices.push(device.newer
-      ? { label: '更新电脑端到 v' + device.newer, sub: '当前 v' + device.version + '。更新时会中断几秒，终端随后接回原对话', value: 'computer' }
-      : { label: '检查电脑端更新', sub: '电脑端当前 v' + device.version + '；有新版本时自动安装', value: 'computer' });
-    choices.push({ label: '退出登录', sub: '下次需要重新扫码或输入密码', value: 'out', kind: 'danger' });
-    const choice = await ask('更多', '', choices);
-    if (choice === 'add') addProject();
-    else if (choice === 'settings') location.href = 'computer/';
-    else if (choice === 'switch') native.disconnect();
-    else if (choice === 'update') native.update();
-    else if (choice === 'computer') {
-      try { await api('api/terminal', { action: 'update', id: newId() }); toast(device.newer ? '电脑端开始更新，中断几秒后自动恢复' : '已让电脑端检查更新'); }
-      catch (error) { toast(error.message); }
-    }
-    else if (choice === 'out') { try { await api('api/logout', {}); } catch (error) { /* signed out anyway */ } if (native) native.disconnect(); else showLogin(); }
-  });
-
   function showLogin() {
     clearTimeout(timer);
     $('home').hidden = true; $('login').hidden = false;
