@@ -378,7 +378,8 @@
       const see = () => { if (!usable()) return toast('电脑离线，暂时无法打开'); takeOver(s); };
       meta.append(pill(phase, PHASE[phase][0]));
       if (withProject) meta.append(el('span', { className: 'chip', textContent: s.dir }));
-      meta.append(el('span', { textContent: TOOLS[s.tool] + ' · ' + where }));
+      // it is open on the computer and stays there: said so, not as something a program holds
+      meta.append(el('span', { textContent: TOOLS[s.tool] + ' · ' + (s.origin && s.origin !== '电脑独立终端' ? s.origin : '电脑上开着') }));
       const card = el('li', { className: 'card ' + (phase === 'waiting' ? 'done' : phase) }, el('button', { type: 'button', className: 'open', onclick: see },
         el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, el('b', { textContent: s.title }), meta, el('span', { className: 'peek', hidden: !s.last || phase === 'confirm', textContent: s.last || '' }))));
       if (can(s, 'say') && phase !== 'confirm') card.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这段对话发消息', html: ICON.say, onclick: () => tell(s) }));
