@@ -456,6 +456,25 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": info, "sessions": [dict(saved, pinned=False, hidden=True)]}, now=1003)
         self.assertEqual([(s["pinned"], s["hidden"]) for s in self.relay.overview(now=1003)["sessions"]], [(False, True)])
 
+    def test_a_conversation_that_sits_idle_is_told_where_it_is_and_the_answer_is_waited_for(self):
+        import threading
+        sid, other = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"
+        info = dict(self.info, features=["peek", "reach"])
+        idle = {"id": sid, "tool": "claude", "dir": "demo", "title": "桌面版里闲置的对话", "updated": 1, "live": True, "now": False, "host": "cli", "status": "idle", "reach": ["say"], "wake": True}
+        self.relay.agent({"info": info, "sessions": [idle, dict(idle, id=other, reach=[], wake=True), dict(idle, id=sid[:-1] + "6", reach=None, wake=True)]}, now=1001)
+        shown = {s["id"]: s for s in self.relay.overview(now=1001)["sessions"]}
+        # it can be woken only where it can be told at all; it is still no conversation that is going on
+        self.assertEqual([(s["reach"], s["wake"], s["activity"]) for s in shown.values()], [(["say"], True, "locked"), ([], False, "locked"), (None, False, "locked")])
+        answers = {}
+        waiting = threading.Thread(target=lambda: answers.update(got=self.relay.conversation({"id": "c" * 32, "session": sid, "action": "say", "text": "把结论再写短一点"}, now=1001, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual([(o["action"], o["session"], o["tool"], o["text"]) for o in asked], [("session_say", sid, "claude", "把结论再写短一点")])
+        self.relay.agent({"info": info, "acks": [{"id": "c" * 32, "error": "", "result": {"now": True, "woke": True}}]}, now=1002)
+        waiting.join(5)
+        self.assertEqual(answers["got"], {"now": True, "woke": True})
+        self.assertGreater(tr.WAKE_SECONDS, tr.FILE_SECONDS)
+
     def test_a_conversation_a_program_holds_without_using_it_is_not_one_that_is_going_on(self):
         ids = ["11111111-2222-3333-4444-55555555555%d" % n for n in range(5)]
         held = {"tool": "claude", "dir": "demo", "title": "桌面版加载过的对话", "updated": 1, "live": True, "host": "cli", "origin": "Claude 桌面版"}

@@ -179,10 +179,29 @@ public sealed class Reach : IDisposable {
     static long Stamp(string path) { try { return path.Length > 0 ? File.GetLastWriteTimeUtc(path).Ticks : 0; } catch { return 0; } }
     static readonly string[] Nothing = { "", "0" };
 
+    /// Whether no person sits at this run: a script's `claude -p` (Claude Code notes how a session was started; a
+    /// script's is "sdk…"), a `codex exec`, or a helper thread that a Codex conversation started for itself (the
+    /// first line of its record says). Such a run is answered at once and with nothing: keeping it waiting for a
+    /// phone would hold up the script, and it is no conversation to show on a phone.
+    public static bool Scripted(string tool, Dictionary<string, object> hooked) {
+        try {
+            if (tool == "claude") return ClaudeSessions.Entry(Text(hooked, "session_id")).StartsWith("sdk", StringComparison.OrdinalIgnoreCase);
+            string path = Text(hooked, "transcript_path");
+            if (path.Length == 0 || !File.Exists(path)) return false;
+            string first;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) using (var reader = new StreamReader(stream, Encoding.UTF8)) {
+                var head = new char[16384]; int read = reader.Read(head, 0, head.Length);
+                first = new string(head, 0, Math.Max(0, read)); int end = first.IndexOf('\n'); if (end >= 0) first = first.Substring(0, end);
+            }
+            return Regex.IsMatch(first, @"originator.\s*:\s*.codex_exec\b|\bsource.\s*:\s*.exec\b|\bsource.\s*:\s*\{|parent_thread_id.\s*:\s*.\w");
+        } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } catch (ArgumentException) { return false; }
+    }
+
     /// One event of a tool. Returns what the hook writes for the tool to read, and the code it ends with.
     string[] Handle(string tool, Dictionary<string, object> hooked, Func<bool> gone) {
         string name = Text(hooked, "hook_event_name"), session = Text(hooked, "session_id");
         if ((tool != "claude" && tool != "codex") || !Regex.IsMatch(session, Uuid)) return Nothing;
+        if (Scripted(tool, hooked)) return Nothing;
         Open o; bool first;
         lock (gate) {
             first = heard.Add(tool);

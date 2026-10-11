@@ -139,6 +139,31 @@ public static class ReachCheck {
                 idle = 5;
                 Require(Answer(stopped, 3000, "somebody came back") == "" && claude(one).Status == "idle", "a tool is not kept waiting once somebody is at the computer");
 
+                // ---- a run no person sits at (a script's `claude -p`, `codex exec`, a helper thread of a conversation) is
+                // never kept waiting, however long nobody has been at the computer, and is no conversation for a phone
+                idle = 600;
+                string script = Guid.NewGuid().ToString(), desk = Guid.NewGuid().ToString(), exec = Guid.NewGuid().ToString(), helper = Guid.NewGuid().ToString(), wasTranscript = transcript;
+                string notes = Path.Combine(folder, "claude-notes");
+                Directory.CreateDirectory(Path.Combine(notes, "sessions"));
+                File.WriteAllText(Path.Combine(notes, "sessions", "1.json"), "{\"pid\":1,\"sessionId\":\"" + script + "\",\"kind\":\"interactive\",\"entrypoint\":\"sdk-cli\"}");
+                File.WriteAllText(Path.Combine(notes, "sessions", "2.json"), "{\"pid\":2,\"sessionId\":\"" + desk + "\",\"kind\":\"interactive\",\"entrypoint\":\"claude-desktop-3p\"}");
+                Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", notes);
+                Require(ClaudeSessions.Entry(script) == "sdk-cli" && ClaudeSessions.Entry(desk) == "claude-desktop-3p" && ClaudeSessions.Entry(exec) == "", "how a session was started, as Claude Code notes it");
+                Require(Answer(Run("claude", Event("Stop", script)), 5000, "a script's run of Claude Code") == "" && claude(script) == null, "a script's run is let go at once and is not listed");
+                Require(Answer(Run("claude", Request(script, "rm -rf build", "Clean")), 5000, "a script's request") == "" && claude(script) == null, "what a script's run asks is the script's to answer");
+                transcript = Path.Combine(folder, "exec.jsonl");
+                File.WriteAllText(transcript, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"x\",\"originator\":\"codex_exec\",\"source\":\"exec\"}}\n{}\n");
+                Require(Answer(Run("codex", Event("Stop", exec)), 5000, "codex exec") == "" && codex(exec) == null, "codex exec is let go at once and is not listed");
+                transcript = Path.Combine(folder, "helper.jsonl");
+                File.WriteAllText(transcript, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"x\",\"originator\":\"codex-tui\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"y\"}}}}}\n");
+                Require(Answer(Run("codex", Event("Stop", helper)), 5000, "a helper thread") == "" && codex(helper) == null, "a helper thread of a conversation is let go at once");
+                // a person's conversation in the desktop app is listened to as before
+                transcript = wasTranscript;
+                Answer(Run("claude", Event("UserPromptSubmit", desk)), 5000, "the desktop app's conversation");
+                Require(claude(desk) != null && claude(desk).Status == "busy", "a conversation of the desktop app is a person's");
+                Answer(Run("claude", Event("SessionEnd", desk)), 5000, "the desktop app's conversation ends");
+                Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null); idle = 0;
+
                 // ---- a conversation that ends is forgotten
                 Answer(Run("claude", Event("SessionEnd", one)), 5000, "ended");
                 Require(claude(one) == null && codex(two) != null, "only the one that ended");

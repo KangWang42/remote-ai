@@ -207,7 +207,8 @@
       setTimeout(() => box.focus(), 80);
     });
     if (!text) return;
-    try { const got = await api('api/conversation', { id: newId(), session: s.id, action: 'say', text }); toast(got.now ? '已发送' : '已发送，它做完手上这一步后收到'); }
+    if (s.wake) toast('正在送进电脑上的这段对话，大约要十秒…');
+    try { const got = await api('api/conversation', { id: newId(), session: s.id, action: 'say', text }); toast(got.woke ? '已送进电脑上的这段对话' : got.now ? '已发送' : '已发送，它做完手上这一步后收到'); }
     catch (error) { toast(error.message); }
     refresh();
   }
@@ -318,17 +319,19 @@
         const text = box.value.trim();
         if (!text) return box.focus();
         send.disabled = true;
+        // one that sits idle is handed the message where it is: that takes some seconds
+        if (now().wake) { left = '正在送进电脑上的这段对话，大约要十秒…'; show(); }
         try {
           const got = await api('api/conversation', { id: newId(), session: session.id, action: 'say', text });
-          box.value = ''; left = got.now ? '已发送，它接着做了' : '已留言：它做完手上这一步后收到';
-        } catch (error) { toast(error.message); }
+          box.value = ''; left = got.woke ? '已送进电脑上的这段对话，它开始处理了' : got.now ? '已发送，它接着做了' : '已留言：它做完手上这一步后收到';
+        } catch (error) { left = ''; toast(error.message); }
         send.disabled = false; refresh(); show();
       } });
       write.append(box, send);
       let shown = '', left = '';
       function show() {
         const current = now(), phase = current.live ? reachPhase(current) : '', told = Array.isArray(current.reach);
-        const stamp = JSON.stringify([current.live, current.status, current.reach, current.ask && current.ask.id, current.host, current.now, current.dir, left]);
+        const stamp = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, left]);
         follow(current);
         if (stamp === shown) return;
         shown = stamp;
@@ -346,10 +349,11 @@
         // a message: taken at once by one that waits, when it has done what it is doing by one at work
         const sayable = can(current, 'say') && !current.ask;
         write.hidden = !sayable;
-        box.placeholder = current.status === 'waiting' ? '它已停下，正等你的消息' : '给它发消息：它做完手上这一步后收到';
+        box.placeholder = current.wake ? '给它发消息：直接送进电脑上的这段对话' : current.status === 'waiting' ? '它已停下，正等你的消息' : '给它发消息：它做完手上这一步后收到';
         below.textContent = '';
         if (left) below.append(el('p', { className: 'quiet', textContent: left }));
         if (told && !sayable && !current.ask && current.live) below.append(el('p', { className: 'quiet', textContent: '它现在停着，等在电脑上输入，从这里发不进消息。要在手机上接着做，用下面的方式把它接过来。' }));
+        if (current.wake) below.append(el('p', { className: 'quiet', textContent: '消息会直接送进电脑上的这段对话，不用把它接到手机上；回到电脑前可以接着在那里说。它把这条消息记为“来自另一个会话”。' }));
         const { choices, why } = current.live ? ways(current) : { choices: current.dir ? [{ label: '在手机上继续', sub: '它已不在电脑上打开', value: 'resume', kind: 'solid' }] : [], why: '' };
         if (why && !told) below.append(el('p', { className: 'why', textContent: why }));
         choices.forEach(c => below.append(el('button', { type: 'button', className: 'choice ' + (c.kind || ''), onclick: () => finish({ value: c.value, session: current }) },

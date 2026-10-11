@@ -33,7 +33,7 @@ PORT = int(os.environ.get("RCLI_TEST_PORT", "8747"))
 password = "test-" + secrets.token_hex(8)
 new_id = lambda: secrets.token_hex(16)
 uuid = lambda n: "0199aaaa-bbbb-7ccc-8ddd-%012x" % n
-ASKING, WORKING, HELD = uuid(1), uuid(2), uuid(3)
+ASKING, WORKING, HELD, IDLE = uuid(1), uuid(2), uuid(3), uuid(4)
 
 
 def main():
@@ -58,6 +58,9 @@ def main():
     homes.codex_saved(shop, ASKING, "部署到测试环境", 0, held=True)
     homes.codex_saved(notes, WORKING, "整理读书笔记", 0, held=True)
     homes.codex_saved(thesis, HELD, "被占着的对话", 3, held=True)
+    # a conversation of Claude Code's that the desktop app has loaded and nobody is at: a process keeps it, half an hour after it was last used
+    homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5)
+    homes.claude_open(shop, IDLE)
     environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600")       # nobody is at the computer
     environment["PATH"] = str(homes.stand_ins(temp.name)) + ";" + environment["PATH"]
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full",
@@ -110,7 +113,7 @@ def main():
                 time.sleep(0.5)
         until(lambda: listed(WORKING) and listed(ASKING) and listed(uuid(16)), 40, "the conversations are listed")
         # none of the tools' real conversations: only the made-up ones
-        assert {s["id"] for s in call("/api/terminal")["sessions"]} == {uuid(n) for n in (1, 2, 3, 10, 11, 12, 13, 14, 15, 16)}, [s["title"] for s in call("/api/terminal")["sessions"]]
+        assert {s["id"] for s in call("/api/terminal")["sessions"]} == {uuid(n) for n in (1, 2, 3, 4, 10, 11, 12, 13, 14, 15, 16)}, [s["title"] for s in call("/api/terminal")["sessions"]]
         assert hook("UserPromptSubmit", WORKING, notes, prompt="整理提纲").wait(10) == 0
         assert hook("UserPromptSubmit", ASKING, shop, prompt="部署").wait(10) == 0
         asking = hook("PermissionRequest", ASKING, shop, tool_name="Bash", tool_input={"command": "npm run deploy:staging", "description": "Deploy to staging"})
@@ -192,7 +195,7 @@ def main():
         mine = (first["needs"] or []) + (first["active"] or [])
         assert "部署到测试环境" in first["needs"] and "整理读书笔记" in first["active"] and "看日志" in mine and len(mine) == 3, first
         assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券"] and first["more"], first
-        assert first["background"] == ["被占着的对话"] and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and "等你确认" in first["summary"], first
+        assert first["background"] == ["桌面版里闲置的对话", "被占着的对话"] and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and "等你确认" in first["summary"], first
         assert first["filters"][:4] == ["*全部", "Claude Code", "Codex", "PowerShell"] and "手机终端" in first["filters"], first
         # each card says where it is and by what it runs; the one outside every project says its folder, and that it is none
         outside, shell = about("整理读书笔记"), about("看日志")
@@ -205,10 +208,29 @@ def main():
         report["cards"] = {"outside": outside, "terminal": shell, "saved": saved}
         assert saved["meta"][0] == "thesis" and saved["meta"][1].startswith("Codex · ") and saved["pill"] == "", saved
 
+        # ---- a conversation that sits idle in the desktop app is told things where it is: it is not one that is going on,
+        # it is not taken from the app, and the message is handed to it by a session of its own tool (here a stand-in)
+        idle = listed(IDLE)
+        assert (idle["live"], idle["now"], idle["activity"], idle["reach"], idle["wake"], idle["origin"]) == (True, False, "locked", ["say"], True, "Claude 桌面版"), idle
+        page_value("(() => { document.getElementById('background').open = true; return 1; })()")
+        kept = about("桌面版里闲置的对话")
+        assert kept["list"] == "background-list" and kept["pill"] == "已停下" and kept["meta"][0] == "web-shop", kept
+        page_value("(() => { %s('桌面版里闲置的对话').querySelector('button.open').click(); return 1; })()" % CARD)
+        until(lambda: page_value("(() => { const w = document.querySelector('#sheet .write'); return !!w && !w.hidden && document.querySelector('#sheet .write textarea').placeholder; })()"), 8, "the page of the idle conversation has the message box")
+        assert "直接送进电脑上的这段对话" in page_value("document.querySelector('#sheet .write textarea').placeholder")
+        page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '把结论再写短一点'; document.querySelector('#sheet .write button').click(); return 1; })()")
+        until(lambda: "已送进电脑上的这段对话" in (page_value("document.querySelector('#sheet .below').textContent") or ""), 30, "the message was handed to the conversation")
+        handed = json.loads((data / "relay" / "remote-cli-phone" / "stand-in-run.json").read_text(encoding="utf-8"))
+        report["handed_over_with"] = handed["arguments"][:8]
+        assert "to:\nuds:\\\\.\\pipe\\LOCAL\\cc-msg-made-up\n" in handed["given"] and "from their phone" in handed["given"] and handed["given"].rstrip().endswith("把结论再写短一点\n-----END-----"), handed["given"]
+        assert handed["arguments"][0] == "-p" and handed["arguments"][handed["arguments"].index("--tools") + 1] == "SendMessage" and "--no-session-persistence" in handed["arguments"] and '"disableAllHooks": true' in handed["settings"], handed
+        assert listed(IDLE)["live"] is True and len(call("/api/terminal")["terminals"]) == started, "the conversation is where it was, and no terminal was started for it"
+        page_value("(() => { document.getElementById('sheet').close(); return 1; })()")
+
         # ---- told apart by tool, and by where a thing runs
         press("Claude Code")
         only = lists(lambda seen: seen["filters"][1] == "*Claude Code", "one tool")
-        assert only["needs"] is None and only["active"] is None and only["background"] is None and len(only["recent"]) == 2 and "画流程图" not in only["recent"] and not only["nothing"], only
+        assert only["needs"] is None and only["active"] is None and only["background"] == ["桌面版里闲置的对话"] and len(only["recent"]) == 2 and "画流程图" not in only["recent"] and not only["nothing"], only
         press("手机终端")
         none = lists(lambda seen: seen["nothing"], "nothing is both")
         assert none["recent"] is None and "*手机终端" in none["filters"] and none["projects"] == ["web-shop", "thesis"], none

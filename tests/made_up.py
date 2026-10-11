@@ -16,6 +16,7 @@ class Homes:
         for made in (self.claude / "projects", self.claude / "sessions", self.codex / "sessions" / "2026" / "10" / "11", self.codex / "thread-writer-locks"):
             made.mkdir(parents=True, exist_ok=True)
         self.locks = []
+        self.holders = []
         self.rollouts = {}
 
     def environment(self, **more):
@@ -52,6 +53,19 @@ class Homes:
         self.rollouts[session] = path
         return path
 
+    def claude_open(self, folder, session, socket="\\\\.\\pipe\\LOCAL\\cc-msg-made-up", entry="claude-desktop-3p", status="idle"):
+        """A conversation of Claude Code's that a program has open, as Claude Code notes it: the note names a process
+        that runs (one is started here and ended by close()), and where the conversation takes messages from other
+        sessions. The desktop app keeps such a process for every conversation it has loaded."""
+        import subprocess
+        import shutil
+        holder = subprocess.Popen([shutil.which("node"), "-e", "setInterval(() => {}, 1e6)"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.holders.append(holder)
+        time.sleep(0.5)             # the note is written after the process began, as Claude Code writes it
+        (self.claude / "sessions" / ("%d.json" % holder.pid)).write_text(json.dumps(
+            {"pid": holder.pid, "sessionId": session, "cwd": str(folder), "status": status, "kind": "interactive", "entrypoint": entry, "messagingSocketPath": socket}), encoding="utf-8")
+        return holder
+
     def stand_ins(self, folder):
         """Programs that take the place of the tools: what a check starts, on purpose or by mistake, is never a real
         tool. A stand-in says the folder it was started in and what it was started with, and stays; asked for its help
@@ -59,8 +73,13 @@ class Homes:
         tools = Path(folder) / "tools"
         tools.mkdir(parents=True, exist_ok=True)
         (tools / "standin.py").write_text(
-            "import os, sys, time\n"
+            "import json, os, sys, time\n"
             "if '--help' in sys.argv: print('stand-in'); sys.exit(0)\n"
+            # run for one prompt (`-p`), as a session that hands a message over is: what it was given is written beside it, and it says the message was sent
+            "if '-p' in sys.argv:\n"
+            "    given = sys.stdin.buffer.read().decode('utf-8')\n"
+            "    open('stand-in-run.json', 'w', encoding='utf-8').write(json.dumps({'arguments': sys.argv[2:], 'given': given, 'settings': open(sys.argv[sys.argv.index('--settings') + 1], encoding='utf-8').read() if '--settings' in sys.argv else ''}, ensure_ascii=False))\n"
+            "    print(json.dumps({'type': 'result', 'result': 'SENT'})); sys.exit(0)\n"
             "print('STAND-IN %s in [%s] with [%s]' % (sys.argv[1], os.getcwd(), ' '.join(sys.argv[2:])), flush=True)\n"
             "time.sleep(600)\n", encoding="utf-8")
         for name in ("claude", "codex"):
@@ -71,3 +90,6 @@ class Homes:
         for lock in self.locks:
             lock.close()
         self.locks = []
+        for holder in self.holders:
+            holder.kill()
+        self.holders = []

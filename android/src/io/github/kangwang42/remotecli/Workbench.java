@@ -635,7 +635,7 @@ final class Workbench {
     private void sayRemote(AggregateSessions.Thing task, String text) {
         final String cookie = CookieManager.getInstance().getCookie(task.url);
         activity.net.execute(() -> {
-            String problem = ""; boolean later = false;
+            String problem = ""; boolean later = false, woke = false;
             try {
                 JSONObject op = new JSONObject().put("action", "say").put("id", UUID.randomUUID().toString().replace("-", "")).put("text", text);
                 // a conversation that is open on the computer is told through the program that has it; a terminal through its own
@@ -643,18 +643,20 @@ final class Workbench {
                 JSONObject result = null;
                 // the same operation asked again is the same one: a request that did not get through is made once more
                 for (int attempt = 0; result == null && attempt < 3; attempt++) {
-                    try { result = post(task.url + (task.entry.terminal ? "/api/terminal" : "/api/conversation"), cookie, op); }
+                    // a conversation that sits idle is handed the message where it is, which takes some seconds: the answer is waited for
+                    try { result = post(task.url + (task.entry.terminal ? "/api/terminal" : "/api/conversation"), cookie, op, task.entry.terminal ? 8000 : 95000); }
                     catch (IOException unreachable) { Thread.sleep(500); }
                 }
                 if (result == null) throw new Exception("连不上这台电脑，消息没有发出");
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "消息没有发出"));
                 if (!task.entry.terminal && !result.optBoolean("now", true)) later = true;
+                if (result.optBoolean("woke")) woke = true;
             } catch (Exception error) {
                 String said = error.getMessage();
                 // a relay of an earlier version answers so to anything it does not know
                 problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持在此发消息，请更新后再试" : said == null ? "消息没有发出，请稍后重试" : said;
             }
-            final String message = problem.isEmpty() ? (later ? "已发送，它做完手上这一步后收到" : "已发送") : problem;
+            final String message = problem.isEmpty() ? (woke ? "已送进电脑上的这段对话" : later ? "已发送，它做完手上这一步后收到" : "已发送") : problem;
             activity.runOnUiThread(() -> {
                 android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show();
                 refresh();
@@ -698,11 +700,13 @@ final class Workbench {
             activity.runOnUiThread(() -> { ending.remove(key); if (!message.isEmpty()) android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show(); redraw(); refresh(); });
         });
     }
-    private JSONObject post(String address, String cookie, JSONObject payload) throws Exception {
+    private JSONObject post(String address, String cookie, JSONObject payload) throws Exception { return post(address, cookie, payload, 8000); }
+    /** patience: how long the answer is waited for, in milliseconds. */
+    private JSONObject post(String address, String cookie, JSONObject payload, int patience) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         boolean whole = false;
         try {
-            connection.setConnectTimeout(4000); connection.setReadTimeout(8000); connection.setUseCaches(false); connection.setDoOutput(true);
+            connection.setConnectTimeout(4000); connection.setReadTimeout(patience); connection.setUseCaches(false); connection.setDoOutput(true);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestMethod("POST"); connection.setRequestProperty("Content-Type", "application/json");
             if (cookie != null) connection.setRequestProperty("Cookie", cookie);

@@ -29,6 +29,17 @@ public static class InUseCheck {
         Require(AutoUpdater.Step(true, false, true) == "ask" && AutoUpdater.Step(true, false, false) == "ask", "a press in the window is answered at once, with automatic updates on too");
         Require(AutoUpdater.Step(false, false, true) == "wait" && AutoUpdater.Step(false, false, false) == "tell", "found by itself");
         Require(AutoUpdater.Newer("v1.5.3", "1.5.2") && !AutoUpdater.Newer("v1.5.2", "1.5.2") && !AutoUpdater.Newer("1.5.1", "1.5.2") && AutoUpdater.Newer("1.10.0", "1.9.9") && !AutoUpdater.Newer("latest", "1.0.0"), "which version is newer");
+        // a message for a conversation that sits idle: what the session that hands it over is given, and what its answer means
+        string address = "uds:\\\\.\\pipe\\LOCAL\\cc-msg-0123", prompt = ClaudeRelay.Prompt(address, "把结论再写短一点\n分两段");
+        Require(prompt.Contains("to:\n" + address + "\n") && prompt.Contains("-----BEGIN-----\n" + ClaudeRelay.Framed("把结论再写短一点\n分两段") + "\n-----END-----"), "the address and the words, whole: " + prompt);
+        Require(ClaudeRelay.Framed("x").Contains("from their phone") && ClaudeRelay.Framed("x").EndsWith("\n\nx"), "it says whose words they are");
+        string[] arguments = ClaudeRelay.Arguments("C:\\data\\relay-settings.json");
+        Require(arguments[0] == "-p" && String.Join(" ", arguments).Contains("--tools SendMessage --allowedTools SendMessage --strict-mcp-config") && Array.IndexOf(arguments, "--no-session-persistence") > 0
+            && arguments[Array.IndexOf(arguments, "--settings") + 1] == "C:\\data\\relay-settings.json", "one tool, no conversation kept, its own settings: " + String.Join(" ", arguments));
+        ClaudeRelay.Taken("{\"type\":\"result\",\"result\":\"SENT\"}");
+        Func<string, string> refused = said => { try { ClaudeRelay.Taken(said); return ""; } catch (InvalidOperationException error) { return error.Message; } };
+        Require(refused("{\"result\":\"FAILED: no session at that address\"}").Contains("no session at that address") && refused("not json").Contains("没有把消息送出") && refused("{\"result\":\"\"}").Length > 0 && refused(null).Length > 0, "what was not taken says why");
+        Require(ClaudeRelay.Address("11111111-2222-3333-4444-555555555555") == "", "a conversation nothing has open has no address");
         Console.WriteLine("in use now: a window of its own, at work or asking, or used a moment ago; a press on the update button is always answered");
         return 0;
     }

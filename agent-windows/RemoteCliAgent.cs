@@ -186,6 +186,7 @@ public sealed class TerminalAgent {
     readonly Dictionary<string, LiveTerminal> terminals = new Dictionary<string, LiveTerminal>();
     readonly Dictionary<string, Dictionary<string, object>> completed = new Dictionary<string, Dictionary<string, object>>();
     readonly HashSet<string> reported = new HashSet<string>();
+    readonly HashSet<string> relaying = new HashSet<string>();       // messages on their way into an idle conversation (ClaudeRelay)
     readonly object gate = new object();
     HttpClient client;
     DateTime nextLogin = DateTime.MinValue;
@@ -214,7 +215,8 @@ public sealed class TerminalAgent {
     // ("") and says the folder instead (Folder): the phone can look at it, answer it and tell it things, and its folder
     // can be made a project from there.
     // Live: a program on this computer holds it. Now: it is in use (InUse); only then is it something that is going on.
-    public sealed class SessionInfo { public bool Now; public string Id, Tool, Dir, Folder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    // Wakes: a message for it can be handed to it where it is even while it sits idle (ClaudeRelay).
+    public sealed class SessionInfo { public bool Now, Wakes; public string Id, Tool, Dir, Folder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
     /// the tools' settings; whether or not it has, this listens for them.
     public readonly Reach Reach;
@@ -225,8 +227,12 @@ public sealed class TerminalAgent {
     object Listed(SessionInfo s) {
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
         string status = known != null ? known.Status : s.Status;
+        // A message reaches it through its hooks while it is at work or kept waiting; one that sits idle is woken by
+        // a message handed to it as Claude Code's own sessions hand each other messages. Either way it stays where it is.
+        bool hooked = known != null && known.Sayable, wake = s.Live && s.Wakes && !hooked && !(known != null && known.Status == "confirm");
         return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = s.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
-            reach = known == null ? null : new[] { known.Sayable ? "say" : null, known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
+            reach = known == null && !wake ? null : new[] { hooked || wake ? "say" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
+            wake = wake,
             ask = known != null && known.Status == "confirm" ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
     }
     sealed class TitleCache { public long Stamp, Length; public string Title, Same; }
@@ -264,24 +270,7 @@ public sealed class TerminalAgent {
         return window || Milliseconds(now) - used < RecentMinutes * 60000L;
     }
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct ProcessEntry {
-        public uint size, usage, processId; public IntPtr heap; public uint module, threads, parentId; public int priority; public uint flags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string file;
-    }
-    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry entry);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry entry);
-    [DllImport("kernel32.dll", EntryPoint = "CloseHandle")] static extern bool CloseSnapshot(IntPtr handle);
-    public static Dictionary<int, int> Parents() {
-        var map = new Dictionary<int, int>();
-        IntPtr snapshot = CreateToolhelp32Snapshot(2, 0);
-        if (snapshot == new IntPtr(-1)) return map;
-        try {
-            var entry = new ProcessEntry { size = (uint)Marshal.SizeOf(typeof(ProcessEntry)) };
-            if (Process32FirstW(snapshot, ref entry)) do { map[(int)entry.processId] = (int)entry.parentId; } while (Process32NextW(snapshot, ref entry));
-        } finally { CloseSnapshot(snapshot); }
-        return map;
-    }
+    public static Dictionary<int, int> Parents() { return SessionOrigin.Parents(); }
     static string ReadPart(string path, bool tail, int limit) {
         using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
             if (tail && stream.Length > limit) stream.Seek(-limit, SeekOrigin.End);
@@ -334,12 +323,7 @@ public sealed class TerminalAgent {
     }
     // Where Claude Code keeps its conversations and the notes of the programs that have them open: its own folder
     // in the person's home, or the one CLAUDE_CONFIG_DIR names, as Claude Code itself reads it.
-    public static string ClaudeHome {
-        get {
-            string named = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
-            return String.IsNullOrWhiteSpace(named) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude") : named;
-        }
-    }
+    public static string ClaudeHome { get { return ClaudeSessions.Home; } }
     public static string ProjectFolder(string path) { return Regex.Replace(path, "[^a-zA-Z0-9]", "-"); }
     // A folder that is no project is spoken of to the phone unless it is one of the system's own for passing things.
     static bool Elsewhere(string folder) { return folder.Length >= 3 && folder.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) < 0 && !folder.EndsWith(@"\AppData\Local\Temp", StringComparison.OrdinalIgnoreCase); }
@@ -375,7 +359,7 @@ public sealed class TerminalAgent {
             var parents = Parents();
             foreach (string file in Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json")) {
                 try {
-                    var source = ClaudeSessions.Inspect(file);
+                    var source = ClaudeSessions.Inspect(file, parents);
                     if (!source.Live) continue;
                     int pid = source.Pid; string session = source.Session;
                     LiveTerminal owner = null; int at = pid;
@@ -398,7 +382,7 @@ public sealed class TerminalAgent {
                     string id = Path.GetFileNameWithoutExtension(file.Name), title, same;
                     if (!Regex.IsMatch(id, Uuid) || (title = ClaudeTitle(file, out same)).Length == 0) continue;
                     ClaudeSessions.Owner source; bool live = open.TryGetValue(id, out source);
-                    found.Add(new SessionInfo { Id = id, Tool = "claude", Dir = dir.Key, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? source.Host : "", Origin = live ? source.Origin : "", CanTakeover = live && source.CanTakeover, OwnershipKnown = !live || source.CanTakeover || source.Host == "remote", Status = live ? source.Status : "", TakeoverReason = live ? source.Reason : "", Same = same });
+                    found.Add(new SessionInfo { Id = id, Tool = "claude", Dir = dir.Key, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? source.Host : "", Origin = live ? source.Origin : "", Wakes = live && source.Socket.Length > 0, CanTakeover = live && source.CanTakeover, OwnershipKnown = !live || source.CanTakeover || source.Host == "remote", Status = live ? source.Status : "", TakeoverReason = live ? source.Reason : "", Same = same });
                 }
             } catch { }
         }
@@ -413,7 +397,7 @@ public sealed class TerminalAgent {
                 if (title.Length == 0) continue;        // nothing has been said in it yet
                 var source = held.Value;
                 if (!InUse(source.Host, source.Origin, source.Status, Reach.Of("claude", held.Key), Milliseconds(file.LastWriteTimeUtc), DateTime.UtcNow)) continue;
-                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
+                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Wakes = source.Socket.Length > 0, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
             } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
         // and the ones a terminal of the phone's has taken on from there: listed so that the terminal keeps the conversation's name and marks
@@ -915,7 +899,7 @@ public sealed class TerminalAgent {
             }
             if (live.Tool == "claude") {
                 string folder = Path.Combine(ClaudeHome, "sessions");
-                var source = Directory.Exists(folder) ? Directory.GetFiles(folder, "*.json").Select(ClaudeSessions.Inspect).FirstOrDefault(s => s.Live && s.Session == session) : null;
+                var source = Directory.Exists(folder) ? Directory.GetFiles(folder, "*.json").Select(noted => ClaudeSessions.Inspect(noted)).FirstOrDefault(s => s.Live && s.Session == session) : null;
                 if (source == null || !CodexSessions.Descends(source.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Claude Code 进程属于手机终端，已取消接管");
             }
             if (live.Tool != "claude" && live.Tool != "codex") {
@@ -925,7 +909,7 @@ public sealed class TerminalAgent {
             live.Pty.Dispose();
             for (int n = 0; n < 60; n++) {
                 if (live.Tool == "codex" && !CodexSessions.Inspect(session).Live) break;
-                if (live.Tool == "claude" && !Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json").Select(ClaudeSessions.Inspect).Any(s => s.Live && s.Session == session)) break;
+                if (live.Tool == "claude" && !Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json").Select(noted => ClaudeSessions.Inspect(noted)).Any(s => s.Live && s.Session == session)) break;
                 Thread.Sleep(50);
             }
             if (live.Tool == "codex" && CodexSessions.Inspect(session).Live) throw new InvalidOperationException("原 Codex 进程没有及时结束，已取消接管");
@@ -953,6 +937,7 @@ public sealed class TerminalAgent {
     void Execute(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string id = Get(op, "id"), terminal = Get(op, "terminal"), action = Get(op, "action");
         if (completed.ContainsKey(id)) { reported.Remove(id); return; }
+        if (relaying.Contains(id)) return;       // being handed over: answered when that is done
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
@@ -976,7 +961,33 @@ public sealed class TerminalAgent {
                 // a conversation a program on this computer has open: only one this computer listed, in a project or where it was found open
                 string session = Get(op, "session"), tool = Get(op, "tool");
                 if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && (s.Dir.Length == 0 ? s.Folder.Length > 0 : AllDirs(prefs).ContainsKey(s.Dir)))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
-                if (action == "session_say") result = new Dictionary<string, object> { { "now", Reach.Say(tool, session, Get(op, "text")) } };
+                if (action == "session_say") {
+                    var listed = sessions.First(s => s.Id == session && s.Tool == tool && s.Live);
+                    var told = Reach.Of(tool, session);
+                    if (listed.Wakes && !(told != null && (told.Sayable || told.Status == "confirm"))) {
+                        // It sits idle: the message is handed to it where it is. That takes some seconds, so it is done
+                        // beside the terminals' work, and the operation is answered when it has been taken or has failed.
+                        string text = (Get(op, "text") ?? "").Trim();
+                        if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字");
+                        if (!relaying.Add(id)) return;
+                        string launcher = FindTool("claude"), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
+                        Task.Run(() => {
+                            string failed = "";
+                            try { ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), text); }
+                            catch (InvalidOperationException refused) { failed = refused.Message; }
+                            catch (IOException) { failed = "消息没有送出：电脑上启动不了 Claude Code"; }
+                            catch (System.ComponentModel.Win32Exception) { failed = "消息没有送出：电脑上启动不了 Claude Code"; }
+                            lock (work) {
+                                completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
+                                if (failed.Length == 0) completed[id]["result"] = new Dictionary<string, object> { { "now", true }, { "woke", true } };
+                                relaying.Remove(id); lastActivity = DateTime.UtcNow; soon = true; nextScan = DateTime.UtcNow.AddSeconds(1);
+                            }
+                            Wake();
+                        });
+                        return;
+                    }
+                    result = new Dictionary<string, object> { { "now", Reach.Say(tool, session, Get(op, "text")) } };
+                }
                 else { Reach.Answer(tool, session, Get(op, "ask"), Get(op, "allow") == "True"); result = new Dictionary<string, object>(); }
             }
             else if (file) {

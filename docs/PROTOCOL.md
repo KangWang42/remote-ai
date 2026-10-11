@@ -72,7 +72,8 @@ listed, those that are open or pinned first, then the ones used last.
 A live conversation whose tool tells of it through its hooks (the `reach` capability, see "A conversation that is
 open on the computer") carries more: `status` may also be `confirm` (it asks for permission) or `waiting` (it has
 stopped and is kept waiting for a message from the phone); `reach` lists what the phone can do to it now, of `say`
-and `answer`; `ask` is the request it waits on, `{"id", "text"}`, or null; `last` is what it said last. Where the
+and `answer`; `ask` is the request it waits on, `{"id", "text"}`, or null; `last` is what it said last;
+`wake` says that a message is handed to it where it sits idle (see there) instead of waiting for its next stop. Where the
 tool tells nothing, `reach` and `ask` are null and `last` is empty. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
@@ -210,7 +211,14 @@ it stays open on the computer and is used there as before.
   conversation waits on. → `{}`. A request that was answered meanwhile, on the computer or the phone, is refused.
 - `{"action": "say", "text": "<1 to 8000 characters>"}` leaves a message for it. → `{"now": true}` when the tool
   takes it at once (it had stopped and was waiting for it), `{"now": false}` when it will take it once it has done
-  what it is doing. A conversation that has stopped without waiting cannot be told anything, and says so.
+  what it is doing. A conversation that has stopped without waiting can be told only where it says `wake`: a Claude
+  Code conversation that sits idle in the program that has it. The computer then hands it the message as one of
+  Claude Code's own cross-session messages, through a Claude Code session started for that one message (one tool,
+  `SendMessage`; no hooks; no conversation kept), addressed to where Claude Code notes that the conversation takes
+  such messages. That takes some seconds, so the relay holds the request for up to 85 seconds. → `{"now": true,
+  "woke": true}`. The conversation is not taken from its program; it reads the message as one from another session,
+  framed as its user's words from the phone. Without `wake` (Codex, or a Claude Code that notes no such address) an
+  idle conversation says that it cannot be told.
 
 - `{"action": "mark", "pinned": true|false, "hidden": true|false}` (one of the two, or both) says of any listed
   conversation, open or not, that it is pinned or hidden, or no longer is. → `{}`. It needs the `marks` capability

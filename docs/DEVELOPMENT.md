@@ -52,7 +52,7 @@ python tests\workbench_ui_check.py                         # 工作台默认折�
 python tests\android_update_check.py                      # App 更新器关闭安装流的顺序
 python tests\native_owner_check.py                        # 临时进程验证归属，不操作真实 Codex 会话
 python tests\relay_check.py                               # 电脑端对自有中转的判断：密码对、密码错、地址不是中转、端口不通
-python tests\in_use_check.py                              # 电脑上哪些对话算“正在使用”（在执行或等确认、命令行窗口、最近十分钟用过；桌面应用占着但闲置的不算），以及找到新版本后怎么处理（手机发起的直接装，窗口里点按钮当场询问，自动检查到的等空闲或只提示）
+python tests\in_use_check.py                              # 把手机消息送进闲置的 Claude Code 对话时交给转达会话的内容和对回答的判断；电脑上哪些对话算“正在使用”（在执行或等确认、命令行窗口、最近十分钟用过；桌面应用占着但闲置的不算），以及找到新版本后怎么处理（手机发起的直接装，窗口里点按钮当场询问，自动检查到的等空闲或只提示）
 python tests\marks_check.py                               # 对话的置顶和隐藏标记：按工具和对话记在电脑端数据目录里，重启后仍在，文件损坏时不影响使用，数量超限时最早的让位
 python tests\inbox_check.py <chrome.exe> [输出文件夹]      # 手机首页：按“等你处理、置顶、进行中、最近”分段，未加入项目的对话带文件夹名列出；按工具和运行位置筛选；搜索全部对话、终端和项目；长按（手指按住和鼠标右键）出菜单且不会误开对话；置顶、隐藏、在项目里找回；未加入项目的对话直接在手机上接过来（终端开在它原来的文件夹里，不建项目），以及把文件夹加为项目。真实的中转和电脑端，工具的对话用 tests\made_up.py 编造，不读取也不启动本机真实的工具
 python tests\side_status_check.py                         # 电脑端窗口左下角：手机访问状态下面列出已连接的工具（Claude Code、Codex），只列状态良好的；工具的配置用临时文件夹代替，并核对本机真实配置没有变化；先运行 tools\package_windows.py

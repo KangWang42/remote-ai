@@ -17,14 +17,33 @@ public sealed class SessionOrigin {
     /// Where a conversation runs, in words for its owner: a command line unless a program that is known stands above it.
     public const string CommandLine = "命令行";
     public string Name = CommandLine;
-    public static SessionOrigin Inspect(int pid) {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct ProcessEntry {
+        public uint size, usage, processId; public IntPtr heap; public uint module, threads, parentId; public int priority; public uint flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string file;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry entry);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry entry);
+    [DllImport("kernel32.dll", EntryPoint = "CloseHandle")] static extern bool CloseSnapshot(IntPtr handle);
+    /// Every process and its parent, as they are at this moment: one look at the system for all of them.
+    public static Dictionary<int, int> Parents() {
+        var map = new Dictionary<int, int>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(2, 0);
+        if (snapshot == new IntPtr(-1)) return map;
+        try {
+            var entry = new ProcessEntry { size = (uint)Marshal.SizeOf(typeof(ProcessEntry)) };
+            if (Process32FirstW(snapshot, ref entry)) do { map[(int)entry.processId] = (int)entry.parentId; } while (Process32NextW(snapshot, ref entry));
+        } finally { CloseSnapshot(snapshot); }
+        return map;
+    }
+    /// `parents`: the list to read from, where one was taken already (several conversations are looked at in a row).
+    public static SessionOrigin Inspect(int pid, Dictionary<int, int> parents = null) {
         var result = new SessionOrigin();
         var seen = new HashSet<int>();
+        if (parents == null) parents = Parents();
         for (int depth = 0; depth < 16 && pid > 0 && seen.Add(pid); depth++) {
-            int parent = 0;
-            using (var search = new ManagementObjectSearcher("SELECT ParentProcessId FROM Win32_Process WHERE ProcessId=" + pid))
-            using (var rows = search.Get()) foreach (ManagementObject row in rows) using (row) parent = Convert.ToInt32(row["ParentProcessId"]);
-            if (parent <= 0 || parent == pid) break;
+            int parent;
+            if (!parents.TryGetValue(pid, out parent) || parent <= 0 || parent == pid) break;
             try {
                 using (var child = Process.GetProcessById(pid)) using (var ancestor = Process.GetProcessById(parent)) {
                     if (ancestor.StartTime.ToUniversalTime() > child.StartTime.ToUniversalTime()) break;
@@ -53,11 +72,34 @@ public sealed class SessionOrigin {
 public sealed class ClaudeSessions {
     public sealed class Owner {
         public string Session = "", Dir = "", Status = "", Host = "unknown", Origin = "", Reason = "无法核实 Claude Code 会话，请先在原终端结束后重试";
+        public string Socket = "";      // where it takes messages from other sessions (Claude Code's own note), "" when it says none
         public int Pid;
         public long Started;
         public bool Live, CanTakeover;
     }
-    public static Owner Inspect(string file) {
+    /// Where Claude Code keeps its conversations and the notes of the programs that have them open: its own folder
+    /// in the person's home, or the one CLAUDE_CONFIG_DIR names, as Claude Code itself reads it.
+    public static string Home {
+        get {
+            string named = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            return String.IsNullOrWhiteSpace(named) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude") : named;
+        }
+    }
+    /// How a session was started, as Claude Code notes it ("cli", "claude-desktop…", "sdk-cli" for a script's run);
+    /// "" when it has no note. Whether its program still runs is not looked at.
+    public static string Entry(string session) {
+        try {
+            foreach (string file in Directory.GetFiles(Path.Combine(Home, "sessions"), "*.json")) {
+                try {
+                    var record = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
+                    object value;
+                    if (record != null && record.TryGetValue("sessionId", out value) && Convert.ToString(value) == session) return record.TryGetValue("entrypoint", out value) ? Convert.ToString(value) : "";
+                } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
+            }
+        } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        return "";
+    }
+    public static Owner Inspect(string file, Dictionary<int, int> parents = null) {
         var result = new Owner();
         try {
             var record = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
@@ -76,7 +118,8 @@ public sealed class ClaudeSessions {
                 result.Pid = pid; result.Started = started; result.Live = true;
                 if (record.TryGetValue("cwd", out value)) result.Dir = Convert.ToString(value);
                 if (record.TryGetValue("status", out value)) result.Status = Convert.ToString(value);
-                var origin = SessionOrigin.Inspect(pid); result.Origin = origin.Name;
+                if (record.TryGetValue("messagingSocketPath", out value) && value != null) result.Socket = Convert.ToString(value);
+                var origin = SessionOrigin.Inspect(pid, parents); result.Origin = origin.Name;
                 // Claude Code says itself how it was started; its app starts it as "claude-desktop".
                 if (record.TryGetValue("entrypoint", out value) && Convert.ToString(value).StartsWith("claude-desktop", StringComparison.OrdinalIgnoreCase)) result.Origin = "Claude 桌面版";
                 result.Host = origin.Remote ? "remote" : exact ? "cli" : "unknown";

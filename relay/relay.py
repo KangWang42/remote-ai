@@ -276,6 +276,7 @@ def _public_session(session, terminal=""):
 
 FILE_ACTIONS = ("file_list", "file_read")
 FILE_SECONDS = 25
+WAKE_SECONDS = 85       # a message that is handed to a conversation where it sits idle takes a short run of its tool on the computer
 # What the program on the computer is asked about itself: a few of its settings, and the line it is reached by.
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
@@ -290,11 +291,13 @@ def _reached(session):
     """What the computer says of a conversation its tool tells of: what the phone can do, the request it waits on,
     and what it said last. Nothing of it where the tool tells nothing."""
     if not isinstance(session.get("reach"), list):
-        return {"reach": None, "ask": None, "last": ""}
+        return {"reach": None, "ask": None, "last": "", "wake": False}
     ask = session.get("ask")
     ask = {"id": ask["id"], "text": ask["text"][:600]} if (session.get("status") == "confirm" and isinstance(ask, dict) and isinstance(ask.get("id"), str)
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
-    return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask)], "ask": ask, "last": str(session.get("last") or "")[:300]}
+    # wake: it sits idle, and a message is handed to it where it is (that takes some seconds), instead of being left for its next stop
+    return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask)], "ask": ask, "last": str(session.get("last") or "")[:300],
+            "wake": session.get("wake") is True and "say" in session["reach"]}
 
 
 def _placed(session):
@@ -831,6 +834,8 @@ class Relay:
                     raise RemoteError("这个确认请求已经处理过了，或只能在电脑上回答" if action == "answer" else "这段对话现在不能从手机发消息，请刷新后重试")
                 if action == "answer" and saved["ask"]["id"] != more["ask"]:
                     raise RemoteError("这个确认请求已经处理过了")
+                if action == "say" and saved.get("wake") and wait == FILE_SECONDS:
+                    wait = WAKE_SECONDS
             return self._held({"id": op_id, "action": "session_" + action, "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
 
     def computer(self, payload, now=None, wait=FILE_SECONDS):
