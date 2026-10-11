@@ -41,21 +41,9 @@ button:disabled { opacity: .45; cursor: default; }
 #slid canvas { position: absolute; left: 0; top: 0; will-change: transform; image-rendering: pixelated; }
 #latest { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 5px; height: 34px; padding: 0 14px 0 10px; border-radius: 17px; background: var(--panel); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
 #latest svg { color: var(--accent); }
-/* The button comes in a moment after it is called for: a program that offers its own way back (below) has it taken
-   away again before it is seen. */
-#latest, #offer { animation: appear .16s both; }
-#latest { animation-delay: .25s; }
-@keyframes appear { from { opacity: 0; } }
-/* Where a program offers its own way back to the end, the row it writes that on is shown as the app's own
-   (terminal.js): a line across the terminal with "回到最新" on it. It lies over that row, and over the rows that slide. */
-#offer { position: absolute; left: 0; width: 100%; z-index: 4; display: flex; align-items: center; justify-content: center; padding: 0; color: var(--muted); font-weight: 600; line-height: 1;
-  background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat var(--bg); }
-#offer span { display: flex; align-items: center; gap: .35em; padding: 0 .9em; background: var(--bg); }
-#offer svg { width: 1.15em; height: 1.15em; color: var(--accent); }
-#offer:active span { color: var(--ink); }
-/* a row is low for a finger: what takes the tap reaches a little above and below it */
-#offer::after { content: ""; position: absolute; inset: -12px 0; }
-#latest:active { background: var(--raised); }
+/* Where a program writes its own offer of the way back to the end over a row of its screen, that row is covered
+   (terminal.js): the button above does the same. The cover lies over the row, and over the rows that slide. */
+#offer { position: absolute; left: 0; width: 100%; z-index: 4; background: var(--bg); pointer-events: none; }
 [hidden] { display: none !important; }
 
 #notice { display: none; margin: 0 10px; padding: 7px 12px; border-radius: 10px; font-size: 12px; line-height: 1.5; color: var(--warn-ink); background: var(--warn-bg); }

@@ -371,7 +371,8 @@
     }
     latest() {
       const mode = this.mode();
-      // a program that offers the way back itself is taken up on it; another is scrolled back as far as it was scrolled
+      // a program that offers the way back itself is taken up on it: it leads to the end from anywhere. Another is
+      // scrolled back as far as it was scrolled.
       if (this.offered() >= 0) { if (!this.send(END)) return false; }
       else if (this.remoteUp > 0 && mode !== 'local') {
         const keys = mode === 'page' ? '\x1b[6~'.repeat(Math.min(80, Math.ceil(this.remoteUp / 8) + 2))

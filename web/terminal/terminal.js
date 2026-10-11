@@ -125,35 +125,28 @@
   }
   new ResizeObserver(layout).observe(screen);
 
-  // The way back to the end. A program that offers one itself (Claude Code writes "Jump to bottom (ctrl+End)" over
-  // the last row of its conversation) has that row shown as the app's own: a quiet line across the terminal with
-  // "回到最新" on it, which does what the offer says. For any other there is the button in the corner.
-  const offer = document.createElement('button'), offerText = document.createElement('span');
-  offer.type = 'button'; offer.id = 'offer'; offer.hidden = true;
-  offerText.append(latest.querySelector('svg').cloneNode(true), '回到最新');
-  offer.append(offerText);
+  // The way back to the end is the button in the corner. A program that offers one of its own on its screen (Claude
+  // Code writes "Jump to bottom (ctrl+End)" over the last row of its conversation) has that row covered: on a phone
+  // it is words in another language cut into a line of text, for something the button already does.
+  const offer = document.createElement('div');
+  offer.id = 'offer'; offer.hidden = true;
   holder.querySelector('.xterm-screen').appendChild(offer);
   let offered = '';
   function follow() {
-    const buffer = term.buffer.active, row = scrollRouter.offered(), now = row + ' ' + term.rows + ' ' + tall;
+    const buffer = term.buffer.active, row = scrollRouter.offered(), now = row + ' ' + term.rows;
     if (now !== offered) {
       offered = now;
-      if (row >= 0) {
-        // the row, in the terminal's own measure, and letters that fit it
-        offer.style.top = 100 * row / term.rows + '%'; offer.style.height = 100 / term.rows + '%';
-        offer.style.fontSize = Math.max(10, Math.min(14, .62 * tall / term.rows)) + 'px';
-      }
+      if (row >= 0) { offer.style.top = 100 * row / term.rows + '%'; offer.style.height = 100 / term.rows + '%'; }      // the row, in the terminal's own measure
       offer.hidden = row < 0;
     }
-    const away = !(buffer.viewportY >= buffer.baseY && scrollRouter.remoteUp <= 0);
-    // a program that says itself when it is away from the end is believed: the button is for those that do not
-    const corner = away && row < 0 && !scrollRouter.offers;
-    if (latest.hidden === corner) latest.hidden = !corner;
+    // a program that says itself when it is away from the end is believed; of another, the rows it was scrolled by are counted
+    const away = scrollRouter.offers ? row >= 0 : !(buffer.viewportY >= buffer.baseY && scrollRouter.remoteUp <= 0);
+    if (latest.hidden === away) latest.hidden = !away;
   }
   term.onScroll(follow);
   term.onRender(follow);
   const scrollRouter = new TerminalScrollRouter(term, send, () => tool);
-  for (const button of [latest, offer]) button.addEventListener('click', () => {
+  latest.addEventListener('click', () => {
     scroller.stop(); unslide();
     scrollRouter.latest(); follow();
   });
@@ -205,7 +198,7 @@
   });
   screen.addEventListener('touchstart', event => {
     scrollRouter.start();
-    if (event.touches.length === 1 && !latest.contains(event.target) && !offer.contains(event.target)) {
+    if (event.touches.length === 1 && !latest.contains(event.target)) {
       const now = performance.now();
       scroller.start(event.touches[0].clientY, now);
       slide.begin(scrollRouter.mode() === 'local' ? 'local' : 'remote', now);
@@ -226,7 +219,7 @@
 
   // Buttons act on the terminal without taking the keyboard away from the message box.
   function keepFocus(element) { element.addEventListener('mousedown', event => event.preventDefault()); }
-  document.querySelectorAll('.keys button, #slash, #send, #latest, #offer, #voice').forEach(keepFocus);
+  document.querySelectorAll('.keys button, #slash, #send, #latest, #voice').forEach(keepFocus);
   document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => send(KEYS[button.dataset.key])));
 
   // The box is measured only when its text may have wrapped differently, once per frame: measuring on every key
