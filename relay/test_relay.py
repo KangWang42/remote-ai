@@ -426,6 +426,59 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual(answers["got"]["messages"], said)
         self.assertNotIn(ask["id"], self.relay._pending)        # nothing of it is kept
 
+    def test_a_conversation_open_on_the_computer_is_answered_and_told_from_the_phone(self):
+        import threading
+        sid, other = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"
+        info = dict(self.info, features=["peek", "reach"])
+        told = {"id": sid, "tool": "codex", "dir": "demo", "title": "桌面版里的对话", "updated": 1, "live": True, "host": "shared", "status": "confirm",
+                "reach": ["say", "answer", "delete"], "ask": {"id": "ab12cd34ef56", "text": "Build it\nBash：cargo build" + "x" * 900}, "last": "y" * 500}
+        plain = {"id": other, "tool": "claude", "dir": "demo", "title": "没有钩子的对话", "updated": 1, "live": True, "host": "shared", "status": "busy", "ask": {"id": "ab12cd34ef56", "text": "?"}}
+        self.relay.agent({"info": info, "sessions": [told, plain]}, now=1001)
+        shown = {s["id"]: s for s in self.relay.overview(now=1001)["sessions"]}
+        # what its tool tells of it is passed on, cut to size; a conversation whose tool tells nothing has none of it
+        self.assertEqual((shown[sid]["status"], shown[sid]["reach"], shown[sid]["ask"]["id"], len(shown[sid]["ask"]["text"]), len(shown[sid]["last"])), ("confirm", ["say", "answer"], "ab12cd34ef56", 600, 300))
+        self.assertEqual(shown[sid]["activity"], "active")          # it is seen at work, whatever program runs it
+        self.assertEqual((shown[other]["reach"], shown[other]["ask"], shown[other]["last"], shown[other]["activity"]), (None, None, "", "locked"))
+        ask = lambda **more: dict({"id": "c" * 32, "session": sid}, **more)
+        for bad, why in ((ask(action="answer", ask="ab12cd34ef56"), "回答无效"), (ask(action="answer", ask="ab12cd34ef56", allow="yes"), "回答无效"), (ask(action="answer", ask="x", allow=True), "回答无效"),
+                         (ask(action="answer", ask="ffffffffffff", allow=True), "已经处理过"), (ask(action="say", text="  "), "1 至 8000"), (ask(action="say", text="x" * 8001), "1 至 8000"),
+                         (ask(action="end"), "不支持"), (ask(action="say", text="hi", session=other), "不能从手机发消息"), (ask(action="answer", ask="ab12cd34ef56", allow=True, session=other), "已经处理过")):
+            with self.assertRaisesRegex(RemoteError, why):
+                self.relay.conversation(bad, now=1001, wait=0)
+        answers = {}
+        waiting = threading.Thread(target=lambda: answers.update(got=self.relay.conversation(ask(action="answer", ask="ab12cd34ef56", allow=False), now=1001, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual([(o["action"], o["session"], o["tool"], o["dir"], o["ask"], o["allow"]) for o in asked], [("session_answer", sid, "codex", "demo", "ab12cd34ef56", False)])
+        self.relay.agent({"info": info, "acks": [{"id": "c" * 32, "error": "", "result": {}}]}, now=1002)
+        waiting.join(5)
+        self.assertEqual(answers["got"], {})
+        waiting = threading.Thread(target=lambda: answers.update(said=self.relay.conversation(dict(ask(action="say", text="然后更新文档"), id="d" * 32), now=1002, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual([(o["action"], o["session"], o["tool"], o["text"]) for o in asked], [("session_say", sid, "codex", "然后更新文档")])
+        self.relay.agent({"info": info, "acks": [{"id": "d" * 32, "error": "", "result": {"now": False}}]}, now=1003)
+        waiting.join(5)
+        self.assertEqual(answers["said"], {"now": False})            # it takes the message when it has done what it is doing
+        # what the computer refuses is said in its words
+        waiting = threading.Thread(target=lambda: answers.update(error=self._refused(dict(ask(action="say", text="再来"), id="e" * 32), 1003)))
+        waiting.start()
+        self.relay.pull({"instance": self.info["instance"], "wait": 3})
+        self.relay.agent({"info": info, "acks": [{"id": "e" * 32, "error": "这段对话已经在电脑上停下"}]}, now=1004)
+        waiting.join(5)
+        self.assertIn("已经在电脑上停下", answers["error"])
+        # a computer whose program is older has no such thing
+        self.relay.agent({"info": dict(self.info, features=["peek"]), "sessions": [told]}, now=1005)
+        with self.assertRaisesRegex(RemoteError, "更新电脑端"):
+            self.relay.conversation(dict(ask(action="say", text="hi"), id="f" * 32), now=1005, wait=0)
+
+    def _refused(self, payload, now):
+        try:
+            self.relay.conversation(payload, now=now, wait=5)
+            return ""
+        except RemoteError as error:
+            return str(error)
+
     def test_a_message_is_said_to_a_terminal_from_outside_its_page(self):
         self.start()
         pulled = lambda: self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"]

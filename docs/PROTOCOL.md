@@ -44,6 +44,13 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
 the computer; `live` means a program on the computer has it open, `terminal` is set when one of the relay's
 terminals already shows it. `state` is `starting`, `running` or `closed`; `status` is `busy`, `idle` or empty.
 
+A live conversation whose tool tells of it through its hooks (the `reach` capability, see "A conversation that is
+open on the computer") carries more: `status` may also be `confirm` (it asks for permission) or `waiting` (it has
+stopped and is kept waiting for a message from the phone); `reach` lists what the phone can do to it now, of `say`
+and `answer`; `ask` is the request it waits on, `{"id", "text"}`, or null; `last` is what it said last. Where the
+tool tells nothing, `reach` and `ask` are null and `last` is empty. `activity` is `active` for a conversation in a
+command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
+
 Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek` and `settings`. These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 An agent verifies Codex's actual writer lock and process ownership before advertising takeover, then checks
@@ -170,6 +177,24 @@ At most 40 messages of at most 1,500 characters, oldest first; `more` says that 
 something the tool did. What a tool writes into a conversation for itself (reminders, results of commands) is left
 out. The tool and the folder asked of the computer are the ones it reported for that conversation.
 
+With `"action": "say"` or `"action": "answer"` the same request acts on a conversation that has that way in its
+`reach` (the computer needs the `reach` capability). Neither takes the conversation from the program that has it:
+it stays open on the computer and is used there as before.
+
+- `{"action": "answer", "ask": "<id of the request>", "allow": true|false}` answers the request for permission the
+  conversation waits on. → `{}`. A request that was answered meanwhile, on the computer or the phone, is refused.
+- `{"action": "say", "text": "<1 to 8000 characters>"}` leaves a message for it. → `{"now": true}` when the tool
+  takes it at once (it had stopped and was waiting for it), `{"now": false}` when it will take it once it has done
+  what it is doing. A conversation that has stopped without waiting cannot be told anything, and says so.
+
+How this reaches the tools: Claude Code and Codex run hooks of the computer's program (it puts them into the tools'
+own settings when its owner switches that on). A hook for a request for permission is answered with the phone's
+answer; a hook that runs as the tool stops is answered with the message, as something to go on with. Claude Code
+shows its question on the computer while the hook runs and takes whichever answer comes first. Codex asks its hooks
+first, so the computer's program keeps it waiting for the phone only while nobody has touched the computer's
+keyboard or mouse for a minute, and lets it go the moment somebody does; in the same way a tool that stops is kept
+waiting for a message only while nobody is at the computer, for half an hour at most.
+
 ### The program itself
 
 `POST /api/computer` `{"id": "<16 to 32 hex digits>", "action": "..."}` is held like `/api/files` and needs the
@@ -230,7 +255,7 @@ the same folder. A locked source cannot be resumed concurrently; choose fork or 
 
 ```json
 {"info": {"instance": "<32 hex, new at each start>", "enabled": true, "tools": ["claude", "shell"], "workspaces": ["demo"],
-          "features": ["files", "update"], "version": "0.7.0", "newer": "", "shell": "PowerShell", "projects": [...], "candidates": [...]},
+          "features": ["files", "update", "reach"], "version": "0.7.0", "newer": "", "shell": "PowerShell", "projects": [...], "candidates": [...]},
  "terminals": [{"id": "...", "state": "running", "status": "idle", "tool": "shell", "dir": "demo", "created": 1700000000000, "title": ""}],
  "output": [{"terminal": "...", "seq": 13, "data": "..."}],
  "acks": [{"id": "<operation id>", "error": ""}],

@@ -119,6 +119,7 @@ public sealed class TerminalAgent {
     readonly string dataDir;
     public TerminalAgent(string dataFolder = null) {
         dataDir = dataFolder ?? DefaultData;
+        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir)); Reach.Changed += Wake;
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
         try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | (SecurityProtocolType)12288; }
@@ -205,6 +206,18 @@ public sealed class TerminalAgent {
         public bool PhoneTerminal;
     }
     public sealed class SessionInfo { public string Id, Tool, Dir, Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
+    /// the tools' settings; whether or not it has, this listens for them.
+    public readonly Reach Reach;
+    // A conversation as the phone is told of it: what the scan found, and where a hook has told more, how it stands
+    // now, what it asks, what it last said, and what the phone can do to it ("say", "answer").
+    object Listed(SessionInfo s) {
+        var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
+        string status = known != null ? known.Status : s.Status;
+        return new { id = s.Id, tool = s.Tool, dir = s.Dir, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
+            reach = known == null ? null : new[] { known.Sayable ? "say" : null, known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
+            ask = known != null && known.Status == "confirm" ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
+    }
     sealed class TitleCache { public long Stamp, Length; public string Title, Same; }
     readonly Dictionary<string, TitleCache> titles = new Dictionary<string, TitleCache>();
     readonly CodexSessions codexSessions = new CodexSessions();
@@ -865,7 +878,8 @@ public sealed class TerminalAgent {
         if (completed.ContainsKey(id)) { reported.Remove(id); return; }
         string error = ""; Dictionary<string, object> result = null;
         try {
-            bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update", peek = action == "session_read";
+            bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
+            bool peek = action == "session_read" || action == "session_say" || action == "session_answer";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
@@ -873,7 +887,14 @@ public sealed class TerminalAgent {
             if (project) ChangeProjects(op, prefs, action);
             else if (update) { if (UpdateRequested == null) throw new InvalidOperationException("这台电脑运行的是不带自动更新的后台程序"); UpdateRequested(); }
             else if (computer) { if (Computer == null) throw new InvalidOperationException("这台电脑运行的后台程序没有可在手机上更改的设置"); result = Computer(op); }
-            else if (peek) result = ReadConversation(op, prefs);
+            else if (action == "session_read") result = ReadConversation(op, prefs);
+            else if (peek) {
+                // a conversation a program on this computer has open: only one this computer listed, in a folder that is allowed
+                string session = Get(op, "session"), tool = Get(op, "tool");
+                if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && AllDirs(prefs).ContainsKey(s.Dir))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+                if (action == "session_say") result = new Dictionary<string, object> { { "now", Reach.Say(tool, session, Get(op, "text")) } };
+                else { Reach.Answer(tool, session, Get(op, "ask"), Get(op, "allow") == "True"); result = new Dictionary<string, object>(); }
+            }
             else if (file) {
                 string root;
                 if (!AllDirs(prefs).TryGetValue(Get(op, "dir"), out root)) throw new ArgumentException("目录未获允许");
@@ -963,7 +984,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek" }.Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach" }.Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => new { name = d.Key, path = d.Value, @fixed = true, exists = true })
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => new { name = p.Key, path = p.Value, @fixed = false, exists = allowed.ContainsKey(p.Key) })).ToArray(),
                     candidates = candidates.ToArray() } },
@@ -973,7 +994,7 @@ public sealed class TerminalAgent {
                 { "output", output }, { "acks", acknowledgments }
             };
             // The list of conversations is long: it goes out when it changed, and now and then in case the relay restarted.
-            var listed = sessions.Select(s => new { id = s.Id, tool = s.Tool, dir = s.Dir, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = s.Status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason }).ToArray();
+            var listed = sessions.Select(Listed).ToArray();
             listedText = json.Serialize(listed);
             listing = listedText != sentSessions || DateTime.UtcNow - sessionsSent > TimeSpan.FromSeconds(10);
             if (listing) payload["sessions"] = listed;
@@ -1063,6 +1084,8 @@ public sealed class TerminalAgent {
             File.WriteAllBytes(Path.Combine(folder, "password.dpapi"), ProtectedData.Protect(Encoding.UTF8.GetBytes(secret), null, DataProtectionScope.CurrentUser));
             return 0;
         }
+        // --hook <tool> <pipe>: run by Claude Code or Codex as one of their hooks (Reach.cs)
+        if (args.Length == 3 && args[0] == "--hook") return RemoteCli.Reach.Hook(args[1], args[2]);
         string data = args.Length > 1 && args[0] == "--data" ? args[1] : null;
         bool created;
         using (var singleton = new Mutex(true, "Local\\RemoteCliAgent" + (data == null ? "" : "-" + Math.Abs(data.ToLowerInvariant().GetHashCode())), out created)) {
