@@ -294,7 +294,7 @@ def main():
         saying = threading.Thread(target=lambda: answers.update(got=call("/api/conversation", {"id": new_id(), "session": IDLE, "action": "say", "text": "再加一个例子"})))
         saying.start()
         woke = until(lambda: (data / "relay" / "remote-cli-phone" / "stand-in-run.json").is_file() and json.loads((data / "relay" / "remote-cli-phone" / "stand-in-run.json").read_text(encoding="utf-8")), 30, "the conversation is woken")
-        assert "Remote CLI wake-up" in woke["given"] and "再加一个例子" not in woke["given"] and saying.is_alive(), woke["given"]
+        assert "Remote AI wake-up" in woke["given"] and "再加一个例子" not in woke["given"] and saying.is_alive(), woke["given"]
         stopped = hook("Stop", IDLE, shop, tool="claude", last_assistant_message="…", stop_hook_active=False)
         given = json.loads(stopped.communicate(timeout=10)[0].decode("utf-8"))
         assert given["decision"] == "block" and given["reason"].endswith("\n\n再加一个例子") and "from their phone" in given["reason"], given

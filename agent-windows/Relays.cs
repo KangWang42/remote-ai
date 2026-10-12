@@ -26,8 +26,10 @@ public sealed class Relay {
 /// program; an empty list means there are none. The owner's own relays are kept here with their passwords, protected
 /// for this Windows account, and so is what each relay for everyone gave this computer.
 public sealed class Relays {
-    // Asked in this order; the second serves the same file where the first cannot be reached.
-    static readonly string[] Sources = { "https://raw.githubusercontent.com/KangWang42/remote-cli/main/public-relays.json", "https://cdn.jsdelivr.net/gh/KangWang42/remote-cli@main/public-relays.json" };
+    // Asked in this order: the repository under the name it is to have, then under the one it had (AutoUpdater.Repositories);
+    // of each, the second address serves the same file where the first cannot be reached.
+    static readonly string[] Sources = { "https://raw.githubusercontent.com/KangWang42/remote-ai/main/public-relays.json", "https://cdn.jsdelivr.net/gh/KangWang42/remote-ai@main/public-relays.json",
+        "https://raw.githubusercontent.com/KangWang42/remote-cli/main/public-relays.json", "https://cdn.jsdelivr.net/gh/KangWang42/remote-cli@main/public-relays.json" };
     const string Address = @"\Ahttps://[^/\s]+\z", Any = @"\Ahttps?://[^/\s]+\z", Local = @"\Ahttps?://(127\.0\.0\.1|localhost)(:\d+)?\z";
     readonly string dataDir;
     readonly JavaScriptSerializer json = new JavaScriptSerializer();

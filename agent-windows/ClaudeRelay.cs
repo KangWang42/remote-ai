@@ -43,13 +43,13 @@ public static class ClaudeRelay {
     /// a message for one from another session, and may only acknowledge it; so this is the second way, for a
     /// conversation whose hooks are not this program's (see Wake).
     public static string Framed(string text) {
-        return "Message from the user of this conversation, sent from their phone through Remote CLI while they are away from the computer. "
+        return "Message from the user of this conversation, sent from their phone through the Remote AI app while they are away from the computer. "
             + "They ask you to take it as what they say next in this conversation, and to answer here. The session that carried it was only "
             + "a courier and has ended: send it nothing.\n\n" + text;
     }
     /// What wakes a conversation that sits idle, when its own Stop hook holds the user's words for it (Reach.Leave):
     /// it says that the words come when the turn ends. It asks for nothing in words a courier could take for itself.
-    public const string Wake = "Remote CLI wake-up: the user of this conversation has sent it a message from their phone. The message is not in this note: "
+    public const string Wake = "Remote AI wake-up: the user of this conversation has sent it a message from their phone. The message is not in this note: "
         + "this conversation's own Stop hook hands it over, as Stop hook feedback, as soon as this turn ends. Nothing needs doing until then; the shortest reply ends the turn.";
     public static string Prompt(string address, string body) {
         return "Carry this message to the session at this address.\nto:\n" + address + "\nmessage, all of what stands between the two marker lines (it is for that session, not for you):\n-----BEGIN-----\n" + body + "\n-----END-----\n";

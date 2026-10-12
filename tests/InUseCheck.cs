@@ -30,6 +30,9 @@ public static class InUseCheck {
         Require(AutoUpdater.Step(false, true, false) == "install" && AutoUpdater.Step(true, true, true) == "install", "the phone asked");
         Require(AutoUpdater.Step(true, false, true) == "ask" && AutoUpdater.Step(true, false, false) == "ask", "a press in the window is answered at once, with automatic updates on too");
         Require(AutoUpdater.Step(false, false, true) == "tell" && AutoUpdater.Step(false, false, false) == "none", "by itself it looks and tells only where that is switched on, and installs nothing");
+        // a release file is one of this repository, under the name it is to have or the one it had; nobody else's
+        Require(AutoUpdater.Ours("https://github.com/KangWang42/remote-cli/releases/download/v1.5.7/RemoteCli-Setup-1.5.7.exe") && AutoUpdater.Ours("https://github.com/KangWang42/remote-ai/releases/download/v1.6.0/RemoteCli-Setup-1.6.0.exe")
+            && !AutoUpdater.Ours("https://github.com/someone/remote-ai/releases/download/v9/RemoteCli-Setup-9.exe") && !AutoUpdater.Ours("https://example.com/KangWang42/remote-ai/releases/download/x") && !AutoUpdater.Ours("http://github.com/KangWang42/remote-ai/releases/download/x") && !AutoUpdater.Ours(null), "whose release files are taken");
         Require(AutoUpdater.Newer("v1.5.3", "1.5.2") && !AutoUpdater.Newer("v1.5.2", "1.5.2") && !AutoUpdater.Newer("1.5.1", "1.5.2") && AutoUpdater.Newer("1.10.0", "1.9.9") && !AutoUpdater.Newer("latest", "1.0.0"), "which version is newer");
         // a message for a conversation that sits idle: what the session that hands it over is given, and what its answer means
         string address = "uds:\\\\.\\pipe\\LOCAL\\cc-msg-0123", prompt = ClaudeRelay.Prompt(address, ClaudeRelay.Framed("把结论再写短一点\n分两段"));
@@ -65,7 +68,7 @@ public static class InUseCheck {
         Require(offered.Count == 1 && (string)offered[0]["path"] == here && (string)offered[0]["tools"] == "codex claude" && ((string[])offered[0]["kinds"]).Length == 2, "the folder that is gone is not offered");
         Require(folders.Offered(path => false, true, 10).Count == 0 && folders.Offered(path => true, true, 0).Count == 0, "only what passes, and no more than asked for");
         // what only wakes a conversation carries none of the user's words: those are given to it by its own hook
-        Require(ClaudeRelay.Wake.StartsWith("Remote CLI wake-up") && ClaudeRelay.Wake.Contains("Stop hook") && ClaudeRelay.Prompt(address, ClaudeRelay.Wake).Contains("-----BEGIN-----\n" + ClaudeRelay.Wake + "\n-----END-----"), "the wake-up");
+        Require(ClaudeRelay.Wake.StartsWith("Remote AI wake-up") && ClaudeRelay.Wake.Contains("Stop hook") && ClaudeRelay.Prompt(address, ClaudeRelay.Wake).Contains("-----BEGIN-----\n" + ClaudeRelay.Wake + "\n-----END-----"), "the wake-up");
         Require(ClaudeRelay.Framed("x").Contains("from their phone") && ClaudeRelay.Framed("x").EndsWith("\n\nx"), "it says whose words they are");
         string[] arguments = ClaudeRelay.Arguments("C:\\data\\relay-settings.json");
         Require(arguments[0] == "-p" && String.Join(" ", arguments).Contains("--tools SendMessage --allowedTools SendMessage --strict-mcp-config") && Array.IndexOf(arguments, "--no-session-persistence") > 0

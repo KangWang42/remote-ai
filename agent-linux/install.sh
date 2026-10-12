@@ -25,7 +25,8 @@
 # and nothing needs root. Running it again keeps the password, the projects and the settings.
 set -euo pipefail
 
-source_url="https://codeload.github.com/KangWang42/remote-cli/tar.gz/refs/heads/main"
+# The repository under the name it is to have and the one it had (it is renamed with the product): the first that answers.
+sources=("https://codeload.github.com/KangWang42/remote-ai/tar.gz/refs/heads/main" "https://codeload.github.com/KangWang42/remote-cli/tar.gz/refs/heads/main")
 tunnel_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-"
 share="$HOME/.local/share/remote-cli-agent"
 state="$HOME/.local/state/remote-cli-agent"
@@ -67,7 +68,11 @@ find_source() {
     command -v tar >/dev/null || fail "需要 tar 来解开下载的程序。"
     fetched="$(mktemp -d)"
     say "正在下载 remote-cli…"
-    download "$source_url" "$fetched/source.tar.gz" || fail "下载程序失败：$source_url"
+    got=""
+    for source_url in "${sources[@]}"; do
+        if download "$source_url" "$fetched/source.tar.gz" 2>/dev/null; then got=1; break; fi
+    done
+    [ -n "$got" ] || fail "下载程序失败：${sources[*]}"
     tar -xzf "$fetched/source.tar.gz" -C "$fetched" --strip-components=1
     repo="$fetched"
 }

@@ -29,7 +29,16 @@ final class GithubUpdater {
     static final class Release { final int code; final String version, url, sha256, page;
         Release(int code, String version, String url, String sha256, String page) { this.code = code; this.version = version; this.url = url; this.sha256 = sha256; this.page = page; }
     }
-    private static final String API = "https://api.github.com/repos/KangWang42/remote-cli/releases/latest";
+    /**
+     * The repository on GitHub, under the name it is to have and the one it had: it is renamed with the product, and
+     * an app installed before or after that finds its releases under either. One that is not there is passed over.
+     */
+    static final String[] REPOSITORIES = {"KangWang42/remote-ai", "KangWang42/remote-cli"};
+    /** Whether an address is a release file of this repository. */
+    static boolean ours(String url) {
+        for (String name : REPOSITORIES) if (url != null && url.startsWith("https://github.com/" + name + "/releases/download/")) return true;
+        return false;
+    }
     private static final String ACTION = "io.github.kangwang42.remotecli.INSTALL_STATUS";
     private static final long MAX = 64L * 1024 * 1024;
     private final Activity activity; private final Listener listener; private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -53,8 +62,15 @@ final class GithubUpdater {
             PackageInfo info = activity.getPackageManager().getPackageArchiveInfo(part.getPath(), 0); if (info == null || !activity.getPackageName().equals(info.packageName) || code(info) <= currentCode()) throw new Exception("下载的安装包不是本应用的新版本");
             if (apk.exists()) apk.delete(); if (!part.renameTo(apk)) throw new Exception("无法保存安装包"); commit(apk);
         } catch (Exception e) { finish(e.getMessage() == null ? "更新未完成" : e.getMessage()); } }); }
-    private Release fetch() throws Exception { HttpURLConnection c = connection(API); JSONObject root = new JSONObject(read(c)); String tag = root.optString("tag_name", "").replaceFirst("^v", ""); if (tag.isEmpty() || !newer(tag, currentVersion())) return null; int code = versionCode(tag); JSONArray assets = root.optJSONArray("assets");
-        for (int i = 0; assets != null && i < assets.length(); i++) { JSONObject a = assets.getJSONObject(i); if (!"RemoteCli-Android.apk".equals(a.optString("name"))) continue; String url = a.optString("browser_download_url"); if (!url.startsWith("https://github.com/KangWang42/remote-cli/releases/download/")) throw new Exception("发布文件地址无效"); String digest = a.optString("digest", ""); if (digest.startsWith("sha256:")) digest = digest.substring(7).toLowerCase(Locale.ROOT); else digest = ""; return new Release(code, tag, url, digest, root.optString("html_url", "")); }
+    private Release fetch() throws Exception {
+        HttpURLConnection c = null;
+        for (String name : REPOSITORIES) {
+            c = connection("https://api.github.com/repos/" + name + "/releases/latest");
+            if (c.getResponseCode() != HttpURLConnection.HTTP_NOT_FOUND) break;
+            c.disconnect();
+        }
+        JSONObject root = new JSONObject(read(c)); String tag = root.optString("tag_name", "").replaceFirst("^v", ""); if (tag.isEmpty() || !newer(tag, currentVersion())) return null; int code = versionCode(tag); JSONArray assets = root.optJSONArray("assets");
+        for (int i = 0; assets != null && i < assets.length(); i++) { JSONObject a = assets.getJSONObject(i); if (!"RemoteCli-Android.apk".equals(a.optString("name"))) continue; String url = a.optString("browser_download_url"); if (!ours(url)) throw new Exception("发布文件地址无效"); String digest = a.optString("digest", ""); if (digest.startsWith("sha256:")) digest = digest.substring(7).toLowerCase(Locale.ROOT); else digest = ""; return new Release(code, tag, url, digest, root.optString("html_url", "")); }
         throw new Exception("最新发布没有匹配的 Android 安装包"); }
     private static HttpURLConnection connection(String address) throws Exception { HttpURLConnection c = (HttpURLConnection) new URL(address).openConnection(); c.setConnectTimeout(15000); c.setReadTimeout(120000); c.setRequestProperty("User-Agent", "RemoteCli-Android-GitHub-Updater"); c.setRequestProperty("Accept", "application/vnd.github+json"); return c; }
     private static String read(HttpURLConnection c) throws Exception { try (InputStream in = c.getInputStream()) { byte[] b = new byte[8192]; StringBuilder out = new StringBuilder(); int n; while ((n = in.read(b)) >= 0) out.append(new String(b, 0, n, "UTF-8")); return out.toString(); } finally { c.disconnect(); } }

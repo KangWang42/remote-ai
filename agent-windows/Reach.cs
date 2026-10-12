@@ -127,12 +127,12 @@ public sealed class Reach : IDisposable {
         }
     }
     /// What stands in front of a message that a hook hands to its tool as its user's words from the phone.
-    // (What the tools are told keeps the words that were tried with them, under the name the program had then:
-    // how a tool takes a message hangs on its wording, and each wording has to be tried with the real tool.)
-    public const string FromPhone = "Message from the user, sent from their phone through Remote CLI";
-    /// The names by which what this program wrote into a conversation is known as its own: the one it tells the
-    /// tools, and the one it shows.
-    public static readonly string[] Names = { "Remote CLI", "Remote AI" };
+    // (How a tool takes a message hangs on its wording: these words were tried with the real tools, and a change
+    // of them is tried again before it goes out.)
+    public const string FromPhone = "Message from the user, sent from their phone through the Remote AI app";
+    /// The names by which what this program wrote into a conversation is known as its own: the one it has, and the
+    /// one it had (conversations written then are still read).
+    public static readonly string[] Names = { "Remote AI", "Remote CLI" };
     /// The phone's answer to a request for permission.
     public void Answer(string tool, string session, string ask, bool allow) {
         lock (gate) {
@@ -277,7 +277,7 @@ public sealed class Reach : IDisposable {
         Tell();
         if (!verdict.HasValue) return Nothing;
         var decision = new Dictionary<string, object> { { "behavior", verdict.Value ? "allow" : "deny" } };
-        if (!verdict.Value) decision["message"] = "The user declined this from their phone (Remote CLI).";
+        if (!verdict.Value) decision["message"] = "The user declined this from their phone (Remote AI app).";
         return new[] { json.Serialize(new Dictionary<string, object> { { "hookSpecificOutput", new Dictionary<string, object> { { "hookEventName", "PermissionRequest" }, { "decision", decision } } } }), "0" };
     }
     // The tool has stopped. A message that waited for this goes to it now. Else, while nobody is at the computer, it

@@ -48,13 +48,13 @@ public static class SaidCheck {
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"加了。\"}]}}",
                 "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"someone-else\",\"body\":\"check the tests over there\"},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
                 "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":\"Stop hook feedback:\\nrun the linter first\"}}",
-                // the same, were it told under the name the program shows: read as its own as well
-                "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"remote-cli-phone-01\",\"body\":\"Remote AI wake-up: the user of this conversation is sending it a message from their phone.\"},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
+                // written while the program went by its earlier name: read as its own as well
+                "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"remote-cli-phone-01\",\"body\":\"Remote CLI wake-up: the user of this conversation is sending it a message from their phone.\"},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"…\"}]}}",
-                "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":\"Stop hook feedback:\\nMessage from the user, sent from their phone through the Remote AI app while they are away from the computer. Treat it as their next instruction:\\n\\n改名之前发的\"}}",
+                "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":\"Stop hook feedback:\\nMessage from the user, sent from their phone through Remote CLI while they are away from the computer. Treat it as their next instruction:\\n\\n改名之前发的\"}}",
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"收到。\"}]}}");
-            // what the tools are told keeps the words that were tried with them
-            Require(Reach.FromPhone.Contains("Remote CLI") && ClaudeRelay.Wake.StartsWith("Remote CLI wake-up") && ClaudeRelay.Framed("x").Contains("Remote CLI"), "the words the tools are told in");
+            // what the tools are told names the program as it is called now (tried with the real tools in these words)
+            Require(Reach.FromPhone.Contains("Remote AI") && ClaudeRelay.Wake.StartsWith("Remote AI wake-up") && ClaudeRelay.Framed("x").Contains("Remote AI"), "the words the tools are told in");
             Require(Shown(TerminalAgent.Said(phone, "claude")) == "user:在电脑上说的 | assistant:好的。 | user:把结论再写短一点\n\n分两段 | assistant:改短了。 | user:再加一个例子 | assistant:加了。 | user:改名之前发的 | assistant:收到。", "what the phone said: " + Shown(TerminalAgent.Said(phone, "claude")));
             var messages = ((IEnumerable)result["messages"]).Cast<Dictionary<string, object>>().ToList();
             Require(messages.Count == 4, "claude count: " + Shown(result));

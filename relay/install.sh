@@ -24,7 +24,10 @@
 # password and the port.
 set -euo pipefail
 
-source_url="${RCLI_SOURCE:-https://codeload.github.com/KangWang42/remote-cli/tar.gz/refs/heads/main}"
+# The repository under the name it is to have and the one it had (it is renamed with the product): the first that
+# answers is used. RCLI_SOURCE names another address instead.
+sources=("https://codeload.github.com/KangWang42/remote-ai/tar.gz/refs/heads/main" "https://codeload.github.com/KangWang42/remote-cli/tar.gz/refs/heads/main")
+[ -z "${RCLI_SOURCE:-}" ] || sources=("$RCLI_SOURCE")
 root=/opt/remote-cli
 settings=/etc/remote-cli
 unit=/etc/systemd/system/remote-cli-relay.service
@@ -73,9 +76,13 @@ find_source() {
     if [ -z "$archive" ]; then
         archive="$fetched/source.tar.gz"
         say "正在下载 remote-cli…"
-        if command -v curl >/dev/null; then curl -fsSL --retry 2 -o "$archive" "$source_url"
-        else python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$source_url" "$archive"
-        fi || fail "下载失败：$source_url
+        got=""
+        for source_url in "${sources[@]}"; do
+            if command -v curl >/dev/null; then curl -fsSL --retry 2 -o "$archive" "$source_url"
+            else python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$source_url" "$archive"
+            fi && { got=1; break; }
+        done
+        [ -n "$got" ] || fail "下载失败：${sources[*]}
 服务器访问不了 GitHub 时，在别的电脑上下载 https://github.com/KangWang42/remote-cli/archive/refs/heads/main.tar.gz，传到服务器后用 --source 指定它。"
     fi
     [ -f "$archive" ] || fail "找不到源码压缩包：$archive"

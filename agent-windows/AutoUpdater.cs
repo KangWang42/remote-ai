@@ -14,7 +14,15 @@ public sealed class ReleaseUpdate {
 
 /// GitHub Releases updater. It accepts only the repository's HTTPS release asset and checks its digest.
 public static class AutoUpdater {
-    const string Api = "https://api.github.com/repos/KangWang42/remote-cli/releases/latest";
+    /// The repository on GitHub, under the name it is to have and the one it had: it is renamed with the product,
+    /// and a program installed before or after that finds its releases under either. They are asked in this order;
+    /// one that is not there (yet, or any more) is passed over.
+    public static readonly string[] Repositories = { "KangWang42/remote-ai", "KangWang42/remote-cli" };
+    /// Whether an address is a release file of this repository.
+    public static bool Ours(string url) {
+        foreach (string name in Repositories) if ((url ?? "").StartsWith("https://github.com/" + name + "/releases/download/", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
     const string AssetPrefix = "RemoteCli-Setup-";
     public static bool Newer(string latest, string current) {
         Version a, b;
@@ -30,8 +38,20 @@ public static class AutoUpdater {
     }
     public static Task<ReleaseUpdate> CheckAsync(string current) { return Task.Run(() => Check(current)); }
     static ReleaseUpdate Check(string current) {
+        WebException missing = null;
+        foreach (string name in Repositories) {
+            try { return Check("https://api.github.com/repos/" + name + "/releases/latest", current); }
+            catch (WebException error) {
+                var answer = error.Response as HttpWebResponse;
+                if (answer == null || answer.StatusCode != HttpStatusCode.NotFound) throw;
+                missing = error;
+            }
+        }
+        throw missing;
+    }
+    static ReleaseUpdate Check(string api, string current) {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-        var request = (HttpWebRequest)WebRequest.Create(Api); request.Method = "GET"; request.Timeout = 15000;
+        var request = (HttpWebRequest)WebRequest.Create(api); request.Method = "GET"; request.Timeout = 15000;
         request.UserAgent = "RemoteCli/" + current + " (GitHub updater)"; request.Accept = "application/vnd.github+json";
         using (var response = (HttpWebResponse)request.GetResponse()) using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
             var json = new JavaScriptSerializer().DeserializeObject(reader.ReadToEnd()) as Dictionary<string, object>;
@@ -41,7 +61,7 @@ public static class AutoUpdater {
                 var asset = raw as Dictionary<string, object>;
                 if (asset == null || !String.Equals(Convert.ToString(asset["name"]), AssetPrefix + version + ".exe", StringComparison.OrdinalIgnoreCase)) continue;
                 string url = Convert.ToString(asset["browser_download_url"]);
-                if (!url.StartsWith("https://github.com/KangWang42/remote-cli/releases/download/", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("发布文件地址无效");
+                if (!Ours(url)) throw new InvalidDataException("发布文件地址无效");
                 string digest = Convert.ToString(asset.ContainsKey("digest") ? asset["digest"] : "");
                 return new ReleaseUpdate { Version = version, Url = url, Sha256 = digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) ? digest.Substring(7).ToLowerInvariant() : "" };
             }
