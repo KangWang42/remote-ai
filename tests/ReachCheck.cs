@@ -150,6 +150,14 @@ public static class ReachCheck {
                 Require(Until(() => claude(one).Status == "waiting", 3000), "waits again");
                 idle = 5;
                 Require(Answer(stopped, 3000, "somebody came back") == "" && claude(one).Status == "idle", "a tool is not kept waiting once somebody is at the computer");
+                // nobody comes, and no message either: after its time it is let go, and has stopped. That time is
+                // minutes, well inside what the tools are told a hook may take.
+                Require(reach.Lingers == Reach.Linger && Reach.Linger == 300 && Reach.Linger < Reach.Hold && Reach.Hold < Reach.Patience, "five minutes at a stop, half an hour for a request");
+                idle = 600; reach.Lingers = 1;
+                stopped = Run("claude", Event("Stop", one, ",\"last_assistant_message\":\"Ran a third time.\""));
+                Require(Until(() => claude(one).Status == "waiting", 3000) && !stopped.Program.WaitForExit(400), "waits a third time");
+                Require(Answer(stopped, 4000, "its time is over") == "" && claude(one).Status == "idle" && !claude(one).Sayable, "a tool is let go when its time is over");
+                reach.Lingers = Reach.Linger; idle = 5;
 
                 // ---- a run no person sits at (a script's `claude -p`, `codex exec`, a helper thread of a conversation) is
                 // never kept waiting, however long nobody has been at the computer, and is no conversation for a phone

@@ -28,7 +28,10 @@ namespace RemoteCli {
 /// what it would have done without this.
 public sealed class Reach : IDisposable {
     public const int Unattended = 60;       // seconds without a key or the mouse after which nobody is taken to be at the computer
-    public const int Hold = 1800;           // the longest a tool is kept waiting for the phone, in seconds
+    public const int Hold = 1800;           // the longest a request for permission is kept for the phone's answer, in seconds
+    public const int Linger = 300;          // the longest a tool that stops is kept waiting for the phone's message, in seconds:
+                                            // the tool shows its hook as running all that while, and a conversation that
+                                            // has been let go is reached all the same (CodexQueue, ClaudeRelay)
     public const int Patience = 2000;       // what the tools are told a hook may take, in seconds: longer than any hold
     public static readonly string[] Events = { "SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop", "SessionEnd" };
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
@@ -63,6 +66,8 @@ public sealed class Reach : IDisposable {
     /// Whether a tool has told of anything since this program started: its hooks do reach it.
     public bool Heard(string tool) { lock (gate) return heard.Contains(tool); }
     readonly string pipe; readonly Func<int> idle;
+    /// How long a tool that stops is kept waiting, in seconds. A test says less.
+    public int Lingers = Linger;
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     volatile bool closed;
     /// Something about a conversation changed: the phone is to be told at once.
@@ -311,7 +316,7 @@ public sealed class Reach : IDisposable {
             lock (gate) {
                 while (o.Status == "waiting" && o.Turn == turn) {
                     if (o.Message != null) { message = o.Message; o.Message = null; break; }
-                    if (gone() || idle() < Unattended || DateTime.UtcNow - began > TimeSpan.FromSeconds(Hold)) { o.Status = "idle"; break; }
+                    if (gone() || idle() < Unattended || DateTime.UtcNow - began > TimeSpan.FromSeconds(Lingers)) { o.Status = "idle"; break; }
                     Monitor.Wait(gate, 300);
                 }
             }

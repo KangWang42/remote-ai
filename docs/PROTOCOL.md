@@ -269,7 +269,9 @@ answer; a hook that runs as the tool stops is answered with the message, as some
 shows its question on the computer while the hook runs and takes whichever answer comes first. Codex asks its hooks
 first, so the computer's program keeps it waiting for the phone only while nobody has touched the computer's
 keyboard or mouse for a minute, and lets it go the moment somebody does; in the same way a tool that stops is kept
-waiting for a message only while nobody is at the computer, for half an hour at most.
+waiting for a message only while nobody is at the computer, for five minutes at most (the tool shows its hook as
+running all that while; a request for permission is kept for half an hour). A conversation that was let go is idle,
+and is told where it says `wake` (see `say` above).
 
 ### The program itself
 
