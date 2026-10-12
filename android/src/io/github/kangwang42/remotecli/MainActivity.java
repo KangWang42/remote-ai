@@ -469,7 +469,7 @@ public final class MainActivity extends Activity {
         if (drawn) script.append("if(was!=='").append(skin).append("'&&!(window.RemoteCliNative&&RemoteCliNative.pref)&&!location.hash)location.reload();");
         return script.append("}catch(e){}})()").toString();
     }
-    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "renderer");
+    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "renderer", "readfont", "readsize", "readline");
     private final Saver saver = new Saver(this);
     private final class Bridge {
         /** The system's speech recognizer; what was said goes into the page's message box. */

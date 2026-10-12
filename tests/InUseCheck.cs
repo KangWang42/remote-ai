@@ -44,7 +44,9 @@ public static class InUseCheck {
         Require(String.Join(",", Folders.Told(new[] { term, app, desk }, false, true)) == desk + "," + term, "not the app that is closed");
         Require(Folders.Told(new[] { app }, false, true).Length == 0 && Folders.Told(new[] { desk }, true, false).Length == 0 && Folders.Told(new[] { editor }, false, false).Length == 1, "a folder only a closed app uses is of no kind");
         Require(Folders.Held(app, term) == app && Folders.Held(desk, term) == desk && Folders.Held(SessionOrigin.CommandLine, app) == term, "by its holder");
-        Require(Folders.Held("", app) == app && Folders.Held("Codex 后台服务", app) == app && Folders.Held("VS Code", term) == editor, "by its file, or an editor");
+        Require(Folders.Held("", app) == app && Folders.Held("Codex 后台服务", app) == app, "by its file, where the holder tells nothing");
+        // under an editor: the editor's, unless it was started as a command line (that runs in the editor's terminal)
+        Require(Folders.Held("VS Code", editor) == editor && Folders.Held("Positron", app) == editor && Folders.Held("Positron", term) == term && Folders.Held("VS Code", term) == term, "a terminal inside an editor is a terminal");
         // one look fills it; what it knows is that of the look that ended last
         var folders = new Folders();
         string here = Path.GetTempPath().TrimEnd('\\'), gone = Path.Combine(here, "no-such-folder-" + Guid.NewGuid().ToString("N"));

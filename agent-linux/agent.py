@@ -45,7 +45,7 @@ import time
 import uuid
 from urllib.parse import quote, urlsplit
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -57,7 +57,8 @@ FILE_ENTRIES = 3000     # entries of a folder in one answer
 FEATURES = ["terminal-exit", "files", "peek", "marks"]
 MARKS = ("pinned", "hidden")     # what the owner says of single conversations from the phone
 MAX_MARKS = 300                 # of each kind; with more, the ones marked longest ago give way
-SAID_MESSAGES = 40      # of a conversation, the last this many things said are shown on the phone
+SAID_MESSAGES = 40      # of a conversation, the last this many things its user and the tool said are shown on the phone
+SAID_RUN = 30           # with what the tool did between them: of one unbroken run, the last this many
 SAID_CHARS = 1500       # and of each, this much
 # where the tools' own installers put them; a service's PATH seldom has these
 TOOL_DIRS = (".local/bin", ".npm-global/bin", "bin", ".bun/bin", ".volta/bin", ".cargo/bin")
@@ -278,8 +279,12 @@ def said(path, tool):
     """The last things said in a saved conversation, oldest first: what the person asked, what
     the tool answered, and the name of each thing it did. What the tools put into a
     conversation for themselves (reminders, command output, results) is left out."""
-    limit = 768 * 1024
+    limit = 4 * 1024 * 1024
     out = []
+    # what a tool gave back is never shown and fills most of a long conversation: such a row is passed over unread
+    given_back = '"type":"tool_result"' if tool == "claude" else '"type":"function_call_output"'
+    text = "\n".join(line for line in read_part(path, True, limit).split("\n")
+                     if not (len(line) > 4096 and given_back in line[:1200]))
 
     def add(role, text):
         text = " ".join(text.split()) if role == "tool" else text.strip()
@@ -292,7 +297,7 @@ def said(path, tool):
                       if isinstance(given.get(k), str)), "")
         return (str(name or "") + ("：" + about[:160] if about else "")).strip()
 
-    for row in rows(read_part(path, True, limit)):
+    for row in rows(text):
         if tool == "claude":
             message = row.get("message")
             if row.get("type") not in ("user", "assistant") or row.get("isSidechain") or row.get("isMeta") \
@@ -319,8 +324,34 @@ def said(path, tool):
                         add(payload["role"], part["text"])
             elif payload.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
                 add("tool", brief(payload.get("name") or "shell", None))
-    more = len(out) > SAID_MESSAGES or os.path.getsize(path) > limit
-    return {"messages": out[-SAID_MESSAGES:], "more": more, "updated": int(os.path.getmtime(path) * 1000)}
+    kept = talk(out, SAID_MESSAGES, SAID_RUN)
+    more = len(kept) < len(out) or os.path.getsize(path) > limit
+    return {"messages": kept, "more": more, "updated": int(os.path.getmtime(path) * 1000)}
+
+
+def talk(said, most, runs):
+    """The last `most` things said by the user and the tool, oldest first, with what the tool
+    did between them. A conversation at work is mostly things done: counted with the rest they
+    would leave no room for what was said. Of one unbroken run of them the last `runs` are
+    given, and a line says how many came before."""
+    kept, spoken, run, passed = [], 0, 0, 0
+    for entry in reversed(said):
+        if entry["role"] == "tool":
+            run += 1
+            if run > runs:
+                passed += 1
+                continue
+        else:
+            if passed:
+                kept.append({"role": "tool", "text": "更早的 %d 个操作" % passed})
+            passed, run, spoken = 0, 0, spoken + 1
+            if spoken > most:
+                break
+        kept.append(entry)
+    if passed:
+        kept.append({"role": "tool", "text": "更早的 %d 个操作" % passed})
+    kept.reverse()
+    return kept
 
 
 def parent_of(pid):

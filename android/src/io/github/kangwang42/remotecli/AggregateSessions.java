@@ -49,7 +49,8 @@ final class AggregateSessions {
          */
         String source() {
             if (terminal) return "term";
-            if (!live) return sourceOfKind(kind);
+            // the computer says by what it is used (a command line inside an editor's terminal is a terminal's)
+            if (!live || !kind.isEmpty()) return sourceOfKind(kind);
             return origin.contains("桌面版") || origin.contains("后台服务") || "shared".equals(host) || (!origin.isEmpty() && !"命令行".equals(origin) && !"电脑独立终端".equals(origin)) ? "app" : "term";
         }
         /** The conversation a mark is kept of: a terminal's own, or the saved one itself; "" for a terminal without one. */
@@ -203,6 +204,8 @@ final class AggregateSessions {
         /** With which tools and where its folder is used: as the computer says of the folder, and by what is in it now. */
         final Set<String> tools = new HashSet<>(), sources = new HashSet<>();
         Project(String name) { this.name = name; }
+        /** "app", "term", "both", or "" where nothing says: for the tint of its row. */
+        String source() { return sources.contains("app") ? (sources.contains("term") ? "both" : "app") : sources.contains("term") ? "term" : ""; }
         /** What the computer says of the folder: the tools, and by what it is used ("终端", "Codex 桌面版", …). */
         void told(List<String> tools, List<String> kinds) {
             this.tools.addAll(tools);

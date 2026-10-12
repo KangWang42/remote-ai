@@ -387,7 +387,7 @@ public sealed class TerminalAgent {
                         int parent; if (!parents.TryGetValue(at, out parent) || parent == at || parent == 0) break; at = parent;
                     }
                     if (owner != null) { owner.Session = session; owner.Status = source.Status; }
-                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true, Folders.Held(source.Origin, Folders.Terminal)); }
+                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true, Folders.Held(source.Origin, Folders.OfClaude(source.Entry))); }
                 } catch { }
             }
         } catch { }
@@ -683,7 +683,9 @@ public sealed class TerminalAgent {
     // the program that has it open: what the person asked, what the tool answered, and the name of each thing it did.
     // What the tools put into a conversation for themselves (reminders, command output, results) is left out.
     public static Dictionary<string, object> Said(string path, string tool) {
-        const int limit = 768 * 1024, most = 40, chars = 1500;
+        // limit: how much of the file's end is read. most: how many things said by the user and the tool are given;
+        // what the tool did between them goes with them, of one unbroken run the last `runs`.
+        const int limit = 4 * 1024 * 1024, most = 40, runs = 30, chars = 1500;
         var reader = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
         var said = new List<Dictionary<string, object>>();
         Func<Dictionary<string, object>, string, object> at = (d, k) => { object v; return d != null && d.TryGetValue(k, out v) ? v : null; };
@@ -701,6 +703,8 @@ public sealed class TerminalAgent {
         bool woken = false;
         foreach (string line in ReadPart(path, true, limit).Split('\n')) {
             if (!line.StartsWith("{", StringComparison.Ordinal)) continue;
+            // What a tool gave back is never shown and fills most of a long conversation: such a row is passed over unread.
+            if (line.Length > 4096 && line.IndexOf(tool == "claude" ? "\"type\":\"tool_result\"" : "\"type\":\"function_call_output\"", 0, 1200, StringComparison.Ordinal) >= 0) continue;
             Dictionary<string, object> row;
             try { row = reader.Deserialize<Dictionary<string, object>>(line); } catch (Exception) { continue; }
             string type = at(row, "type") as string;
@@ -744,7 +748,24 @@ public sealed class TerminalAgent {
             }
         }
         var file = new FileInfo(path);
-        return new Dictionary<string, object> { { "messages", said.Skip(Math.Max(0, said.Count - most)).ToList() }, { "more", said.Count > most || file.Length > limit }, { "updated", Milliseconds(file.LastWriteTimeUtc) } };
+        var kept = Talk(said, most, runs);
+        return new Dictionary<string, object> { { "messages", kept }, { "more", kept.Count < said.Count || file.Length > limit }, { "updated", Milliseconds(file.LastWriteTimeUtc) } };
+    }
+    /// The last `most` things said by the user and the tool, oldest first, with what the tool did between them. A
+    /// conversation at work is mostly things done: counted with the rest they would leave no room for what was
+    /// said. Of one unbroken run of them the last `runs` are given, and a line says how many came before.
+    public static List<Dictionary<string, object>> Talk(List<Dictionary<string, object>> said, int most, int runs) {
+        var kept = new List<Dictionary<string, object>>();
+        int talk = 0, run = 0, passed = 0;
+        Action earlier = () => { if (passed > 0) kept.Add(new Dictionary<string, object> { { "role", "tool" }, { "text", "更早的 " + passed + " 个操作" } }); passed = 0; };
+        for (int i = said.Count - 1; i >= 0; i--) {
+            if ((string)said[i]["role"] == "tool") { if (++run > runs) { passed++; continue; } }
+            else { earlier(); run = 0; if (++talk > most) break; }
+            kept.Add(said[i]);
+        }
+        earlier();
+        kept.Reverse();
+        return kept;
     }
     Dictionary<string, object> ReadConversation(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string session = Get(op, "session"), tool = Get(op, "tool"), dir = Get(op, "dir"), root;

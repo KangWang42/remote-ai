@@ -32,10 +32,14 @@ public sealed class Folders {
             : entrypoint.IndexOf("vscode", StringComparison.OrdinalIgnoreCase) >= 0 || entrypoint.IndexOf("jetbrains", StringComparison.OrdinalIgnoreCase) >= 0 ? Editor : Terminal;
     }
     /// By what a conversation is used that a program has open, from where that program runs; `saved`: what the
-    /// conversation's own file says, for a holder that tells nothing (the service the Codex programs share).
+    /// conversation itself says started it. A desktop app's is that app's, a command line's the terminal's. Under
+    /// an editor (VS Code, Positron) it is the editor's unless it was started as a command line: that runs in the
+    /// editor's terminal, and is a terminal's. A holder that tells nothing (the service the Codex programs share)
+    /// leaves it to what the conversation says.
     public static string Held(string origin, string saved) {
         origin = origin ?? "";
-        return origin == CodexApp || origin == ClaudeApp ? origin : origin == SessionOrigin.CommandLine ? Terminal : origin.Length == 0 || origin.EndsWith("后台服务") ? saved : Editor;
+        return origin == CodexApp || origin == ClaudeApp ? origin : origin == SessionOrigin.CommandLine ? Terminal
+            : origin.Length == 0 || origin.EndsWith("后台服务") ? saved : saved == Terminal ? Terminal : Editor;
     }
     public static bool App(string kind) { return kind == CodexApp || kind == ClaudeApp; }
     /// The kinds as they are told: each once, the terminal last; a desktop app that does not run is left out where

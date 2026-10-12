@@ -195,12 +195,19 @@ def main():
                 seen = page_value(LISTS)
                 if test(seen):
                     return seen
-                assert time.time() < deadline, (what, seen, page_value("(document.getElementById('toast') || {}).textContent"))
+                assert time.time() < deadline, (what, seen)
                 time.sleep(0.3)
 
         # ---- by what needs its owner: what asks, what is at work, what was used lately, across the projects
         first = lists(lambda seen: seen["needs"] and seen["recent"] and seen["active"], "the lists are filled")
         report["first"] = first
+        # what runs in an app is told apart from what runs in a terminal by its tint: the cards, and the projects
+        TINT = "((list, title) => { const c = Array.from(document.querySelectorAll(list + ' .card')).find(c => c.querySelector('b') && c.querySelector('b').textContent === title); return c ? [c.dataset.source || '', getComputedStyle(c).backgroundColor, getComputedStyle(c).backgroundImage !== 'none'] : null; })"
+        tint = lambda where, title: page_value("%s(%s, %s)" % (TINT, json.dumps(where), json.dumps(title, ensure_ascii=False)))
+        app, term, both, plain = tint("#overview", "桌面版里闲置的对话"), tint("#overview", "看日志"), tint("#project-list", "web-shop"), tint("#project-list", "thesis")
+        report["tints"] = {"app": app, "terminal": term, "project_both": both, "project_terminal": plain}
+        assert app[0] == "app" and term[0] == "term" and both[0] == "both" and plain[0] == "term", report["tints"]
+        assert app[1] != term[1] and term[1] == plain[1] and both[2] and not term[2], report["tints"]
         mine = (first["needs"] or []) + (first["active"] or [])
         assert "部署到测试环境" in first["needs"] and "整理读书笔记" in first["active"] and "看日志" in mine and len(mine) == 3, first
         assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券"] and first["more"], first
@@ -233,6 +240,24 @@ def main():
         assert window["window"] and window["tall"] > 0.98 and window["choices"] == 0 and window["small"] == [] and window["box"] == "发消息" and window["head"] == "Claude 桌面版 · web-shop", window
         until(lambda: "好的。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 10, "what was said in it")
         picture("conversation.png")
+        # how it is read: behind "Aa", the type, its size and the spacing of the lines; what is chosen is kept
+        PICKS = "(() => { const r = document.querySelector('#sheet .reading'); return r.hidden ? null : Array.from(r.querySelectorAll('.pick')).map(g => Array.from(g.querySelectorAll('button')).map(b => (b.getAttribute('aria-pressed') === 'true' ? '*' : '') + b.textContent)); })()"
+        pick = lambda group, text: page_value("(() => { Array.from(document.querySelectorAll('#sheet .reading .pick')[%d].querySelectorAll('button')).find(b => b.textContent === %s).click(); return 1; })()" % (group, json.dumps(text, ensure_ascii=False)))
+        READ = "(() => { const s = getComputedStyle(document.querySelector('#sheet .said')), page = getComputedStyle(document.documentElement); return { font: s.fontFamily, size: parseFloat(s.fontSize) / parseFloat(page.fontSize), line: parseFloat(s.lineHeight) / parseFloat(s.fontSize), kept: ['readfont', 'readsize', 'readline'].map(key => localStorage.getItem('rcli-' + key)) }; })()"
+        assert page_value(PICKS) is None, "folded until it is asked for"
+        page_value("(() => { document.querySelector('#sheet .bar .type').click(); return 1; })()")
+        assert page_value(PICKS) == [["*默认", "衬线", "等宽"], ["小", "*标准", "大", "特大"], ["紧凑", "*标准", "宽松"]], page_value(PICKS)
+        usual = page_value(READ)
+        assert abs(usual["size"] - 0.93) < 0.02 and abs(usual["line"] - 1.65) < 0.03 and usual["kept"] == [None, None, None], usual
+        pick(0, "衬线"); pick(1, "特大"); pick(2, "宽松")
+        chosen = page_value(READ)
+        report["read_as_chosen"] = chosen
+        assert "serif" in chosen["font"].lower() and abs(chosen["size"] - 1.18) < 0.02 and abs(chosen["line"] - 1.9) < 0.03 and chosen["kept"] == ["serif", "larger", "loose"], chosen
+        assert page_value(PICKS) == [["默认", "*衬线", "等宽"], ["小", "标准", "大", "*特大"], ["紧凑", "标准", "*宽松"]], page_value(PICKS)
+        picture("conversation-serif.png")
+        pick(0, "默认"); pick(1, "标准"); pick(2, "标准")
+        page_value("(() => { document.querySelector('#sheet .bar .type').click(); return 1; })()")
+        assert page_value(PICKS) is None and abs(page_value(READ)["size"] - 0.93) < 0.02
         page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '把结论再写短一点'; document.querySelector('#sheet .write button').click(); return 1; })()")
         # what is written stands in the window at once, while it is still on its way
         assert page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.mine'); return mine.length === 1 && mine[0].textContent === '把结论再写短一点' && document.querySelector('#sheet .write button').disabled; })()"), "shown at once"

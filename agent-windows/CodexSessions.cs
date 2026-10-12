@@ -73,6 +73,7 @@ public sealed class ClaudeSessions {
     public sealed class Owner {
         public string Session = "", Dir = "", Status = "", Host = "unknown", Origin = "", Reason = "无法核实 Claude Code 会话，请先在原终端结束后重试";
         public string Socket = "";      // where it takes messages from other sessions (Claude Code's own note), "" when it says none
+        public string Entry = "";       // how it was started, as Claude Code notes it: "cli", "claude-desktop…", "claude-vscode"
         public int Pid;
         public long Started;
         public bool Live, CanTakeover;
@@ -121,6 +122,7 @@ public sealed class ClaudeSessions {
                 if (record.TryGetValue("messagingSocketPath", out value) && value != null) result.Socket = Convert.ToString(value);
                 var origin = SessionOrigin.Inspect(pid, parents); result.Origin = origin.Name;
                 // Claude Code says itself how it was started; its app starts it as "claude-desktop".
+                if (record.TryGetValue("entrypoint", out value)) result.Entry = Convert.ToString(value);
                 if (record.TryGetValue("entrypoint", out value) && Convert.ToString(value).StartsWith("claude-desktop", StringComparison.OrdinalIgnoreCase)) result.Origin = "Claude 桌面版";
                 result.Host = origin.Remote ? "remote" : exact ? "cli" : "unknown";
                 result.CanTakeover = exact && !origin.Remote;

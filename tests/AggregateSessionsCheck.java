@@ -171,6 +171,14 @@ public final class AggregateSessionsCheck {
         AggregateSessions.Entry drawn = new AggregateSessions.Entry(false, "drawn", "web-shop", "桌面版里画的", "codex", "", "", "", false, "", "", ""), typed = new AggregateSessions.Entry(false, "typed", "web-shop", "终端里写的", "codex", "", "", "", false, "", "", "");
         drawn.kind = "Codex 桌面版"; typed.kind = "终端";
         require("app".equals(drawn.source()) && "term".equals(typed.source()) && past1.source().isEmpty() && "app".equals(AggregateSessions.sourceOfKind("编辑器")), "by what started it");
+        // one a program has open is told by what the computer says uses it: a command line inside an editor's terminal is a terminal's
+        AggregateSessions.Entry inEditor = new AggregateSessions.Entry(false, "pos", "web-shop", "Positron 的终端里", "claude", "", "", "idle", true, "cli", "", "");
+        inEditor.origin = "Positron"; inEditor.kind = "终端";
+        AggregateSessions.Entry extension = new AggregateSessions.Entry(false, "ext", "web-shop", "编辑器的扩展里", "claude", "", "", "idle", true, "cli", "", "");
+        extension.origin = "VS Code"; extension.kind = "编辑器";
+        AggregateSessions.Entry earlier = new AggregateSessions.Entry(false, "old", "web-shop", "较早的电脑端", "claude", "", "", "idle", true, "cli", "", "");
+        earlier.origin = "VS Code";
+        require("term".equals(inEditor.source()) && "app".equals(extension.source()) && "app".equals(earlier.source()), "by what the computer says, else by where the program runs");
         things.add(on.apply(drawn));
         require(ids.apply(AggregateSessions.board(things, "", "", "app").recent).contains("drawn") && "drawn".equals(ids.apply(AggregateSessions.board(things, "桌面版里画的 codex 桌面版", "", "").found)), "listed and found as an app's");
         things.remove(things.size() - 1);
@@ -182,6 +190,7 @@ public final class AggregateSessionsCheck {
         told.get(0).told(Arrays.asList("codex"), Arrays.asList("Codex 桌面版", "终端"));
         told.get(2).told(Arrays.asList("claude"), Collections.singletonList("Claude 桌面版"));
         require(told.get(0).passes("codex", "app") && told.get(0).passes("claude", "term") && told.get(2).passes("claude", "app") && !told.get(2).passes("claude", "term") && !told.get(2).passes("codex", "app"), "as the computer says of the folder");
+        require("both".equals(told.get(0).source()) && "term".equals(told.get(1).source()) && "app".equals(told.get(2).source()) && new AggregateSessions.Project("x").source().isEmpty(), "for the tint of its row");
         // one search over all of it: every word, whatever its case, in the name, the place, the tool, the computer; the hidden too
         require("out".equals(ids.apply(AggregateSessions.board(things, " 读书 ", "", "").found)) && AggregateSessions.board(things, "读书", "", "").searched, "by a word of the name");
         require("看日志 past-1 只有画面的终端".equals(ids.apply(AggregateSessions.board(things, "THESIS", "", "").found)), "by the project, what is open first: " + ids.apply(AggregateSessions.board(things, "THESIS", "", "").found));

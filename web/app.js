@@ -11,7 +11,7 @@
   const native = window.RemoteCliNative || null;
   // The look belongs to the app, not to one computer: inside the app it is kept there, so every computer's pages
   // open in the same skin and text size. A browser keeps it per address, as it keeps everything else.
-  const LOOK = ['skin', 'text'];
+  const LOOK = ['skin', 'text', 'readfont', 'readsize', 'readline'];
   const saved = (key, fallback) => {
     if (native && native.pref && LOOK.includes(key)) { const chosen = native.pref(key); if (chosen) return chosen; }
     try { return localStorage.getItem('rcli-' + key) || fallback; } catch (error) { return fallback; }
@@ -20,7 +20,7 @@
     if (native && native.setPref && LOOK.includes(key)) native.setPref(key, value);
     try { localStorage.setItem('rcli-' + key, value); } catch (error) { /* private window */ }
   };
-  let data = null, project = '', timer = 0, busy = false, shown = 2, endedShown = 8, toastTimer = 0;
+  let data = null, project = '', timer = 0, shown = 2, endedShown = 8, toastTimer = 0;
   // Project detail starts as a compact index. Each long section opens only when the user asks for it.
   const projectFolds = { active: false, live: false, history: false };
   // The first list is asked for while the sign-in is still being checked: over a tunnel each answer takes a
@@ -65,8 +65,17 @@
   // ?skin=<name> chooses a skin from a link, for example when showing the app to someone.
   const asked = new URLSearchParams(location.search).get('skin');
   if (asked && window.RemoteCliSkins[asked]) keep('skin', asked);
+  // How a conversation is read in its window: the type, its size beside the page's own, and the spacing of the lines.
+  const READ = {
+    readfont: ['字体', { sans: ['默认', 'inherit'], serif: ['衬线', '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif'], mono: ['等宽', 'ui-monospace, "Cascadia Mono", Consolas, monospace'] }, 'sans', '--read-font'],
+    readsize: ['字号', { small: ['小', '.84rem'], normal: ['标准', '.93rem'], large: ['大', '1.04rem'], larger: ['特大', '1.18rem'] }, 'normal', '--read-size'],
+    readline: ['行距', { tight: ['紧凑', '1.45'], normal: ['标准', '1.65'], loose: ['宽松', '1.9'] }, 'normal', '--read-line'] };
+  function typeset() {
+    Object.keys(READ).forEach(key => { const [, choices, usual, name] = READ[key]; document.documentElement.style.setProperty(name, (choices[saved(key, usual)] || choices[usual])[1]); });
+  }
   function paint() {
     const skin = window.RemoteCliPaint(saved('skin', 'paper'));
+    typeset();
     document.documentElement.style.fontSize = TEXT[saved('text', 'normal')] || TEXT.normal;
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.content = skin.t.background;
@@ -161,22 +170,30 @@
   const running = t => t.state === 'running' || t.state === 'starting';
   const usable = () => data && data.device.online && data.device.enabled;
 
-  // Sends one operation and waits until the computer has carried it out.
-  async function run(payload, waiting) {
-    if (busy) return null;
-    busy = true; toast(waiting);
+  // Sends one operation and waits until the computer has carried it out. One at a time: what is asked for while
+  // another is still being carried out waits for it, and is then done. (It was dropped without a word before, which
+  // lost a press made in the moment after the one before had shown its result.)
+  let turn = Promise.resolve();
+  function run(payload, waiting) {
+    const mine = turn.then(() => carry(payload, waiting));
+    turn = mine.then(() => null, () => null);
+    return mine;
+  }
+  async function carry(payload, waiting) {
+    toast(waiting);
     try {
       const op = Object.assign({ id: newId() }, payload);
       let result = await api('api/terminal', op);
-      for (let n = 0; n < 60 && result.state === 'queued'; n++) {
-        await new Promise(r => setTimeout(r, 400));
+      // asked again soon at first: most things are done within a moment
+      for (let n = 0; n < 62 && result.state === 'queued'; n++) {
+        await new Promise(r => setTimeout(r, n < 3 ? 150 : 400));
         result = await api('api/terminal', op);
       }
       if (result.error) throw new Error(result.error);
       if (result.state === 'queued') throw new Error('电脑没有响应，请确认电脑端程序在运行');
       toast('');
       return result;
-    } catch (error) { toast(error.message); return null; } finally { busy = false; }
+    } catch (error) { toast(error.message); return null; }
   }
   // ?take=<conversation> comes from the app's workbench: the question about taking over a conversation that runs on
   // the computer is asked at once, and the terminal that follows leads back to the workbench.
@@ -284,8 +301,19 @@
     const choice = await openSheet((form, finish) => {
       const now = () => (data.sessions || []).find(s => s.id === session.id && s.tool === session.tool) || session;
       const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
-      form.append(el('div', { className: 'bar' }, el('button', { type: 'button', className: 'icon', ariaLabel: '返回', html: ICON.back, onclick: () => finish(null) }),
-        el('div', { className: 'who' }, el('h3', { textContent: session.title }), head)), said, asks, below, write);
+      // how it is read: chosen behind "Aa", kept with the look (in the app for every computer)
+      const format = el('div', { className: 'reading', hidden: true });
+      Object.keys(READ).forEach(key => {
+        const [label, choices, usual] = READ[key], group = el('span', { className: 'pick', role: 'group', ariaLabel: label });
+        Object.keys(choices).forEach(value => group.append(el('button', { type: 'button', textContent: choices[value][0], ariaPressed: String(saved(key, usual) === value), onclick: () => {
+          keep(key, value); typeset();
+          group.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.textContent === choices[value][0])));
+        } })));
+        format.append(el('span', { textContent: label }), group);
+      });
+      form.append(el('div', { className: 'above' }, el('div', { className: 'bar' }, el('button', { type: 'button', className: 'icon', ariaLabel: '返回', html: ICON.back, onclick: () => finish(null) }),
+        el('div', { className: 'who' }, el('h3', { textContent: session.title }), head),
+        el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), format), said, asks, below, write);
       // ---- what is said there
       // The window asks the computer for the conversation itself, again and again while it is open, and says what
       // it has (`since`): the computer gives it anew only when it changed, with how it stands. So what is said on
@@ -433,7 +461,9 @@
   const base = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(path || '');
   // where a conversation that a program has open runs: the desktop app or an editor ('app'), or a command line
   // (one that no program has open is told by what started it)
-  const sourceOf = s => !s.live ? sourceOfKind(s.kind) : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'term';
+  // and one that a program has open by what the computer says uses it (a command line inside an editor's terminal
+  // is a terminal's); a computer of an earlier version says only where the program runs
+  const sourceOf = s => !s.live || s.kind ? sourceOfKind(s.kind) : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'term';
   function things() {
     const sessions = data.sessions || [], saved = {};
     sessions.forEach(s => { saved[s.tool + ':' + s.id] = s; });
@@ -463,7 +493,7 @@
   const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? PHONE : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
   // what a card shows: it is built again when any of this changes
   const signed = x => x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned]
-    : [x.s.id, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), x.s.ask ? x.s.ask.id : '', x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state];
+    : [x.s.id, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), x.s.ask ? x.s.ask.id : '', x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state, x.source];
 
   // ---- the filters: by tool, and by where a thing runs. They last as long as the page is kept open.
   let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 2, hiddenShown = false;
@@ -551,7 +581,8 @@
     meta.append(el('span', { className: 'chip' + (x.apart ? ' apart' : ''), textContent: x.place }));
     if (x.apart) meta.append(el('span', { textContent: '未加入项目' }));
   }
-  const card = (x, withProject) => held(x.t ? terminalCard(x, withProject) : sessionCard(x, withProject), () => manage(x));
+  // (what runs in an app is told apart from what runs in a terminal by its tint)
+  const card = (x, withProject) => { const made = held(x.t ? terminalCard(x, withProject) : sessionCard(x, withProject), () => manage(x)); if (x.source) made.dataset.source = x.source; return made; };
   // A terminal opened from the phone.
   function terminalCard(x, withProject) {
     const t = x.t, phase = x.phase, meta = el('span', { className: 'meta' }, pill(phase, PHASE[phase][0]));
@@ -714,6 +745,9 @@
       const list = wanted.map(name => {
         const folder = folderOf(name);
         const own = mine.filter(x => x.project === name), count = sessions.filter(x => x.project === name).length;
+        // a project is an app's, a terminal's or both: by what its folder is used for, and by what is in it now
+        const uses = new Set((folder.kinds || []).map(sourceOfKind).concat(everything.filter(x => x.project === name).map(x => x.source)).filter(Boolean));
+        const source = uses.has('app') ? (uses.has('term') ? 'both' : 'app') : uses.has('term') ? 'term' : '';
         const need = stands(own, 'confirm'), done = stands(own, 'done'), work = stands(own, 'busy');
         const meta = el('span', { className: 'meta' });
         if (need) { const c = el('span', { className: 'count', textContent: need + ' 个等你确认' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--bad)'); c.style.color = 'var(--bad)'; meta.append(c); }
@@ -721,8 +755,10 @@
         if (work) { const c = el('span', { className: 'count', textContent: work + ' 个在执行' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--busy)'); c.style.color = 'var(--busy)'; meta.append(c); }
         if (own.length && !need && !done && !work) meta.append(el('span', { textContent: own.length + ' 个终端开着' }));
         meta.append(el('span', { textContent: count ? count + ' 段对话' : '还没有对话' }));
-        return { name, card: el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => enter(name) },
-          el('span', { className: 'tool folder', html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev }))), sign: [name, need, done, work, own.length, count, folder.path] };
+        const made = el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => enter(name) },
+          el('span', { className: 'tool folder', html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev })));
+        if (source) made.dataset.source = source;
+        return { name, card: made, sign: [name, need, done, work, own.length, count, folder.path, source] };
       });
       const cardsP = list.map(x => x.card);
       if (ready && !searching) cardsP.push(el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', onclick: addProject, html: ICON.plus + '<span>添加项目</span>' })));

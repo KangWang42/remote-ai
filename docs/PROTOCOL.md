@@ -48,8 +48,9 @@ computer's own words for the phone to show and search: a desktop app (`Codex 桌
 (`编辑器`), a terminal (`终端`); a computer of an earlier version says none. The Windows computer leaves out a folder
 that only a desktop app uses while that app does not run. `projects` say the same of each project's folder (`tools`,
 `kinds`; a closed app is not left out there), and each of the `sessions` says by what it is used in `kind`: by the
-program that has it open, else by what started it. The phone tells apart two: the terminal's word, and every other
-(an app). `sessions` are conversations the tools saved on
+program that has it open, else by what started it. A command line that runs in an editor's own terminal is the
+terminal's (`终端`), an editor's extension the editor's. The phone tells apart two: the terminal's word, and every
+other (an app). `sessions` are conversations the tools saved on
 the computer; `live` means a program on the computer has it open, `terminal` is set when one of the relay's
 terminals already shows it. `state` is `starting`, `running` or `closed`; `status` is `busy`, `idle` or empty.
 
@@ -207,7 +208,9 @@ that has it open:
  "messages": [{"role": "user", "text": "..."}, {"role": "assistant", "text": "..."}, {"role": "tool", "text": "Bash：npm test"}]}
 ```
 
-At most 40 messages of at most 1,500 characters, oldest first; `more` says that earlier ones exist. `tool` names
+The last 40 things the user and the tool said to each other, each of at most 1,500 characters, oldest first, with what
+the tool did between them (`tool`; of one unbroken run of those the last 30, and a line that says how many came
+before); `more` says that earlier ones exist. `tool` names
 something the tool did. What a tool writes into a conversation for itself (reminders, results of commands) is left
 out. The tool and the folder asked of the computer are the ones it reported for that conversation.
 

@@ -71,6 +71,25 @@ public static class SaidCheck {
             var last = TerminalAgent.Said(many, "claude");
             var kept = ((IEnumerable)last["messages"]).Cast<Dictionary<string, object>>().ToList();
             Require(kept.Count == 40 && (string)kept[0]["text"] == "第16句" && (string)kept[39]["text"] == "第55句" && true.Equals(last["more"]), "the last forty");
+            // A conversation at work is mostly things done. What the tool said between them is given all the same:
+            // the forty are counted of what was said; of a long run of things done the last thirty, with how many came before.
+            var busy = new List<string> { "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"开始吧\"}}" };
+            Func<string, string> says = text => "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"" + text + "\"}]}}";
+            Func<int, string> does = n => "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"step " + n + "\"}}]}}";
+            // what a tool gave back is long, and is passed over unread (here it is not even whole JSON)
+            string back = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"t\",\"type\":\"tool_result\",\"content\":\"" + new string('x', 9000);
+            busy.Add(says("先看看现状。"));
+            for (int n = 1; n <= 45; n++) { busy.Add(does(n)); busy.Add(back); }
+            busy.Add(says("找到原因了。"));
+            for (int n = 46; n <= 50; n++) { busy.Add(does(n)); busy.Add(back); }
+            busy.Add(says("改好了。"));
+            var work = TerminalAgent.Said(Write(folder, "busy.jsonl", busy.ToArray()), "claude");
+            var shown = ((IEnumerable)work["messages"]).Cast<Dictionary<string, object>>().Select(m => m["role"] + ":" + m["text"]).ToList();
+            Require(shown.Count == 4 + 1 + 30 + 5 && shown[0] == "user:开始吧" && shown[1] == "assistant:先看看现状。" && shown[2] == "tool:更早的 15 个操作" && shown[3] == "tool:Bash：step 16"
+                && shown[32] == "tool:Bash：step 45" && shown[33] == "assistant:找到原因了。" && shown[39] == "assistant:改好了。" && true.Equals(work["more"]), "what was said between the things done: " + String.Join(" | ", shown.Take(4)) + " … " + shown.Count);
+            var few = new List<Dictionary<string, object>>();
+            for (int n = 0; n < 5; n++) few.Add(new Dictionary<string, object> { { "role", n % 2 == 0 ? "tool" : "assistant" }, { "text", "t" + n } });
+            Require(TerminalAgent.Talk(few, 40, 30).Count == 5 && TerminalAgent.Talk(few, 1, 30).Count == 3 && TerminalAgent.Talk(new List<Dictionary<string, object>>(), 40, 30).Count == 0, "short ones whole; with the last thing said, what was done around it");
             Console.WriteLine("ok: what was said in a Claude Code and a Codex conversation, cut and counted");
             return 0;
         } finally { Directory.Delete(folder, true); }

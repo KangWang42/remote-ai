@@ -279,6 +279,27 @@ class Pure(unittest.TestCase):
             ("user", "第一句"), ("assistant", "我先看看登录的代码。"), ("tool", "Bash：grep -rn "), ("assistant", "长" * 14)])
         self.assertEqual(len(got["messages"][-1]["text"]), agent.SAID_CHARS)
         self.assertFalse(got["more"])
+        # A conversation at work is mostly things done. What was said between them is given all the same: the forty
+        # are counted of what was said; of a long run of things done the last thirty, with how many came before.
+        # What a tool gave back is long, and is passed over unread (here it is not even whole JSON).
+        busy = os.path.join(home, "busy.jsonl")
+        says = lambda text: json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}, ensure_ascii=False)
+        does = lambda n: json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "step %d" % n}}]}})
+        back = '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"' + "x" * 9000
+        lines = [json.dumps({"type": "user", "message": {"role": "user", "content": "开始吧"}}, ensure_ascii=False), says("先看看现状。")]
+        for n in range(1, 46):
+            lines += [does(n), back]
+        lines.append(says("找到原因了。"))
+        for n in range(46, 51):
+            lines += [does(n), back]
+        lines.append(says("改好了。"))
+        with open(busy, "w", encoding="utf-8") as stream:
+            stream.write("\n".join(lines) + "\n")
+        work = agent.said(busy, "claude")
+        shown = ["%s:%s" % (m["role"], m["text"]) for m in work["messages"]]
+        self.assertEqual((len(shown), shown[:4], shown[32:34], shown[-1], work["more"]),
+                         (40, ["user:开始吧", "assistant:先看看现状。", "tool:更早的 15 个操作", "tool:Bash：step 16"], ["tool:Bash：step 45", "assistant:找到原因了。"], "assistant:改好了。", True))
+        self.assertEqual(agent.talk([], 40, 30), [])
         with open(os.path.join(rollouts, "rollout-2026-10-09T10-00-00-%s.jsonl" % codex), "a", encoding="utf-8") as stream:
             for payload in (
                 {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "规则"}]},
