@@ -250,7 +250,8 @@ public sealed class Reach : IDisposable {
                 uint process = 0;       // the hook's own process, as the system tells it: from there up, what started it
                 try { if (!GetNamedPipeClientProcessId(stream.SafePipeHandle.DangerousGetHandle(), out process)) process = 0; } catch (ObjectDisposedException) { }
                 string[] answer = Handle(Convert.ToString(tool), (Dictionary<string, object>)hooked, () => gone || closed, (int)process);
-                WriteFrame(stream, Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string, object> { { "out", answer[0] }, { "code", Int32.Parse(answer[1]) } })));
+                // `again`: this program is closing, and what it was asked has not been answered by anybody
+                WriteFrame(stream, Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string, object> { { "out", answer[0] }, { "code", Int32.Parse(answer[1]) }, { "again", closed && answer[0].Length == 0 } })));
                 try { stream.WaitForPipeDrain(); } catch { }
             } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }      // a pipe that closed, or words that are not an event
         }
@@ -406,26 +407,47 @@ public sealed class Reach : IDisposable {
         return new[] { AtStop(tool, tool == "claude" ? ClaudeSessions.Version(Text(hooked, "session_id")) : "", message), "0" };
     }
 
+    /// How long a hook with a request waits for the program to listen again, once it has stopped listening, in seconds.
+    public const int Return = 90;
     /// The hook itself, as the tools run it: hands the event it was given to the program that listens on the pipe
     /// and writes back what that answers. When nothing listens, it has nothing to say and the tool goes on at once.
+    /// A request for permission that the program had taken is another matter: the program may be starting again (an
+    /// update, asked for from the phone while its owner is away), and the request would fall to the tool's own
+    /// question, where the phone cannot answer it. The hook waits a while for the program and hands it over anew.
     public static int Hook(string tool, string pipeName) {
         try {
             byte[] hooked;
             using (var input = Console.OpenStandardInput()) using (var all = new MemoryStream()) { input.CopyTo(all); hooked = all.ToArray(); }
             string text = Encoding.UTF8.GetString(hooked).Trim().TrimStart('﻿');
             if (!text.StartsWith("{", StringComparison.Ordinal)) return 0;
-            using (var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut)) {
-                client.Connect(400);
-                WriteFrame(client, Encoding.UTF8.GetBytes("{\"tool\":" + new JavaScriptSerializer().Serialize(tool) + ",\"event\":" + text + "}"));
-                byte[] answer = ReadFrame(client);
-                if (answer == null) return 0;
-                var said = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 }.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(answer));
-                byte[] written = Encoding.UTF8.GetBytes(Text(said, "out"));
-                if (written.Length > 0) using (var output = Console.OpenStandardOutput()) { output.Write(written, 0, written.Length); output.Flush(); }
-                int code; return Int32.TryParse(Text(said, "code"), out code) ? code : 0;
+            bool request = Regex.IsMatch(text, "\"hook_event_name\"\\s*:\\s*\"PermissionRequest\"");
+            DateTime? lost = null;
+            for (;;) {
+                bool taken = false;
+                try {
+                    using (var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut)) {
+                        client.Connect(lost.HasValue ? 1000 : 400);
+                        WriteFrame(client, Encoding.UTF8.GetBytes("{\"tool\":" + new JavaScriptSerializer().Serialize(tool) + ",\"event\":" + text + "}"));
+                        taken = true;
+                        byte[] answer = ReadFrame(client);
+                        if (answer != null) {
+                            var said = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 }.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(answer));
+                            object again;
+                            if (!(said.TryGetValue("again", out again) && again is bool && (bool)again)) {
+                                byte[] written = Encoding.UTF8.GetBytes(Text(said, "out"));
+                                if (written.Length > 0) using (var output = Console.OpenStandardOutput()) { output.Write(written, 0, written.Length); output.Flush(); }
+                                int code; return Int32.TryParse(Text(said, "code"), out code) ? code : 0;
+                            }
+                        }
+                    }
+                } catch (TimeoutException) { } catch (IOException) { }
+                // nothing listened from the first: the program is not running. It listened and is gone: wait for it.
+                if (!request || (!taken && !lost.HasValue)) return 0;
+                if (!lost.HasValue) lost = DateTime.UtcNow;
+                if (DateTime.UtcNow - lost.Value > TimeSpan.FromSeconds(Return)) return 0;
+                Thread.Sleep(1000);
             }
-        } catch (TimeoutException) { return 0; } catch (IOException) { return 0; } catch (UnauthorizedAccessException) { return 0; }
-        catch (ArgumentException) { return 0; } catch (InvalidOperationException) { return 0; }
+        } catch (UnauthorizedAccessException) { return 0; } catch (ArgumentException) { return 0; } catch (InvalidOperationException) { return 0; }
     }
 }
 

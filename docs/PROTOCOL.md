@@ -273,7 +273,9 @@ says at the corner of the computer's screen what waits and how to have it there.
 nobody has answered after half an hour, with still nobody at the computer, is not left at the tool's own question,
 which only somebody at the computer could answer: the hook answers that it is not allowed for now, and the tool
 stops and says what it needs. The conversation is then one that has stopped, to be told from the phone (`say`)
-whenever its owner reads it; it asks again, and that request is the phone's to answer. Where
+whenever its owner reads it; it asks again, and that request is the phone's to answer. A request that is kept
+outlives the program being started again (an update): its hook waits up to a minute and a half for the program to
+listen again and hands the request over anew. Where
 the program's owner switched that off (the setting `ask`, below), the hook ends at once, Codex shows its own
 question, and the conversation is listed as asking, without `answer` among what the phone can do. A tool that
 stops is not kept waiting unless the program's owner chose a time for that (the setting `wait`, below): then, while

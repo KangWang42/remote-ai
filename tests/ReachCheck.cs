@@ -286,6 +286,22 @@ public static class ReachCheck {
                 Require(reach.Heard("claude") && reach.Heard("codex") && !reach.Heard("other"), "a tool that has told of something is known to reach this program");
             }
             Require(Answer(Run("claude", Event("Stop", Guid.NewGuid().ToString())), 5000, "nobody listens") == "", "with nothing listening the hook ends at once and says nothing");
+            Require(Answer(Run("codex", Request(Guid.NewGuid().ToString(), "git push", "")), 5000, "nobody listens to a request") == "", "a request too, when the program was never there");
+
+            // ---- the program is started again while it keeps a request for the phone (an update, asked for from the
+            // phone): the request is not lost to the tool's own question. Its hook waits and hands it over anew.
+            string through = Guid.NewGuid().ToString();
+            Hooked carried;
+            using (var earlier = new Reach(pipe, () => 600)) {
+                carried = Run("codex", Request(through, "git push", "Publish"));
+                Require(Until(() => earlier.Of("codex", through) != null && earlier.Of("codex", through).Answerable, 3000), "kept by the program as it was");
+            }
+            Require(!carried.Program.WaitForExit(2500), "the program has closed: the hook waits for it to be there again");
+            using (var later = new Reach(pipe, () => 600)) {
+                Require(Until(() => later.Of("codex", through) != null && later.Of("codex", through).Answerable && later.Of("codex", through).AskText.Contains("git push"), 6000), "the program is there again and has the request");
+                later.Answer("codex", through, later.Of("codex", through).AskId, true);
+                Require(Answer(carried, 3000, "answered after the program came back").Contains("\"behavior\":\"allow\""), "and the phone's answer reaches the tool");
+            }
 
             // ---- the tools' settings: only this program's entries are added and taken out
             string claudeHome = Path.Combine(folder, "claude"), codexHome = Path.Combine(folder, "codex");
