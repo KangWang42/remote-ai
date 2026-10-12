@@ -110,8 +110,9 @@
     { name: 'tunnel', title: '公网隧道的协议', about: '隧道经常断开时改用 HTTP/2，下次建立时生效', choices: [['auto', '自动'], ['http2', 'HTTP/2']] },
     { name: 'autostart', title: '登录 Windows 后自动启动' },
     { name: 'reach', title: '手机处理电脑上的对话', about: '电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用' },
-    // one with more choices than a row holds is chosen on a sheet, which says what it is for; `needs`: the switch
-    // without which it has nothing to do
+    // `needs`: the switch without which a setting has nothing to do. One with more choices than a row holds is
+    // chosen on a sheet, which says what it is for.
+    { name: 'ask', needs: 'reach', title: 'Codex 的确认请求交给手机', about: '电脑无人操作时由手机回答，这期间电脑上的 Codex 显示钩子在运行；关闭时在电脑上回答' },
     { name: 'wait', needs: 'reach', title: '对话停下后等手机消息', sheet: true, choices: [['0', '不等'], ['60', '1 分钟'], ['300', '5 分钟'], ['900', '15 分钟'], ['1800', '30 分钟']],
       explained: '不等：对话做完就停下，电脑上看不到任何变化；手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十几秒。选了时间：电脑无人操作满 1 分钟后，对话做完先等这么久，这期间发的消息立即送达；等的时候电脑上显示钩子正在运行，有人碰键盘或鼠标就结束。' },
     { name: 'update', title: '自动检查更新', about: '有新版本时提示' }];

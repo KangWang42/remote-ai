@@ -48,7 +48,7 @@ public sealed partial class App : Form {
     // (those used in a terminal; those used by a desktop app or an editor).
     readonly Segmented projectPick = new Segmented { Items = new[] { "已添加", "终端项目", "应用项目" } };
     string offeredMark = "";
-    readonly Switch enabledSwitch = new Switch(), autostartSwitch = new Switch(), autoUpdateSwitch = new Switch(), reachSwitch = new Switch();
+    readonly Switch enabledSwitch = new Switch(), autostartSwitch = new Switch(), autoUpdateSwitch = new Switch(), reachSwitch = new Switch(), askSwitch = new Switch();
     SettingRow reachRow, updateRow;
     readonly Segmented rights = new Segmented { Items = new[] { "默认", "自动改文件", "只读" } }, protocol = new Segmented { Items = new[] { "自动", "HTTP/2" } };
     readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 10 * 60 * 1000 }, quietTimer = new System.Windows.Forms.Timer { Interval = 5000 };
@@ -93,7 +93,7 @@ public sealed partial class App : Form {
         try { config = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(ConfigFile, Encoding.UTF8)); } catch { config = null; }
         if (config == null) config = new Dictionary<string, object>();
         foreach (var item in new Dictionary<string, object> { { "Mode", "lan" }, { "Port", 8722 }, { "Server", "" }, { "OwnServer", "" }, { "RemoteEnabled", true },
-                 { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 } })
+                 { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", false } })
             if (!config.ContainsKey(item.Key) || config[item.Key] == null) config[item.Key] = item.Value;
         if (Array.IndexOf(new[] { "lan", "cloud", "own", "public" }, Mode) < 0) config["Mode"] = "lan";
         try { password = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(PasswordFile), null, DataProtectionScope.CurrentUser)); } catch { password = ""; }
@@ -861,7 +861,7 @@ public sealed partial class App : Form {
 
         // ---- page: settings
         var settings = Page("设置", "这些设置只影响这台电脑。");
-        var rows = Place(settings, new Card(), 28, 92, 652, 10 * 44 + 12);
+        var rows = Place(settings, new Card(), 28, 84, 652, 11 * 41 + 12);
         autoUpdateSwitch.Changed += (s, e) => Set("update", autoUpdateSwitch.On);
         enabledSwitch.On = Convert.ToString(config["RemoteEnabled"]) == "True";
         enabledSwitch.Changed += (s, e) => { Keep("RemoteEnabled", enabledSwitch.On); RefreshActivity(); Toast(enabledSwitch.On ? "已允许手机访问" : "已暂停手机访问，立即生效"); };
@@ -906,22 +906,26 @@ public sealed partial class App : Form {
             menu.Closed += (c, a) => BeginInvoke(new Action(menu.Dispose));
             menu.Show(waitPick, new Point(0, waitPick.Height + 2));
         };
-        var waitRow = new SettingRow("对话停下后等手机消息", "等的时候手机发的消息立即送达，工具显示钩子在运行", waitPick, 170, 34);
+        var waitRow = new SettingRow("对话停下后等手机消息", "等的时候手机发的消息立即送达，工具显示钩子在运行", waitPick, 170, 32);
         waitRow.Tip(tips, WaitFor);
+        askSwitch.Changed += (s, e) => Set("ask", askSwitch.On);
+        var askRow = new SettingRow("Codex 的确认请求交给手机", "无人操作电脑时由手机回答，这期间 Codex 显示钩子在运行", askSwitch, 46, 26);
+        askRow.Tip(tips, AskFor);
         updateButton = new RoundButton { Text = "检查更新", Glyph = Theme.IconRefresh };
         updateButton.Click += (s, e) => CheckForUpdate(true);
         var all = new[] {
             new SettingRow("允许手机访问", "关闭后手机立即不能操作，正在运行的终端不受影响", enabledSwitch, 46, 26),
             new SettingRow("登录 Windows 后自动启动", "开机后在托盘里运行，不弹出窗口", autostartSwitch, 46, 26),
             reachRow = new SettingRow("手机处理电脑上的对话", "电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用", reachSwitch, 46, 26),
+            askRow,
             waitRow,
-            new SettingRow("新终端的权限", "Claude Code 和 Codex 从手机启动时用什么权限模式", rights, 250, 34),
-            new SettingRow("公网隧道的协议", "隧道经常断开或出现 1033 时改用 HTTP/2", protocol, 170, 34),
+            new SettingRow("新终端的权限", "Claude Code 和 Codex 从手机启动时用什么权限模式", rights, 250, 32),
+            new SettingRow("公网隧道的协议", "隧道经常断开或出现 1033 时改用 HTTP/2", protocol, 170, 32),
             new SettingRow("本机端口", "局域网直连和公网隧道使用，被占用时换一个", portBox, 96, 32),
-            new SettingRow("外观", "和手机 App 相同的几种配色，默认与 App 一致", skinPick, 170, 34),
+            new SettingRow("外观", "和手机 App 相同的几种配色，默认与 App 一致", skinPick, 170, 32),
             new SettingRow("自动检查更新", "开启后定期检查，有新版本时提示", autoUpdateSwitch, 46, 26),
-            (updateRow = new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 34)) };
-        for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 44, 648, 44);
+            (updateRow = new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 32)) };
+        for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 41, 648, 41);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 552, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
         Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 552, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-ai") { UseShellExecute = true }); } catch (Exception) { } });
         Action(settings, "退出 Remote AI", Theme.IconPower, ButtonKind.Danger, 530, 552, 150, 36, (s, e) => Quit());

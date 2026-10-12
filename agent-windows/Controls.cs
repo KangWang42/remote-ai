@@ -465,8 +465,8 @@ public sealed class SettingRow : Panel {
     public void Say(string about, Color colour) { if (text.Text != about) text.Text = about; if (text.ForeColor != colour) text.ForeColor = colour; }
     public SettingRow(string title, string about, Control control, int controlWidth, int controlHeight) {
         BackColor = Theme.Panel; Height = 53; side = control;
-        name = Theme.Label(title, Theme.Ink, Theme.Panel, 9.5f, true); name.SetBounds(18, 5, 360, 20);
-        text = Theme.Label(about, Theme.Muted, Theme.Panel, 8.5f); text.SetBounds(18, 24, controlWidth <= 60 ? 540 : 370, 18);      // beside a switch there is room for a longer line
+        name = Theme.Label(title, Theme.Ink, Theme.Panel, 9.5f, true); name.SetBounds(18, 3, 360, 20);
+        text = Theme.Label(about, Theme.Muted, Theme.Panel, 8.5f); text.SetBounds(18, 22, controlWidth <= 60 ? 540 : 370, 18);      // beside a switch there is room for a longer line
         Controls.Add(name); Controls.Add(text);
         if (control != null) { control.SetBounds(0, 0, controlWidth, controlHeight); Controls.Add(control); control.BringToFront(); }
     }

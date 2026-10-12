@@ -74,7 +74,7 @@ def main():
     removed = Path(temp.name) / "removed"            # where a conversation that is deleted goes here, in place of the recycle bin
     environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600", REMOTECLI_REMOVED=str(removed))       # nobody is at the computer
     environment["PATH"] = str(homes.stand_ins(temp.name, queue=True)) + ";" + environment["PATH"]
-    (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full",
+    (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full", "ReachAsk": True,
                                                   "RemoteDirs": ["web-shop=" + str(shop), "thesis=" + str(thesis)]}), encoding="utf-8")
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(PORT), "--data", str(Path(temp.name) / "relay")], env=environment, stdout=subprocess.DEVNULL)
     agent_exe = ROOT / "agent-windows" / "bin" / "RemoteCliAgent.exe"

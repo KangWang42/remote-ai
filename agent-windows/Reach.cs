@@ -19,8 +19,9 @@ namespace RemoteCli {
 /// from the program that has a conversation: it goes on as it is, the person at the computer uses it as before, and
 /// the phone looks on. What the phone can do is what a hook can answer:
 /// - a request for permission. Claude Code shows its question on the computer while the hook runs, and takes
-///   whichever answer comes first; Codex asks its hooks before it shows the question, so it is kept waiting for
-///   the phone only while nobody is at the computer;
+///   whichever answer comes first: nothing of the hook is seen there. Codex asks its hooks before it shows the
+///   question, so to be answered from the phone it has to be kept, showing a running hook meanwhile: that is done
+///   only where its owner chose it, and only while nobody is at the computer;
 /// - what to do next. A hook that runs as the tool stops can tell it to go on with something: a message from the
 ///   phone is passed to it there. One sent while the tool works waits for that moment; and while nobody is at the
 ///   computer, a tool that stops is kept waiting for the phone's message for a while, where its owner chose that.
@@ -38,9 +39,21 @@ public sealed class Reach : IDisposable {
     public static readonly int[] Waits = { 0, 60, 300, 900, 1800 };
     /// The choice as it is kept in the settings ("ReachWait"), read: one of Waits, none where nothing valid is kept.
     public static int Wait(object kept) { int seconds; return Int32.TryParse(Convert.ToString(kept), out seconds) && Array.IndexOf(Waits, seconds) >= 0 ? seconds : 0; }
-    /// What Claude Code shows on its screen while its Stop hook runs, in place of "running stop hook": what the hook
-    /// is there for, and how a wait ends. It is read by the person at the computer, not by the model.
-    public const string Waiting = "Remote AI 查收手机消息，碰一下键盘或鼠标就结束";
+    /// What the program's owner lets a hook keep its tool for, while nobody is at the computer. Nothing, unless they
+    /// chose it: a tool that is kept shows a running hook, which whoever looks at the computer need not understand.
+    public sealed class Kept {
+        public int AtStop;          // a tool that stops waits so many seconds for the phone's message
+        public bool Requests;       // a request for permission of a tool that asks its hooks first (Codex) waits for the phone's answer
+        /// As the settings keep it: "ReachWait" and "ReachAsk".
+        public static Kept From(IDictionary<string, object> settings) {
+            object wait = null, ask = null;
+            if (settings != null) { settings.TryGetValue("ReachWait", out wait); settings.TryGetValue("ReachAsk", out ask); }
+            return new Kept { AtStop = Wait(wait), Requests = ask is bool ? (bool)ask : String.Equals(Convert.ToString(ask), "true", StringComparison.OrdinalIgnoreCase) };
+        }
+    }
+    /// What Claude Code shows on its screen while its Stop hook runs, in place of "running stop hook". It is read by
+    /// the person at the computer, not by the model, and is seen for a moment at every stop.
+    public const string Waiting = "Remote AI 查收手机消息";
     public const int Patience = 2000;       // what the tools are told a hook may take, in seconds: longer than any hold
     public static readonly string[] Events = { "SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop", "SessionEnd" };
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
@@ -78,7 +91,7 @@ public sealed class Reach : IDisposable {
     readonly HashSet<string> heard = new HashSet<string>();
     /// Whether a tool has told of anything since this program started: its hooks do reach it.
     public bool Heard(string tool) { lock (gate) return heard.Contains(tool); }
-    readonly string pipe; readonly Func<int> idle, wait; readonly Func<int, string, string, bool> own;
+    readonly string pipe; readonly Func<int> idle; readonly Func<Kept> kept; readonly Func<int, string, string, bool> own;
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint process);
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     volatile bool closed;
@@ -86,10 +99,10 @@ public sealed class Reach : IDisposable {
     public event Action Changed;
     public string Pipe { get { return pipe; } }
 
-    /// `waitSeconds`: how long a tool that stops is kept waiting now, as its owner has it; asked at every stop.
+    /// `keeps`: what a tool is kept for now, as its owner has it; asked at every request and every stop.
     /// `ownTerminal`: whether a hook (its process, its tool, its conversation) runs in one of this program's own terminals.
-    public Reach(string pipeName, Func<int> idleSeconds = null, Func<int> waitSeconds = null, Func<int, string, string, bool> ownTerminal = null) {
-        pipe = pipeName; idle = idleSeconds ?? IdleSeconds; wait = waitSeconds ?? (() => 0); own = ownTerminal;
+    public Reach(string pipeName, Func<int> idleSeconds = null, Func<Kept> keeps = null, Func<int, string, string, bool> ownTerminal = null) {
+        pipe = pipeName; idle = idleSeconds ?? IdleSeconds; kept = keeps ?? (() => new Kept()); own = ownTerminal;
         new Thread(Listen) { IsBackground = true, Name = "reach" }.Start();
         watch = new System.Threading.Timer(Rested, null, 1000, 1000);
     }
@@ -300,7 +313,8 @@ public sealed class Reach : IDisposable {
         string id; var began = DateTime.UtcNow; bool? verdict = null;
         lock (gate) {
             id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null;
-            o.Status = "confirm"; o.Answerable = !mine && (beside || idle() >= Unattended); o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
+            // beside its own question the hook is not seen; a tool that asks its hooks first is kept only where its owner chose that
+            o.Status = "confirm"; o.Answerable = !mine && (beside || (kept().Requests && idle() >= Unattended)); o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
         }
         Tell();
         lock (gate) {
@@ -337,14 +351,14 @@ public sealed class Reach : IDisposable {
         return json.Serialize(new Dictionary<string, object> { { "decision", "block" }, { "reason", FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message } });
     }
     string[] Stopped(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone, bool mine) {
-        string message = null; var began = DateTime.UtcNow; int turn, kept = wait(); bool held = false;
+        string message = null; var began = DateTime.UtcNow; int turn, wait = kept().AtStop; bool held = false;
         lock (gate) {
             o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = o.Held = false; turn = o.Turn;
             if (o.Queued != null) { message = o.Queued; o.Queued = null; Monitor.PulseAll(gate); }
             else if (!mine && idle() >= Unattended) {
                 // nobody is at the computer: it is the phone's turn. The hook is kept only where its owner chose a
                 // time for that; else the tool stops as it would without this program.
-                o.Status = "waiting"; o.Message = null; o.Stopped = began; o.Held = held = kept > 0;
+                o.Status = "waiting"; o.Message = null; o.Stopped = began; o.Held = held = wait > 0;
                 Monitor.PulseAll(gate);
             } else o.Status = "idle";
         }
@@ -357,7 +371,7 @@ public sealed class Reach : IDisposable {
                         if (o.Message != null) { message = o.Message; o.Message = null; break; }
                         if (gone() || idle() < Unattended) { o.Status = "idle"; o.Held = false; break; }
                         // its time is over: the tool stops, and it is the phone's turn still
-                        if (DateTime.UtcNow - began > TimeSpan.FromSeconds(kept)) { o.Held = false; let = true; break; }
+                        if (DateTime.UtcNow - began > TimeSpan.FromSeconds(wait)) { o.Held = false; let = true; break; }
                         Monitor.Wait(gate, 300);
                     }
                 }

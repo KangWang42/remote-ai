@@ -119,7 +119,7 @@ public sealed class TerminalAgent {
     readonly string dataDir;
     public TerminalAgent(string dataFolder = null) {
         dataDir = dataFolder ?? DefaultData;
-        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, WaitAtStop, InOwnTerminal); Reach.Changed += Wake;
+        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal); Reach.Changed += Wake;
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
@@ -587,14 +587,12 @@ public sealed class TerminalAgent {
         if (SessionOrigin.Descends(hook, Process.GetCurrentProcess().Id)) return true;
         lock (work) return terminals.Values.Any(t => !t.Pty.Closed && t.Tool == tool && String.Equals(t.Session, session, StringComparison.OrdinalIgnoreCase));
     }
-    // How long a tool that stops is kept waiting for the phone, as the settings have it now. Asked by the hooks'
-    // threads: read on its own, without what Preferences does besides.
-    int WaitAtStop() {
-        try {
-            object kept;
-            var prefs = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dataDir, "config.json"), Encoding.UTF8));
-            return prefs != null && prefs.TryGetValue("ReachWait", out kept) ? RemoteCli.Reach.Wait(kept) : 0;
-        } catch (IOException) { return 0; } catch (UnauthorizedAccessException) { return 0; } catch (ArgumentException) { return 0; } catch (InvalidOperationException) { return 0; }
+    // What a tool is kept for the phone for, as the settings have it now. Asked by the hooks' threads: read on its
+    // own, without what Preferences does besides. Nothing is kept where the settings cannot be read.
+    Reach.Kept KeptForPhone() {
+        try { return RemoteCli.Reach.Kept.From(new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dataDir, "config.json"), Encoding.UTF8))); }
+        catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
+        return new Reach.Kept();
     }
     Dictionary<string, object> Preferences() {
         var prefs = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dataDir, "config.json"), Encoding.UTF8));

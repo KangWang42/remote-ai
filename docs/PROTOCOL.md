@@ -267,8 +267,10 @@ How this reaches the tools: Claude Code and Codex run hooks of the computer's pr
 own settings when its owner switches that on). A hook for a request for permission is answered with the phone's
 answer; a hook that runs as the tool stops is answered with the message, as something to go on with. Claude Code
 shows its question on the computer while the hook runs and takes whichever answer comes first. Codex asks its hooks
-first, so the computer's program keeps it waiting for the phone only while nobody has touched the computer's
-keyboard or mouse for a minute, and lets it go the moment somebody does; a request for permission is kept so for half an hour at most. A tool that
+first and shows a running hook meanwhile, so its request is kept for the phone only where the program's owner chose
+that (the setting `ask`, below), and then only while nobody has touched the computer's keyboard or mouse for a
+minute: it is let go the moment somebody does, and after half an hour at most. Otherwise the hook ends at once, Codex
+shows its own question, and the conversation is listed as asking, without `answer` among what the phone can do. A tool that
 stops is not kept waiting unless the program's owner chose a time for that (the setting `wait`, below): then, while
 nobody is at the computer, it waits that long for a message, which it takes at once, and the tool shows its hook as
 running all that while. A conversation that has stopped is idle, and is told where it says `wake` (see `say` above).
@@ -286,7 +288,7 @@ line. The program answers and decides everything; the relay checks the shape of 
 | `action` | Fields | Answer |
 | --- | --- | --- |
 | `settings_read` | none | what the program tells about itself, below |
-| `settings_change` | `name`, `value` | the same, after the change. `rights`: `full`, `edit` or `read` (the mode Claude Code and Codex are started in from the phone); `tunnel`: `auto` or `http2` (used by the next tunnel); `autostart`, `update`, `reach`: `true` or `false` (`reach`: the program's hooks are in the settings of Claude Code and Codex, see "A conversation that is open on the computer"); `wait`: `"0"`, `"60"`, `"300"`, `"900"` or `"1800"`, the seconds a tool that stops is kept waiting for the phone's message while nobody is at the computer, as a word (`"0"`, not at all, unless chosen) |
+| `settings_change` | `name`, `value` | the same, after the change. `rights`: `full`, `edit` or `read` (the mode Claude Code and Codex are started in from the phone); `tunnel`: `auto` or `http2` (used by the next tunnel); `autostart`, `update`, `reach`, `ask`: `true` or `false` (`reach`: the program's hooks are in the settings of Claude Code and Codex, see "A conversation that is open on the computer"; `ask`: a request for permission of Codex's is kept for the phone while nobody is at the computer, `false` unless chosen); `wait`: `"0"`, `"60"`, `"300"`, `"900"` or `"1800"`, the seconds a tool that stops is kept waiting for the phone's message while nobody is at the computer, as a word (`"0"`, not at all, unless chosen) |
 | `line_switch` | `to`: the `id` of a line | the same; `change.state` is now `preparing` |
 | `line_take` | none | `{"address", "ticket", "key", "seconds"}`, when `change.state` is `ready` |
 | `line_keep` | `key` | the same as `settings_read`; sent through the new line |
@@ -296,7 +298,7 @@ line. The program answers and decides everything; the relay checks the shape of 
  "lines": [{"id": "lan", "kind": "lan", "current": false, "ready": true},
            {"id": "cloud", "kind": "cloud", "current": true, "ready": true},
            {"id": "r3f9a0c1d2e4b", "kind": "own", "name": "home", "ms": 42, "current": false, "ready": true}],
- "settings": {"rights": "full", "tunnel": "auto", "autostart": true, "update": false, "reach": true, "wait": "0"},
+ "settings": {"rights": "full", "tunnel": "auto", "autostart": true, "update": false, "reach": true, "ask": false, "wait": "0"},
  "reach": [{"tool": "claude", "name": "Claude Code", "state": "good"}],
  "change": {"state": "", "to": "", "note": "", "left": 0}}
 ```
