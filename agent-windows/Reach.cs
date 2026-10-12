@@ -127,7 +127,12 @@ public sealed class Reach : IDisposable {
         }
     }
     /// What stands in front of a message that a hook hands to its tool as its user's words from the phone.
+    // (What the tools are told keeps the words that were tried with them, under the name the program had then:
+    // how a tool takes a message hangs on its wording, and each wording has to be tried with the real tool.)
     public const string FromPhone = "Message from the user, sent from their phone through Remote CLI";
+    /// The names by which what this program wrote into a conversation is known as its own: the one it tells the
+    /// tools, and the one it shows.
+    public static readonly string[] Names = { "Remote CLI", "Remote AI" };
     /// The phone's answer to a request for permission.
     public void Answer(string tool, string session, string ask, bool allow) {
         lock (gate) {

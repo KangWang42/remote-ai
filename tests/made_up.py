@@ -83,6 +83,13 @@ static class StandIn {
             Console.WriteLine("Queued message 0 for thread " + given[2] + ".");
             return 0;
         }
+        if (given.Length == 2 && given[0] == "archive") {
+            string home = Environment.GetEnvironmentVariable("CODEX_HOME"), kept = Path.Combine(home, "archived_sessions");
+            Directory.CreateDirectory(kept);
+            foreach (string file in Directory.GetFiles(Path.Combine(home, "sessions"), "rollout-*" + given[1] + ".jsonl", SearchOption.AllDirectories)) File.Move(file, Path.Combine(kept, Path.GetFileName(file)));
+            Console.WriteLine("Archived session " + given[1] + ".");
+            return 0;
+        }
         return 2;
     }
 }'''
@@ -100,6 +107,8 @@ static class StandIn {
             "if '-p' in sys.argv:\n"
             "    given = sys.stdin.buffer.read().decode('utf-8')\n"
             "    open('stand-in-run.json', 'w', encoding='utf-8').write(json.dumps({'arguments': sys.argv[2:], 'given': given, 'settings': open(sys.argv[sys.argv.index('--settings') + 1], encoding='utf-8').read() if '--settings' in sys.argv else ''}, ensure_ascii=False))\n"
+            "    print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'SendMessage', 'input': {}}]}}))\n"
+            "    print(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'content': json.dumps({'success': True})}]}}))\n"
             "    print(json.dumps({'type': 'result', 'result': 'SENT'})); sys.exit(0)\n"
             "print('STAND-IN %s in [%s] with [%s]' % (sys.argv[1], os.getcwd(), ' '.join(sys.argv[2:])), flush=True)\n"
             "time.sleep(600)\n", encoding="utf-8")

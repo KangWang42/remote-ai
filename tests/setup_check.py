@@ -26,7 +26,11 @@ def location():
 def main():
     setup = str(Path(sys.argv[1]).resolve())
     env = dict(os.environ, REMOTECLI_SETUP_SANDBOX="1")
-    links = [Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Remote CLI sandbox.lnk", Path(os.environ["USERPROFILE"]) / "Desktop/Remote CLI sandbox.lnk"]
+    links = [Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Remote AI sandbox.lnk", Path(os.environ["USERPROFILE"]) / "Desktop/Remote AI sandbox.lnk"]
+    # the shortcuts an installation under the earlier name left: taken away when this one is installed
+    earlier = [link.with_name("Remote CLI sandbox.lnk") for link in links]
+    for link in earlier:
+        link.write_bytes(b"left by the earlier name")
     assert location() is None, "a sandbox installation is left over from an earlier run"
     with tempfile.TemporaryDirectory() as temp:
         busy, second = Path(temp) / "has things", Path(temp) / "second place"
@@ -38,6 +42,7 @@ def main():
         assert {p.name for p in first.iterdir()} == OWN, sorted(p.name for p in first.iterdir())
         assert (busy / "keep.txt").read_text() == "keep" and location() == str(first)
         assert links[0].is_file()
+        assert not earlier[0].exists() and not earlier[1].exists(), "the earlier name's shortcuts are gone"
         # 2. installing again elsewhere moves it: the earlier copy and its now empty folder go, the neighbours stay
         assert subprocess.run([setup, "--quiet", "--dir", str(second)], env=env).returncode == 0
         assert not first.exists() and (busy / "keep.txt").is_file()

@@ -313,6 +313,14 @@
       });
       form.append(el('div', { className: 'above' }, el('div', { className: 'bar' }, el('button', { type: 'button', className: 'icon', ariaLabel: '返回', html: ICON.back, onclick: () => finish(null) }),
         el('div', { className: 'who' }, el('h3', { textContent: session.title }), head),
+        // at the top right, as on a terminal's page: the files of its project (one outside every project has none
+        // to show), and how it is read
+        el('button', { type: 'button', className: 'icon files', ariaLabel: '查看项目文件', html: ICON.folder, hidden: !session.dir || !(data.device.features || []).includes('files'), onclick: () => {
+          if (!usable()) return toast('电脑离线，暂时无法查看文件');
+          // the way back from the files leads to this window again
+          history.replaceState(history.state, '', location.pathname + '?take=' + encodeURIComponent(session.id));
+          location.href = 'files/?dir=' + encodeURIComponent(session.dir);
+        } }),
         el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), format), said, asks, below, write);
       // ---- what is said there
       // The window asks the computer for the conversation itself, again and again while it is open, and says what
@@ -544,6 +552,8 @@
     if (folder && usable()) choices.push({ label: '把 ' + base(folder) + ' 加为项目', value: 'add' });
     if (!project && x.project) choices.push({ label: '进入项目 ' + x.project, value: 'enter' });
     if (x.t && x.live) choices.push({ label: '结束终端', value: 'end', kind: 'danger' });
+    // a saved conversation of a project that nothing has open can be put away (the computer keeps it recoverable)
+    if (s && !x.t && !s.live && s.dir && usable() && (data.device.features || []).includes('delete')) choices.push({ label: '删除对话', value: 'delete', kind: 'danger' });
     if (!choices.length) return;
     const choice = await ask(x.title, '', choices);
     if (choice === 'pin') mark(s, { pinned: !s.pinned });
@@ -552,6 +562,26 @@
     else if (choice === 'enter') enter(x.project);
     else if (choice === 'end') endTerminal(x.t);
     else if (choice === 'close' || choice === 'copy') into(s, choice);
+    else if (choice === 'delete') remove(s);
+  }
+  async function remove(s) {
+    if (!await ask('删除“' + s.title + '”？', '', [{ label: '删除', value: true, kind: 'danger' }])) return;
+    toast('正在删除…');
+    try { await api('api/conversation', { id: newId(), session: s.id, action: 'delete' }); toast('已删除'); }
+    catch (error) { toast(error.message); }
+    refresh();
+  }
+  // ---- a project besides entering it: renamed, or taken from the list (its folder and what is in it stay)
+  // One the computer keeps in its own settings is changed from here where the computer says it does that.
+  async function manageProject(name, folder) {
+    if (!usable() || (folder.fixed && !(data.device.features || []).includes('projects'))) return;
+    const choice = await ask(name, '', [{ label: '重命名', value: 'rename' }, { label: '移除项目', value: 'remove', kind: 'danger' }]);
+    if (choice === 'rename') {
+      const answer = await ask('重命名“' + name + '”', '', [{ label: '保存', value: true, kind: 'solid' }], [{ key: 'to', label: '名称', value: name, max: 40 }]);
+      if (answer && answer.to && answer.to !== name && await run({ action: 'project_rename', name, to: answer.to }, '正在保存…')) refresh();
+    } else if (choice === 'remove') {
+      if (await ask('移除“' + name + '”？', '', [{ label: '移除项目', value: true, kind: 'danger' }]) && await run({ action: 'project_remove', name }, '正在移除…')) { toast('已移除'); refresh(); }
+    }
   }
   // A press that is held on a card asks what to do with it. A finger that moves is scrolling; the press that ends a
   // held one opens nothing. A mouse asks with its other button, and so does a phone that says a held press that way.
@@ -688,14 +718,14 @@
     const offline = $('offline');
     offline.hidden = ready;
     if (!ready) offline.replaceChildren(el('b', { textContent: device.online ? '电脑端暂停了手机访问' : '电脑离线' }),
-      el('span', { textContent: device.online ? '在电脑上的 Remote CLI“设置”里打开“允许手机访问”。' : '请确认电脑已开机且 Remote CLI 正在运行。使用公网隧道时，退出程序或重启电脑后地址会变更，需要重新扫码。' }));
+      el('span', { textContent: device.online ? '在电脑上的 Remote AI“设置”里打开“允许手机访问”。' : '请确认电脑已开机且 Remote AI 正在运行。使用公网隧道时，退出程序或重启电脑后地址会变更，需要重新扫码。' }));
     if (project && !names.includes(project)) { project = ''; }
     const everything = things(), mine = everything.filter(x => x.t && x.live);
     $('overview').hidden = !!project; $('project').hidden = !project;
     // In the app the arrow on the first page leads to the workbench, where every computer is listed.
     $('back').hidden = !project && !(native && native.home);
     $('back').setAttribute('aria-label', project ? '返回全部项目' : '返回工作台');
-    $('heading').textContent = project || 'Remote CLI';
+    $('heading').textContent = project || 'Remote AI';
     // conversations open on the computer are counted with the terminals, by how they stand
     const stands = (list, ...phases) => list.filter(x => x.live && phases.includes(x.phase)).length;
     const waiting = stands(everything, 'confirm'), done = stands(everything, 'done', 'waiting'), working = stands(everything, 'busy');
@@ -755,8 +785,9 @@
         if (work) { const c = el('span', { className: 'count', textContent: work + ' 个在执行' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--busy)'); c.style.color = 'var(--busy)'; meta.append(c); }
         if (own.length && !need && !done && !work) meta.append(el('span', { textContent: own.length + ' 个终端开着' }));
         meta.append(el('span', { textContent: count ? count + ' 段对话' : '还没有对话' }));
-        const made = el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => enter(name) },
-          el('span', { className: 'tool folder', html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev })));
+        const made = held(el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => enter(name) },
+          el('span', { className: 'tool folder', html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev }))),
+          () => manageProject(name, folder));
         if (source) made.dataset.source = source;
         return { name, card: made, sign: [name, need, done, work, own.length, count, folder.path, source] };
       });

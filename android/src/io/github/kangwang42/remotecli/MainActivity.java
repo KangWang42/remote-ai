@@ -127,7 +127,7 @@ public final class MainActivity extends Activity {
         String single = prefs.getString("server", "");
         if (!single.isEmpty() && computers().length() == 0) remember("", single);
         updater = new GithubUpdater(this, new GithubUpdater.Listener() {
-            @Override public void found(GithubUpdater.Release release) { new AlertDialog.Builder(MainActivity.this).setTitle("发现 Remote CLI 新版本").setMessage("GitHub 上有 v" + release.version + "，现在下载并安装吗？").setPositiveButton("更新", (d, w) -> updater.install(release)).setNegativeButton("稍后", null).show(); }
+            @Override public void found(GithubUpdater.Release release) { new AlertDialog.Builder(MainActivity.this).setTitle("发现 Remote AI 新版本").setMessage("GitHub 上有 v" + release.version + "，现在下载并安装吗？").setPositiveButton("更新", (d, w) -> updater.install(release)).setNegativeButton("稍后", null).show(); }
             @Override public void message(String text) {
                 if (text == null || text.isEmpty()) return;
                 // Inside a computer's pages there is no line of the app's own to write on.
@@ -249,7 +249,7 @@ public final class MainActivity extends Activity {
     // ---- adding a computer by typing
     void add(String problem) {
         repaint();
-        LinearLayout page = step("手动添加电脑", "填电脑上 Remote CLI 窗口里显示的地址和密码。");
+        LinearLayout page = step("手动添加电脑", "填电脑上 Remote AI 窗口里显示的地址和密码。");
         nameBox = kit.field("名称（可不填），例如 办公室电脑", InputType.TYPE_CLASS_TEXT);
         page.addView(nameBox, kit.below(22));
         addressBox = kit.field("地址，例如 192.168.1.5:8722", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -279,7 +279,7 @@ public final class MainActivity extends Activity {
             return;
         }
         repaint();
-        LinearLayout page = step("扫码添加电脑", "对准电脑端 Remote CLI 窗口中的二维码，识别后自动连接。");
+        LinearLayout page = step("扫码添加电脑", "对准电脑端 Remote AI 窗口中的二维码，识别后自动连接。");
         final int side = Math.min(getResources().getDisplayMetrics().widthPixels - kit.dp(36), kit.dp(380));
         FrameLayout frame = new FrameLayout(this);
         frame.setBackground(kit.shape(Color.BLACK, kit.LINE, 24));
@@ -302,7 +302,7 @@ public final class MainActivity extends Activity {
         show(page, "scan");
         scanner = new Scanner(this, frame, value -> {
             scanner = null;
-            if (!link(Uri.parse(value))) home("这不是 Remote CLI 的二维码。请扫描电脑端窗口中显示的二维码。");
+            if (!link(Uri.parse(value))) home("这不是 Remote AI 的二维码。请扫描电脑端窗口中显示的二维码。");
         }, problem -> { scanner = null; add(problem + "。可以手动输入地址和密码。"); });
         frame.post(() -> { if (scanner != null) { scanner.start(); frame.addView(aim, new FrameLayout.LayoutParams(-1, -1)); } });
     }
@@ -449,7 +449,7 @@ public final class MainActivity extends Activity {
             // The line the computer was asked to turn to cannot be reached from here: the computer finds that out by
             // the phone's absence and goes back, and it is still listed under the address it had.
             if (origin.equals(movedTo)) { movedFrom = movedTo = ""; home("新线路没有连上。电脑会在 2 分钟内回到原来的线路，之后可以从这里重新打开它。"); return; }
-            home("电脑连接已断开。请确认电脑上的 Remote CLI 已打开，然后重新扫码连接；局域网直连时请检查是否在同一个 Wi-Fi。");
+            home("电脑连接已断开。请确认电脑上的 Remote AI 已打开，然后重新扫码连接；局域网直连时请检查是否在同一个 Wi-Fi。");
         });
     }
 

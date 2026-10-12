@@ -15,7 +15,7 @@ import java.io.FileOutputStream;
 import java.io.OutputStream;
 
 /**
- * Keeps a file the page hands over, piece by piece, in the phone's Download folder (Download/RemoteCLI), where
+ * Keeps a file the page hands over, piece by piece, in the phone's Download folder (Download/RemoteAI), where
  * every file manager and every other app finds it. One file at a time. Needs no permission: from Android 10 on
  * the system's own list of downloads is written to; before that, the app's own folder on shared storage.
  */
@@ -54,7 +54,7 @@ final class Saver {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, shown);
                 values.put(MediaStore.MediaColumns.MIME_TYPE, type);
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RemoteCLI");
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RemoteAI");
                 values.put(MediaStore.MediaColumns.IS_PENDING, 1);
                 ContentResolver resolver = activity.getContentResolver();
                 uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
@@ -91,7 +91,7 @@ final class Saver {
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0);
                 activity.getContentResolver().update(uri, values, null, null);
                 last = uri; lastType = type; uri = null;
-                return "下载 / RemoteCLI";
+                return "下载 / RemoteAI";
             }
             String where = file.getAbsolutePath();
             last = null; file = null;

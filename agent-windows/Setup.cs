@@ -15,7 +15,10 @@ namespace RemoteCli {
 ///   --quiet            no questions and no start afterwards
 ///   --dir <folder>     where to install (default: the folder of an earlier installation, else %LOCALAPPDATA%\Programs\RemoteCli)
 public static class Setup {
-    const string Version = "1.5.6", Name = "Remote CLI";
+    const string Version = "1.5.6", Name = "Remote AI";
+    // The names it had before. Their shortcuts are taken away when this one is installed or removed; the folder, the
+    // registry keys and the files keep their names, so that an installation is found and replaced whatever it was called.
+    static readonly string[] EarlierNames = { "Remote CLI" };
     // REMOTECLI_SETUP_SANDBOX=1 is for the tests: its own registry entry and shortcut names, and no look at a running
     // copy, so trying the installer never touches a real installation.
     static readonly bool Sandbox = Environment.GetEnvironmentVariable("REMOTECLI_SETUP_SANDBOX") == "1";
@@ -26,6 +29,7 @@ public static class Setup {
     static readonly string[] OwnFiles = { "RemoteCli.exe", "RemoteCliAgent.exe", "Uninstall.exe", "LICENSE", "THIRD_PARTY.md", "README.md" };
     static string Data { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RemoteCli"); } }
     static string[] Shortcuts { get { return new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), LinkName), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), LinkName) }; } }
+    static string[] EarlierShortcuts { get { return EarlierNames.Select(name => name + (Sandbox ? " sandbox" : "") + ".lnk").SelectMany(link => new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), link), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), link) }).ToArray(); } }
 
     static string Installed() {
         using (var key = Registry.CurrentUser.OpenSubKey(UninstallKey)) return key == null ? "" : Convert.ToString(key.GetValue("InstallLocation") ?? "");
@@ -107,7 +111,7 @@ public static class Setup {
     static int Install(bool quiet, string wanted, bool launch) {
         string target = wanted.Length > 0 ? Resolve(wanted) : DefaultTarget();
         if (!quiet) { target = Ask(target); if (target == null) return 1; }
-        if (Running()) { if (!quiet) MessageBox.Show("Remote CLI 正在运行。请先在托盘图标上点右键选“退出”，再重新运行安装程序。", "安装 " + Name); return 1; }
+        if (Running()) { if (!quiet) MessageBox.Show(Name + " 正在运行。请先在托盘图标上点右键选“退出”，再重新运行安装程序。", "安装 " + Name); return 1; }
         string earlier = Installed();
         try {
             Directory.CreateDirectory(target);
@@ -134,6 +138,7 @@ public static class Setup {
         string program = Path.Combine(target, "RemoteCli.exe"), remover = Path.Combine(target, "Uninstall.exe");
         File.Copy(Application.ExecutablePath, remover, true);
         foreach (string file in Shortcuts) Shortcut(file, program);
+        foreach (string file in EarlierShortcuts) try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         using (var key = Registry.CurrentUser.CreateSubKey(UninstallKey)) {
             key.SetValue("DisplayName", Name); key.SetValue("DisplayVersion", Version); key.SetValue("Publisher", "remote-cli");
             key.SetValue("InstallLocation", target); key.SetValue("UninstallString", "\"" + remover + "\" --uninstall");
@@ -154,8 +159,8 @@ public static class Setup {
         string here = Path.GetDirectoryName(Application.ExecutablePath), target = File.Exists(Path.Combine(here, "RemoteCli.exe")) ? here : Installed();
         if (target.Length == 0 || !Directory.Exists(target)) { if (!quiet) MessageBox.Show("没有找到已安装的 " + Name + "。", "卸载"); return 1; }
         if (!quiet && MessageBox.Show("卸载 " + Name + "？\n" + target, "卸载", MessageBoxButtons.OKCancel) != DialogResult.OK) return 1;
-        if (Running()) { if (!quiet) MessageBox.Show("Remote CLI 正在运行。请先在托盘图标上点右键选“退出”。", "卸载"); return 1; }
-        foreach (string file in Shortcuts) try { File.Delete(file); } catch { }
+        if (Running()) { if (!quiet) MessageBox.Show(Name + " 正在运行。请先在托盘图标上点右键选“退出”。", "卸载"); return 1; }
+        foreach (string file in Shortcuts.Concat(EarlierShortcuts)) try { File.Delete(file); } catch { }
         using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true)) if (run != null && !Sandbox) run.DeleteValue("RemoteCli", false);
         Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false);
         bool all = !quiet && Directory.Exists(Data) && MessageBox.Show("同时删除设置、密码和下载的隧道程序吗？\n" + Data, "卸载", MessageBoxButtons.YesNo) == DialogResult.Yes;

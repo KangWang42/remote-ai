@@ -419,6 +419,32 @@ class Pure(unittest.TestCase):
             first = sessions.read(outside, "claude", "", {"项目": project})
             self.assertEqual(sessions.read(outside, "claude", "", {"项目": project}, first["stamp"]), {"same": True, "stamp": first["stamp"], "title": "整理读书笔记", "status": ""})
             self.assertIn("messages", sessions.read(outside, "claude", "", {"项目": project}, "1.1"))
+            # a saved conversation of a project is put away: Claude Code's into the trash with a note of where it lay,
+            # Codex's by Codex's own archive; not one a program has open, not one that is unknown; its marks go with it
+            before_data = os.environ.get("XDG_DATA_HOME")
+            os.environ["XDG_DATA_HOME"] = os.path.join(home, "share")
+            try:
+                saved_file = os.path.join(home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", project), old + ".jsonl")
+                os.makedirs(saved_file[:-6])
+                self.assertTrue(marks.has("pinned", "claude", old))
+                for wrong in ((inside, "claude"), (outside, "claude"), (str(uuid.uuid4()), "claude"), ("x", "claude")):
+                    with self.assertRaises(agent.OpError):
+                        sessions.delete(*wrong, {"项目": project}, [])
+                sessions.delete(old, "claude", {"项目": project}, [])
+                trashed = os.path.join(home, "share", "Trash")
+                self.assertFalse(os.path.exists(saved_file) or os.path.exists(saved_file[:-6]))
+                self.assertEqual(sorted(os.listdir(os.path.join(trashed, "files"))), sorted([old, old + ".jsonl"]))
+                with open(os.path.join(trashed, "info", old + ".jsonl.trashinfo"), encoding="utf-8") as stream:
+                    self.assertIn("Path=" + agent.quote(saved_file), stream.read())
+                self.assertFalse(marks.has("pinned", "claude", old))
+                self.assertNotIn(old, [s["id"] for s in sessions.found])
+            finally:
+                if before_data is None:
+                    del os.environ["XDG_DATA_HOME"]
+                else:
+                    os.environ["XDG_DATA_HOME"] = before_data
+            found = sessions.scan({"项目": project}, [])
+            by = {s["id"]: s for s in found}
             # it is read where it is; one of a project is read by its project as before
             self.assertEqual(sessions.read(outside, "claude", "", {"项目": project})["messages"], [{"role": "user", "text": "整理读书笔记"}])
             self.assertEqual(sessions.read(codex_out, "codex", "", {"项目": project})["messages"], [])

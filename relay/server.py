@@ -372,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self._json(500, {"error": "中转没能保存新的空间"})
         elif path in ("", "/") and payload is None:
-            self._send(200, "Remote CLI relay\n", "text/plain; charset=utf-8")
+            self._send(200, "Remote AI relay\n", "text/plain; charset=utf-8")
         else:
             self._json(404, {"error": "not found"})
         return None

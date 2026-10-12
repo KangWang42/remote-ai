@@ -137,7 +137,7 @@ set_up() {
     chmod 600 "$settings/relay.env"
     cat > "$unit" <<UNIT
 [Unit]
-Description=Remote CLI relay (listens on this machine only; a web server in front supplies https)
+Description=Remote AI relay (listens on this machine only; a web server in front supplies https)
 After=network.target
 
 [Service]

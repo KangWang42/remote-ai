@@ -203,6 +203,7 @@ final class AggregateSessions {
         final List<Entry> active = new ArrayList<>(), ended = new ArrayList<>(), history = new ArrayList<>();
         /** With which tools and where its folder is used: as the computer says of the folder, and by what is in it now. */
         final Set<String> tools = new HashSet<>(), sources = new HashSet<>();
+        boolean fixed;          // it stands in the computer's own settings: changed from the phone only where the computer says so
         Project(String name) { this.name = name; }
         /** "app", "term", "both", or "" where nothing says: for the tint of its row. */
         String source() { return sources.contains("app") ? (sources.contains("term") ? "both" : "app") : sources.contains("term") ? "term" : ""; }

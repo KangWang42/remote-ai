@@ -315,7 +315,7 @@ def main():
                 # Saving inside the app: the page hands the file to the phone piece by piece. A stand-in for the app
                 # collects the pieces; together they must be the file.
                 stand_in = ask("Page.addScriptToEvaluateOnNewDocument", source="window.RemoteCliNative = { got: [], saveStart(n) { this.name = n; this.got = []; return ''; }, "
-                               "savePiece(d) { this.got.push(d); return ''; }, saveEnd() { this.done = true; return '下载 / RemoteCLI'; }, saveCancel() { this.cancelled = true; }, openSaved() {}, chrome() {}, pref() { return ''; }, setPref() {} };")
+                               "savePiece(d) { this.got.push(d); return ''; }, saveEnd() { this.done = true; return '下载 / RemoteAI'; }, saveCancel() { this.cancelled = true; }, openSaved() {}, chrome() {}, pref() { return ''; }, setPref() {} };")
                 shot(view("bundle.zip"), "save.png", "!!document.querySelector('.unknown button')")
                 ask("Runtime.evaluate", expression="document.querySelector('.unknown button').click()")
                 deadline = time.time() + 30

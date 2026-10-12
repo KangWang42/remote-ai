@@ -287,7 +287,7 @@ COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_tak
 REACH = ("say", "answer")
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark") + COMPUTER_ACTIONS     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark", "session_delete") + COMPUTER_ACTIONS     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -638,7 +638,9 @@ class Relay:
                     project = next((x for x in self._device["projects"] if x["name"] == payload.get("name")), None)
                     if not project:
                         raise RemoteError("没有这个项目")
-                    if project["fixed"]:
+                    # one that stands in the computer's own settings is changed there, unless the computer says that
+                    # it changes those from the phone too (`projects`)
+                    if project["fixed"] and "projects" not in self._device.get("features", []):
                         raise RemoteError("这个项目写在电脑的配置文件里，请在电脑上修改")
                     if action == "project_rename" and not _name(payload.get("to")):
                         raise RemoteError("名称需为 1 至 40 字")
@@ -813,6 +815,8 @@ class Relay:
             more = {mark: payload[mark] for mark in MARKS if mark in payload}
             if not more or any(type(value) is not bool for value in more.values()):
                 raise RemoteError("标记无效")
+        elif action == "delete":
+            pass
         elif action == "read":
             # a page that follows a conversation says what it has: the computer answers {"same": true} to that
             if isinstance(payload.get("since"), str) and _stamp.fullmatch(payload["since"]):
@@ -825,13 +829,22 @@ class Relay:
                 raise RemoteError("操作编号已被其它操作使用")
             if not self._view(now)["online"] or not self._device["enabled"]:
                 raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
-            needed, without = {"read": ("peek", "电脑端版本不支持查看对话内容，请更新电脑端"), "mark": ("marks", "电脑端版本不支持置顶和隐藏对话，请更新电脑端")}.get(
+            needed, without = {"read": ("peek", "电脑端版本不支持查看对话内容，请更新电脑端"), "mark": ("marks", "电脑端版本不支持置顶和隐藏对话，请更新电脑端"),
+                               "delete": ("delete", "电脑端版本不支持删除对话，请更新电脑端")}.get(
                 action, ("reach", "电脑端版本不支持在手机上处理电脑上的对话，请更新电脑端"))
             if needed not in self._device.get("features", []):
                 raise RemoteError(without)
             saved = next((s for s in self._sessions if s["id"] == session), None)
             if not saved:
                 raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
+            if action == "delete":
+                # A saved conversation is put away by the computer (nothing is destroyed: its tool's archive, or the
+                # recycle bin). Not one a program has open, nor one a terminal here runs. It leaves the list at once.
+                if saved.get("live") or not saved["dir"] or any(t.get("session") == session and t["state"] in ("starting", "running") for t in self._state()["threads"].values()):
+                    raise RemoteError("这段对话正开着，请先结束它再删除")
+                answer = self._held({"id": op_id, "action": "session_delete", "session": session, "tool": saved["tool"], "dir": saved["dir"]}, now, wait)
+                self._sessions[:] = [s for s in self._sessions if s["id"] != session]
+                return answer
             if action == "mark":
                 # the computer keeps it; the list here says so at once, and again with the computer's next report
                 answer = self._held({"id": op_id, "action": "session_mark", "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
@@ -929,7 +942,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks")],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects")],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))

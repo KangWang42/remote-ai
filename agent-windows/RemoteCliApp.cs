@@ -191,7 +191,7 @@ public sealed partial class App : Form {
         status.Set(text, problem ? Theme.Bad : text.StartsWith("正在") ? Theme.Busy : Theme.Good);
         trouble = problem; preparing = !problem && text.StartsWith("正在");
         if (nav.Count > 0) RefreshActivity();
-        tray.Text = ("Remote CLI：" + text).Length > 60 ? ("Remote CLI：" + text).Substring(0, 60) : "Remote CLI：" + text;
+        tray.Text = ("Remote AI：" + text).Length > 60 ? ("Remote AI：" + text).Substring(0, 60) : "Remote AI：" + text;
     }
     void ShowAddress(string where) {
         if (InvokeRequired) { BeginInvoke(new Action(() => ShowAddress(where))); return; }
@@ -728,7 +728,7 @@ public sealed partial class App : Form {
         TakeOver();
         kept = Kept();
         KillLeftovers();
-        Text = "Remote CLI"; Font = Theme.Text();
+        Text = "Remote AI"; Font = Theme.Text();
         AutoScaleMode = AutoScaleMode.None;      // positions below are for 100%; the whole window is scaled once at the end
         ClientSize = new Size(SideWidth + PageWidth, WindowHeight); FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false; StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Bg; ForeColor = Theme.Ink;
@@ -737,7 +737,7 @@ public sealed partial class App : Form {
         // ---- side bar
         var side = Place(this, new Panel { BackColor = Theme.Side }, 0, 0, SideWidth, WindowHeight);
         Place(side, new PictureBox { Image = Theme.Mark(88), SizeMode = PictureBoxSizeMode.Zoom, BackColor = Theme.Side }, 20, 24, 40, 40);
-        Note(side, "Remote CLI", 70, 24, 130, 22, Theme.Ink, 11.5f, true);
+        Note(side, "Remote AI", 70, 24, 130, 22, Theme.Ink, 11.5f, true);
         Note(side, "v" + Version, 71, 46, 130, 18, Theme.Faint, 8.25f);
         string[] names = { "连接", "项目", "活动", "设置" }, glyphs = { Theme.IconPhone, Theme.IconFolder, Theme.IconPulse, Theme.IconGear };
         for (int i = 0; i < names.Length; i++) {
@@ -866,7 +866,7 @@ public sealed partial class App : Form {
         enabledSwitch.Changed += (s, e) => { Keep("RemoteEnabled", enabledSwitch.On); RefreshActivity(); Toast(enabledSwitch.On ? "已允许手机访问" : "已暂停手机访问，立即生效"); };
         autostartSwitch.Changed += (s, e) => Set("autostart", autostartSwitch.On);
         // what cannot be done (a settings file of a tool that cannot be read) is said, and the switch shows what is
-        reachSwitch.Changed += (s, e) => { try { Set("reach", reachSwitch.On); } catch (InvalidOperationException error) { ShowSettings(); MessageBox.Show(this, error.Message, "Remote CLI", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
+        reachSwitch.Changed += (s, e) => { try { Set("reach", reachSwitch.On); } catch (InvalidOperationException error) { ShowSettings(); MessageBox.Show(this, error.Message, "Remote AI", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
         rights.Changed += (s, e) => { Set("rights", Rights[rights.Chosen]); Toast("对之后新开的终端生效"); };
         // With the tunnel in use, another protocol means another tunnel.
         protocol.Changed += (s, e) => { if (Mode == "cloud" && Held()) { ShowSettings(); return; } Set("tunnel", Protocols[protocol.Chosen]); if (Mode == "cloud") Reconnect(); };
@@ -908,14 +908,14 @@ public sealed partial class App : Form {
         for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 48, 648, 48);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 544, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
         Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 544, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-cli") { UseShellExecute = true }); } catch (Exception) { } });
-        Action(settings, "退出 Remote CLI", Theme.IconPower, ButtonKind.Danger, 530, 544, 150, 36, (s, e) => Quit());
+        Action(settings, "退出 Remote AI", Theme.IconPower, ButtonKind.Danger, 530, 544, 150, 36, (s, e) => Quit());
 
         // ---- toast, tray, timers
         Place(this, toast, 0, WindowHeight - 58, 200, 34);
         toast.Visible = false; toast.BackColor = Theme.Ink; toast.ForeColor = Theme.OnAccent; toast.TextAlign = ContentAlignment.MiddleCenter; toast.Font = Theme.Text(9f, true);
         toastTimer.Interval = 1600; toastTimer.Tick += (s, e) => { toastTimer.Stop(); toast.Visible = false; };
         activityTimer.Interval = 2000; activityTimer.Tick += (s, e) => { RefreshActivity(); if (pages.Count > 1 && pages[1].Visible && projectPick.Chosen != 0) ShowProjects(); };
-        tray.Icon = Theme.MarkIcon(32); tray.Visible = true; tray.Text = "Remote CLI";
+        tray.Icon = Theme.MarkIcon(32); tray.Visible = true; tray.Text = "Remote AI";
         tray.DoubleClick += (s, e) => Reveal();
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("显示窗口", null, (s, e) => Reveal());
@@ -926,7 +926,7 @@ public sealed partial class App : Form {
         FormClosing += (s, e) => {
             if (quitting || e.CloseReason != CloseReason.UserClosing) { Shutdown(); return; }
             e.Cancel = true; Hide();
-            if (!hinted) { hinted = true; tray.ShowBalloonTip(4000, "Remote CLI 仍在运行", "手机仍可连接。如需停止，请在托盘图标上点右键选“退出”。", ToolTipIcon.Info); }
+            if (!hinted) { hinted = true; tray.ShowBalloonTip(4000, "Remote AI 仍在运行", "手机仍可连接。如需停止，请在托盘图标上点右键选“退出”。", ToolTipIcon.Info); }
         };
         ShowMode();
         Go(Dirs().Count == 0 ? 1 : 0);        // a first start begins where something has to be done
@@ -943,6 +943,16 @@ public sealed partial class App : Form {
             // The phone may ask for the update: it is looked for and installed at once, whatever the terminals are doing.
             agent.UpdateRequested = () => BeginInvoke(new Action(() => CheckForUpdate(false, true)));
             agent.Computer = Itself;
+            // a project that was added in this window is removed or renamed from the phone too
+            agent.Settled = (action, name, to) => {
+                var list = Dirs(); int at = list.FindIndex(line => line.StartsWith(name + "=", StringComparison.Ordinal));
+                if (at < 0) return false;
+                if (action == "project_remove") list.RemoveAt(at); else list[at] = to + "=" + list[at].Substring(list[at].IndexOf('=') + 1);
+                Keep("RemoteDirs", list.ToArray());
+                Action shown = () => { offeredMark = ""; ShowProjects(); };
+                if (InvokeRequired) BeginInvoke(shown); else shown();
+                return true;
+            };
             // The first time, the tools are given this program's hooks without being asked for: a second copy or a
             // test, which has a data folder of its own, leaves the tools' settings alone until it is told.
             if (Convert.ToString(config["Reach"]).Length == 0 && !offstage && String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTECLI_DATA"))) {
@@ -993,7 +1003,7 @@ public sealed partial class App : Form {
             else if (toldUpdate != found.Version) {
                 toldUpdate = found.Version;
                 Toast("发现新版本 v" + found.Version);
-                if (!Visible) try { tray.ShowBalloonTip(6000, "Remote CLI 有新版本 v" + found.Version, "打开窗口，在“设置”里更新。", ToolTipIcon.Info); } catch (InvalidOperationException) { }
+                if (!Visible) try { tray.ShowBalloonTip(6000, "Remote AI 有新版本 v" + found.Version, "打开窗口，在“设置”里更新。", ToolTipIcon.Info); } catch (InvalidOperationException) { }
             }
             ShowUpdate();
         } catch (Exception error) { updateButton.Text = "检查更新"; if (manual) Toast("检查更新失败：" + error.Message); }
@@ -1020,7 +1030,7 @@ public sealed partial class App : Form {
     void Reveal() { Show(); WindowState = FormWindowState.Normal; Activate(); }
     void Shutdown() { generation++; tray.Visible = false; StopChildren(); Abandon(); }
     void Quit() {
-        if (!Confirm("退出 Remote CLI？", "退出后手机不能再连接，正在运行的终端会结束。", "退出", true)) return;
+        if (!Confirm("退出 Remote AI？", "退出后手机不能再连接，正在运行的终端会结束。", "退出", true)) return;
         quitting = true; Shutdown();
         Environment.Exit(0);
     }
@@ -1028,7 +1038,7 @@ public sealed partial class App : Form {
     // A small window in the program's own look: a question with two answers, optionally with lines to fill in, each
     // under its label when it has one. Returns what was filled in, or null when the question was not agreed to.
     string[] Dialog(string title, string text, string yes, bool danger, string[] labels, string[] values) {
-        using (var dialog = new Form { Text = "Remote CLI", FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent,
+        using (var dialog = new Form { Text = "Remote AI", FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent,
                                        MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Theme.Text(), BackColor = Theme.Bg, ForeColor = Theme.Ink, AutoScaleMode = AutoScaleMode.None, Icon = Icon }) {
             dialog.HandleCreated += (s, e) => Theme.Title(dialog.Handle);
             Place(dialog, Theme.Label(title, Theme.Ink, Theme.Bg, 11.5f, true), 24, 22, 372, 26);
@@ -1064,7 +1074,7 @@ public sealed partial class App : Form {
         // One copy per data folder: a copy pointed at another folder with REMOTECLI_DATA (a test, a second setup) may run beside it.
         string elsewhere = Environment.GetEnvironmentVariable("REMOTECLI_DATA");
         using (var single = new Mutex(true, "Local\\RemoteCliApp" + (String.IsNullOrWhiteSpace(elsewhere) ? "" : "-" + Math.Abs(elsewhere.ToLowerInvariant().GetHashCode())), out created)) {
-            if (!created) { MessageBox.Show("Remote CLI 已经在运行，请看屏幕右下角的托盘图标。", "Remote CLI"); return 0; }
+            if (!created) { MessageBox.Show("Remote AI 已经在运行，请看屏幕右下角的托盘图标。", "Remote AI"); return 0; }
             ServicePointManager.DefaultConnectionLimit = 8;      // the held request and the reports run side by side
             SetProcessDPIAware();
             Application.EnableVisualStyles();

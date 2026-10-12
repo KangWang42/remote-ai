@@ -247,6 +247,13 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": info, "acks": [{"id": rename["id"]}]}, now=1007)
         self.assertEqual(self.relay.command(rename, now=1008)["state"], "done")
         self.assertEqual(self.relay.overview(started, now=1009)["terminal"]["dir"], "周会")
+        # one that stands in the computer's own settings is changed from the phone where the computer says it does that
+        self.relay.agent({"info": dict(info, features=["projects", "files"])}, now=1009)
+        remove = {"action": "project_remove", "id": "5" * 32, "name": "demo"}
+        self.assertEqual(self.relay.command(remove, now=1009)["state"], "queued")
+        self.relay.agent({"info": info, "acks": [{"id": remove["id"]}]}, now=1009)
+        with self.assertRaisesRegex(RemoteError, "请在电脑上修改"):
+            self.relay.command(dict(remove, id="6" * 32), now=1009)
         add = {"action": "project_add", "id": "4" * 32, "path": "E:\\没有"}
         self.relay.command(add, now=1010)
         self.relay.agent({"info": info, "acks": [{"id": add["id"], "error": "电脑上没有这个文件夹"}]}, now=1011)
@@ -478,6 +485,38 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual([(s["pinned"], s["hidden"]) for s in self.relay.overview(now=1002)["sessions"]], [(True, False)])
         self.relay.agent({"info": info, "sessions": [dict(saved, pinned=False, hidden=True)]}, now=1003)
         self.assertEqual([(s["pinned"], s["hidden"]) for s in self.relay.overview(now=1003)["sessions"]], [(False, True)])
+
+    def test_a_saved_conversation_is_put_away_by_the_computer_and_leaves_the_list(self):
+        import threading
+        kept, open_, apart = "11111111-2222-3333-4444-555555555555", "22222222-2222-3333-4444-555555555555", "33333333-2222-3333-4444-555555555555"
+        listed = [{"id": kept, "tool": "codex", "dir": "demo", "title": "旧的讨论", "updated": 1},
+                  {"id": open_, "tool": "claude", "dir": "demo", "title": "开着的", "updated": 2, "live": True, "host": "cli"},
+                  {"id": apart, "tool": "codex", "dir": "", "folder": "D:\\notes", "title": "项目之外的", "updated": 3, "live": True, "host": "cli"}]
+        ask = lambda session, n: {"id": n * 32, "session": session, "action": "delete"}
+        self.relay.agent({"info": dict(self.info, features=["peek", "marks"]), "sessions": listed}, now=1001)
+        with self.assertRaisesRegex(RemoteError, "不支持删除对话"):
+            self.relay.conversation(ask(kept, "a"), now=1001, wait=0)
+        info = dict(self.info, features=["peek", "marks", "delete"])
+        self.relay.agent({"info": info}, now=1001)
+        # not one a program has open, not one outside the projects, not one a terminal here runs
+        for refused in (open_, apart):
+            with self.assertRaisesRegex(RemoteError, "正开着"):
+                self.relay.conversation(ask(refused, "b"), now=1001, wait=0)
+        with self.assertRaisesRegex(RemoteError, "没有找到这个对话"):
+            self.relay.conversation(ask("66666666-7777-8888-9999-000000000000", "b"), now=1001, wait=0)
+        answers = {}
+        waiting = threading.Thread(target=lambda: answers.update(got=self.relay.conversation(ask(kept, "c"), now=1001, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual([{k: v for k, v in o.items() if k not in ("at", "terminal")} for o in asked], [{"id": "c" * 32, "action": "session_delete", "session": kept, "tool": "codex", "dir": "demo"}])
+        self.relay.agent({"info": info, "acks": [{"id": "c" * 32, "error": "", "result": {}}]}, now=1002)
+        waiting.join(5)
+        self.assertEqual(answers["got"], {})
+        # it is gone from the list at once, before the computer has listed its conversations again
+        self.assertEqual([s["id"] for s in self.relay.overview(now=1002)["sessions"]], [open_, apart])
+        # the computer's lists are what counts from then on: one it still lists is listed
+        self.relay.agent({"info": info, "sessions": listed}, now=1003)
+        self.assertIn(kept, [s["id"] for s in self.relay.overview(now=1003)["sessions"]])
 
     def test_a_conversation_that_sits_idle_is_told_where_it_is_and_the_answer_is_waited_for(self):
         import threading

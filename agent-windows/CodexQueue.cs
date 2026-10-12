@@ -58,7 +58,7 @@ public static class CodexQueue {
         quoted.Append('\\', 2 * slashes);
         return quoted.Append('"').ToString();
     }
-    static int Run(string program, string arguments, int seconds, out string said) {
+    internal static int Run(string program, string arguments, int seconds, out string said) {
         var info = new ProcessStartInfo(program, arguments) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
         using (var process = Process.Start(info)) {
             process.StandardInput.Close();

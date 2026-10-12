@@ -83,7 +83,7 @@ final class GithubUpdater {
             session.close();
         }
     }
-    @SuppressWarnings("deprecation") private void status(Intent i) { int s = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE); if (s == PackageInstaller.STATUS_PENDING_USER_ACTION) { Intent confirm = i.getParcelableExtra(Intent.EXTRA_INTENT); try { activity.startActivity(confirm); } catch (Exception e) { listener.message("无法打开系统安装确认"); } return; } listener.message(s == PackageInstaller.STATUS_SUCCESS ? "安装完成，请重新打开 Remote CLI" : "安装未完成"); }
+    @SuppressWarnings("deprecation") private void status(Intent i) { int s = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE); if (s == PackageInstaller.STATUS_PENDING_USER_ACTION) { Intent confirm = i.getParcelableExtra(Intent.EXTRA_INTENT); try { activity.startActivity(confirm); } catch (Exception e) { listener.message("无法打开系统安装确认"); } return; } listener.message(s == PackageInstaller.STATUS_SUCCESS ? "安装完成，请重新打开 Remote AI" : "安装未完成"); }
     private int currentCode() { try { return code(activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0)); } catch (Exception e) { return 0; } }
     private String currentVersion() { try { String v = activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0).versionName; return v == null ? "0.0.0" : v; } catch (Exception e) { return "0.0.0"; } }
     private static int code(PackageInfo p) { return Build.VERSION.SDK_INT >= 28 ? (int) p.getLongVersionCode() : p.versionCode; }

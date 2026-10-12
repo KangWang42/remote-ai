@@ -34,10 +34,12 @@ import pty
 import re
 import secrets
 import select
+import shutil
 import signal
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import termios
 import threading
@@ -45,7 +47,7 @@ import time
 import uuid
 from urllib.parse import quote, urlsplit
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -54,7 +56,7 @@ PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 FILE_ACTIONS = ("file_list", "file_read")
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "peek", "marks"]
+FEATURES = ["terminal-exit", "files", "peek", "marks", "delete"]
 MARKS = ("pinned", "hidden")     # what the owner says of single conversations from the phone
 MAX_MARKS = 300                 # of each kind; with more, the ones marked longest ago give way
 SAID_MESSAGES = 40      # of a conversation, the last this many things its user and the tool said are shown on the phone
@@ -415,6 +417,22 @@ class Marks:
         return True
 
 
+def trash(path):
+    """Moves a file or a folder into the user's trash, the way the desktop's file managers do
+    (the XDG trash: the thing itself, and a note of where it lay). Nothing is destroyed."""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    files, notes = os.path.join(base, "Trash", "files"), os.path.join(base, "Trash", "info")
+    os.makedirs(files, mode=0o700, exist_ok=True)
+    os.makedirs(notes, mode=0o700, exist_ok=True)
+    name, at = os.path.basename(path), 1
+    while os.path.lexists(os.path.join(files, name)) or os.path.lexists(os.path.join(notes, name + ".trashinfo")):
+        at += 1
+        name = "%s.%d" % (os.path.basename(path), at)
+    with open(os.path.join(notes, name + ".trashinfo"), "w", encoding="utf-8") as stream:
+        stream.write("[Trash Info]\nPath=%s\nDeletionDate=%s\n" % (quote(path), time.strftime("%Y-%m-%dT%H:%M:%S")))
+    shutil.move(path, os.path.join(files, name))
+
+
 def elsewhere(folder):
     """Whether a folder that is no project is spoken of to the phone: a full path, and not one
     of the system's own folders for passing things."""
@@ -520,6 +538,43 @@ class Sessions:
             folder = self.spoken.get(name, "")
             if folder and re.sub(r"[^a-zA-Z0-9]", "-", folder) == name:
                 self._offer(dirs, folder, "claude", newest[0].st_mtime, False, self.used.get("claude\n" + name, "终端"))
+
+    def delete(self, session, tool, dirs, terminals, archive=None):
+        """Puts a saved conversation of a project away: one of Codex's by Codex itself (`codex
+        archive`; `codex unarchive` brings it back), one of Claude Code's into the trash, with the
+        folder of what belongs to it. Not one that a program has open."""
+        saved = next((s for s in self.found if s["id"] == session and s["tool"] == tool), None) if UUID_RE.match(session) else None
+        folder = dirs.get(saved["dir"]) if saved else None
+        if not folder:
+            raise OpError("电脑上没有找到这个对话，请刷新后重试")
+        if saved["live"] or any(live.session == session and not live.closed for live in terminals):
+            raise OpError("这段对话正开着，请先结束它再删除")
+        if tool == "claude":
+            path = os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")
+            if not os.path.isfile(path):
+                raise OpError("电脑上没有找到这个对话，请刷新后重试")
+            try:
+                trash(path)
+                if os.path.isdir(path[:-6]):
+                    trash(path[:-6])
+            except OSError:
+                raise OpError("没有权限移走这段对话的文件")
+        else:
+            program = find_tool("codex")
+            if not program:
+                raise OpError("电脑上没有找到 Codex，对话没有删除")
+            archive = archive or (lambda: subprocess.run([program, "archive", session], stdin=subprocess.DEVNULL, capture_output=True, timeout=30))
+            try:
+                done = archive()
+            except (OSError, subprocess.TimeoutExpired):
+                raise OpError("Codex 没有及时归档这段对话，请稍后重试")
+            if done.returncode != 0:
+                said = (done.stdout + done.stderr).decode("utf-8", "replace").strip()[-160:]
+                raise OpError("Codex 没有归档这段对话" + ("：" + said if said else "，请确认 Codex 是带 archive 命令的版本"))
+        if self.marks:
+            for kind in MARKS:
+                self.marks.set(kind, tool, session, False)
+        self.found = [s for s in self.found if not (s["id"] == session and s["tool"] == tool)]
 
     def scan(self, dirs, terminals):
         found = []
@@ -1280,7 +1335,7 @@ class Agent:
         the held pull; the same id is never carried out twice."""
         try:
             op_id, terminal = check_op(op, need_terminal=op.get("action") not in
-                                       PROJECT_ACTIONS + FILE_ACTIONS + ("session_read", "session_mark"))
+                                       PROJECT_ACTIONS + FILE_ACTIONS + ("session_read", "session_mark", "session_delete"))
         except OpError as error:
             say("拒绝操作：%s" % error)
             return
@@ -1311,6 +1366,9 @@ class Agent:
                     if isinstance(op.get(kind), bool):
                         self.marks.set(kind, tool, session, op[kind])
                 self.sessions_at, result = 0.0, {}      # the next report lists the conversations as they now stand
+            elif action == "session_delete":
+                self.sessions.delete(str(op.get("session") or ""), str(op.get("tool") or ""), dirs, list(self.terminals.values()))
+                self.sessions_at, result = 0.0, {}
             elif action == "start":
                 self.start_terminal(op, dirs, terminal)
             else:

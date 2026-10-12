@@ -428,7 +428,7 @@
       if (current && (current.kind.view === 'code' || current.kind.view === 'markdown' || current.kind.ext === 'svg' || !current.kind.view))
         list.push({ label: '长行自动换行', sub: '关闭时可以左右滑动看完整的一行', on: wrap, act: () => { wrap = !wrap; keep('files-wrap', wrap ? '1' : ''); document.querySelectorAll('.code').forEach(c => c.classList.toggle('wrap', wrap)); } });
       list.push({ label: '复制文件路径', sub: join(dir, join(place.path, place.file)), act: async () => { try { await navigator.clipboard.writeText(join(place.path, place.file)); toast('已复制'); } catch (error) { toast('这里不能复制'); } } });
-      list.push({ label: native ? '保存到手机' : '保存到这台设备', sub: native ? '放进手机的“下载 / RemoteCLI”，之后可以用别的应用打开' : '作为浏览器的下载', act: save });
+      list.push({ label: native ? '保存到手机' : '保存到这台设备', sub: native ? '放进手机的“下载 / RemoteAI”，之后可以用别的应用打开' : '作为浏览器的下载', act: save });
     } else {
       [['name', '按名称排列'], ['time', '最近修改的在前'], ['size', '最大的在前']].forEach(([key, label]) => list.push({ label, on: sort === key, act: () => { sort = key; keep('files-sort', key); show(); } }));
       list.push({ label: '显示隐藏的文件', sub: '以 . 开头的和系统隐藏的', on: hidden, act: () => { hidden = !hidden; keep('files-hidden', hidden ? '1' : ''); show(); } });

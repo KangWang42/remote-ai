@@ -181,7 +181,7 @@ to held requests. Switching to the background cancels the active reader; returni
 | `close` | `terminal` |
 | `project_add` | `path`, optional `name`, `create` |
 | `project_rename` | `name`, `to` |
-| `project_remove` | `name` |
+| `project_remove` | `name`. The folder and what is in it stay. A project that stands in the computer's own settings (`fixed`) is renamed or removed from the phone only where the computer says it does that (the `projects` capability: the Windows program, for the projects added in its window); else the relay refuses |
 | `update` | none. The program on the computer looks for a newer release of itself and installs it; needs the `update` capability |
 
 ### Files
@@ -231,11 +231,13 @@ it stays open on the computer and is used there as before.
   sits idle in the program that has it, and whose tool has a way of its own to hand it a message there. For Codex
   the computer runs `codex queue --thread <id> --message <text>`: the conversation takes the message as what its
   user says next. For Claude Code the computer uses Claude Code's own cross-session messages, sent through a Claude
-  Code session started for that one message (one tool, `SendMessage`; no hooks; no conversation kept) and addressed
+  Code session started for that one message (one tool, `SendMessage`; no hooks; no conversation kept; whether the
+  message was carried is read from what that tool answered, and a session that did not call it is started again, three
+  times at most) and addressed
   to where Claude Code notes that the conversation takes such messages. A conversation takes such a message as
   another session's, not as its user's, so the user's words are not sent that way where it can be avoided: while
   Claude Code runs this program's hooks, the words are left for the conversation, the message only wakes it (it
-  carries none of the user's words and asks for a one-character answer), and the conversation's own Stop hook hands
+  carries none of the user's words), and the conversation's own Stop hook hands
   it the words when that turn ends, as its user's next instruction. Where the words are not taken within 40 seconds,
   or the hooks are not installed, they are sent as the cross-session message itself, framed as the user's words from
   the phone. Either way takes some seconds, so the relay holds the request for up to 85 seconds.
@@ -244,6 +246,11 @@ it stays open on the computer and is used there as before.
   taken from its program. Without `wake` (a Codex without the command, a Claude Code that notes no such address) an
   idle conversation says that it cannot be told.
 
+- `{"action": "delete"}` puts a saved conversation of a project away. → `{}`. It needs the `delete` capability instead
+  of `reach`, and is refused for a conversation that a program has open or a terminal runs. The computer is asked with
+  the operation `session_delete` and destroys nothing: a conversation of Claude Code's goes into the recycle bin (on
+  Linux the user's trash), with the folder that belongs to it; one of Codex's is archived by Codex itself
+  (`codex archive <id>`; `codex unarchive <id>` brings it back). The overview no longer lists it from then on.
 - `{"action": "mark", "pinned": true|false, "hidden": true|false}` (one of the two, or both) says of any listed
   conversation, open or not, that it is pinned or hidden, or no longer is. → `{}`. It needs the `marks` capability
   instead of `reach`. The computer is asked with the operation `session_mark` and keeps the marks by tool and

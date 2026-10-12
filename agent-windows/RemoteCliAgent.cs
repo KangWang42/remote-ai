@@ -173,7 +173,7 @@ public sealed class TerminalAgent {
         var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
         string where = Place(live, dirs);
         if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || where == null || !Directory.Exists(where)) return;
-        live.Pending.Append("\r\n\x1b[2m" + (tool == "shell" ? "Remote CLI 已更新，这是重新打开的 PowerShell。" : session.Length > 0 ? "Remote CLI 已更新，正在接回原来的对话…" : "Remote CLI 已更新；原对话保存在电脑上，可从历史对话继续。") + "\x1b[0m\r\n");
+        live.Pending.Append("\r\n\x1b[2m" + (tool == "shell" ? "Remote AI 已更新，这是重新打开的 PowerShell。" : session.Length > 0 ? "Remote AI 已更新，正在接回原来的对话…" : "Remote AI 已更新；原对话保存在电脑上，可从历史对话继续。") + "\x1b[0m\r\n");
         live.Pty = new PseudoTerminal(Command(tool, launcher, session, false, Get(prefs, "RemoteMaxMode"), false, tool == "codex" && SupportsStandalone(launcher), false), where,
             Math.Max(20, Math.Min(240, Convert.ToInt32(kept["cols"]))), Math.Max(6, Math.Min(100, Convert.ToInt32(kept["rows"]))), text => {
                 lock (gate) { live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
@@ -716,8 +716,9 @@ public sealed class TerminalAgent {
                     // conversation through a hook or as a message from another session, and is the user's all the same.
                     var origin = at(row, "origin") as Dictionary<string, object>;
                     string noted = at(message, "content") as string ?? "", body = at(origin, "body") as string ?? noted;
-                    if (type != "user" || body.IndexOf("from their phone", StringComparison.Ordinal) < 0 || body.IndexOf("Remote CLI", StringComparison.Ordinal) < 0) continue;
-                    if (body.StartsWith("Remote CLI wake-up", StringComparison.Ordinal)) { woken = true; continue; }       // only woke it: the words follow
+                    // (under this program's name, or the one it had before: conversations written then are still read)
+                    if (type != "user" || body.IndexOf("from their phone", StringComparison.Ordinal) < 0 || !Reach.Names.Any(name => body.IndexOf(name, StringComparison.Ordinal) >= 0)) continue;
+                    if (Reach.Names.Any(name => body.StartsWith(name + " wake-up", StringComparison.Ordinal))) { woken = true; continue; }       // only woke it: the words follow
                     int words = body.IndexOf("\n\n", StringComparison.Ordinal);
                     if (words >= 0) { add("user", body.Substring(words + 2)); woken = false; }
                     continue;
@@ -797,6 +798,10 @@ public sealed class TerminalAgent {
         var use = folders.Of(path);
         return new Dictionary<string, object> { { "name", name }, { "path", path }, { "fixed", settled }, { "exists", exists }, { "tools", String.Join(" ", use.Tools) }, { "kinds", Folders.Told(use.Kinds) } };
     }
+    /// The projects that were added in the window are the window's to keep: it removes or renames one when asked
+    /// (action, name, new name), and says whether it had it. Without a window they stand in a file of settings and
+    /// are changed there.
+    public Func<string, string, string, bool> Settled;
     public void ChangeProjects(Dictionary<string, object> op, Dictionary<string, object> prefs, string action) {
         var settings = Dirs(prefs); var own = OwnProjects();
         string name = Tidy(Get(op, "name"));
@@ -818,6 +823,17 @@ public sealed class TerminalAgent {
             own.Add(new KeyValuePair<string, string>(name, path));
         } else {
             int at = own.FindIndex(p => p.Key == name);
+            if (at < 0 && settings.ContainsKey(name) && Settled != null) {
+                // one that was added in the window: the window keeps it, and changes it when it is asked to
+                string renamed = Tidy(Get(op, "to"));
+                if (action == "project_remove") { if (terminals.Values.Any(t => t.Dir == name && !t.Pty.Closed)) throw new InvalidOperationException("这个项目还有终端在运行，请先结束"); }
+                else if (renamed.Length == 0 || renamed.Length > 40 || renamed.Contains("=")) throw new ArgumentException("名称需为 1 至 40 字，且不含等号");
+                else if (renamed != name && (settings.ContainsKey(renamed) || own.Any(p => p.Key == renamed))) throw new ArgumentException("已有同名项目");
+                if (!Settled(action, name, renamed)) throw new ArgumentException("没有这个项目");
+                if (action == "project_rename") foreach (var t in terminals.Values.Concat(ended).Where(t => t.Dir == name)) t.Dir = renamed;
+                nextScan = DateTime.MinValue;
+                return;
+            }
             if (at < 0) throw new ArgumentException(settings.ContainsKey(name) ? "这个项目写在电脑的配置文件里，请在电脑上修改" : "没有这个项目");
             if (action == "project_remove") {
                 if (terminals.Values.Any(t => t.Dir == name && !t.Pty.Closed)) throw new InvalidOperationException("这个项目还有终端在运行，请先结束");
@@ -930,7 +946,7 @@ public sealed class TerminalAgent {
         try {
             using (var reply = ask("/api/session", null)) {
                 string text; using (var reader = new StreamReader(reply.GetResponseStream(), Encoding.UTF8)) text = reader.ReadToEnd();
-                if ((int)reply.StatusCode != 200 || !text.Contains("\"signed_in\"")) return "这个地址上没有 Remote CLI 中转，请核对地址和端口";
+                if ((int)reply.StatusCode != 200 || !text.Contains("\"signed_in\"")) return "这个地址上没有 Remote AI 中转，请核对地址和端口";
             }
             using (var reply = ask("/api/login", new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "password", password } }))) {
                 int code = (int)reply.StatusCode;
@@ -952,7 +968,7 @@ public sealed class TerminalAgent {
         try {
             lock (work) {
                 var active = terminals.Values.Where(t => t.Pty != null && !t.Pty.Closed).ToArray();
-                var list = active.Select(t => new[] { t.Tool, t.Dir.Length > 0 ? t.Dir : Path.GetFileName(t.Folder), t.Status ?? "", t.Started.ToString("o"), sessions.Where(s => s.Id == t.Session).Select(s => s.Title).FirstOrDefault() ?? "", "手机 Remote CLI", "phone", t.Id }).ToList();
+                var list = active.Select(t => new[] { t.Tool, t.Dir.Length > 0 ? t.Dir : Path.GetFileName(t.Folder), t.Status ?? "", t.Started.ToString("o"), sessions.Where(s => s.Id == t.Session).Select(s => s.Title).FirstOrDefault() ?? "", "手机 Remote AI", "phone", t.Id }).ToList();
                 // Of the conversations the computer's own programs hold, the ones in use now (InUse): a writer lock or
                 // a process kept by a desktop app is no sign that anybody is at the conversation.
                 list.AddRange(sessions.Where(s => s.Live && s.Now && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), (Reach.Of(s.Tool, s.Id) ?? new Reach.Open { Status = s.Status }).Status, s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
@@ -1020,7 +1036,7 @@ public sealed class TerminalAgent {
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
-            bool peek = action == "session_read" || action == "session_say" || action == "session_answer" || action == "session_mark";
+            bool peek = action == "session_read" || action == "session_say" || action == "session_answer" || action == "session_mark" || action == "session_delete";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
@@ -1034,6 +1050,24 @@ public sealed class TerminalAgent {
                 string session = Get(op, "session"), tool = Get(op, "tool");
                 if (!sessions.Any(s => s.Id == session && s.Tool == tool)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 foreach (string kind in Marks.Kinds.Where(op.ContainsKey)) Marks.Set(kind, tool, session, Get(op, kind) == "True");
+                result = new Dictionary<string, object>();
+            }
+            else if (action == "session_delete") {
+                // Put away (Removal.cs): only one this computer listed, of a project, that no program has open and no
+                // terminal of the phone's runs. What its owner said of it (pinned, hidden) goes with it.
+                string session = Get(op, "session"), tool = Get(op, "tool"), root;
+                var gone = sessions.FirstOrDefault(s => s.Id == session && s.Tool == tool);
+                if (gone == null || !Regex.IsMatch(session, Uuid) || !AllDirs(prefs).TryGetValue(gone.Dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+                if (gone.Live || terminals.Values.Any(t => t.Session == session && !t.Pty.Closed)) throw new InvalidOperationException("这段对话正开着，请先结束它再删除");
+                try {
+                    if (tool == "claude") Removal.Claude(Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl"));
+                    else Removal.Codex(FindTool("codex"), session);
+                }
+                catch (FileNotFoundException) { throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试"); }
+                catch (UnauthorizedAccessException) { throw new InvalidOperationException("没有权限移走这段对话的文件"); }
+                foreach (string kind in Marks.Kinds) Marks.Set(kind, tool, session, false);
+                sessions = sessions.Where(s => !(s.Id == session && s.Tool == tool)).ToList();
+                nextScan = DateTime.MinValue;
                 result = new Dictionary<string, object>();
             }
             else if (peek) {
@@ -1174,7 +1208,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks" }.Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete" }.Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },

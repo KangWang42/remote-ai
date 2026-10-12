@@ -64,7 +64,7 @@ def main():
             agent = start_agent()
             await_ready(lambda: client.call("/api/terminal")["device"]["online"], "agent again")
             after = before["after"]
-            await_ready(lambda: "Remote CLI 已更新" in "".join(c["data"] for c in look(after)["chunks"]), "the returned terminal's first words")
+            await_ready(lambda: "Remote AI 已更新" in "".join(c["data"] for c in look(after)["chunks"]), "the returned terminal's first words")
             assert not (data / "restart.json").exists(), "the note is used once"
             time.sleep(3)
             client.call("/api/terminal", operation(terminal, "input", data="'AFTER_' + 'RESTART'\r"))

@@ -16,6 +16,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -70,7 +71,8 @@ def main():
     # a conversation of Claude Code's that the desktop app has loaded and nobody is at: a process keeps it, half an hour after it was last used
     homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5, said=("结算页的金额有时多出一位小数，帮我看看", "好的。问题在 `formatPrice`：金额从分换算成元之后没有固定两位小数。\n\n- 换算后统一用 `toFixed(2)`\n- 在 `cart.test.js` 补了一条用例\n\n要顺便检查优惠券那里的金额吗？"))
     homes.claude_open(shop, IDLE)
-    environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600")       # nobody is at the computer
+    removed = Path(temp.name) / "removed"            # where a conversation that is deleted goes here, in place of the recycle bin
+    environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600", REMOTECLI_REMOVED=str(removed))       # nobody is at the computer
     environment["PATH"] = str(homes.stand_ins(temp.name, queue=True)) + ";" + environment["PATH"]
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full",
                                                   "RemoteDirs": ["web-shop=" + str(shop), "thesis=" + str(thesis)]}), encoding="utf-8")
@@ -93,6 +95,13 @@ def main():
                 cookie["Cookie"] = reply.getheader("Set-Cookie").split(";")[0]
             assert reply.status == 200, (path, reply.status, text[:300].decode("utf-8", "replace"))
             return json.loads(text)
+
+        def http_error(act):
+            try:
+                act()
+                return ""
+            except AssertionError as refused:
+                return str(refused)
 
         def listed(session):
             return next((s for s in call("/api/terminal").get("sessions", []) if s["id"] == session), None)
@@ -240,6 +249,9 @@ def main():
         assert window["window"] and window["tall"] > 0.98 and window["choices"] == 0 and window["small"] == [] and window["box"] == "发消息" and window["head"] == "Claude 桌面版 · web-shop", window
         until(lambda: "好的。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 10, "what was said in it")
         picture("conversation.png")
+        # at the top right, as on a terminal's page: the files of its project, and how it is read
+        corner = page_value("(() => Array.from(document.querySelectorAll('#sheet .bar > button')).slice(1).map(b => [b.getAttribute('aria-label'), b.hidden || !b.offsetParent]))()")
+        assert corner == [["查看项目文件", False], ["字体和版式", False]], corner
         # how it is read: behind "Aa", the type, its size and the spacing of the lines; what is chosen is kept
         PICKS = "(() => { const r = document.querySelector('#sheet .reading'); return r.hidden ? null : Array.from(r.querySelectorAll('.pick')).map(g => Array.from(g.querySelectorAll('button')).map(b => (b.getAttribute('aria-pressed') === 'true' ? '*' : '') + b.textContent)); })()"
         pick = lambda group, text: page_value("(() => { Array.from(document.querySelectorAll('#sheet .reading .pick')[%d].querySelectorAll('button')).find(b => b.textContent === %s).click(); return 1; })()" % (group, json.dumps(text, ensure_ascii=False)))
@@ -338,7 +350,7 @@ def main():
         # ---- a held press asks what to do with a card: a mouse's other button
         page_value("(() => { %s('给结算页加上优惠券').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
         offered = until(lambda: page_value(SHEET), 5, "the sheet of a held press")
-        assert offered == ["置顶", "从列表隐藏", "进入项目 web-shop"], offered
+        assert offered == ["置顶", "从列表隐藏", "进入项目 web-shop", "删除对话"], offered
         time.sleep(0.5)             # the sheet has come up
         picture("inbox-manage.png")
         choose("置顶")
@@ -356,7 +368,7 @@ def main():
         offered = until(lambda: page_value(SHEET), 5, "the sheet of a finger held down")
         ask("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
         time.sleep(0.6)
-        assert offered == ["置顶", "从列表隐藏", "进入项目 thesis"] and page_value(SHEET) == offered, (offered, page_value(SHEET))
+        assert offered == ["置顶", "从列表隐藏", "进入项目 thesis", "删除对话"] and page_value(SHEET) == offered, (offered, page_value(SHEET))
         choose("从列表隐藏")
         hidden = lists(lambda seen: seen["recent"] and "摘要翻译" not in seen["recent"], "hidden")
         assert listed(uuid(14))["hidden"] is True and len(call("/api/terminal")["terminals"]) == started, hidden
@@ -382,7 +394,7 @@ def main():
         page_value("(() => { document.getElementById('hidden-history').click(); return 1; })()")
         assert page_value(HISTORY)["saved"] == ["画流程图", "整理第三章的参考文献", "摘要翻译"] and about("摘要翻译")["pill"] == "已隐藏"
         page_value("(() => { %s('摘要翻译').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
-        assert until(lambda: page_value(SHEET), 5, "the sheet in a project") == ["置顶", "取消隐藏"]
+        assert until(lambda: page_value(SHEET), 5, "the sheet in a project") == ["置顶", "取消隐藏", "删除对话"]
         choose("取消隐藏")
         until(lambda: listed(uuid(14))["hidden"] is False, 10, "no longer hidden")
         page_value("(() => { document.getElementById('back').click(); return 1; })()")
@@ -392,6 +404,7 @@ def main():
         # is made of it. Here by a copy: what holds this one open is a made-up lock, which cannot be asked to close.
         page_value("(() => { %s('整理读书笔记').querySelector('button.open').click(); return 1; })()" % CARD)
         until(lambda: page_value(WINDOW), 8, "the window of the one outside")
+        assert page_value("document.querySelector('#sheet .bar .files').hidden") is True, "one outside every project has no files to show"
         # the window works beside the conversation: what is said on the computer appears in it while it is open
         with open(homes.rollouts[WORKING], "a", encoding="utf-8") as stream:
             stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "第二部分写好了。"}]}}, ensure_ascii=False) + "\n")
@@ -474,10 +487,60 @@ def main():
         until(lambda: (lambda card: card and not card["apart"] and card["meta"][0] == "reading-notes")(about("整理读书笔记")), 30, "the conversation is the project's own")
         report["projects_after"] = joined["projects"]
 
+        # ---- a project besides entering it: one that was added from the phone is renamed and removed by a held press;
+        # one the computer keeps in its own settings is not offered that (this computer runs without its window)
+        PROJECT = "((name) => Array.from(document.querySelectorAll('#project-list .card:not(.add)')).find(c => c.querySelector('b').textContent === name))"
+        hold = lambda name: page_value("(() => { %s(%s).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % (PROJECT, json.dumps(name, ensure_ascii=False)))
+        hold("web-shop")
+        time.sleep(0.6)
+        assert page_value(SHEET) is None, "nothing is offered for a project of the computer's own settings"
+        hold("term-notes")
+        assert until(lambda: page_value(SHEET), 5, "what can be done with a project") == ["重命名", "移除项目"]
+        choose("重命名")
+        until(lambda: page_value("(() => { const f = document.getElementById('field-to'); return f && document.getElementById('sheet').open ? f.value : null; })()") == "term-notes", 5, "the name as it is, to change")
+        page_value("(() => { document.getElementById('field-to').value = '终端笔记'; return 1; })()")
+        choose("保存")
+        lists(lambda seen: seen["projects"] and "终端笔记" in seen["projects"] and "term-notes" not in seen["projects"], "the project has its new name")
+        hold("终端笔记")
+        until(lambda: page_value(SHEET), 5, "the sheet again")
+        choose("移除项目")
+        assert until(lambda: page_value(SHEET), 5, "asked once more") == ["移除项目"]
+        choose("移除项目")
+        lists(lambda seen: seen["projects"] and "终端笔记" not in seen["projects"], "the project is gone from the list")
+        assert typed.is_dir(), "its folder stays"
+
+        # ---- a saved conversation is put away: Claude Code's file is moved off (here into a folder the check names, on
+        # a computer in use into the recycle bin), Codex's is archived by Codex; not one a program has open
+        doomed = homes.claude / "projects" / re.sub("[^a-zA-Z0-9]", "-", str(shop)) / (uuid(16) + ".jsonl")
+        assert doomed.is_file() and "delete" in call("/api/terminal")["device"]["features"]
+        search("更旧的讨论")
+        lists(lambda seen: seen["results"] == ["更旧的讨论"], "the one to delete is found")
+        page_value("(() => { %s('更旧的讨论').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
+        assert "删除对话" in until(lambda: page_value(SHEET), 5, "its sheet")
+        choose("删除对话")
+        assert until(lambda: page_value(SHEET), 5, "asked once more") == ["删除"]
+        choose("删除")
+        lists(lambda seen: seen["results"] == [], "it is gone from the lists")
+        search("")
+        assert not doomed.exists() and (removed / doomed.name).is_file(), "moved off, not destroyed"
+        assert call("/api/conversation", {"id": new_id(), "session": uuid(12), "action": "delete"}) == {}
+        assert not homes.rollouts[uuid(12)].exists() and (homes.codex / "archived_sessions" / homes.rollouts[uuid(12)].name).is_file(), "archived by Codex"
+        until(lambda: uuid(12) not in [s["id"] for s in call("/api/terminal")["sessions"]], 15, "and listed no more")
+        refused = http_error(lambda: call("/api/conversation", {"id": new_id(), "session": IDLE, "action": "delete"}))
+        assert "正开着" in refused, refused
+
         # ---- what asks is answered on its card, as before
         page_value("(() => { %s('部署到测试环境').querySelector('.answers .yes').click(); return 1; })()" % CARD)
         assert asking.wait(10) == 0 and json.loads(asking.stdout.read().decode("utf-8"))["hookSpecificOutput"]["decision"]["behavior"] == "allow"
         assert len(call("/api/terminal")["terminals"]) == started, "nothing was started by any of this"
+        # ---- from a conversation's window to the files of its project, and back into the window
+        ask("Page.navigate", url="http://127.0.0.1:%d/?take=%s" % (PORT, IDLE))
+        until(lambda: page_value(WINDOW), 15, "the window, opened by its address")
+        page_value("(() => { document.querySelector('#sheet .bar .files').click(); return 1; })()")
+        until(lambda: (page_value("location.pathname + location.search") or "").endswith("/files/?dir=web-shop"), 10, "the files of its project")
+        page_value("(() => { history.back(); return 1; })()")
+        back = until(lambda: page_value("location.pathname.endsWith('/files/') ? null : (document.getElementById('sheet') && " + WINDOW + ")"), 15, "back in the window")
+        assert back["head"].endswith("web-shop") and back["window"], back
         print(json.dumps(report, ensure_ascii=False))
         print("the first page: by what needs its owner, filtered, searched, pinned, hidden, and a folder made a project")
     finally:

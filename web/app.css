@@ -168,7 +168,9 @@ dialog.window { max-width: none; width: 100%; height: 100%; max-height: none; ma
 dialog.window #sheet-form { height: 100%; max-height: none; grid-template-rows: auto 1fr; grid-auto-rows: auto; gap: 10px; padding: calc(8px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
 dialog.window #sheet-form::before { display: none; }
 dialog.window .bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
-dialog.window .bar .type { flex: none; min-width: 44px; min-height: 44px; border-radius: 12px; color: var(--muted); font-weight: 600; font-size: .95rem; }
+dialog.window .bar .type, dialog.window .bar .files { flex: none; min-width: 44px; min-height: 44px; border-radius: 12px; color: var(--muted); font-weight: 600; font-size: .95rem; }
+dialog.window .bar .files[hidden] { display: none; }
+dialog.window .bar .files svg { width: 21px; height: 21px; }
 dialog.window .reading { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 12px; margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); font-size: .86rem; color: var(--muted); }
 dialog.window .reading[hidden] { display: none; }
 dialog.window .reading .pick { display: flex; gap: 4px; padding: 3px; border-radius: 11px; background: var(--bg); border: 1px solid var(--line); }

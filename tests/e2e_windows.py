@@ -53,7 +53,7 @@ def main():
         # the door: nothing without the password, pages are served, a wrong password is refused
         call("/api/terminal", expect=401)
         call("/api/terminal", {"action": "start"}, expect=401)
-        assert b"Remote CLI" in call("/") and b"xterm" in call("/terminal/") and b"ProjectTerminal" in call("/terminal/bridge.js")
+        assert b"Remote AI" in call("/") and b"xterm" in call("/terminal/") and b"ProjectTerminal" in call("/terminal/bridge.js")
         call("/../relay/server.py", expect=404)
         call("/api/login", {"password": "wrong"}, expect=401)
         assert call("/api/session")["signed_in"] is False

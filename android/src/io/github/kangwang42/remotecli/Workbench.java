@@ -35,6 +35,7 @@ final class Workbench {
         final String state, line;
         final List<AggregateSessions.Project> projects;
         final boolean marks;        // the computer keeps what is said of single conversations: pinned, hidden
+        final Set<String> can = new HashSet<>();        // what else the computer says it does: "delete", "projects"
         Snapshot(String state, String line, List<AggregateSessions.Project> projects, boolean marks) { this.state = state; this.line = line; this.projects = projects; this.marks = marks; }
     }
     private static final int SHOWN = 4, TASKS = 12, TALKS = 8, RECENT = 2, RECENT_ALL = 20, FOUND = 30;
@@ -104,7 +105,7 @@ final class Workbench {
         head.addView(mark(42));
         LinearLayout titles = kit.column();
         titles.setPadding(kit.dp(12), 0, kit.dp(6), 0);
-        titles.addView(kit.line("Remote CLI", 21, kit.INK, true));
+        titles.addView(kit.line("Remote AI", 21, kit.INK, true));
         summary = kit.line(list.length() == 0 ? "在手机上使用电脑里的终端" : "正在连接…", 13, kit.MUTED, false);
         titles.addView(summary);
         head.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
@@ -197,7 +198,7 @@ final class Workbench {
         LinearLayout card = kit.column();
         card.setPadding(kit.dp(18), kit.dp(18), kit.dp(18), kit.dp(20)); card.setBackground(kit.shape(kit.PANEL, kit.LINE, 20));
         card.addView(kit.bold("连接第一台电脑", 17, kit.INK));
-        String[] steps = { "在电脑上安装并打开 Remote CLI", "点下面的“扫码添加电脑”，对准电脑窗口里的二维码", "连上后选一个项目，新建 Claude Code、Codex 或 PowerShell 终端" };
+        String[] steps = { "在电脑上安装并打开 Remote AI", "点下面的“扫码添加电脑”，对准电脑窗口里的二维码", "连上后选一个项目，新建 Claude Code、Codex 或 PowerShell 终端" };
         for (int i = 0; i < steps.length; i++) {
             LinearLayout row = new LinearLayout(activity);
             TextView number = kit.bold(String.valueOf(i + 1), 12.5f, kit.ACCENT);
@@ -345,7 +346,7 @@ final class Workbench {
         for (int i = 0; projects != null && i < projects.length(); i++) {
             JSONObject project = projects.optJSONObject(i);
             if (project == null) continue;
-            for (AggregateSessions.Project group : groups) if (group.name.equals(project.optString("name"))) group.told(strings(project.optJSONArray("tools")), strings(project.optJSONArray("kinds")));
+            for (AggregateSessions.Project group : groups) if (group.name.equals(project.optString("name"))) { group.told(strings(project.optJSONArray("tools")), strings(project.optJSONArray("kinds"))); group.fixed = project.optBoolean("fixed"); }
         }
         int[] counts = AggregateSessions.counts(groups, seen(url));
         List<String> parts = new ArrayList<>();
@@ -353,7 +354,9 @@ final class Workbench {
         if (counts[1] > 0) parts.add(counts[1] + " 个已完成");
         if (counts[2] > 0) parts.add(counts[2] + " 个在执行");
         String line = !parts.isEmpty() ? android.text.TextUtils.join(" · ", parts) : counts[3] > 0 ? "在线 · " + counts[3] + " 个终端等待输入" : "在线 · 没有任务在运行";
-        return new Snapshot("on", line, groups, marks);
+        Snapshot read = new Snapshot("on", line, groups, marks);
+        for (int i = 0; features != null && i < features.length(); i++) read.can.add(features.optString(i));
+        return read;
     }
 
     // ---- drawing; a part is rebuilt only when what it shows has changed, so a press or a scroll is not interrupted
@@ -590,13 +593,45 @@ final class Workbench {
         if (entry.apart()) { labels.add("把 " + entry.place() + " 加为项目"); does.add("add"); }
         int danger = -1;
         if (entry.terminal && "running".equals(entry.state)) { danger = labels.size(); labels.add("结束终端"); does.add("end"); }
+        // a saved conversation of a project that nothing has open can be put away (the computer keeps it recoverable)
+        if (snapshot != null && snapshot.can.contains("delete") && "history".equals(task.kind) && !entry.terminal && !entry.project.isEmpty()) { danger = labels.size(); labels.add("删除对话"); does.add("delete"); }
         if (labels.isEmpty()) return;
         kit.sheet(entry.shownTitle(), AggregateSessions.where(entry), labels.toArray(new String[0]), null, danger, which -> {
             String what = does.get(which);
             if ("pin".equals(what)) markRemote(task, true, !entry.pinned);
             else if ("hide".equals(what)) markRemote(task, false, !entry.hidden);
             else if ("add".equals(what)) addFolder(task);
+            else if ("delete".equals(what)) deleteTask(task);
             else stopTask(task);
+        });
+    }
+    private void deleteTask(AggregateSessions.Thing task) {
+        kit.sheet("删除“" + task.entry.shownTitle() + "”？", "", new String[]{"删除"}, null, 0, which -> ask(task.url, "/api/conversation", "已删除", "没有删除，请稍后重试", op -> op.put("action", "delete").put("session", task.entry.id)));
+    }
+    /** A project besides opening it: taken from its computer's list (the folder and what is in it stay). */
+    private void manageProject(String url, AggregateSessions.Project project) {
+        Snapshot snapshot = snapshots.get(url);
+        if (snapshot == null || project.fixed && !snapshot.can.contains("projects")) return;
+        kit.sheet(project.name, "", new String[]{"移除项目"}, null, 0, which -> ask(url, "/api/terminal", "已移除", "没有移除，请稍后重试", op -> op.put("action", "project_remove").put("name", project.name)));
+    }
+    private interface Filled { void fill(JSONObject op) throws org.json.JSONException; }
+    /** Asks a computer for one thing and says how it went. */
+    private void ask(String url, String path, String done, String failed, Filled filled) {
+        final String cookie = CookieManager.getInstance().getCookie(url);
+        activity.net.execute(() -> {
+            String problem = "";
+            try {
+                JSONObject op = new JSONObject().put("id", UUID.randomUUID().toString().replace("-", ""));
+                filled.fill(op);
+                JSONObject result = post(url + path, cookie, op);
+                if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", failed));
+            } catch (Exception error) {
+                String said = error.getMessage();
+                // a relay of an earlier version answers so to anything it does not know
+                problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，请更新后再试" : said == null ? failed : said;
+            }
+            final String message = problem.isEmpty() ? done : problem;
+            activity.runOnUiThread(() -> { android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show(); refresh(); });
         });
     }
     /** The computer keeps what is said of a conversation (the action "mark"); what is hidden is no longer pinned. */
@@ -816,7 +851,7 @@ final class Workbench {
             card.addView(rule());
             LinearLayout help = kit.row();
             help.setPadding(kit.dp(16), kit.dp(10), kit.dp(12), kit.dp(12));
-            help.addView(kit.text("key".equals(snapshot.state) ? "登录已过期。" : "请确认电脑已开机且 Remote CLI 正在运行。退出电脑端或重启电脑后，公网隧道的地址会变更。", 12.5f, kit.MUTED), new LinearLayout.LayoutParams(0, -2, 1));
+            help.addView(kit.text("key".equals(snapshot.state) ? "登录已过期。" : "请确认电脑已开机且 Remote AI 正在运行。退出电脑端或重启电脑后，公网隧道的地址会变更。", 12.5f, kit.MUTED), new LinearLayout.LayoutParams(0, -2, 1));
             TextView again = kit.bold("重新扫码", 13.5f, kit.ACCENT);
             again.setGravity(Gravity.CENTER); again.setMinHeight(kit.dp(40)); again.setPadding(kit.dp(14), 0, kit.dp(14), 0);
             again.setBackground(kit.shape(Kit.tint(kit.ACCENT, 34), 0, 12));
@@ -877,6 +912,7 @@ final class Workbench {
         chevron.setRotation(open ? 90 : 0);
         row.addView(chevron);
         kit.press(row, () -> { if (!unfolded.remove(key)) unfolded.add(key); drawComputer(computer); });
+        row.setOnLongClickListener(v -> { manageProject(url, project); return true; });
         if (!open) return row;
         LinearLayout box = kit.column();
         box.addView(row);
