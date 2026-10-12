@@ -193,13 +193,13 @@ def pages(chrome, out, folder, first, addresses, config):
         press("Array.from(document.querySelectorAll('#settings li')).find(li => li.textContent.includes('手机处理电脑上的对话')).querySelector('.flip')")
         until(lambda: config()["Reach"] is True and value("!!(%s)" % WAIT), "the switch to be kept and the row to come", 15)
         assert value("(%s).querySelector('.act').textContent" % WAIT) == "5 分钟" and value("document.querySelectorAll('#settings li').length") == 8
-        # and whether Codex's requests are: a switch, off until switched on
+        # and whether Codex's requests are: a switch, on until switched off
         ASK = "Array.from(document.querySelectorAll('#settings li')).find(li => li.textContent.includes('Codex 的确认请求交给手机'))"
-        assert value("(%s).querySelector('.flip').getAttribute('aria-checked')" % ASK) == "false"
+        assert value("(%s).querySelector('.flip').getAttribute('aria-checked')" % ASK) == "true"
         press("(%s).querySelector('.flip')" % ASK)
-        until(lambda: config()["ReachAsk"] is True and value("(%s).querySelector('.flip').getAttribute('aria-checked')" % ASK) == "true", "the switch to be kept and shown", 15)
+        until(lambda: config()["ReachAsk"] is False and value("(%s).querySelector('.flip').getAttribute('aria-checked')" % ASK) == "false", "the switch to be kept and shown", 15)
         press("(%s).querySelector('.flip')" % ASK)
-        until(lambda: config()["ReachAsk"] is False, "and off again", 15)
+        until(lambda: config()["ReachAsk"] is True, "and on again", 15)
         press("(%s).querySelector('button')" % WAIT)
         until(lambda: value("document.querySelectorAll('#sheet[open] .choice').length") == 5, "the times to choose from", 10)
         assert value("Array.from(document.querySelectorAll('#sheet .choice')).map(b => b.firstChild.textContent + (b.querySelector('.tick') ? '*' : ''))") == ["不等", "1 分钟", "5 分钟*", "15 分钟", "30 分钟"]
@@ -283,12 +283,12 @@ def main():
             assert first.ask("settings_change", name="rights", value="read")["settings"]["rights"] == "read" and config()["RemoteMaxMode"] == "read"
             assert first.ask("settings_change", name="tunnel", value="http2")["settings"]["tunnel"] == "http2" and config()["TunnelProtocol"] == "http2"
             assert first.ask("settings_change", name="tunnel", value="auto")["settings"]["tunnel"] == "auto"
-            # what is kept for the phone while nobody is at the computer: nothing unless chosen. A request of Codex's
-            # (on or off), and how long a tool that stops waits (so many seconds, as a word)
-            assert told["settings"]["ask"] is False and told["settings"]["wait"] == "0", told["settings"]
-            assert first.ask("settings_change", name="ask", value=True)["settings"]["ask"] is True and config()["ReachAsk"] is True
-            assert "没有这项设置" in first.ask("settings_change", name="ask", value="yes") and config()["ReachAsk"] is True
+            # what is kept for the phone while nobody is at the computer: a request of Codex's (on unless switched
+            # off), and how long a tool that stops waits (so many seconds, as a word; not at all unless chosen)
+            assert told["settings"]["ask"] is True and told["settings"]["wait"] == "0", told["settings"]
             assert first.ask("settings_change", name="ask", value=False)["settings"]["ask"] is False and config()["ReachAsk"] is False
+            assert "没有这项设置" in first.ask("settings_change", name="ask", value="yes") and config()["ReachAsk"] is False
+            assert first.ask("settings_change", name="ask", value=True)["settings"]["ask"] is True and config()["ReachAsk"] is True
             changed = first.ask("settings_change", name="wait", value="900")
             assert isinstance(changed, dict) and changed["settings"]["wait"] == "900" and config()["ReachWait"] == 900, (changed, config().get("ReachWait"))
             assert first.ask("settings_change", name="wait", value="0")["settings"]["wait"] == "0" and config()["ReachWait"] == 0

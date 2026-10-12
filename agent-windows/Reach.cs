@@ -39,16 +39,17 @@ public sealed class Reach : IDisposable {
     public static readonly int[] Waits = { 0, 60, 300, 900, 1800 };
     /// The choice as it is kept in the settings ("ReachWait"), read: one of Waits, none where nothing valid is kept.
     public static int Wait(object kept) { int seconds; return Int32.TryParse(Convert.ToString(kept), out seconds) && Array.IndexOf(Waits, seconds) >= 0 ? seconds : 0; }
-    /// What the program's owner lets a hook keep its tool for, while nobody is at the computer. Nothing, unless they
-    /// chose it: a tool that is kept shows a running hook, which whoever looks at the computer need not understand.
+    /// What the program's owner lets a hook keep its tool for, while nobody is at the computer. A tool that is kept
+    /// shows a running hook and nothing else, so the computer's screen says in words what waits (KeptNow, Notice).
     public sealed class Kept {
-        public int AtStop;          // a tool that stops waits so many seconds for the phone's message
-        public bool Requests;       // a request for permission of a tool that asks its hooks first (Codex) waits for the phone's answer
+        public int AtStop;              // a tool that stops waits so many seconds for the phone's message: not at all, unless chosen
+        public bool Requests = true;    // a request for permission of a tool that asks its hooks first (Codex) waits for the phone's
+                                        // answer: without that the phone cannot answer it at all. Its owner can switch it off.
         /// As the settings keep it: "ReachWait" and "ReachAsk".
         public static Kept From(IDictionary<string, object> settings) {
             object wait = null, ask = null;
             if (settings != null) { settings.TryGetValue("ReachWait", out wait); settings.TryGetValue("ReachAsk", out ask); }
-            return new Kept { AtStop = Wait(wait), Requests = ask is bool ? (bool)ask : String.Equals(Convert.ToString(ask), "true", StringComparison.OrdinalIgnoreCase) };
+            return new Kept { AtStop = Wait(wait), Requests = ask is bool ? (bool)ask : !String.Equals(Convert.ToString(ask), "false", StringComparison.OrdinalIgnoreCase) };
         }
     }
     /// What Claude Code shows on its screen while its Stop hook runs, in place of "running stop hook". It is read by
@@ -66,6 +67,10 @@ public sealed class Reach : IDisposable {
         public bool Answerable;             // the request can be answered from the phone (else only at the computer)
         public bool Held;                   // while it waits, its hook is kept: a message is taken at once. Else it has
                                             // stopped for good, and is told by its tool's own way in, where it has one
+        public bool Beside;                 // while it asks, its own question is on the computer's screen as well
+        /// Its tool is kept by a hook and shows nothing but that: a request that waits for the phone in place of the
+        /// tool's own question, or a stop that waits for a message. Whoever looks at the computer is to be told.
+        public bool Kept { get { return (Status == "confirm" && Answerable && !Beside) || (Status == "waiting" && Held); } }
         /// A message can be left for it here: it takes it now, or when it has done what it is doing.
         public bool Sayable { get { return Status == "busy" || Status == "confirm" || (Status == "waiting" && Held); } }
         internal string Transcript = "", Queued, Message; internal bool? Verdict; internal DateTime Seen, AskedAt, Stopped; internal int Turn; internal long AskStamp;
@@ -139,6 +144,8 @@ public sealed class Reach : IDisposable {
             return o.Copy();
         }
     }
+    /// The conversations whose tool a hook keeps right now, showing nothing but a running hook (Open.Kept).
+    public Open[] KeptNow() { lock (gate) return open.Values.Where(o => o.Kept).Select(o => o.Copy()).ToArray(); }
     /// A message from the phone for a conversation. Says in words for the person why it cannot be passed on.
     /// Returns whether the tool takes it now (else when it has done what it is doing).
     public bool Say(string tool, string session, string text) {
@@ -314,7 +321,7 @@ public sealed class Reach : IDisposable {
         lock (gate) {
             id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null;
             // beside its own question the hook is not seen; a tool that asks its hooks first is kept only where its owner chose that
-            o.Status = "confirm"; o.Answerable = !mine && (beside || (kept().Requests && idle() >= Unattended)); o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
+            o.Status = "confirm"; o.Answerable = !mine && (beside || (kept().Requests && idle() >= Unattended)); o.Beside = beside; o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
         }
         Tell();
         lock (gate) {

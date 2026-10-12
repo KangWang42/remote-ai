@@ -72,9 +72,30 @@ public sealed partial class App {
     // What a tool is kept for the phone for while nobody is at the computer (Reach.Kept): nothing, unless its owner
     // chooses it. The agent reads the settings where a tool asks or stops.
     const string AskFor = "Codex 先问钩子，再显示自己的确认框，所以要让手机回答，就得先把请求留住。\n"
-        + "关（默认）：确认框照常显示在电脑上，手机上能看到它在等确认，但只能在电脑上回答。\n"
-        + "开：电脑无人操作满 1 分钟时，请求留给手机回答，最长 30 分钟；这期间电脑上的 Codex 显示钩子正在运行，碰一下键盘或鼠标就回到电脑上回答。\n"
+        + "开（默认）：电脑无人操作满 1 分钟时，请求留给手机回答，最长 30 分钟。这期间 Codex 只显示钩子正在运行，\n"
+        + "屏幕右下角会有一条说明；碰一下键盘或鼠标，确认框就回到电脑上。\n"
+        + "关：确认框始终直接显示在电脑上，手机上能看到它在等确认，但不能回答。\n"
         + "Claude Code 不受这一项影响：它的确认框始终显示在电脑上，手机和电脑谁先回答都可以。";
+    // While a hook keeps a tool for the phone, the screen says what waits and how to have it at the computer.
+    readonly Notice notice = new Notice();
+    void ShowKept() {
+        var kept = agent == null || !Reaching ? new Reach.Open[0] : agent.Reach.KeptNow();
+        if (kept.Length == 0) { notice.Clear(); Noted(); return; }
+        var one = kept.FirstOrDefault(o => o.Status == "confirm") ?? kept[0];
+        string tool = ToolNames.ContainsKey(one.Tool) ? ToolNames[one.Tool] : one.Tool;
+        if (one.Status == "confirm") notice.Say(tool + " 的确认请求已发到手机", "动一下鼠标或键盘，改在这台电脑上回答", offstage);
+        else notice.Say(tool + " 做完了，在等手机的消息", "动一下鼠标或键盘即结束等待", offstage);
+        Noted();
+    }
+    // REMOTECLI_NOTICED names a file: what the notice says is written there, and drawn beside it, for a check.
+    void Noted() {
+        string file = Environment.GetEnvironmentVariable("REMOTECLI_NOTICED");
+        if (String.IsNullOrWhiteSpace(file)) return;
+        try {
+            File.WriteAllText(file, notice.Title + "\n" + notice.About, new UTF8Encoding(false));
+            if (notice.Visible) using (var drawn = new System.Drawing.Bitmap(notice.Width, notice.Height)) { notice.DrawToBitmap(drawn, new System.Drawing.Rectangle(System.Drawing.Point.Empty, notice.Size)); drawn.Save(file + ".png", System.Drawing.Imaging.ImageFormat.Png); }
+        } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (System.Runtime.InteropServices.ExternalException) { }
+    }
     bool Asking {
         get { return Reach.Kept.From(config).Requests; }
         set { Keep("ReachAsk", value); }

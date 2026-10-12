@@ -93,7 +93,7 @@ public sealed partial class App : Form {
         try { config = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(ConfigFile, Encoding.UTF8)); } catch { config = null; }
         if (config == null) config = new Dictionary<string, object>();
         foreach (var item in new Dictionary<string, object> { { "Mode", "lan" }, { "Port", 8722 }, { "Server", "" }, { "OwnServer", "" }, { "RemoteEnabled", true },
-                 { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", false } })
+                 { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", true } })
             if (!config.ContainsKey(item.Key) || config[item.Key] == null) config[item.Key] = item.Value;
         if (Array.IndexOf(new[] { "lan", "cloud", "own", "public" }, Mode) < 0) config["Mode"] = "lan";
         try { password = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(PasswordFile), null, DataProtectionScope.CurrentUser)); } catch { password = ""; }
@@ -909,7 +909,7 @@ public sealed partial class App : Form {
         var waitRow = new SettingRow("对话停下后等手机消息", "等的时候手机发的消息立即送达，工具显示钩子在运行", waitPick, 170, 32);
         waitRow.Tip(tips, WaitFor);
         askSwitch.Changed += (s, e) => Set("ask", askSwitch.On);
-        var askRow = new SettingRow("Codex 的确认请求交给手机", "无人操作电脑时由手机回答，这期间 Codex 显示钩子在运行", askSwitch, 46, 26);
+        var askRow = new SettingRow("Codex 的确认请求交给手机", "无人操作电脑时由手机回答，屏幕右下角有说明；关闭后只在电脑上回答", askSwitch, 46, 26);
         askRow.Tip(tips, AskFor);
         updateButton = new RoundButton { Text = "检查更新", Glyph = Theme.IconRefresh };
         updateButton.Click += (s, e) => CheckForUpdate(true);
@@ -980,6 +980,7 @@ public sealed partial class App : Form {
             }
             // a tool that tells of a conversation for the first time is in good state from then on
             agent.Reach.Changed += () => { if (IsHandleCreated && Reaching && Hooked.Any(tool => agent.Reach.Heard(tool))) try { BeginInvoke(new Action(ShowReach)); } catch (InvalidOperationException) { } };
+            agent.Reach.Changed += () => { if (IsHandleCreated) try { BeginInvoke(new Action(ShowKept)); } catch (InvalidOperationException) { } };
             ShowSettings();
             updateTimer.Tick += (t, a) => { CheckForUpdate(false); if (DateTime.UtcNow - listRead > TimeSpan.FromHours(6)) ReadList(); };
             ReadList();

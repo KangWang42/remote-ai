@@ -175,7 +175,22 @@ public static class ReachCheck {
                 wait = 300; idle = 5; tellings = told;
                 Require(Until(() => claude(one).Status == "idle", 3000) && Until(() => told > tellings, 1000), "until somebody is back at the computer, which is told");
 
-                // ---- unless its owner chose it, a request of Codex's is not kept either: Codex asks its hooks before
+                // ---- what a hook keeps its tool for, showing nothing but a running hook, is told apart: the computer's
+                // screen is to say it in words. A request of Codex's that waits for the phone is such; one of Claude
+                // Code's is not (its own question is on the screen); a stop that waits is.
+                string kept = Guid.NewGuid().ToString();
+                idle = 600; asks = true; wait = 300;
+                var keptAsk = Run("codex", Request(kept, "git push", "Publish"));
+                Require(Until(() => codex(kept) != null && codex(kept).Kept, 3000) && reach.KeptNow().Length == 1 && reach.KeptNow()[0].Session == kept && reach.KeptNow()[0].Status == "confirm", "a request of Codex's that waits for the phone is kept, to be told at the computer");
+                idle = 5;
+                Require(Answer(keptAsk, 3000, "somebody came back") == "" && reach.KeptNow().Length == 0, "and no longer once somebody is at the computer");
+                idle = 600;
+                var keptStop = Run("claude", Event("Stop", kept, ",\"last_assistant_message\":\"Done.\""));
+                Require(Until(() => reach.KeptNow().Length == 1 && reach.KeptNow()[0].Status == "waiting", 3000), "a stop that waits for the phone's message is kept too");
+                idle = 5;
+                Require(Answer(keptStop, 3000, "somebody came back to it") == "" && reach.KeptNow().Length == 0, "until it is let go");
+
+                // ---- where its owner switched that off, a request of Codex's is not kept: Codex asks its hooks before
                 // it shows its question, and kept it shows a running hook. It shows its own question at once then, and
                 // the phone is told that it asks, at the computer. Claude Code's is kept as ever: beside its own question.
                 string unkept = Guid.NewGuid().ToString(), beside = Guid.NewGuid().ToString();
@@ -184,11 +199,12 @@ public static class ReachCheck {
                 Require(Refused(() => reach.Answer("codex", unkept, codex(unkept).AskId, true)).Contains("只能在电脑上"), "which the phone cannot answer");
                 var shown = Run("claude", Request(beside, "npm test", ""));
                 Require(Until(() => claude(beside) != null && claude(beside).Status == "confirm" && claude(beside).Answerable, 3000), "Claude Code's request is the phone's to answer all the same");
+                Require(claude(beside).Beside && !claude(beside).Kept && reach.KeptNow().Length == 0, "with nothing to explain at the computer: its own question is there");
                 reach.Answer("claude", beside, claude(beside).AskId, true);
                 Require(Answer(shown, 3000, "allowed from the phone").Contains("\"behavior\":\"allow\""), "and is answered");
                 asks = true;
                 var chosen = new Dictionary<string, object> { { "ReachWait", 300 }, { "ReachAsk", true } };
-                Require(Reach.Kept.From(chosen).AtStop == 300 && Reach.Kept.From(chosen).Requests && Reach.Kept.From(null).AtStop == 0 && !Reach.Kept.From(null).Requests && !Reach.Kept.From(new Dictionary<string, object> { { "ReachAsk", "yes" } }).Requests && !new Reach.Kept().Requests, "what is kept for the phone, as the settings keep it: nothing unless chosen");
+                Require(Reach.Kept.From(chosen).AtStop == 300 && Reach.Kept.From(chosen).Requests && Reach.Kept.From(null).AtStop == 0 && Reach.Kept.From(null).Requests && new Reach.Kept().Requests && !Reach.Kept.From(new Dictionary<string, object> { { "ReachAsk", false } }).Requests && !Reach.Kept.From(new Dictionary<string, object> { { "ReachAsk", "False" } }).Requests, "what is kept for the phone, as the settings keep it: a request unless switched off, no wait unless chosen");
 
                 // ---- a conversation in one of the program's own terminals is at the phone already, in that terminal:
                 // nothing of it is kept, whoever is or is not at the computer and whatever time was chosen
