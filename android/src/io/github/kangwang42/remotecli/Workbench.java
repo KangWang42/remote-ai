@@ -327,6 +327,7 @@ final class Workbench {
                 made.said = entry.optString(terminal ? "said" : "last");
                 JSONArray reach = terminal ? null : entry.optJSONArray("reach");
                 made.reached = reach != null;
+                made.canTakeover = entry.optBoolean("can_takeover");
                 made.folder = entry.optString("folder");
                 made.now = terminal || entry.optBoolean("now", true);
                 if (!terminal) { made.origin = entry.optString("origin"); made.kind = entry.optString("kind"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
@@ -416,7 +417,7 @@ final class Workbench {
             for (AggregateSessions.Thing task : part) {
                 all.add(task);
                 mark.append(task.url).append('\n').append(task.entry.id).append('\n').append(task.kind).append('\n').append(task.entry.shownTitle()).append('\n').append(task.computer).append('\n')
-                    .append(AggregateSessions.where(task.entry)).append('\n').append(task.entry.pinned).append(task.entry.hidden).append(ending.contains(task.url + '\n' + task.entry.id)).append('\n');
+                    .append(AggregateSessions.where(task.entry)).append('\n').append(task.entry.pinned).append(task.entry.hidden).append(task.entry.canTakeover).append(ending.contains(task.url + '\n' + task.entry.id)).append('\n');
                 if (!task.running()) mark.append(AggregateSessions.ago(AggregateSessions.recent(task.entry), now)).append('\n');
             }
         }
@@ -590,7 +591,7 @@ final class Workbench {
         if (marks && "history".equals(task.kind)) { labels.add(entry.hidden ? "取消隐藏" : "从列表隐藏"); does.add("hide"); }
         if (entry.apart()) { labels.add("把 " + entry.place() + " 加为项目"); does.add("add"); }
         int danger = -1;
-        if (entry.terminal && "running".equals(entry.state)) { danger = labels.size(); labels.add("结束终端"); does.add("end"); }
+        if (entry.canEnd(snapshot != null && snapshot.can.contains("end"))) { danger = labels.size(); labels.add(entry.terminal ? "结束终端" : "结束电脑上的这段对话"); does.add("end"); }
         // a saved conversation of a project that nothing has open can be put away (the computer keeps it recoverable)
         if (snapshot != null && snapshot.can.contains("delete") && "history".equals(task.kind) && !entry.terminal && !entry.project.isEmpty()) { danger = labels.size(); labels.add("删除对话"); does.add("delete"); }
         if (labels.isEmpty()) return;
@@ -727,7 +728,9 @@ final class Workbench {
     private void stopTask(AggregateSessions.Thing task) {
         final String key = task.url + '\n' + task.entry.id;
         if (ending.contains(key)) return;
-        kit.sheet("结束“" + task.entry.shownTitle() + "”？", "", new String[]{"结束终端"}, null, 0,
+        Snapshot snapshot = snapshots.get(task.url);
+        if (!task.entry.canEnd(snapshot != null && snapshot.can.contains("end"))) return;
+        kit.sheet("结束“" + task.entry.shownTitle() + "”？", "正在执行的任务会被中断；已保存的对话记录保留。", new String[]{task.entry.terminal ? "结束终端" : "结束电脑上的这段对话"}, null, 0,
             which -> { if (which == 0 && ending.add(key)) { redraw(); closeRemote(task, key); } });
     }
     private void closeRemote(AggregateSessions.Thing task, String key) {
@@ -735,6 +738,11 @@ final class Workbench {
         activity.net.execute(() -> {
             String problem = "";
             try {
+                if (!task.entry.terminal) {
+                    JSONObject op = new JSONObject().put("action", "end").put("id", UUID.randomUUID().toString().replace("-", "")).put("session", task.entry.id);
+                    // Conversation operations return their result once. Do not retry a timeout as a second close.
+                    post(task.url + "/api/conversation", cookie, op, 40000);
+                } else {
                 JSONObject op = new JSONObject().put("action", "close").put("id", UUID.randomUUID().toString().replace("-", "")).put("terminal", task.entry.id);
                 JSONObject result = null;
                 long deadline = System.nanoTime() + 30_000_000_000L;
@@ -748,7 +756,8 @@ final class Workbench {
                     Thread.sleep(400);
                 }
                 if (result == null || "queued".equals(result.optString("state"))) throw new Exception("电脑没有响应，请稍后重试");
-            } catch (Exception error) { problem = error.getMessage() == null ? "结束终端失败，请稍后重试" : error.getMessage(); }
+                }
+            } catch (Exception error) { problem = error.getMessage() == null ? "结束失败，请刷新后确认当前状态" : error.getMessage(); }
             final String message = problem;
             activity.runOnUiThread(() -> { ending.remove(key); if (!message.isEmpty()) android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show(); redraw(); refresh(); });
         });

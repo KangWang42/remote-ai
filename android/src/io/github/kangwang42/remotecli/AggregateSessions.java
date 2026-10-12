@@ -21,7 +21,10 @@ final class AggregateSessions {
          * A conversation that a program on the computer has open, of which its tool tells (the relay's `reach`): it
          * is at work there like a terminal, and stands among the tasks by how it stands. canSay: a message can be left for it.
          */
-        boolean reached, canSay;
+        boolean reached, canSay, canTakeover;
+        boolean canEnd(boolean supported) {
+            return terminal ? "running".equals(state) : supported && live && canTakeover && attached.isEmpty();
+        }
         /**
          * Whether a conversation that a program on the computer holds is in use now (the computer says: at work, asking,
          * in a window of its own, or used a moment ago). A desktop app keeps every conversation it has loaded held; one
@@ -276,7 +279,7 @@ final class AggregateSessions {
                 for (Entry entry : entries) {
                     add(key, entry.id); add(key, entry.shownTitle()); add(key, entry.tool);
                     add(key, label(entry.kind(seen))); add(key, entry.host); add(key, entry.origin);
-                    add(key, entry.folder); key.append(entry.pinned ? 'p' : '-').append(entry.hidden ? 'h' : '-');
+                    add(key, entry.folder); key.append(entry.pinned ? 'p' : '-').append(entry.hidden ? 'h' : '-').append(entry.canTakeover ? 'e' : '-');
                     if (entries == project.history || entries == project.ended) add(key, ago(recent(entry), System.currentTimeMillis()));
                 }
             }

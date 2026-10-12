@@ -177,6 +177,10 @@ dialog.window .reading .pick button[aria-pressed="true"] { background: var(--rai
 dialog.window .bar .who { flex: 1; min-width: 0; }
 dialog.window .bar h3 { font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 dialog.window .bar .stands { color: var(--muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sheet-form .control-mode { margin: 2px 0; padding: 8px 11px; border: 1px solid var(--line); border-radius: 11px; color: var(--muted); background: var(--panel); font-size: .78rem; line-height: 1.35; }
+#sheet-form .control-mode.shared { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+#sheet-form .control-mode.saved { border-style: dashed; }
+dialog.window .phone-delivery { display: block; margin-top: 5px; color: var(--muted); font-size: .73rem; }
 dialog.window #sheet-form .said { max-height: none; min-height: 0; height: 100%; border: 0; background: transparent; padding: 6px 2px; }
 /* what was said fills what is left of the window; over its lower edge, the way back to what was said last */
 dialog.window .reads { position: relative; min-height: 0; }

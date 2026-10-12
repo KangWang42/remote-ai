@@ -292,8 +292,8 @@ def main():
         assert page_value(PICKS) is None and abs(page_value(READ)["size"] - 0.93) < 0.02
         page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '把结论再写短一点'; document.querySelector('#sheet .write button.solid').click(); return 1; })()")
         # what is written stands in the window at once, while it is still on its way
-        assert page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.mine'); return mine.length === 1 && mine[0].textContent === '把结论再写短一点' && document.querySelector('#sheet .write button.solid').disabled; })()"), "shown at once"
-        until(lambda: page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.user'); return mine.length && mine[mine.length - 1].textContent === '把结论再写短一点' && !document.querySelector('#sheet .write button.solid').disabled; })()"), 30, "what was written stands in the window as what the user said")
+        assert page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.mine'); return mine.length === 1 && mine[0].querySelector('.plain').textContent === '把结论再写短一点' && mine[0].querySelector('.phone-delivery').textContent === '手机消息 · 正在送达' && document.querySelector('#sheet .write button.solid').disabled; })()"), "shown at once with delivery state"
+        until(lambda: page_value("(() => { const said = document.querySelector('#sheet .said'); return said && said.textContent.includes('把结论再写短一点') && !document.querySelector('#sheet .write button.solid').disabled; })()"), 30, "what was written stands in the window as what the user said")
         if out:
             # the picture for the guide, in the size of its other pictures
             ask("Emulation.setDeviceMetricsOverride", width=500, height=960, deviceScaleFactor=1, mobile=True)
@@ -451,7 +451,7 @@ def main():
         page_value("(() => { %s('整理读书笔记').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
         offered = until(lambda: page_value(SHEET), 5, "what can be done with the one outside")
         report["offered_for_the_one_outside"] = offered
-        assert offered == ["置顶", "接到手机终端（电脑上已关闭时）", "另开一份到手机终端", "把 reading-notes 加为项目"], offered
+        assert offered == ["置顶", "另开一份到手机终端", "把 reading-notes 加为项目"], offered
         assert page_value("document.querySelectorAll('#sheet small, #sheet p').length") == 0, "no lines of explanation"
         choose("另开一份到手机终端")
         apart = until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["dir"] == "" and t["state"] == "running"), None), 30,
@@ -509,7 +509,7 @@ def main():
         # ---- the folder of the conversation that is open outside every project is made one
         page_value("(() => { %s('整理读书笔记').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
         offered = until(lambda: page_value(SHEET), 5, "the sheet of the one outside")
-        assert offered == ["置顶", "接到手机终端（电脑上已关闭时）", "另开一份到手机终端", "把 reading-notes 加为项目"], offered
+        assert offered == ["置顶", "另开一份到手机终端", "把 reading-notes 加为项目"], offered
         choose("把 reading-notes 加为项目")
         joined = lists(lambda seen: seen["projects"] and "reading-notes" in seen["projects"], "its folder is a project")
         until(lambda: (lambda card: card and not card["apart"] and card["meta"][0] == "reading-notes")(about("整理读书笔记")), 30, "the conversation is the project's own")
