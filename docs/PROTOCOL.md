@@ -205,7 +205,7 @@ that has it open:
 
 ```json
 {"title": "...", "updated": 1700000000000, "more": false,
- "messages": [{"role": "user", "text": "..."}, {"role": "assistant", "text": "..."}, {"role": "tool", "text": "Bash：npm test"}]}
+ "messages": [{"role": "user", "text": "..."}, {"role": "thought", "text": "..."}, {"role": "tool", "text": "Bash：run the tests", "detail": "npm test", "result": "12 passed"}, {"role": "assistant", "text": "..."}]}
 ```
 
 The last 40 things the user and the tool said to each other, each of at most 1,500 characters, oldest first, with what
@@ -218,6 +218,12 @@ With `"action": "say"` or `"action": "answer"` the same request acts on a conver
 `reach` (the computer needs the `reach` capability). Neither takes the conversation from the program that has it:
 it stays open on the computer and is used there as before.
 
+- `messages[].role` is `user`, `assistant`, `tool` (one step of the tool's: for Claude Code its name and what it is
+  for, or else its command or file; for Codex the command that ran, or the files read or changed, as Codex notes
+  them for its own window; with `detail`, the command itself where the step is told by something else, and
+  `result`, the first lines of what came back, six at most, where there are any) or `thought` (what the tool said of its work between its steps: the summary Claude Code
+  keeps of its thinking, where it keeps one, and Codex's of its reasoning). A page that knows no `thought` shows it
+  as it shows `assistant`.
 - Without an action (or with `"read"`) the answer is what was last said in it: `{"messages": [...], "more": false,
   "title": "...", "stamp": "<the computer's word for how its file was>", "status": "busy"}`. A page that follows a
   conversation asks again every moment and says what it has, `"since": "<that stamp>"`: the computer then answers

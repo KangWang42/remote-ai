@@ -26,3 +26,12 @@ assert.match(page, /<details id="background" class="held-sessions"/);
 assert.match(page, /电脑上闲置或被占用的对话/);
 assert.match(app, /DOMPurify\.sanitize\(marked\.parse\(/, 'what a tool said is set as text from Markdown, and only after it has been made harmless');
 console.log('session state checks passed');
+// Into a terminal of the phone's, from the conversation's own window: offered for one that runs in a terminal on the
+// computer, which the computer closes for it, at work or not; one that an app has is not closed under the app.
+assert.match(app, /const inTerminal = session => sourceOfKind\(session\.kind \|\| ''\) === 'term';/);
+assert.match(app, /className: 'icon take', ariaLabel: '接到手机终端', html: ICON\.shell, hidden: session\.can_takeover !== true \|\| !inTerminal\(session\)/, 'the window offers it for a terminal\'s conversation only');
+assert.match(app, /session\.can_takeover === true && \(!locked \|\| inTerminal\(session\)\) \? \{ label: '接到手机终端（关闭电脑上的）', value: 'close' \}/, 'and a held press says that the computer closes it');
+assert.match(app, /const current = now\(\); finish\(null\); into\(current, 'close'\);/, 'the window is left, and the terminal started with the conversation');
+// The steps of a conversation stand open, each with its command and the first lines of what came back.
+assert.match(app, /el\('details', \{ className: 'did', open: true \}/, 'what the tool did is shown, not folded away');
+assert.match(app, /m\.detail \? el\('code', \{ className: 'ran', textContent: m\.detail \}\) : '', m\.result \? el\('pre', \{ className: 'got', textContent: m\.result \}\) : ''/);

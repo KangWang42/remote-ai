@@ -300,6 +300,44 @@ class Pure(unittest.TestCase):
         self.assertEqual((len(shown), shown[:4], shown[32:34], shown[-1], work["more"]),
                          (40, ["user:开始吧", "assistant:先看看现状。", "tool:更早的 15 个操作", "tool:Bash：step 16"], ["tool:Bash：step 45", "assistant:找到原因了。"], "assistant:改好了。", True))
         self.assertEqual(agent.talk([], 40, 30), [])
+        # What the tool said of its work between its steps (the summary Claude Code keeps of its thinking, where it
+        # keeps one) is given; a step is told by what it is for, where the tool says so.
+        silent = os.path.join(home, "silent.jsonl")
+        part = lambda piece: json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [piece]}}, ensure_ascii=False)
+        with open(silent, "w", encoding="utf-8") as stream:
+            stream.write("\n".join([json.dumps({"type": "user", "message": {"role": "user", "content": "比一下两个版本"}}, ensure_ascii=False),
+                                    part({"type": "thinking", "thinking": "", "signature": "x"}),
+                                    part({"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "python compare.py", "description": "对比 4.0 和 2.0 的结果"}}),
+                                    json.dumps({"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "t1", "type": "tool_result", "content": "step 1 same\nstep 3 differs\n"}]}}),
+                                    part({"type": "thinking", "thinking": "已对比：差别在第三步。"}),
+                                    part({"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "step3.R"}}),
+                                    # what came back is long, and its row is not read: its first lines are taken all the same
+                                    '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t2","type":"tool_result","content":[{"type":"text","text":"     1\\tlibrary(\\"dplyr\\")\\n     2\\t# \\u4e2d\\n' + "".join("     %d\\tx <- %d\\n" % (n, n) for n in range(3, 400)) + '"}]}]}}',
+                                    part({"type": "thinking", "thinking": "想" * 700}),
+                                    part({"type": "text", "text": "差别在第三步。"})]) + "\n")
+        shown = ["%s:%s" % (m["role"], m["text"] if len(m["text"]) < 30 else len(m["text"])) for m in agent.said(silent, "claude")["messages"]]
+        self.assertEqual(shown, ["user:比一下两个版本", "tool:Bash：对比 4.0 和 2.0 的结果", "thought:已对比：差别在第三步。", "tool:Read：step3.R", "thought:%d" % agent.SAID_NOTED, "assistant:差别在第三步。"])
+        # a step as a terminal would show it: the command itself where it is told by what it is for, and the first lines of what came back
+        steps = [m for m in agent.said(silent, "claude")["messages"] if m["role"] == "tool"]
+        self.assertEqual((steps[0].get("detail"), steps[0].get("result")), ("python compare.py", "step 1 same\nstep 3 differs"))
+        self.assertEqual((steps[1].get("detail"), steps[1].get("result")), (None, '     1\tlibrary("dplyr")\n     2\t# 中\n     3\tx <- 3\n     4\tx <- 4\n     5\tx <- 5\n     6\tx <- 6\n…'))
+        self.assertEqual((agent.first("a\n" + "x" * 300 + "\nb"), agent.first(" \n\n"), agent.begins('{"type":"tool_result"}', 1)), ("a\n" + "x" * 200 + "…\nb", "", ""))
+        # Codex's steps by what they were, as it notes them for its own window; the calls that only wrap them are passed over
+        stepped = os.path.join(home, "stepped.jsonl")
+        item = lambda **noted: json.dumps({"type": "event_msg", "payload": {"type": "item_completed", "item": noted}}, ensure_ascii=False)
+        with open(stepped, "w", encoding="utf-8") as stream:
+            stream.write("\n".join([json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "比一下"}]}}, ensure_ascii=False),
+                                    json.dumps({"type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "**对比两个版本**"}]}}, ensure_ascii=False),
+                                    json.dumps({"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec", "input": "x"}}),
+                                    item(type="CommandExecution", command=["sh", "-c", "Rscript compare.R"], parsed_cmd=[{"type": "unknown", "cmd": "Rscript compare.R"}]),
+                                    item(type="CommandExecution", command=["cat", "a.R"], parsed_cmd=[{"type": "read", "cmd": "cat a.R", "name": "a.R", "path": "/work/a.R"}]),
+                                    item(type="CommandExecution", command=["git", "status"], parsed_cmd=[], aggregated_output="fatal: not a git repository\n", exit_code=128),
+                                    item(type="FileChange", changes={"/work/a.R": {"type": "update"}, "/work/src/b.R": {"type": "add"}}),
+                                    json.dumps({"type": "response_item", "payload": {"type": "function_call", "name": "request_user_input", "arguments": "{}"}}),
+                                    json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "差别在第三步。"}]}}, ensure_ascii=False)]) + "\n")
+        self.assertEqual(["%s:%s" % (m["role"], m["text"]) for m in agent.said(stepped, "codex")["messages"]],
+                         ["user:比一下", "thought:**对比两个版本**", "tool:运行：Rscript compare.R", "tool:读取：a.R", "tool:运行：git status", "tool:修改：a.R、b.R", "tool:request_user_input", "assistant:差别在第三步。"])
+        self.assertEqual(agent.said(stepped, "codex")["messages"][4].get("result"), "（退出码 128）\nfatal: not a git repository")
         with open(os.path.join(rollouts, "rollout-2026-10-09T10-00-00-%s.jsonl" % codex), "a", encoding="utf-8") as stream:
             for payload in (
                 {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "规则"}]},

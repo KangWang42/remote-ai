@@ -69,7 +69,7 @@ def main():
     homes.codex_saved(notes, WORKING, "整理读书笔记", 0, held=True)
     homes.codex_saved(thesis, HELD, "被占着的对话", 3, held=True)
     # a conversation of Claude Code's that the desktop app has loaded and nobody is at: a process keeps it, half an hour after it was last used
-    homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5, said=("结算页的金额有时多出一位小数，帮我看看", "好的。问题在 `formatPrice`：金额从分换算成元之后没有固定两位小数。\n\n- 换算后统一用 `toFixed(2)`\n- 在 `cart.test.js` 补了一条用例\n\n要顺便检查优惠券那里的金额吗？"))
+    homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5, said=("结算页的金额有时多出一位小数，帮我看看", "好的。问题在 `formatPrice`：金额从分换算成元之后没有固定两位小数。\n\n- 换算后统一用 `toFixed(2)`\n- 在 `cart.test.js` 补了一条用例\n\n要顺便检查优惠券那里的金额吗？"), worked=({"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "node compare.js --old 2.0 --new 4.0", "description": "对比两版的金额"}}, {"type": "tool_result", "tool_use_id": "t1", "content": "2.0: 12.50\n4.0: 12.5\ndiffers in 3 of 40 rows\n" + "row\n" * 30}, {"type": "thinking", "thinking": "已对比两版：差别在金额的换算。", "signature": "x"}, {"type": "thinking", "thinking": "", "signature": "x"}, {"type": "tool_use", "name": "Read", "input": {"file_path": "C:/Users/someone/Documents/projects/web-shop/src/checkout/components/price/formatPriceWithCurrencyAndRounding.test.js"}}))
     homes.claude_open(shop, IDLE, version="2.1.283")        # a Claude Code that takes the phone's words as added context at a stop
     removed = Path(temp.name) / "removed"            # where a conversation that is deleted goes here, in place of the recycle bin
     environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600", REMOTECLI_REMOVED=str(removed))       # nobody is at the computer
@@ -251,9 +251,21 @@ def main():
         assert window["window"] and window["tall"] > 0.98 and window["choices"] == 0 and window["small"] == [] and window["box"] == "发消息" and window["head"] == "Claude 桌面版 · web-shop", window
         until(lambda: "好的。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 10, "what was said in it")
         picture("conversation.png")
-        # at the top right, as on a terminal's page: the files of its project, and how it is read
+        # what it said of its work between its steps stands there, quieter; its steps by what they are for. And
+        # nothing is wider than the window, whatever the length of a command or a path without a space in it.
+        SHAPE = "(() => { const s = document.querySelector('#sheet .said'); const wide = Array.from(document.querySelectorAll('#sheet-form, #sheet .bar, #sheet .said, #sheet .said *')).filter(e => e.getBoundingClientRect().right > innerWidth + 1 && !e.closest('.wide, pre')).map(e => e.tagName + '.' + e.className);" \
+                " return { thought: Array.from(s.querySelectorAll('.turn.thought .plain')).map(e => e.textContent), steps: Array.from(s.querySelectorAll('details.did li')).map(e => [e.querySelector('.what').textContent.slice(0, 24), (e.querySelector('.ran') || {}).textContent || '', ((e.querySelector('.got') || {}).textContent || '').split('\\n').length, e.getBoundingClientRect().height > 0]), open: Array.from(s.querySelectorAll('details.did')).every(d => d.open), wide: wide, across: document.getElementById('sheet-form').scrollWidth - innerWidth, corner: document.querySelector('#sheet .bar .type').getBoundingClientRect().right <= innerWidth }; })()"
+        shape = page_value(SHAPE)
+        report["window_holds_its_width"] = shape
+        # a step stands open, as a terminal would show it: what it is for, the command itself, the first lines of what came back
+        assert shape["thought"] == ["已对比两版：差别在金额的换算。"] and len(shape["steps"]) == 2 and shape["open"], shape
+        assert shape["steps"][0] == ["Bash：对比两版的金额", "node compare.js --old 2.0 --new 4.0", 7, True] and shape["steps"][1][0].startswith("Read：C:/Users/someone") and shape["steps"][1][1:] == ["", 1, True], shape
+        assert shape["wide"] == [] and shape["across"] <= 0 and shape["corner"], shape
+        picture("conversation-steps.png")
+        # at the top right, as on a terminal's page: the files of its project, and how it is read. (Into a terminal
+        # of the phone's is offered there for a conversation that runs in a terminal on the computer: not for an app's.)
         corner = page_value("(() => Array.from(document.querySelectorAll('#sheet .bar > button')).slice(1).map(b => [b.getAttribute('aria-label'), b.hidden || !b.offsetParent]))()")
-        assert corner == [["查看项目文件", False], ["字体和版式", False]], corner
+        assert corner == [["接到手机终端", True], ["查看项目文件", False], ["字体和版式", False]], corner
         # how it is read: behind "Aa", the type, its size and the spacing of the lines; what is chosen is kept
         PICKS = "(() => { const r = document.querySelector('#sheet .reading.format'); return r.hidden ? null : Array.from(r.querySelectorAll('.pick')).map(g => Array.from(g.querySelectorAll('button')).map(b => (b.getAttribute('aria-pressed') === 'true' ? '*' : '') + b.textContent)); })()"
         pick = lambda group, text: page_value("(() => { Array.from(document.querySelectorAll('#sheet .reading.format .pick')[%d].querySelectorAll('button')).find(b => b.textContent === %s).click(); return 1; })()" % (group, json.dumps(text, ensure_ascii=False)))

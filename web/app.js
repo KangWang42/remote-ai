@@ -247,10 +247,13 @@
   // Going on with a conversation that a program on the computer has, in a terminal of the phone's: that takes it from
   // the program, or goes on with a copy. It is no part of the conversation's window, which works beside the program;
   // a held press on its card offers it. Each choice says in its own words what happens on the computer.
+  const inTerminal = session => sourceOfKind(session.kind || '') === 'term';
   function ways(session) {
     const locked = sessionActivity(session) === 'locked' && session.now !== false, choices = [];
     if (!session.live) return choices;
-    choices.push(session.can_takeover === true && !locked ? { label: '接到手机终端（关闭电脑上的）', value: 'close' } : { label: '接到手机终端（电脑上已关闭时）', value: 'close' });
+    // one that runs in a terminal on the computer is closed there by the computer, at work or not; one that an app
+    // has, only while the app is not at it
+    choices.push(session.can_takeover === true && (!locked || inTerminal(session)) ? { label: '接到手机终端（关闭电脑上的）', value: 'close' } : { label: '接到手机终端（电脑上已关闭时）', value: 'close' });
     if (session.tool === 'codex' && (data.device.features || []).includes('codex-fork')) choices.push({ label: '另开一份到手机终端', value: 'copy' });
     return choices;
   }
@@ -277,13 +280,22 @@
     let run = null, last = '';
     messages.forEach(m => {
       if (m.role === 'tool') {
-        if (!run) { run = { list: el('ul'), count: 0 }; run.box = el('details', { className: 'did' }, el('summary'), run.list); box.append(run.box); }
-        run.list.append(el('li', { textContent: m.text })); run.count++;
+        // The steps stand open, each as a terminal would show it: what it is, the command itself where it is told
+        // by what it is for, and the first lines of what came back. The line above them folds a run away.
+        if (!run) { run = { list: el('ul'), count: 0 }; run.box = el('details', { className: 'did', open: true }, el('summary'), run.list); box.append(run.box); }
+        run.list.append(el('li', null, el('span', { className: 'what', textContent: m.text }),
+          m.detail ? el('code', { className: 'ran', textContent: m.detail }) : '', m.result ? el('pre', { className: 'got', textContent: m.result }) : ''));
+        run.count++;
         run.box.firstChild.textContent = '做了 ' + run.count + ' 个操作';
-        run.box.open = run.count <= 3;          // a few are shown; a long run is opened by a tap
         return;
       }
       run = null;
+      // what the tool said of its work between its steps: a quieter line of its own, under the tool's name like its answers
+      if (m.role === 'thought') {
+        box.append(el('div', { className: 'turn assistant thought' }, last !== 'assistant' ? el('b', { textContent: toolName }) : '', el('div', { className: 'plain', textContent: m.text })));
+        last = 'assistant';
+        return;
+      }
       const mine = m.role === 'user';
       box.append(el('div', { className: 'turn ' + (mine ? 'user' : 'assistant') },
         !mine && last !== 'assistant' ? el('b', { textContent: toolName }) : '', set(m.text)));
@@ -314,6 +326,10 @@
           const made = (data.device.projects || []).find(p => samePath(p.path, session.folder));
           if (made) files(made.name); else toast('已加为项目');
         } }, el('span', { textContent: '加为项目并查看文件' })));
+      // into a terminal of the phone's: for one that runs in a terminal on the computer, which the computer closes
+      // for it. There it is typed into and seen as a terminal shows it. (Any other way is behind a held press.)
+      const taking = el('div', { className: 'reading take', hidden: true }, el('span', { textContent: '关闭电脑上的这段对话，在手机终端里继续' }),
+        el('button', { type: 'button', className: 'solid', onclick: () => { const current = now(); finish(null); into(current, 'close'); } }, el('span', { textContent: '接到手机终端' })));
       // how it is read: chosen behind "Aa", kept with the look (in the app for every computer)
       const format = el('div', { className: 'reading format', hidden: true });
       Object.keys(READ).forEach(key => {
@@ -329,13 +345,17 @@
         // at the top right, as on a terminal's page: the files of its project, and how it is read. The phone is shown
         // the files of projects only: for a conversation outside every project the folder offers to make its folder
         // one, and opens the files then.
+        el('button', { type: 'button', className: 'icon take', ariaLabel: '接到手机终端', html: ICON.shell, hidden: session.can_takeover !== true || !inTerminal(session), onclick: () => {
+          if (!usable()) return toast('电脑离线，暂时不能接到手机');
+          outside.hidden = format.hidden = true; taking.hidden = !taking.hidden;
+        } }),
         el('button', { type: 'button', className: 'icon files', ariaLabel: '查看项目文件', html: ICON.folder, hidden: !(session.dir || session.folder) || !(data.device.features || []).includes('files'), onclick: () => {
           if (!usable()) return toast('电脑离线，暂时无法查看文件');
           const current = now();
           if (current.dir) return files(current.dir);
           outside.hidden = !outside.hidden;
         } }),
-        el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), outside, format), said, asks, below, write);
+        el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), taking, outside, format), said, asks, below, write);
       // ---- what is said there
       // The window asks the computer for the conversation itself, again and again while it is open, and says what
       // it has (`since`): the computer gives it anew only when it changed, with how it stands. So what is said on

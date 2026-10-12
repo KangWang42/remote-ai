@@ -22,13 +22,16 @@ class Homes:
     def environment(self, **more):
         return dict(os.environ, PYTHONUTF8="1", CLAUDE_CONFIG_DIR=str(self.claude), CODEX_HOME=str(self.codex), **more)
 
-    def claude_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), entry=None):
+    def claude_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), entry=None, worked=()):
         """A conversation Claude Code saved for a folder, named, and last used that many hours ago. `entry`: what
-        started it, as Claude Code notes it with the folder in every row ("cli", "claude-desktop-3p")."""
+        started it, as Claude Code notes it with the folder in every row ("cli", "claude-desktop-3p"). `worked`:
+        parts of what it did before it answered, as Claude Code writes them (tool_use, thinking)."""
         saved = self.claude / "projects" / re.sub("[^a-zA-Z0-9]", "-", str(folder))
         saved.mkdir(parents=True, exist_ok=True)
         noted = {"cwd": str(folder), "entrypoint": entry} if entry else {}
-        rows = [dict({"type": "user", "message": {"role": "user", "content": said[0]}}, **noted), {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": said[1]}]}},
+        rows = [dict({"type": "user", "message": {"role": "user", "content": said[0]}}, **noted)] + [
+                {"type": "user" if part.get("type") == "tool_result" else "assistant", "message": {"role": "user" if part.get("type") == "tool_result" else "assistant", "content": [part]}} for part in worked] + [
+                {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": said[1]}]}},
                 {"type": "ai-title", "aiTitle": title, "sessionId": session}]
         path = saved / (session + ".jsonl")
         path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")

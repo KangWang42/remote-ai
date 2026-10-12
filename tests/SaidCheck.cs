@@ -82,6 +82,68 @@ public static class SaidCheck {
                 "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"部署好了\"}]}}");
             Require(Shown(TerminalAgent.Said(codex, "codex")) == "user:部署一下 | tool:shell | assistant:部署好了", "codex: " + Shown(TerminalAgent.Said(codex, "codex")));
 
+            // A conversation that works without a word of answer between its steps: what it says of its work is
+            // kept by Claude Code as "thinking" (a short summary, or nothing), by Codex as the summary of its
+            // reasoning. That is shown, as said; a step is shown by what it is for where the tool says so.
+            string silent = Write(folder, "silent.jsonl",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"比一下两个版本\"}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"abc\"}]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"python compare.py --a 4.0 --b 2.0\",\"description\":\"对比 4.0 和 2.0 的结果\"}}]}}",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"t1\",\"type\":\"tool_result\",\"content\":\"step 1 same\\nstep 2 same\\nstep 3 differs\\r\\n\\n\"}]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"已对比 4.0 和 2.0：差别在第三步。\",\"signature\":\"abc\"}]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"Read\",\"input\":{\"file_path\":\"step3.R\"}}]}}",
+                // what came back is long, and its row is not read: its first lines are taken all the same
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"t2\",\"type\":\"tool_result\",\"content\":[{\"type\":\"text\",\"text\":\"     1\\tlibrary(\\\"dplyr\\\")\\n     2\\t# 第三步 \\u4e2d\\n" + String.Concat(Enumerable.Range(3, 400).Select(n => "     " + n + "\\tx <- " + n + "\\n")) + "\"}]}]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t3\",\"name\":\"Bash\",\"input\":{\"command\":\"Rscript step3.R\"}}]}}",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"t3\",\"type\":\"tool_result\",\"content\":\"\"}]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"" + new string('想', 700) + "\"}]}}",
+                "{\"type\":\"assistant\",\"isSidechain\":true,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"子任务里的\"}]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"差别在第三步。\"}]}}");
+            var worked = ((IEnumerable)TerminalAgent.Said(silent, "claude")["messages"]).Cast<Dictionary<string, object>>().ToList();
+            Require(String.Join(" | ", worked.Select(m => m["role"] + ":" + (((string)m["text"]).Length > 30 ? ((string)m["text"]).Length + " letters" : m["text"]))) ==
+                "user:比一下两个版本 | tool:Bash：对比 4.0 和 2.0 的结果 | thought:已对比 4.0 和 2.0：差别在第三步。 | tool:Read：step3.R | tool:Bash：Rscript step3.R | thought:600 letters | assistant:差别在第三步。",
+                "what it said of its work, and its steps by what they are for: " + String.Join(" | ", worked.Select(m => m["role"] + ":" + m["text"])).Substring(0, 200));
+            // a step as a terminal would show it: the command itself where the step is told by what it is for, and
+            // the first lines of what came back (six at most; nothing where nothing came back)
+            Func<Dictionary<string, object>, string, string> of = (m, key) => m.ContainsKey(key) ? (string)m[key] : null;
+            Require(of(worked[1], "detail") == "python compare.py --a 4.0 --b 2.0" && of(worked[1], "result") == "step 1 same\nstep 2 same\nstep 3 differs", "the command and what came back: " + of(worked[1], "detail") + " / " + of(worked[1], "result"));
+            Require(of(worked[3], "detail") == null && of(worked[3], "result") == "     1\tlibrary(\"dplyr\")\n     2\t# 第三步 中\n     3\tx <- 3\n     4\tx <- 4\n     5\tx <- 5\n     6\tx <- 6\n…", "the first lines of a long one, from a row that is not read: " + of(worked[3], "result"));
+            Require(of(worked[4], "detail") == null && of(worked[4], "result") == null && !worked[2].ContainsKey("result"), "a step told by its command has no second line; nothing came back, nothing is shown");
+            // of a long conversation only the latest steps carry what came back
+            var long_ = new List<string> { "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"开始\"}}" };
+            for (int n = 1; n <= 60; n++) {
+                long_.Add("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"s" + n + "\",\"name\":\"Bash\",\"input\":{\"command\":\"step " + n + "\"}}]}}");
+                long_.Add("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"s" + n + "\",\"type\":\"tool_result\",\"content\":\"done " + n + "\"}]}}");
+                if (n % 20 == 0) long_.Add("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"到第 " + n + " 步了\"}]}}");
+            }
+            var many_ = ((IEnumerable)TerminalAgent.Said(Write(folder, "long.jsonl", long_.ToArray()), "claude")["messages"]).Cast<Dictionary<string, object>>().Where(m => (string)m["role"] == "tool").ToList();
+            Require(many_.Count == 60 && many_.Count(m => m.ContainsKey("result")) == TerminalAgent.Results && !many_[19].ContainsKey("result") && (string)many_[20]["result"] == "done 21" && (string)many_[59]["result"] == "done 60", "what came back, for the last forty steps: " + many_.Count(m => m.ContainsKey("result")));
+            Require(TerminalAgent.First("a\n" + new string('x', 300) + "\nb") == "a\n" + new string('x', 200) + "…\nb" && TerminalAgent.First(" \n\n") == "" && TerminalAgent.First(null) == "" && TerminalAgent.Begins("{\"type\":\"tool_result\",\"content\":\"a\\\\b \\\"c\\\"\"}", 1) == "a\\b \"c\"" && TerminalAgent.Begins("{\"type\":\"tool_result\"}", 1) == "", "the first lines, and the beginning of a row");
+            string summed = Write(folder, "summed.jsonl",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"比一下\"}]}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"**对比两个版本**\"},{\"type\":\"summary_text\",\"text\":\"先看输出。\"}],\"encrypted_content\":\"x\"}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"summary\":[]}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"name\":\"exec\",\"status\":\"completed\"}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"已对比。\"}]}}");
+            Require(Shown(TerminalAgent.Said(summed, "codex")) == "user:比一下 | thought:**对比两个版本**\n\n先看输出。 | tool:exec | assistant:已对比。", "Codex's summary of its reasoning: " + Shown(TerminalAgent.Said(summed, "codex")));
+            // Codex's newer way of working wraps every step in a call named "exec". What the step was, it notes for its
+            // own window as the step ends: the command that ran, the files that were read or changed. Those are shown.
+            string stepped = Write(folder, "stepped.jsonl",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"比一下\"}]}}",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"UserMessage\",\"content\":[{\"type\":\"text\",\"text\":\"比一下\"}]}}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"name\":\"exec\",\"status\":\"completed\",\"input\":\"const r = await tools.shell({});\"}}",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"CommandExecution\",\"command\":[\"powershell.exe\",\"-Command\",\"Rscript compare.R\"],\"parsed_cmd\":[{\"type\":\"unknown\",\"cmd\":\"Rscript compare.R\"}],\"aggregated_output\":\"ok\",\"exit_code\":0}}}",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"CommandExecution\",\"command\":[\"powershell.exe\",\"-Command\",\"Get-Content a.R\"],\"parsed_cmd\":[{\"type\":\"read\",\"cmd\":\"Get-Content a.R\",\"name\":\"a.R\",\"path\":\"C:\\\\work\\\\a.R\"}]}}}",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"CommandExecution\",\"command\":[\"git\",\"status\"],\"parsed_cmd\":[],\"aggregated_output\":\"fatal: not a git repository\\n\",\"exit_code\":128}}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"name\":\"exec\",\"status\":\"completed\"}}",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"FileChange\",\"changes\":{\"C:\\\\work\\\\a.R\":{\"type\":\"update\",\"unified_diff\":\"@@\"},\"C:\\\\work\\\\src\\\\b.R\":{\"type\":\"add\",\"content\":\"x\"}},\"status\":\"completed\"}}}",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"Reasoning\",\"summary_text\":[],\"raw_content\":[]}}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"arguments\":\"{}\"}}",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"AgentMessage\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"text\",\"text\":\"差别在第三步。\"}]}}}",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"差别在第三步。\"}]}}");
+            Require(Shown(TerminalAgent.Said(stepped, "codex")) == "user:比一下 | tool:运行：Rscript compare.R | tool:读取：a.R | tool:运行：git status | tool:修改：a.R、b.R | tool:request_user_input | assistant:差别在第三步。", "Codex's steps by what they were: " + Shown(TerminalAgent.Said(stepped, "codex")));
+            var ran = ((IEnumerable)TerminalAgent.Said(stepped, "codex")["messages"]).Cast<Dictionary<string, object>>().ToList();
+            Require((string)ran[1]["result"] == "ok" && (string)ran[3]["result"] == "（退出码 128）\nfatal: not a git repository" && !ran[2].ContainsKey("result") && !ran[4].ContainsKey("result"), "what came back from Codex's commands, and how one that failed ended");
             // only the last forty things said are given, and it is said that there is more
             string many = Write(folder, "many.jsonl", Enumerable.Range(1, 55).Select(n => "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"第" + n + "句\"}}").ToArray());
             var last = TerminalAgent.Said(many, "claude");

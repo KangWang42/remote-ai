@@ -699,26 +699,52 @@ public sealed class TerminalAgent {
     public static Dictionary<string, object> Said(string path, string tool) {
         // limit: how much of the file's end is read. most: how many things said by the user and the tool are given;
         // what the tool did between them goes with them, of one unbroken run the last `runs`.
-        const int limit = 4 * 1024 * 1024, most = 40, runs = 30, chars = 1500;
+        const int limit = 4 * 1024 * 1024, most = 40, runs = 30, chars = 1500, aside = 600;
         var reader = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
         var said = new List<Dictionary<string, object>>();
         Func<Dictionary<string, object>, string, object> at = (d, k) => { object v; return d != null && d.TryGetValue(k, out v) ? v : null; };
         Action<string, string> add = (role, text) => {
             text = role == "tool" ? Regex.Replace(text ?? "", @"\s+", " ").Trim() : (text ?? "").Trim();
             if (text.Length == 0) return;
-            if (text.Length > chars) text = text.Substring(0, Char.IsHighSurrogate(text[chars - 2]) ? chars - 2 : chars - 1) + "…";
+            int room = role == "thought" ? aside : chars;
+            if (text.Length > room) text = text.Substring(0, Char.IsHighSurrogate(text[room - 2]) ? room - 2 : room - 1) + "…";
             said.Add(new Dictionary<string, object> { { "role", role }, { "text", text } });
         };
         Func<object, object, string> brief = (name, given) => {
             var input = given as Dictionary<string, object>; string about = "";
-            foreach (string key in new[] { "command", "file_path", "path", "pattern", "description", "query", "url" }) { about = at(input, key) as string ?? ""; if (about.Length > 0) break; }
+            // what the step is for, where the tool says it (Bash's description), before the command itself
+            foreach (string key in new[] { "description", "command", "file_path", "path", "pattern", "query", "url" }) { about = at(input, key) as string ?? ""; if (about.Length > 0) break; }
             return (Convert.ToString(name) + (about.Length > 0 ? "：" + (about.Length > 160 ? about.Substring(0, 160) : about) : "")).Trim();
         };
+        // A step as a terminal would show it: besides what it is for, the command itself (`detail`, where the step
+        // is told by something else) and the first lines of what came back (`result`).
+        var steps = new Dictionary<string, Dictionary<string, object>>();
+        Func<string, string, Dictionary<string, object>> step = (text, detail) => {
+            int before = said.Count;
+            add("tool", text);
+            if (said.Count == before) return null;
+            var made = said[said.Count - 1];
+            detail = (detail ?? "").Trim();
+            if (detail.Length > 0 && text.IndexOf(detail.Length > 40 ? detail.Substring(0, 40) : detail, StringComparison.Ordinal) < 0) made["detail"] = detail.Length > 400 ? detail.Substring(0, 400) + "…" : detail;
+            return made;
+        };
+        Action<Dictionary<string, object>, string> came = (made, back) => { string first = First(back); if (made != null && first.Length > 0) made["result"] = first; };
         bool woken = false;
-        foreach (string line in ReadPart(path, true, limit).Split('\n')) {
+        string read = ReadPart(path, true, limit);
+        // Codex notes each step for its own window as it ends (the command that ran, the files changed). Where it
+        // does, the steps are told by those, and the calls that only wrap them ("exec", "shell") are passed over.
+        bool itemized = tool != "claude" && read.IndexOf("\"item_completed\"", StringComparison.Ordinal) >= 0;
+        foreach (string line in read.Split('\n')) {
             if (!line.StartsWith("{", StringComparison.Ordinal)) continue;
-            // What a tool gave back is never shown and fills most of a long conversation: such a row is passed over unread.
-            if (line.Length > 4096 && line.IndexOf(tool == "claude" ? "\"type\":\"tool_result\"" : "\"type\":\"function_call_output\"", 0, 1200, StringComparison.Ordinal) >= 0) continue;
+            // What a tool gave back fills most of a long conversation: of such a row only the beginning is taken, unread.
+            if (line.Length > 4096 && line.IndexOf(tool == "claude" ? "\"type\":\"tool_result\"" : "\"type\":\"function_call_output\"", 0, 1200, StringComparison.Ordinal) >= 0) {
+                if (tool == "claude") {
+                    var whose = Regex.Match(line.Substring(0, 1200), "\"tool_use_id\":\"([^\"]+)\"");
+                    Dictionary<string, object> asked;
+                    if (whose.Success && steps.TryGetValue(whose.Groups[1].Value, out asked)) came(asked, Begins(line, line.IndexOf("\"type\":\"tool_result\"", StringComparison.Ordinal)));
+                }
+                continue;
+            }
             Dictionary<string, object> row;
             try { row = reader.Deserialize<Dictionary<string, object>>(line); } catch (Exception) { continue; }
             string type = at(row, "type") as string;
@@ -757,12 +783,44 @@ public sealed class TerminalAgent {
                 foreach (object item in parts) {
                     var part = item as Dictionary<string, object>; string kind = at(part, "type") as string, text = at(part, "text") as string;
                     if (kind == "text" && text != null) { if (type == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal)) add(type, text); }
-                    else if (kind == "tool_use" && type == "assistant") add("tool", brief(at(part, "name"), at(part, "input")));
+                    else if (kind == "tool_use" && type == "assistant") {
+                        var made = step(brief(at(part, "name"), at(part, "input")), at(at(part, "input") as Dictionary<string, object>, "command") as string);
+                        string id = at(part, "id") as string;
+                        if (made != null && !String.IsNullOrEmpty(id)) steps[id] = made;
+                    }
+                    else if (kind == "tool_result" && type == "user") {
+                        Dictionary<string, object> asked; string id = at(part, "tool_use_id") as string ?? "";
+                        if (!steps.TryGetValue(id, out asked)) continue;
+                        object back = at(part, "content");
+                        came(asked, back as string ?? (back is IEnumerable ? String.Join("\n", ((IEnumerable)back).Cast<object>().Select(one => at(one as Dictionary<string, object>, "text") as string ?? "")) : ""));
+                    }
+                    // what it says of its work between the steps, where Claude Code keeps a summary of it
+                    else if (kind == "thinking" && type == "assistant") add("thought", at(part, "thinking") as string);
                 }
             } else {
                 var payload = at(row, "payload") as Dictionary<string, object>;
-                if (type != "response_item" || payload == null) continue;
+                if (payload == null) continue;
                 string kind = at(payload, "type") as string, role = at(payload, "role") as string;
+                if (type == "event_msg" && kind == "item_completed") {
+                    var item = at(payload, "item") as Dictionary<string, object>; string what = at(item, "type") as string;
+                    if (what == "CommandExecution") {
+                        var parsed = (at(item, "parsed_cmd") as IEnumerable ?? new object[0]).Cast<object>().Select(one => one as Dictionary<string, object>).Where(one => one != null).ToList();
+                        var reads = parsed.Where(one => "read".Equals(at(one, "type"))).Select(one => at(one, "name") as string ?? at(one, "path") as string ?? "").Where(one => one.Length > 0).ToList();
+                        string ran = parsed.Select(one => at(one, "cmd") as string ?? "").FirstOrDefault(one => one.Length > 0)
+                            ?? String.Join(" ", (at(item, "command") as IEnumerable ?? new object[0]).Cast<object>().Select(Convert.ToString));
+                        if (parsed.Count > 0 && reads.Count == parsed.Count) add("tool", "读取：" + String.Join("、", reads.Take(3)) + (reads.Count > 3 ? " 等 " + reads.Count + " 个文件" : ""));
+                        else if (ran.Length > 0) {
+                            string code = Convert.ToString(at(item, "exit_code") ?? "");
+                            came(step("运行：" + (ran.Length > 160 ? ran.Substring(0, 160) : ran), ran.Length > 160 ? ran : ""), (code.Length > 0 && code != "0" ? "（退出码 " + code + "）\n" : "") + (at(item, "aggregated_output") as string ?? ""));
+                        }
+                    } else if (what == "FileChange") {
+                        var changed = at(item, "changes") as Dictionary<string, object>;
+                        var names = changed == null ? new List<string>() : changed.Keys.Select(one => one.TrimEnd('/', '\\')).Select(one => one.Substring(one.LastIndexOfAny(new[] { '/', '\\' }) + 1)).Where(one => one.Length > 0).ToList();
+                        if (names.Count > 0) add("tool", "修改：" + String.Join("、", names.Take(3)) + (names.Count > 3 ? " 等 " + names.Count + " 个文件" : ""));
+                    }
+                    continue;
+                }
+                if (type != "response_item") continue;
                 if (kind == "message" && (role == "user" || role == "assistant")) {
                     var parts = at(payload, "content") as IEnumerable;
                     if (parts == null || at(payload, "content") is string) continue;
@@ -771,13 +829,71 @@ public sealed class TerminalAgent {
                         if (text != null && (role == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal))) add(role, text);
                     }
                 }
-                else if (kind == "function_call" || kind == "custom_tool_call" || kind == "local_shell_call") add("tool", brief(at(payload, "name") ?? "shell", null));
+                else if (kind == "function_call" || kind == "custom_tool_call" || kind == "local_shell_call") {
+                    string called = at(payload, "name") as string ?? "shell";
+                    if (!(itemized && (kind == "local_shell_call" || called == "exec" || called == "shell" || called == "local_shell"))) add("tool", brief(called, null));
+                }
+                else if (kind == "reasoning") {
+                    // the summary Codex keeps of its reasoning: what it says of its work between the steps
+                    var summary = at(payload, "summary") as IEnumerable;
+                    if (summary != null && !(at(payload, "summary") is string)) add("thought", String.Join("\n\n", summary.Cast<object>().Select(one => at(one as Dictionary<string, object>, "text") as string).Where(one => !String.IsNullOrWhiteSpace(one))));
+                }
             }
         }
         var file = new FileInfo(path);
         var kept = Talk(said, most, runs);
+        // What came back is given with the latest steps only: a window that follows a conversation at work is sent
+        // it anew whenever it changes, and the output of every step of a long one is too much for that.
+        int withResult = 0;
+        for (int i = kept.Count - 1; i >= 0; i--) if (kept[i].ContainsKey("result") && ++withResult > Results) kept[i].Remove("result");
         return new Dictionary<string, object> { { "messages", kept }, { "more", kept.Count < said.Count || file.Length > limit }, { "updated", Milliseconds(file.LastWriteTimeUtc) } };
     }
+    /// Of how many steps, counted from the last, what came back is given.
+    public const int Results = 40;
+    /// The first lines of what came back from a step, as a terminal shows them: six lines at most, none longer than
+    /// two hundred letters, and a mark where there is more.
+    public static string First(string back) {
+        back = (back ?? "").Replace("\r\n", "\n").TrimStart('\n', '\r').TrimEnd();
+        if (back.Length == 0) return "";
+        var lines = back.Split('\n'); var kept = new List<string>(); int letters = 0;
+        foreach (string one in lines) {
+            if (kept.Count == 6 || letters > 500) break;
+            string cut = one.TrimEnd();
+            if (cut.Length > 200) cut = cut.Substring(0, Char.IsHighSurrogate(cut[199]) ? 199 : 200) + "…";
+            kept.Add(cut); letters += cut.Length;
+        }
+        return String.Join("\n", kept) + (kept.Count < lines.Length ? "\n…" : "");
+    }
+    /// The beginning of what a tool gave back, taken from a row without reading the row: the text that follows
+    /// `"content":` after `from` (a string, or the first text of a list), as far as a few hundred letters go.
+    public static string Begins(string row, int from) {
+        if (from < 0) return "";
+        int at = row.IndexOf("\"content\":", from, StringComparison.Ordinal);
+        if (at < 0) return "";
+        at += 10;
+        if (at < row.Length && row[at] == '[') { at = row.IndexOf("\"text\":\"", at, StringComparison.Ordinal); if (at < 0 || at > from + 400) return ""; at += 7; }
+        if (at >= row.Length || row[at] != '"') return "";
+        var text = new StringBuilder();
+        for (int i = at + 1; i < row.Length && text.Length < 1600; i++) {
+            char c = row[i];
+            if (c == '"') break;
+            if (c != '\\') { text.Append(c); continue; }
+            if (++i >= row.Length) break;
+            switch (row[i]) {
+                case 'n': text.Append('\n'); break;
+                case 't': text.Append('\t'); break;
+                case 'r': break;
+                case 'b': case 'f': break;
+                case 'u':
+                    int code;
+                    if (i + 4 < row.Length && Int32.TryParse(row.Substring(i + 1, 4), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out code)) { text.Append((char)code); i += 4; }
+                    break;
+                default: text.Append(row[i]); break;
+            }
+        }
+        return text.ToString();
+    }
+    /// (What the tool said of its work between its steps, "thought", is counted as said.)
     /// The last `most` things said by the user and the tool, oldest first, with what the tool did between them. A
     /// conversation at work is mostly things done: counted with the rest they would leave no room for what was
     /// said. Of one unbroken run of them the last `runs` are given, and a line says how many came before.

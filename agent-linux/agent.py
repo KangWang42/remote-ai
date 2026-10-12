@@ -47,7 +47,7 @@ import time
 import uuid
 from urllib.parse import quote, urlsplit
 
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -62,6 +62,8 @@ MAX_MARKS = 300                 # of each kind; with more, the ones marked longe
 SAID_MESSAGES = 40      # of a conversation, the last this many things its user and the tool said are shown on the phone
 SAID_RUN = 30           # with what the tool did between them: of one unbroken run, the last this many
 SAID_CHARS = 1500       # and of each, this much
+SAID_NOTED = 600        # of what the tool said of its work between its steps, this much
+SAID_RESULTS = 40       # of this many steps, counted from the last, the first lines of what came back are given
 # where the tools' own installers put them; a service's PATH seldom has these
 TOOL_DIRS = (".local/bin", ".npm-global/bin", "bin", ".bun/bin", ".volta/bin", ".cargo/bin")
 MAX_TERMINALS = 8
@@ -283,25 +285,56 @@ def said(path, tool):
     conversation for themselves (reminders, command output, results) is left out."""
     limit = 4 * 1024 * 1024
     out = []
-    # what a tool gave back is never shown and fills most of a long conversation: such a row is passed over unread
+    # What a tool gave back fills most of a long conversation: of such a row only the beginning is taken, unread.
     given_back = '"type":"tool_result"' if tool == "claude" else '"type":"function_call_output"'
-    text = "\n".join(line for line in read_part(path, True, limit).split("\n")
-                     if not (len(line) > 4096 and given_back in line[:1200]))
+    steps, kept_lines = {}, []
+    for line in read_part(path, True, limit).split("\n"):
+        if len(line) > 4096 and given_back in line[:1200]:
+            whose = re.search(r'"tool_use_id":"([^"]+)"', line[:1200])
+            if tool == "claude" and whose:
+                kept_lines.append(json.dumps({"type": "came-back", "whose": whose.group(1), "text": begins(line, line.find(given_back))}))
+            continue
+        kept_lines.append(line)
+    text = "\n".join(kept_lines)
 
     def add(role, text):
         text = " ".join(text.split()) if role == "tool" else text.strip()
+        room = SAID_NOTED if role == "thought" else SAID_CHARS
         if text:
-            out.append({"role": role, "text": text if len(text) <= SAID_CHARS else text[:SAID_CHARS - 1] + "…"})
+            out.append({"role": role, "text": text if len(text) <= room else text[:room - 1] + "…"})
+
+    def step(text, detail=""):
+        """A step as a terminal would show it: besides what it is for, the command itself (where the step is told
+        by something else) and, later, the first lines of what came back."""
+        before = len(out)
+        add("tool", text)
+        if len(out) == before:
+            return None
+        detail = (detail or "").strip()
+        if detail and detail[:40] not in text:
+            out[-1]["detail"] = detail if len(detail) <= 400 else detail[:400] + "…"
+        return out[-1]
+
+    def came(made, back):
+        if made is not None and first(back):
+            made["result"] = first(back)
 
     def brief(name, given):
         given = given if isinstance(given, dict) else {}
-        about = next((given[k] for k in ("command", "file_path", "path", "pattern", "description", "query", "url")
-                      if isinstance(given.get(k), str)), "")
+        # what the step is for, where the tool says it (Bash's description), before the command itself
+        about = next((given[k] for k in ("description", "command", "file_path", "path", "pattern", "query", "url")
+                      if isinstance(given.get(k), str) and given[k]), "")
         return (str(name or "") + ("：" + about[:160] if about else "")).strip()
 
+    # Codex notes each step for its own window as it ends (the command that ran, the files changed). Where it does,
+    # the steps are told by those, and the calls that only wrap them ("exec", "shell") are passed over.
+    itemized = tool != "claude" and '"item_completed"' in text
     for row in rows(text):
         if tool == "claude":
             message = row.get("message")
+            if row.get("type") == "came-back":
+                came(steps.get(row.get("whose")), row.get("text"))
+                continue
             if row.get("type") not in ("user", "assistant") or row.get("isSidechain") or row.get("isMeta") \
                     or not isinstance(message, dict):
                 continue
@@ -314,10 +347,41 @@ def said(path, tool):
                     if row["type"] == "assistant" or not part["text"].lstrip().startswith("<"):
                         add(row["type"], part["text"])
                 elif part.get("type") == "tool_use" and row["type"] == "assistant":
-                    add("tool", brief(part.get("name"), part.get("input")))
+                    given = part.get("input") if isinstance(part.get("input"), dict) else {}
+                    made = step(brief(part.get("name"), given), given.get("command") if isinstance(given.get("command"), str) else "")
+                    if made is not None and isinstance(part.get("id"), str):
+                        steps[part["id"]] = made
+                elif part.get("type") == "tool_result" and row["type"] == "user":
+                    back = part.get("content")
+                    came(steps.get(part.get("tool_use_id")), back if isinstance(back, str) else "\n".join(
+                        one.get("text") or "" for one in back if isinstance(one, dict)) if isinstance(back, list) else "")
+                # what it says of its work between the steps, where Claude Code keeps a summary of it
+                elif part.get("type") == "thinking" and row["type"] == "assistant" and isinstance(part.get("thinking"), str):
+                    add("thought", part["thinking"])
         else:
             payload = row.get("payload")
-            if row.get("type") != "response_item" or not isinstance(payload, dict):
+            if not isinstance(payload, dict):
+                continue
+            if row.get("type") == "event_msg" and payload.get("type") == "item_completed":
+                item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+                if item.get("type") == "CommandExecution":
+                    parsed = [one for one in item.get("parsed_cmd") or [] if isinstance(one, dict)] if isinstance(item.get("parsed_cmd"), list) else []
+                    reads = [one.get("name") or one.get("path") for one in parsed if one.get("type") == "read" and isinstance(one.get("name") or one.get("path"), str)]
+                    ran = next((one["cmd"] for one in parsed if isinstance(one.get("cmd"), str) and one["cmd"]), None)
+                    if ran is None:
+                        ran = " ".join(str(part) for part in item.get("command") or []) if isinstance(item.get("command"), list) else ""
+                    if parsed and len(reads) == len(parsed):
+                        add("tool", "读取：" + "、".join(reads[:3]) + (" 等 %d 个文件" % len(reads) if len(reads) > 3 else ""))
+                    elif ran:
+                        code = item.get("exit_code")
+                        came(step("运行：" + ran[:160], ran if len(ran) > 160 else ""),
+                             ("（退出码 %s）\n" % code if code not in (None, 0, "0") else "") + (item.get("aggregated_output") if isinstance(item.get("aggregated_output"), str) else ""))
+                elif item.get("type") == "FileChange" and isinstance(item.get("changes"), dict):
+                    names = [name for name in (re.split(r"[/\\]", key.rstrip("/\\"))[-1] for key in item["changes"]) if name]
+                    if names:
+                        add("tool", "修改：" + "、".join(names[:3]) + (" 等 %d 个文件" % len(names) if len(names) > 3 else ""))
+                continue
+            if row.get("type") != "response_item":
                 continue
             if payload.get("type") == "message" and payload.get("role") in ("user", "assistant"):
                 for part in payload.get("content") if isinstance(payload.get("content"), list) else []:
@@ -325,10 +389,82 @@ def said(path, tool):
                             and (payload["role"] == "assistant" or not part["text"].lstrip().startswith("<")):
                         add(payload["role"], part["text"])
             elif payload.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
-                add("tool", brief(payload.get("name") or "shell", None))
+                called = payload.get("name") or "shell"
+                if not (itemized and (payload["type"] == "local_shell_call" or called in ("exec", "shell", "local_shell"))):
+                    add("tool", brief(called, None))
+            elif payload.get("type") == "reasoning" and isinstance(payload.get("summary"), list):
+                # the summary Codex keeps of its reasoning: what it says of its work between the steps
+                add("thought", "\n\n".join(one["text"] for one in payload["summary"]
+                                           if isinstance(one, dict) and isinstance(one.get("text"), str) and one["text"].strip()))
     kept = talk(out, SAID_MESSAGES, SAID_RUN)
+    # What came back is given with the latest steps only: a window that follows a conversation at work is sent it
+    # anew whenever it changes, and the output of every step of a long one is too much for that.
+    with_result = 0
+    for entry in reversed(kept):
+        if "result" in entry:
+            with_result += 1
+            if with_result > SAID_RESULTS:
+                del entry["result"]
     more = len(kept) < len(out) or os.path.getsize(path) > limit
     return {"messages": kept, "more": more, "updated": int(os.path.getmtime(path) * 1000)}
+
+
+def first(back):
+    """The first lines of what came back from a step, as a terminal shows them: six lines at most, none longer
+    than two hundred letters, and a mark where there is more."""
+    back = (back or "").replace("\r\n", "\n").lstrip("\r\n").rstrip()
+    if not back:
+        return ""
+    lines, kept, letters = back.split("\n"), [], 0
+    for one in lines:
+        if len(kept) == 6 or letters > 500:
+            break
+        cut = one.rstrip()
+        kept.append(cut if len(cut) <= 200 else cut[:200] + "…")
+        letters += len(kept[-1])
+    return "\n".join(kept) + ("\n…" if len(kept) < len(lines) else "")
+
+
+def begins(row, start):
+    """The beginning of what a tool gave back, taken from a row without reading the row: the text that follows
+    `"content":` after `start` (a string, or the first text of a list), as far as a few hundred letters go."""
+    at = row.find('"content":', start) if start >= 0 else -1
+    if at < 0:
+        return ""
+    at += 10
+    if row[at:at + 1] == "[":
+        at = row.find('"text":"', at)
+        if at < 0 or at > start + 400:
+            return ""
+        at += 7
+    if row[at:at + 1] != '"':
+        return ""
+    text, i = [], at + 1
+    while i < len(row) and len(text) < 1600:
+        c = row[i]
+        if c == '"':
+            break
+        if c != "\\":
+            text.append(c)
+        else:
+            i += 1
+            if i >= len(row):
+                break
+            e = row[i]
+            if e == "n":
+                text.append("\n")
+            elif e == "t":
+                text.append("\t")
+            elif e == "u":
+                try:
+                    text.append(chr(int(row[i + 1:i + 5], 16)))
+                    i += 4
+                except ValueError:
+                    pass
+            elif e not in "rbf":
+                text.append(e)
+        i += 1
+    return "".join(text)
 
 
 def talk(said, most, runs):
