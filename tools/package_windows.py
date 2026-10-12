@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.5.9"
+VERSION = "1.5.10"
 PYTHON = ("3.12.10", "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3")   # version, SHA-256 of the embeddable zip
 # Parts of the embeddable Python the relay never loads.
 UNUSED = ("_msi.pyd", "_sqlite3.pyd", "sqlite3.dll", "_elementtree.pyd", "pyexpat.pyd", "_wmi.pyd", "_zoneinfo.pyd", "winsound.pyd",
