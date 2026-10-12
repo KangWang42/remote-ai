@@ -282,7 +282,7 @@
       if (m.role === 'tool') {
         // The steps stand open, each as a terminal would show it: what it is, the command itself where it is told
         // by what it is for, and the first lines of what came back. The line above them folds a run away.
-        if (!run) { run = { list: el('ul'), count: 0 }; run.box = el('details', { className: 'did', open: true }, el('summary'), run.list); box.append(run.box); }
+        if (!run) { run = { list: el('ul'), count: 0 }; run.box = el('details', { className: 'did', open: saved('steps', 'open') !== 'shut' }, el('summary'), run.list); box.append(run.box); }
         run.list.append(el('li', null, el('span', { className: 'what', textContent: m.text }),
           m.detail ? el('code', { className: 'ran', textContent: m.detail }) : '', m.result ? el('pre', { className: 'got', textContent: m.result }) : ''));
         run.count++;
@@ -365,6 +365,14 @@
         } })));
         format.append(el('span', { textContent: label }), group);
       });
+      // and whether the steps stand open or folded to a line each run
+      const steps = el('span', { className: 'pick', role: 'group', ariaLabel: '步骤' });
+      [['open', '展开'], ['shut', '收起']].forEach(([value, label]) => steps.append(el('button', { type: 'button', textContent: label, ariaPressed: String((saved('steps', 'open') === 'shut' ? 'shut' : 'open') === value), onclick: () => {
+        keep('steps', value);
+        steps.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.textContent === label)));
+        said.querySelectorAll('details.did').forEach(d => { d.open = value === 'open'; });
+      } })));
+      format.append(el('span', { textContent: '步骤' }), steps);
       form.append(el('div', { className: 'above' }, el('div', { className: 'bar' }, el('button', { type: 'button', className: 'icon', ariaLabel: '返回', html: ICON.back, onclick: () => finish(null) }),
         el('div', { className: 'who' }, el('h3', { textContent: session.title }), head),
         // at the top right, as on a terminal's page: the files of its project, and how it is read. The phone is shown
@@ -409,6 +417,7 @@
             for (let i = pending.length - 1; i >= 0; i--) if (same(record, pending[i].text) > pending[i].before || (pending[i].sent && record.filter(m => m.role === 'user').length > pending[i].users)) pending.splice(i, 1);
             const end = !read || atEnd(), was = said.scrollTop;
             const fresh = el('div');
+            if (got.more) fresh.append(el('p', { className: 'earlier', textContent: '更早的内容在电脑上' }));
             await writeSaid(fresh, record, TOOLS[session.tool]);
             said.replaceChildren(...fresh.childNodes);
             waiting();
@@ -434,7 +443,9 @@
         catch (error) { pending.splice(pending.indexOf(mine), 1); if (!box.value) box.value = text; toast(error.message); }
         send.disabled = false; waiting(); refresh(); show();
       } });
-      write.append(box, send);
+      // a conversation that has stopped is most often told to go on: one press, beside what is typed
+      const goOn = el('button', { type: 'button', className: 'go', textContent: '继续', hidden: true, onclick: () => { if (!box.value.trim()) { box.value = '继续'; send.click(); } else box.focus(); } });
+      write.append(goOn, box, send);
       let shown = '';
       function show() {
         // how it stands is what the computer said of it last: with the conversation itself, or in the lists
@@ -450,6 +461,7 @@
         standing.textContent = !current.live ? '已在电脑上关闭' : PHASE[kind][0];
         clock.textContent = !from ? '' : kind === 'busy' ? lasted(Date.now() - from) : ago(from);
         ending.hidden = !canEnd(current);
+        goOn.hidden = !(can(current, 'say') && !current.ask && (kind === 'stopped' || kind === 'waiting') && record.length > 0);
         if (signature === shown) return;
         shown = signature;
         head.textContent = whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));      // (how it stands is said in the line above the box)

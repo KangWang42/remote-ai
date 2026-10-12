@@ -194,6 +194,9 @@ dialog.window .state .end { margin-left: auto; flex: none; min-height: 34px; pad
 dialog.window .state .end[hidden] { display: none; }
 @keyframes working { 0%, 100% { transform: scale(.7); opacity: .5; } 50% { transform: scale(1.15); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { dialog.window .state.busy .dot { animation: none; } }
+#sheet-form .said .earlier { margin: 0 0 4px; text-align: center; color: var(--muted); font-size: .8rem; }
+dialog.window .write .go { flex: none; min-height: 44px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-weight: 600; }
+dialog.window .write .go[hidden] { display: none; }
 dialog.window .confirm { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); font-size: .9rem; }
 dialog.window .confirm p { margin: 0; }
 dialog.window .confirm .answers { display: flex; gap: 8px; }

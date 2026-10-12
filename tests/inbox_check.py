@@ -272,22 +272,28 @@ def main():
         READ = "(() => { const s = getComputedStyle(document.querySelector('#sheet .said')), page = getComputedStyle(document.documentElement); return { font: s.fontFamily, size: parseFloat(s.fontSize) / parseFloat(page.fontSize), line: parseFloat(s.lineHeight) / parseFloat(s.fontSize), kept: ['readfont', 'readsize', 'readline'].map(key => localStorage.getItem('rcli-' + key)) }; })()"
         assert page_value(PICKS) is None, "folded until it is asked for"
         page_value("(() => { document.querySelector('#sheet .bar .type').click(); return 1; })()")
-        assert page_value(PICKS) == [["*默认", "衬线", "等宽"], ["小", "*标准", "大", "特大"], ["紧凑", "*标准", "宽松"]], page_value(PICKS)
+        assert page_value(PICKS) == [["*默认", "衬线", "等宽"], ["小", "*标准", "大", "特大"], ["紧凑", "*标准", "宽松"], ["*展开", "收起"]], page_value(PICKS)
         usual = page_value(READ)
         assert abs(usual["size"] - 0.93) < 0.02 and abs(usual["line"] - 1.65) < 0.03 and usual["kept"] == [None, None, None], usual
         pick(0, "衬线"); pick(1, "特大"); pick(2, "宽松")
         chosen = page_value(READ)
         report["read_as_chosen"] = chosen
         assert "serif" in chosen["font"].lower() and abs(chosen["size"] - 1.18) < 0.02 and abs(chosen["line"] - 1.9) < 0.03 and chosen["kept"] == ["serif", "larger", "loose"], chosen
-        assert page_value(PICKS) == [["默认", "*衬线", "等宽"], ["小", "标准", "大", "*特大"], ["紧凑", "标准", "*宽松"]], page_value(PICKS)
+        assert page_value(PICKS) == [["默认", "*衬线", "等宽"], ["小", "标准", "大", "*特大"], ["紧凑", "标准", "*宽松"], ["*展开", "收起"]], page_value(PICKS)
         picture("conversation-serif.png")
+        # the steps stand open, or folded to a line each run, as their reader likes; it is kept
+        FOLDS = "Array.from(document.querySelectorAll('#sheet .said details.did')).map(d => d.open)"
+        pick(3, "收起")
+        assert page_value(FOLDS) == [False, False] and page_value("localStorage.getItem('rcli-steps')") == "shut" and page_value(PICKS)[3] == ["展开", "*收起"], page_value(FOLDS)
+        pick(3, "展开")
+        assert page_value(FOLDS) == [True, True] and page_value("localStorage.getItem('rcli-steps')") == "open"
         pick(0, "默认"); pick(1, "标准"); pick(2, "标准")
         page_value("(() => { document.querySelector('#sheet .bar .type').click(); return 1; })()")
         assert page_value(PICKS) is None and abs(page_value(READ)["size"] - 0.93) < 0.02
-        page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '把结论再写短一点'; document.querySelector('#sheet .write button').click(); return 1; })()")
+        page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '把结论再写短一点'; document.querySelector('#sheet .write button.solid').click(); return 1; })()")
         # what is written stands in the window at once, while it is still on its way
-        assert page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.mine'); return mine.length === 1 && mine[0].textContent === '把结论再写短一点' && document.querySelector('#sheet .write button').disabled; })()"), "shown at once"
-        until(lambda: page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.user'); return mine.length && mine[mine.length - 1].textContent === '把结论再写短一点' && !document.querySelector('#sheet .write button').disabled; })()"), 30, "what was written stands in the window as what the user said")
+        assert page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.mine'); return mine.length === 1 && mine[0].textContent === '把结论再写短一点' && document.querySelector('#sheet .write button.solid').disabled; })()"), "shown at once"
+        until(lambda: page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.user'); return mine.length && mine[mine.length - 1].textContent === '把结论再写短一点' && !document.querySelector('#sheet .write button.solid').disabled; })()"), 30, "what was written stands in the window as what the user said")
         if out:
             # the picture for the guide, in the size of its other pictures
             ask("Emulation.setDeviceMetricsOverride", width=500, height=960, deviceScaleFactor=1, mobile=True)
@@ -435,7 +441,7 @@ def main():
         head = page_value("document.querySelector('#sheet .stands').textContent")
         assert head == "Codex · reading-notes" and page_value("document.querySelector('#sheet .state .standing').textContent") == "正在执行", head      # how it stands is said in the line above the box
         # a message is written in the window; it stays open
-        page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '再加一节小结'; document.querySelector('#sheet .write button').click(); return 1; })()")
+        page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '再加一节小结'; document.querySelector('#sheet .write button.solid').click(); return 1; })()")
         went = hook("Stop", WORKING, notes, last_assistant_message="提纲写好了。", stop_hook_active=False)
         assert went.wait(10) == 0 and "再加一节小结" in json.loads(went.stdout.read().decode("utf-8"))["reason"]
         assert page_value("document.getElementById('sheet').open") is True, "the window is still open"
