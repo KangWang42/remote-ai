@@ -190,6 +190,24 @@ public static class ReachCheck {
                 idle = 5;
                 Require(Answer(keptStop, 3000, "somebody came back to it") == "" && reach.KeptNow().Length == 0, "until it is let go");
 
+                // ---- nobody answers, and nobody is at the computer when the request's time is over: the tool is not
+                // left at its own question, which could only be answered at the computer. It is told to stop and say
+                // what it needs; its owner, away for however long, tells it from the phone when to go on.
+                string late = Guid.NewGuid().ToString(), lateToo = Guid.NewGuid().ToString(), there = Guid.NewGuid().ToString();
+                Environment.SetEnvironmentVariable("REMOTECLI_HOLD", "1");
+                idle = 600; asks = true;
+                string put = Answer(Run("codex", Request(late, "git push", "Publish")), 5000, "nobody answered Codex in time");
+                Require(put.Contains("\"behavior\":\"deny\"") && put.Contains("not answered this request on their phone") && codex(late).Status == "busy" && reach.KeptNow().Length == 0, "Codex is told to stop and say what it needs: " + put);
+                put = Answer(Run("claude", Request(lateToo, "npm publish", "")), 5000, "nobody answered Claude Code in time");
+                Require(put.Contains("\"behavior\":\"deny\"") && put.Contains(Reach.Deferred.Substring(0, 40)) && claude(lateToo).Status == "busy", "and so is Claude Code: " + put);
+                // somebody is at the computer when the time is over: the question stays theirs, as it was
+                var theirs = Run("claude", Request(there, "npm publish", ""));
+                Require(Until(() => claude(there) != null && claude(there).Answerable, 3000), "asked, and the phone's to answer");
+                idle = 5;
+                Require(Until(() => !claude(there).Answerable, 4000) && claude(there).Status == "confirm" && !theirs.Program.WaitForExit(600), "its time over with somebody at the computer: left to them, at the tool's own question");
+                theirs.Program.Kill();
+                Environment.SetEnvironmentVariable("REMOTECLI_HOLD", null);
+
                 // ---- where its owner switched that off, a request of Codex's is not kept: Codex asks its hooks before
                 // it shows its question, and kept it shows a running hook. It shows its own question at once then, and
                 // the phone is told that it asks, at the computer. Claude Code's is kept as ever: beside its own question.

@@ -268,8 +268,12 @@ own settings when its owner switches that on). A hook for a request for permissi
 answer; a hook that runs as the tool stops is answered with the message, as something to go on with. Claude Code
 shows its question on the computer while the hook runs and takes whichever answer comes first. Codex asks its hooks
 first and shows a running hook meanwhile, so its request is kept for the phone only while nobody has touched the
-computer's keyboard or mouse for a minute: it is let go the moment somebody does, and after half an hour at most;
-while it is kept, the program says at the corner of the computer's screen what waits and how to have it there. Where
+computer's keyboard or mouse for a minute: it is let go the moment somebody does; while it is kept, the program
+says at the corner of the computer's screen what waits and how to have it there. A request of either tool that
+nobody has answered after half an hour, with still nobody at the computer, is not left at the tool's own question,
+which only somebody at the computer could answer: the hook answers that it is not allowed for now, and the tool
+stops and says what it needs. The conversation is then one that has stopped, to be told from the phone (`say`)
+whenever its owner reads it; it asks again, and that request is the phone's to answer. Where
 the program's owner switched that off (the setting `ask`, below), the hook ends at once, Codex shows its own
 question, and the conversation is listed as asking, without `answer` among what the phone can do. A tool that
 stops is not kept waiting unless the program's owner chose a time for that (the setting `wait`, below): then, while

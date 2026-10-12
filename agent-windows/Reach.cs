@@ -32,6 +32,15 @@ namespace RemoteCli {
 public sealed class Reach : IDisposable {
     public const int Unattended = 60;       // seconds without a key or the mouse after which nobody is taken to be at the computer
     public const int Hold = 1800;           // the longest a request for permission is kept for the phone's answer, in seconds
+    public const int Rest = 1800;           // how long a conversation that stopped while nobody was at the computer is said to wait for the phone
+    /// The same, as it is now: REMOTECLI_HOLD says less, for a test.
+    static int Holds { get { int said; return Int32.TryParse(Environment.GetEnvironmentVariable("REMOTECLI_HOLD"), out said) && said > 0 ? said : Hold; } }
+    /// What a tool is told when nobody answered its request in that time and still nobody is at the computer. Left
+    /// at its own question it could only be answered there, and its owner may be away for days: told this, it stops
+    /// and says what it needs, and is told from the phone when to go on. Read by the model: changed only together
+    /// with runs on the real tools.
+    public const string Deferred = "The user is away from the computer and has not answered this request on their phone (Remote AI app) in time, so it is not allowed for now. "
+        + "Do not try to get the same thing done another way. Stop here and say in one or two sentences what you need permission for: the user will read that on their phone and tell you when to go on.";
     /// How long a tool that stops can be kept waiting for the phone's message, in seconds, as the program's owner
     /// chooses: not at all unless they ask for it. A tool shows its hook as running all the while it is kept, and a
     /// conversation that has stopped is told from the phone all the same, by the tool's own way in (CodexQueue,
@@ -121,7 +130,7 @@ public sealed class Reach : IDisposable {
             foreach (Open o in open.Values) {
                 if (o.Status != "waiting" || o.Held) continue;
                 if (away < 0) away = idle();
-                if (away < Unattended || DateTime.UtcNow - o.Stopped > TimeSpan.FromSeconds(Hold)) { o.Status = "idle"; changed = true; }
+                if (away < Unattended || DateTime.UtcNow - o.Stopped > TimeSpan.FromSeconds(Rest)) { o.Status = "idle"; changed = true; }
             }
         }
         if (changed) Tell();
@@ -312,12 +321,13 @@ public sealed class Reach : IDisposable {
     }
     // The tool asks for permission. The hook is kept waiting until the phone answers; or the tool lets the hook go, or
     // tells of something else (the question was answered at the computer); or, for a tool that does not show its
-    // question while a hook runs, somebody is at the computer; or it has been long enough. That the conversation is
-    // written to says nothing here: Claude Code writes to it while it asks.
+    // question while a hook runs, somebody is at the computer; or it has been long enough: then, with still nobody
+    // at the computer, the tool is told to stop and say what it needs (Deferred). That the conversation is written to
+    // says nothing here: Claude Code writes to it while it asks.
     // `mine`: it runs in one of this program's own terminals. Its question is the terminal's to answer.
     string[] Asked(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone, bool mine) {
         bool beside = tool == "claude" && !mine;         // its question is on the computer's screen while the hook runs
-        string id; var began = DateTime.UtcNow; bool? verdict = null;
+        string id; var began = DateTime.UtcNow; bool? verdict = null; bool deferred = false;
         lock (gate) {
             id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null;
             // beside its own question the hook is not seen; a tool that asks its hooks first is kept only where its owner chose that
@@ -329,7 +339,12 @@ public sealed class Reach : IDisposable {
                 if (o.AskId != id) return Nothing;                                  // the tool has gone on to something else
                 if (o.Verdict.HasValue) { verdict = o.Verdict; break; }
                 if (gone()) { o.AskId = o.AskText = ""; o.Answerable = false; o.Status = "busy"; break; }
-                if (o.Answerable && ((!beside && idle() < Unattended) || DateTime.UtcNow - began > TimeSpan.FromSeconds(Hold))) { o.Answerable = false; if (!beside) break; }
+                if (o.Answerable && DateTime.UtcNow - began > TimeSpan.FromSeconds(Holds)) {
+                    // its time is over. Nobody at the computer either: it is not left at a question nobody can answer
+                    if (idle() >= Unattended) { verdict = false; deferred = true; break; }
+                    o.Answerable = false; if (!beside) break;
+                }
+                if (o.Answerable && !beside && idle() < Unattended) { o.Answerable = false; break; }
                 if (!o.Answerable && !beside) break;
                 Monitor.Wait(gate, 300);
             }
@@ -338,7 +353,7 @@ public sealed class Reach : IDisposable {
         Tell();
         if (!verdict.HasValue) return Nothing;
         var decision = new Dictionary<string, object> { { "behavior", verdict.Value ? "allow" : "deny" } };
-        if (!verdict.Value) decision["message"] = "The user declined this from their phone (Remote AI app).";
+        if (!verdict.Value) decision["message"] = deferred ? Deferred : "The user declined this from their phone (Remote AI app).";
         return new[] { json.Serialize(new Dictionary<string, object> { { "hookSpecificOutput", new Dictionary<string, object> { { "hookEventName", "PermissionRequest" }, { "decision", decision } } } }), "0" };
     }
     // The tool has stopped. A message that waited for this goes to it now. Else, while nobody is at the computer, it

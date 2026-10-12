@@ -72,7 +72,9 @@ def main():
         codex = str(uuid.uuid4())
         asking = hook("codex", "PermissionRequest", codex, tool_name="Bash", tool_input={"command": "git push"})
         until(lambda: said() == ["Codex 的确认请求已发到手机", "动一下鼠标或键盘，改在这台电脑上回答"], "the notice of a request that is kept")
-        assert asking.poll() is None and Path(str(noted) + ".png").stat().st_size > 400
+        drawn = Path(str(noted) + ".png")       # written after the words
+        until(lambda: drawn.exists() and drawn.stat().st_size > 400, "the notice drawn", 5)
+        assert asking.poll() is None
         if out:
             out.mkdir(parents=True, exist_ok=True)
             (out / "notice.png").write_bytes(Path(str(noted) + ".png").read_bytes())
