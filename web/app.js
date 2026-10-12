@@ -302,6 +302,16 @@
       last = m.role;
     });
   }
+  // For how long: 0:07, 3:25, 1:02:10.
+  const lasted = ms => { const s = Math.max(0, Math.floor(ms / 1000)), two = n => String(n).padStart(2, '0'); return s >= 3600 ? Math.floor(s / 3600) + ':' + two(Math.floor(s / 60) % 60) + ':' + two(s % 60) : Math.floor(s / 60) + ':' + two(s % 60); };
+  // Ending a conversation on the computer closes the program that has it there: asked once, in the words of what happens.
+  const confirmEnd = (s, busy) => new Promise(done => {
+    const box = el('div', { className: 'confirm' }, el('p', { textContent: busy ? '结束电脑上的这段对话？它正在执行，会被中断。对话记录保留，之后可以继续。' : '结束电脑上的这段对话？对话记录保留，之后可以继续。' }),
+      el('div', { className: 'answers' }, el('button', { type: 'button', className: 'no', textContent: '结束', onclick: () => { box.remove(); done(true); } }), el('button', { type: 'button', className: 'see', textContent: '取消', onclick: () => { box.remove(); done(false); } })));
+    const old = document.querySelector('#sheet-form .confirm'); if (old) old.remove();
+    const anchor = document.querySelector('#sheet-form .state');
+    if (anchor) anchor.before(box); else done(window.confirm('结束电脑上的这段对话？'));
+  });
   // The window of a conversation that is open on the computer: what was said, and a box to write in. The
   // conversation stays in the program that has it and is used there as before; this works beside it. It follows what
   // is said there while it is open, what the conversation asks is answered here, and what is written here is handed to
@@ -313,6 +323,21 @@
     const choice = await openSheet((form, finish) => {
       const now = () => (data.sessions || []).find(s => s.id === session.id && s.tool === session.tool) || session;
       const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
+      // How it stands, in one line above the box, as a terminal says it at its foot: at work and for how long, asking,
+      // waiting for what its user says, or stopped and since when. Beside it, the way to end it on the computer.
+      const standing = el('span', { className: 'standing' }), clock = el('span', { className: 'clock' });
+      const canEnd = s => s.live && s.can_takeover === true && (data.device.features || []).includes('end');
+      const ending = el('button', { type: 'button', className: 'end', textContent: '结束', hidden: true, onclick: async () => {
+        const current = now(), busy = reachPhase(current) === 'busy';
+        if (!await confirmEnd(current, busy)) return;
+        try { await api('api/conversation', { id: newId(), session: current.id, action: 'end' }); toast('已结束电脑上的这段对话'); finish(null); refresh(); }
+        catch (error) { toast(error.message); }
+      } });
+      const state = el('div', { className: 'state' }, el('span', { className: 'dot' }), standing, clock, ending);
+      // back to what was said last, for someone who has gone up to read
+      const latest = el('button', { type: 'button', className: 'latest', hidden: true, ariaLabel: '回到最新', textContent: '回到最新 ↓', onclick: () => { said.scrollTo({ top: said.scrollHeight, behavior: 'smooth' }); } });
+      const atEnd = () => said.scrollHeight - said.scrollTop - said.clientHeight < 60;
+      said.addEventListener('scroll', () => { latest.hidden = atEnd(); }, { passive: true });
       // the way back from the files leads to this window again
       const files = name => {
         history.replaceState(history.state, '', location.pathname + '?take=' + encodeURIComponent(session.id));
@@ -355,13 +380,13 @@
           if (current.dir) return files(current.dir);
           outside.hidden = !outside.hidden;
         } }),
-        el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), taking, outside, format), said, asks, below, write);
+        el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), taking, outside, format), el('div', { className: 'reads' }, said, latest), asks, state, below, write);
       // ---- what is said there
       // The window asks the computer for the conversation itself, again and again while it is open, and says what
       // it has (`since`): the computer gives it anew only when it changed, with how it stands. So what is said on
       // the computer is here within a moment, whatever the lists know. (A computer of an earlier version gives no
       // such word; it is asked when the lists say that the conversation changed.)
-      let stamp = '', seen = '', read = false, reading = false, stands = null, quick = 0;
+      let stamp = '', seen = '', read = false, reading = false, stands = null, quick = 0, asked = 0, changed = 0, sawBusy = 0;
       const pending = [];        // what was written here and is on its way: shown at once, until the conversation's own record has it
       const same = (messages, text) => messages.filter(m => m.role === 'user' && String(m.text || '').trim() === text).length;
       let record = [];
@@ -378,14 +403,17 @@
           if (typeof got.status === 'string') stands = got.status;
           if (!got.same) {
             record = got.messages || [];
+            if (typeof got.asked === 'number') asked = got.asked;
+            if (typeof got.updated === 'number') changed = got.updated;
             // what was written here stands in the record now, or something newer of the user's does
             for (let i = pending.length - 1; i >= 0; i--) if (same(record, pending[i].text) > pending[i].before || (pending[i].sent && record.filter(m => m.role === 'user').length > pending[i].users)) pending.splice(i, 1);
-            const atEnd = !read || said.scrollHeight - said.scrollTop - said.clientHeight < 60, was = said.scrollTop;
+            const end = !read || atEnd(), was = said.scrollTop;
             const fresh = el('div');
             await writeSaid(fresh, record, TOOLS[session.tool]);
             said.replaceChildren(...fresh.childNodes);
             waiting();
-            said.scrollTop = atEnd ? said.scrollHeight : was;      // what was said last is what one came to see; someone reading further up is left there
+            said.scrollTop = end ? said.scrollHeight : was;      // what was said last is what one came to see; someone reading further up is left there
+            latest.hidden = atEnd();
           }
           stamp = typeof got.stamp === 'string' ? got.stamp : null; seen = listed; read = true;
         } catch (error) { if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
@@ -413,9 +441,18 @@
         const listed = now(), current = stands === null || listed.ask ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
         const signature = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir]);
         follow(listed);
+        // the line of how it stands: its clock goes on between the computer's words
+        const kind = !current.live ? 'stopped' : phase || 'stopped';
+        // at work since its user spoke, as its record says; where the record does not say, since this window saw it at work
+        sawBusy = kind !== 'busy' ? 0 : sawBusy || Date.now();
+        const from = kind === 'busy' ? (asked && asked <= Date.now() ? asked : sawBusy) : kind === 'stopped' || kind === 'waiting' ? changed || current.updated : 0;
+        state.className = 'state ' + kind;
+        standing.textContent = !current.live ? '已在电脑上关闭' : PHASE[kind][0];
+        clock.textContent = !from ? '' : kind === 'busy' ? lasted(Date.now() - from) : ago(from);
+        ending.hidden = !canEnd(current);
         if (signature === shown) return;
         shown = signature;
-        head.textContent = (phase && phase !== 'stopped' ? PHASE[phase][0] + ' · ' : '') + whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));
+        head.textContent = whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));      // (how it stands is said in the line above the box)
         // what it asks is answered here, under what was said
         asks.textContent = '';
         if (current.ask) {
@@ -585,7 +622,8 @@
   async function manage(x) {
     const s = x.s, choices = [];
     if (s && marks()) choices.push({ label: s.pinned ? '取消置顶' : '置顶', value: 'pin' });
-    if (s && !x.t && !s.live && marks()) choices.push({ label: s.hidden ? '取消隐藏' : '从列表隐藏', value: 'hide' });
+    if (s && !x.t && marks() && (!s.live || s.hidden || s.now === false)) choices.push({ label: s.hidden ? '取消隐藏' : '从列表隐藏', value: 'hide' });
+    if (s && !x.t && s.live && s.can_takeover === true && usable() && (data.device.features || []).includes('end')) choices.push({ label: '结束电脑上的这段对话', value: 'finish', kind: 'danger' });
     if (s && !x.t && s.live) ways(s).forEach(way => choices.push(way));
     const folder = x.apart ? (x.t ? x.t.folder : s.folder) || '' : '';
     if (folder && usable()) choices.push({ label: '把 ' + base(folder) + ' 加为项目', value: 'add' });
@@ -600,6 +638,11 @@
     else if (choice === 'add') addFolder(folder);
     else if (choice === 'enter') enter(x.project);
     else if (choice === 'end') endTerminal(x.t);
+    else if (choice === 'finish') {
+      if (!await ask('结束“' + s.title + '”？', '', [{ label: '结束电脑上的这段对话', value: true, kind: 'danger' }])) return;
+      try { await api('api/conversation', { id: newId(), session: s.id, action: 'end' }); toast('已结束'); } catch (error) { toast(error.message); }
+      refresh();
+    }
     else if (choice === 'close' || choice === 'copy') into(s, choice);
     else if (choice === 'delete') remove(s);
   }

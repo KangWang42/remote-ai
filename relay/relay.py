@@ -287,7 +287,7 @@ COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_tak
 REACH = ("say", "answer")
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark", "session_delete") + COMPUTER_ACTIONS     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -815,7 +815,7 @@ class Relay:
             more = {mark: payload[mark] for mark in MARKS if mark in payload}
             if not more or any(type(value) is not bool for value in more.values()):
                 raise RemoteError("标记无效")
-        elif action == "delete":
+        elif action in ("delete", "end"):
             pass
         elif action == "read":
             # a page that follows a conversation says what it has: the computer answers {"same": true} to that
@@ -830,7 +830,7 @@ class Relay:
             if not self._view(now)["online"] or not self._device["enabled"]:
                 raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
             needed, without = {"read": ("peek", "电脑端版本不支持查看对话内容，请更新电脑端"), "mark": ("marks", "电脑端版本不支持置顶和隐藏对话，请更新电脑端"),
-                               "delete": ("delete", "电脑端版本不支持删除对话，请更新电脑端")}.get(
+                               "delete": ("delete", "电脑端版本不支持删除对话，请更新电脑端"), "end": ("end", "电脑端版本不支持在手机上结束电脑上的对话，请更新电脑端")}.get(
                 action, ("reach", "电脑端版本不支持在手机上处理电脑上的对话，请更新电脑端"))
             if needed not in self._device.get("features", []):
                 raise RemoteError(without)
@@ -845,6 +845,12 @@ class Relay:
                 answer = self._held({"id": op_id, "action": "session_delete", "session": session, "tool": saved["tool"], "dir": saved["dir"]}, now, wait)
                 self._sessions[:] = [s for s in self._sessions if s["id"] != session]
                 return answer
+            if action == "end":
+                # The computer ends the program that has the conversation there: it stops at once and is open no more.
+                # Only one that a program has open; the list says so with the computer's next report.
+                if not saved.get("live"):
+                    raise RemoteError("这段对话没有开着")
+                return self._held({"id": op_id, "action": "session_end", "session": session, "tool": saved["tool"], "dir": saved["dir"]}, now, wait)
             if action == "mark":
                 # the computer keeps it; the list here says so at once, and again with the computer's next report
                 answer = self._held({"id": op_id, "action": "session_mark", "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
@@ -942,7 +948,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects")],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end")],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))

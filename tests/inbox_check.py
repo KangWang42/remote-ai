@@ -85,7 +85,7 @@ def main():
     try:
         cookie = {}
 
-        def call(path, payload=None):
+        def call(path, payload=None, expect=200):
             connection = http.client.HTTPConnection("127.0.0.1", PORT, timeout=40)
             body = None if payload is None else json.dumps(payload).encode()
             connection.request("POST" if body is not None else "GET", path, body=body, headers=dict(cookie, **({"Content-Type": "application/json"} if body is not None else {})))
@@ -93,7 +93,7 @@ def main():
             text = reply.read()
             if reply.getheader("Set-Cookie"):
                 cookie["Cookie"] = reply.getheader("Set-Cookie").split(";")[0]
-            assert reply.status == 200, (path, reply.status, text[:300].decode("utf-8", "replace"))
+            assert reply.status == expect, (path, reply.status, text[:300].decode("utf-8", "replace"))
             return json.loads(text)
 
         def http_error(act):
@@ -433,7 +433,7 @@ def main():
         # the window asks the computer for the conversation itself: it is there within a moment, whatever the lists know
         until(lambda: "第二部分写好了。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 4, "what is said on the computer appears in the open window")
         head = page_value("document.querySelector('#sheet .stands').textContent")
-        assert head == "正在执行 · Codex · reading-notes", head
+        assert head == "Codex · reading-notes" and page_value("document.querySelector('#sheet .state .standing').textContent") == "正在执行", head      # how it stands is said in the line above the box
         # a message is written in the window; it stays open
         page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '再加一节小结'; document.querySelector('#sheet .write button').click(); return 1; })()")
         went = hook("Stop", WORKING, notes, last_assistant_message="提纲写好了。", stop_hook_active=False)
@@ -563,6 +563,48 @@ def main():
         page_value("(() => { history.back(); return 1; })()")
         back = until(lambda: page_value("location.pathname.endsWith('/files/') ? null : (document.getElementById('sheet') && " + WINDOW + ")"), 15, "back in the window")
         assert back["head"].endswith("web-shop") and back["window"], back
+        # ---- the window says in one line how the conversation stands and since when, and offers to end it on the
+        # computer; and for someone who has gone up to read, the way back to what was said last
+        STATE = "(() => { const s = document.querySelector('#sheet .state'); if (!s) return null; const e = s.querySelector('.end'), l = document.querySelector('#sheet .latest'); return { kind: s.className, words: s.querySelector('.standing').textContent, clock: s.querySelector('.clock').textContent, end: !e.hidden && !!e.offsetParent, latest: !l.hidden, asked: !!document.querySelector('#sheet .confirm') }; })()"
+        state = until(lambda: (lambda got: got if got and got["clock"] else None)(page_value(STATE)), 10, lambda: "how it stands, and since when: %r" % (page_value(STATE),))
+        report["window_state"] = state
+        # (it was told things above and is at work: the clock runs; one that has stopped says since when)
+        import re as _re
+        assert (state["kind"], state["words"]) in (("state busy", "正在执行"), ("state stopped", "已停下"), ("state waiting", "等你的消息")) and not state["latest"], state
+        assert _re.fullmatch(r"\d+:\d\d(:\d\d)?", state["clock"]) if state["kind"] == "state busy" else ("前" in state["clock"] or state["clock"] == "刚刚"), state
+        assert "end" in call("/api/terminal")["device"]["features"]
+        # a short window has nothing above to go to; made low, what was said scrolls, and the way back shows
+        ask("Emulation.setDeviceMetricsOverride", width=412, height=420, deviceScaleFactor=2, mobile=True)
+        page_value("(() => { const s = document.querySelector('#sheet .said'); s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); return 1; })()")
+        until(lambda: page_value(STATE)["latest"], 5, "the way back to what was said last")
+        picture("conversation-low.png")
+        page_value("(() => { document.querySelector('#sheet .latest').click(); return 1; })()")
+        until(lambda: page_value("(() => { const s = document.querySelector('#sheet .said'); return s.scrollHeight - s.scrollTop - s.clientHeight < 60; })()") and not page_value(STATE)["latest"], 6, "back at what was said last")
+        ask("Emulation.setDeviceMetricsOverride", width=412, height=892, deviceScaleFactor=2, mobile=True)
+        # Ending it on the computer is offered where the computer can end it: it must know the conversation's program
+        # for certain, and the program must not be one that another Remote AI runs. (Where this check itself runs in
+        # a terminal of an installed Remote AI, its stand-in is such a one: then the computer says why not.)
+        if listed(IDLE)["can_takeover"] is True:
+            assert state["end"], state
+            # asked once, in the words of what happens; "取消" leaves everything as it is
+            page_value("(() => { document.querySelector('#sheet .state .end').click(); return 1; })()")
+            until(lambda: page_value(STATE)["asked"], 5, "the question before it is ended")
+            assert "对话记录保留" in page_value("document.querySelector('#sheet .confirm p').textContent")
+            picture("conversation-end.png")
+            page_value("(() => { document.querySelector('#sheet .confirm .see').click(); return 1; })()")
+            assert page_value(STATE)["asked"] is False and listed(IDLE)["live"] is True
+            # "结束": the computer closes the program that has it. It is open no more, its record stays
+            page_value("(() => { document.querySelector('#sheet .state .end').click(); return 1; })()")
+            until(lambda: page_value(STATE)["asked"], 5, "the question again")
+            page_value("(() => { document.querySelector('#sheet .confirm .no').click(); return 1; })()")
+            ended = until(lambda: (lambda s: s if s and not s["live"] else None)(listed(IDLE)), 25, "the conversation is no longer open on the computer")
+            report["ended_from_the_window"] = {key: ended[key] for key in ("live", "title", "dir")}
+            assert ended["dir"] == "web-shop" and page_value("!document.getElementById('sheet').open") is True
+        else:
+            assert not state["end"], state
+            refused = call("/api/conversation", {"id": uuid(900).replace("-", ""), "session": IDLE, "action": "end"}, expect=400)
+            report["ending_refused_here"] = refused
+            assert "远程终端" in refused["error"] and listed(IDLE)["live"] is True, refused
         print(json.dumps(report, ensure_ascii=False))
         print("the first page: by what needs its owner, filtered, searched, pinned, hidden, and a folder made a project")
     finally:

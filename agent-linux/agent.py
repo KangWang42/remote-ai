@@ -25,6 +25,7 @@ this user, continue their saved conversations, and look at the files of a projec
 """
 import base64
 import codecs
+import datetime
 import fcntl
 import glob
 import http.client
@@ -329,6 +330,14 @@ def said(path, tool):
     # Codex notes each step for its own window as it ends (the command that ran, the files changed). Where it does,
     # the steps are told by those, and the calls that only wrap them ("exec", "shell") are passed over.
     itemized = tool != "claude" and '"item_completed"' in text
+    asked = [0]       # when its user said the last thing: the work it is at began then
+
+    def stamped(row):
+        try:
+            asked[0] = int(datetime.datetime.fromisoformat(str(row.get("timestamp")).replace("Z", "+00:00")).timestamp() * 1000)
+        except (TypeError, ValueError):
+            pass
+
     for row in rows(text):
         if tool == "claude":
             message = row.get("message")
@@ -346,6 +355,8 @@ def said(path, tool):
                 if part.get("type") == "text" and isinstance(part.get("text"), str):
                     if row["type"] == "assistant" or not part["text"].lstrip().startswith("<"):
                         add(row["type"], part["text"])
+                        if row["type"] == "user":
+                            stamped(row)
                 elif part.get("type") == "tool_use" and row["type"] == "assistant":
                     given = part.get("input") if isinstance(part.get("input"), dict) else {}
                     made = step(brief(part.get("name"), given), given.get("command") if isinstance(given.get("command"), str) else "")
@@ -388,6 +399,8 @@ def said(path, tool):
                     if isinstance(part, dict) and isinstance(part.get("text"), str) \
                             and (payload["role"] == "assistant" or not part["text"].lstrip().startswith("<")):
                         add(payload["role"], part["text"])
+                        if payload["role"] == "user":
+                            stamped(row)
             elif payload.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
                 called = payload.get("name") or "shell"
                 if not (itemized and (payload["type"] == "local_shell_call" or called in ("exec", "shell", "local_shell"))):
@@ -406,7 +419,7 @@ def said(path, tool):
             if with_result > SAID_RESULTS:
                 del entry["result"]
     more = len(kept) < len(out) or os.path.getsize(path) > limit
-    return {"messages": kept, "more": more, "updated": int(os.path.getmtime(path) * 1000)}
+    return {"messages": kept, "more": more, "updated": int(os.path.getmtime(path) * 1000), "asked": asked[0]}
 
 
 def first(back):

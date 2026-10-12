@@ -35,3 +35,11 @@ assert.match(app, /const current = now\(\); finish\(null\); into\(current, 'clos
 // The steps of a conversation stand open, each with its command and the first lines of what came back.
 assert.match(app, /el\('details', \{ className: 'did', open: true \}/, 'what the tool did is shown, not folded away');
 assert.match(app, /m\.detail \? el\('code', \{ className: 'ran', textContent: m\.detail \}\) : '', m\.result \? el\('pre', \{ className: 'got', textContent: m\.result \}\) : ''/);
+
+// The window says in one line how the conversation stands and for how long, offers to end it on the computer where
+// the computer can, and has a way back to what was said last.
+assert.match(app, /const state = el\('div', \{ className: 'state' \}, el\('span', \{ className: 'dot' \}\), standing, clock, ending\);/);
+assert.match(app, /const canEnd = s => s\.live && s\.can_takeover === true && \(data\.device\.features \|\| \[\]\)\.includes\('end'\);/, 'ending is offered where the computer says it can end it');
+assert.match(app, /action: 'end' \}\); toast\('已结束电脑上的这段对话'\); finish\(null\); refresh\(\);/);
+assert.match(app, /className: 'latest', hidden: true, ariaLabel: '回到最新'/);
+assert.match(app, /clock\.textContent = !from \? '' : kind === 'busy' \? lasted\(Date\.now\(\) - from\) : ago\(from\);/, 'at work, for how long; stopped, since when');

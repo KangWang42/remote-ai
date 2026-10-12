@@ -730,6 +730,11 @@ public sealed class TerminalAgent {
         };
         Action<Dictionary<string, object>, string> came = (made, back) => { string first = First(back); if (made != null && first.Length > 0) made["result"] = first; };
         bool woken = false;
+        long began = 0;       // when its user said the last thing: the work it is at began then
+        Action<Dictionary<string, object>> stamped = written => {
+            DateTime when;
+            if (DateTime.TryParse(at(written, "timestamp") as string, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out when)) began = Milliseconds(when);
+        };
         string read = ReadPart(path, true, limit);
         // Codex notes each step for its own window as it ends (the command that ran, the files changed). Where it
         // does, the steps are told by those, and the calls that only wrap them ("exec", "shell") are passed over.
@@ -782,7 +787,7 @@ public sealed class TerminalAgent {
                 if (parts == null) continue;
                 foreach (object item in parts) {
                     var part = item as Dictionary<string, object>; string kind = at(part, "type") as string, text = at(part, "text") as string;
-                    if (kind == "text" && text != null) { if (type == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal)) add(type, text); }
+                    if (kind == "text" && text != null) { if (type == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal)) { add(type, text); if (type == "user") stamped(row); } }
                     else if (kind == "tool_use" && type == "assistant") {
                         var made = step(brief(at(part, "name"), at(part, "input")), at(at(part, "input") as Dictionary<string, object>, "command") as string);
                         string id = at(part, "id") as string;
@@ -826,7 +831,7 @@ public sealed class TerminalAgent {
                     if (parts == null || at(payload, "content") is string) continue;
                     foreach (object item in parts) {
                         string text = at(item as Dictionary<string, object>, "text") as string;
-                        if (text != null && (role == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal))) add(role, text);
+                        if (text != null && (role == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal))) { add(role, text); if (role == "user") stamped(row); }
                     }
                 }
                 else if (kind == "function_call" || kind == "custom_tool_call" || kind == "local_shell_call") {
@@ -846,7 +851,7 @@ public sealed class TerminalAgent {
         // it anew whenever it changes, and the output of every step of a long one is too much for that.
         int withResult = 0;
         for (int i = kept.Count - 1; i >= 0; i--) if (kept[i].ContainsKey("result") && ++withResult > Results) kept[i].Remove("result");
-        return new Dictionary<string, object> { { "messages", kept }, { "more", kept.Count < said.Count || file.Length > limit }, { "updated", Milliseconds(file.LastWriteTimeUtc) } };
+        return new Dictionary<string, object> { { "messages", kept }, { "more", kept.Count < said.Count || file.Length > limit }, { "updated", Milliseconds(file.LastWriteTimeUtc) }, { "asked", began } };
     }
     /// Of how many steps, counted from the last, what came back is given.
     public const int Results = 40;
@@ -1178,7 +1183,7 @@ public sealed class TerminalAgent {
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
-            bool peek = action == "session_read" || action == "session_say" || action == "session_answer" || action == "session_mark" || action == "session_delete";
+            bool peek = action == "session_read" || action == "session_say" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
@@ -1209,6 +1214,19 @@ public sealed class TerminalAgent {
                 catch (UnauthorizedAccessException) { throw new InvalidOperationException("没有权限移走这段对话的文件"); }
                 foreach (string kind in Marks.Kinds) Marks.Set(kind, tool, session, false);
                 sessions = sessions.Where(s => !(s.Id == session && s.Tool == tool)).ToList();
+                nextScan = DateTime.MinValue;
+                result = new Dictionary<string, object>();
+            }
+            else if (action == "session_end") {
+                // The program that has the conversation on this computer is ended: it stops at once, whatever it was
+                // at, and is no longer open anywhere. Its record stays, to be gone on with. Only one this computer
+                // listed as open, whose program is known for certain and is not one of this program's own.
+                string session = Get(op, "session"), tool = Get(op, "tool");
+                var open = sessions.FirstOrDefault(s => s.Id == session && s.Tool == tool && s.Live);
+                if (open == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+                if (!open.CanTakeover) throw new InvalidOperationException(String.IsNullOrEmpty(open.TakeoverReason) ? "这段对话由电脑上的应用管理，请在那里关闭它" : open.TakeoverReason);
+                if (tool == "claude") ClaudeExclusive(session, true);
+                else CodexSessions.Takeover(session, terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray(), Parents());
                 nextScan = DateTime.MinValue;
                 result = new Dictionary<string, object>();
             }
@@ -1350,7 +1368,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete" }.Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end" }.Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },

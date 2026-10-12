@@ -518,6 +518,30 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": info, "sessions": listed}, now=1003)
         self.assertIn(kept, [s["id"] for s in self.relay.overview(now=1003)["sessions"]])
 
+    def test_a_conversation_open_on_the_computer_is_ended_there_by_the_computer(self):
+        import threading
+        kept, open_ = "11111111-2222-3333-4444-555555555555", "22222222-2222-3333-4444-555555555555"
+        listed = [{"id": kept, "tool": "codex", "dir": "demo", "title": "旧的讨论", "updated": 1},
+                  {"id": open_, "tool": "claude", "dir": "", "folder": "D:\\notes", "title": "开着的", "updated": 2, "live": True, "host": "cli", "can_takeover": True}]
+        ask = lambda session, n: {"id": n * 32, "session": session, "action": "end"}
+        self.relay.agent({"info": dict(self.info, features=["peek", "reach"]), "sessions": listed}, now=1001)
+        with self.assertRaisesRegex(RemoteError, "不支持在手机上结束"):
+            self.relay.conversation(ask(open_, "a"), now=1001, wait=0)
+        info = dict(self.info, features=["peek", "reach", "end"])
+        self.relay.agent({"info": info}, now=1001)
+        self.assertIn("end", self.relay.overview(now=1001)["device"]["features"])
+        # only one that a program has open
+        with self.assertRaisesRegex(RemoteError, "没有开着"):
+            self.relay.conversation(ask(kept, "b"), now=1001, wait=0)
+        answers = {}
+        waiting = threading.Thread(target=lambda: answers.update(got=self.relay.conversation(ask(open_, "c"), now=1001, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual([{k: v for k, v in o.items() if k not in ("at", "terminal")} for o in asked], [{"id": "c" * 32, "action": "session_end", "session": open_, "tool": "claude", "dir": ""}])
+        self.relay.agent({"info": info, "acks": [{"id": "c" * 32, "error": "", "result": {}}]}, now=1002)
+        waiting.join(5)
+        self.assertEqual(answers["got"], {})
+
     def test_a_conversation_that_sits_idle_is_told_where_it_is_and_the_answer_is_waited_for(self):
         import threading
         sid, other = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"

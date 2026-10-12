@@ -224,6 +224,12 @@ it stays open on the computer and is used there as before.
   `result`, the first lines of what came back, six at most, where there are any) or `thought` (what the tool said of its work between its steps: the summary Claude Code
   keeps of its thinking, where it keeps one, and Codex's of its reasoning). A page that knows no `thought` shows it
   as it shows `assistant`.
+- With `"action": "end"` (feature `end`) the computer ends the program that has the conversation: it stops at
+  once, whatever it was at, and is open no more; its record stays. Only for one listed as `live`; the computer
+  refuses, in words for the person, where it does not know the conversation's program for certain
+  (`can_takeover`). The answer is `{}`.
+- What a `read` answers carries `asked`, the time (ms) its user said the last thing, 0 where the record does not
+  say: a conversation at work has been at it since then.
 - Without an action (or with `"read"`) the answer is what was last said in it: `{"messages": [...], "more": false,
   "title": "...", "stamp": "<the computer's word for how its file was>", "status": "busy"}`. A page that follows a
   conversation asks again every moment and says what it has, `"since": "<that stamp>"`: the computer then answers

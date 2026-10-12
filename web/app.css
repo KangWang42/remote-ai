@@ -161,7 +161,7 @@ dialog[open] { animation: rise .18s ease-out; }
 #sheet-form .below:empty, #sheet-form > p:empty, #sheet-form > div:empty { display: none; }
 /* the window of a conversation: it fills the screen; what was said takes all the room the heading and the box leave */
 dialog.window { max-width: none; width: 100%; height: 100%; max-height: none; margin: 0; border-radius: 0; background: var(--bg); animation: none; }
-dialog.window #sheet-form { height: 100%; max-height: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; grid-auto-rows: auto; gap: 10px; padding: calc(8px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
+dialog.window #sheet-form { height: 100%; max-height: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-auto-rows: auto; gap: 8px; padding: calc(8px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
 dialog.window #sheet-form::before { display: none; }
 dialog.window .bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
 dialog.window .bar .type, dialog.window .bar .files, dialog.window .bar .take { flex: none; min-width: 44px; min-height: 44px; border-radius: 12px; color: var(--muted); font-weight: 600; font-size: .95rem; }
@@ -177,7 +177,28 @@ dialog.window .reading .pick button[aria-pressed="true"] { background: var(--rai
 dialog.window .bar .who { flex: 1; min-width: 0; }
 dialog.window .bar h3 { font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 dialog.window .bar .stands { color: var(--muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-dialog.window #sheet-form .said { max-height: none; min-height: 0; border: 0; background: transparent; padding: 6px 2px; }
+dialog.window #sheet-form .said { max-height: none; min-height: 0; height: 100%; border: 0; background: transparent; padding: 6px 2px; }
+/* what was said fills what is left of the window; over its lower edge, the way back to what was said last */
+dialog.window .reads { position: relative; min-height: 0; }
+dialog.window .reads .latest { position: absolute; right: 6px; bottom: 8px; min-height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-size: .84rem; font-weight: 600; box-shadow: 0 4px 14px rgb(0 0 0 / .14); }
+dialog.window .reads .latest[hidden] { display: none; }
+/* how it stands, in one line above the box: at work and for how long, asking, waiting, stopped */
+dialog.window .state { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 4px 0 6px; font-size: .86rem; color: var(--muted); }
+dialog.window .state .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); opacity: .55; }
+dialog.window .state .standing { font-weight: 600; color: var(--ink); }
+dialog.window .state .clock { font-variant-numeric: tabular-nums; }
+dialog.window .state.busy .dot { background: var(--busy, #c98a1b); opacity: 1; animation: working 1.2s ease-in-out infinite; }
+dialog.window .state.confirm .dot { background: var(--bad); opacity: 1; }
+dialog.window .state.waiting .dot { background: var(--good); opacity: 1; }
+dialog.window .state .end { margin-left: auto; flex: none; min-height: 34px; padding: 0 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); font-size: .86rem; font-weight: 600; background: transparent; }
+dialog.window .state .end[hidden] { display: none; }
+@keyframes working { 0%, 100% { transform: scale(.7); opacity: .5; } 50% { transform: scale(1.15); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { dialog.window .state.busy .dot { animation: none; } }
+dialog.window .confirm { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); font-size: .9rem; }
+dialog.window .confirm p { margin: 0; }
+dialog.window .confirm .answers { display: flex; gap: 8px; }
+dialog.window .confirm .answers button { flex: 1; min-height: 42px; border-radius: 12px; font-weight: 600; border: 1px solid var(--line); background: var(--raised); }
+dialog.window .confirm .answers .no { color: var(--bad); }
 /* what was last said in a conversation that is open on the computer */
 #sheet-form .said { display: flex; flex-direction: column; gap: 12px; max-height: 52vh; overflow-y: auto; padding: 14px 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); overscroll-behavior: contain; font-family: var(--read-font, inherit); font-size: var(--read-size, .93rem); line-height: var(--read-line, 1.65); }
 #sheet-form .said .turn { display: grid; gap: 4px; min-width: 0; }
