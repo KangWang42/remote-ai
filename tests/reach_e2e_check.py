@@ -34,6 +34,7 @@ PORT = int(os.environ.get("RCLI_TEST_PORT", "8739"))
 password = "test-" + secrets.token_hex(8)
 new_id = lambda: secrets.token_hex(16)
 SESSION, OUTSIDE = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001", "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002"
+INSIDE = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0003"       # one that runs in a terminal of the phone's own
 
 
 def main():
@@ -197,6 +198,24 @@ def main():
         assert call("/api/terminal", {"action": "project_add", "id": new_id(), "path": str(elsewhere), "name": "", "create": False})["state"] in ("queued", "done")
         joined = until(lambda: (lambda s: s if s and s["dir"] else None)(listed(OUTSIDE)), 30, "the conversation belongs to the new project")
         assert (joined["dir"], joined["folder"]) == ("reading-notes", "") and "reading-notes" in call("/api/terminal")["device"]["workspaces"], joined
+
+        # ---- in one of the phone's own terminals nothing is kept: the phone is at that terminal, where the tool shows
+        # its own question. The same request from outside it, with nobody at the computer, waits for the phone (above).
+        terminal = call("/api/terminal", {"action": "start", "id": new_id(), "tool": "shell", "dir": "demo"})["terminal"]
+        event = Path(temp.name) / "inside.json"
+        event.write_text(json.dumps({"hook_event_name": "PermissionRequest", "session_id": INSIDE, "transcript_path": str(rollout), "cwd": str(work), "tool_name": "Bash", "tool_input": {"command": "git push"}}), encoding="ascii")
+        after, printed, typed, deadline = 0, "", 0, time.time() + 60
+        while time.time() < deadline and "HOOK_ENDED" not in printed:
+            item = call("/api/terminal?terminal=%s&after=%d&wait=5" % (terminal, after))
+            after = item["after"]
+            printed += "".join(chunk["data"] for chunk in item["chunks"])
+            if item["terminal"]["state"] == "running" and not typed and printed:
+                time.sleep(1.5)
+                call("/api/terminal", {"action": "input", "id": new_id(), "terminal": terminal, "data": "Get-Content -Raw '%s' | & '%s' --hook codex %s; 'HOOK_'+'ENDED'\r" % (event, agent_exe, pipe)})
+                typed = time.time()
+        assert "HOOK_ENDED" in printed and time.time() - typed < 12, printed[-400:]
+        report["hook_in_own_terminal_ended_after_s"] = round(time.time() - typed, 1)
+        call("/api/terminal", {"action": "close", "id": new_id(), "terminal": terminal})
 
         # ---- the list page: a card like a terminal's, in the same list; "允许" on it answers a request
         if chrome:

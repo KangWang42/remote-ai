@@ -52,8 +52,10 @@ public static class ReachCheck {
         pipe = "RemoteCli.reach.check" + Guid.NewGuid().ToString("N").Substring(0, 8);
         int idle = 0, told = 0;       // idle: seconds nobody has touched the computer, as the check says it
         int wait = 300;               // how long a tool that stops is kept waiting, as its owner would have chosen
+        bool inTerminal = false;      // whether the hooks run in one of the program's own terminals, as the check says it
+        int hookProcess = 0;          // the process the last hook was, as the pipe told it
         try {
-            using (var reach = new Reach(pipe, () => idle, () => wait)) {
+            using (var reach = new Reach(pipe, () => idle, () => wait, (process, tool, session) => { hookProcess = process; return inTerminal; })) {
                 reach.Changed += () => Interlocked.Increment(ref told);
                 string one = Guid.NewGuid().ToString();
                 Func<string, Reach.Open> claude = session => reach.Of("claude", session), codex = session => reach.Of("codex", session);
@@ -171,6 +173,19 @@ public static class ReachCheck {
                 Require(claude(one).Status == "waiting" && !claude(one).Held && !claude(one).Sayable && told > tellings, "and it is the phone's turn all the same: it has stopped while nobody was at the computer");
                 wait = 300; idle = 5; tellings = told;
                 Require(Until(() => claude(one).Status == "idle", 3000) && Until(() => told > tellings, 1000), "until somebody is back at the computer, which is told");
+
+                // ---- a conversation in one of the program's own terminals is at the phone already, in that terminal:
+                // nothing of it is kept, whoever is or is not at the computer and whatever time was chosen
+                string inside = Guid.NewGuid().ToString(), within = Guid.NewGuid().ToString();
+                idle = 600; wait = 300; inTerminal = true;
+                var own = Run("codex", Request(inside, "git push", "Publish"));
+                Require(Answer(own, 3000, "asked in a terminal of the phone's") == "" && codex(inside).Status == "confirm" && !codex(inside).Answerable, "its question is the terminal's to answer: the tool shows it there");
+                Require(hookProcess == own.Program.Id, "which hook it is, is read from the pipe: " + hookProcess + " / " + own.Program.Id);
+                Require(Answer(Run("claude", Request(within, "npm test", "")), 3000, "Claude Code asked in such a terminal") == "" && !claude(within).Answerable, "the same for Claude Code");
+                Require(Answer(Run("claude", Event("Stop", within, ",\"last_assistant_message\":\"Done here.\"")), 3000, "stopped in such a terminal") == "" && claude(within).Status == "idle" && !claude(within).Held, "and it stops as it would without this program");
+                reach.Leave("claude", within, "one more thing");
+                Require(Answer(Run("claude", Event("Stop", within)), 3000, "something was left for it").Contains("one more thing"), "what was left for it is handed over there too");
+                inTerminal = false; idle = 5;
 
                 // ---- a run no person sits at (a script's `claude -p`, `codex exec`, a helper thread of a conversation) is
                 // never kept waiting, however long nobody has been at the computer, and is no conversation for a phone

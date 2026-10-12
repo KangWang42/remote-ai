@@ -36,6 +36,21 @@ public sealed class SessionOrigin {
         } finally { CloseSnapshot(snapshot); }
         return map;
     }
+    /// Whether a process was started, however many steps down, by another: read from the processes as they are now.
+    public static bool Descends(int pid, int ancestor) {
+        var parents = Parents(); var seen = new HashSet<int>();
+        for (int depth = 0; depth < 32 && pid > 0 && seen.Add(pid); depth++) {
+            int parent;
+            if (!parents.TryGetValue(pid, out parent) || parent <= 0 || parent == pid) return false;
+            try {
+                // a number is given anew once its process has ended: a parent is older than its child
+                using (var child = Process.GetProcessById(pid)) using (var above = Process.GetProcessById(parent)) if (above.StartTime.ToUniversalTime() > child.StartTime.ToUniversalTime()) return false;
+            } catch (ArgumentException) { return false; } catch (InvalidOperationException) { return false; } catch (System.ComponentModel.Win32Exception) { return false; }
+            if (parent == ancestor) return true;
+            pid = parent;
+        }
+        return false;
+    }
     /// `parents`: the list to read from, where one was taken already (several conversations are looked at in a row).
     public static SessionOrigin Inspect(int pid, Dictionary<int, int> parents = null) {
         var result = new SessionOrigin();

@@ -26,6 +26,8 @@ namespace RemoteCli {
 ///   computer, a tool that stops is kept waiting for the phone's message for a while, where its owner chose that.
 /// As soon as somebody touches the keyboard or the mouse, whatever was kept waiting is let go, and the tool does
 /// what it would have done without this.
+/// A conversation in one of this program's own terminals is never kept: the phone is at it already, in that
+/// terminal, where the tool shows its own question and takes what is typed.
 public sealed class Reach : IDisposable {
     public const int Unattended = 60;       // seconds without a key or the mouse after which nobody is taken to be at the computer
     public const int Hold = 1800;           // the longest a request for permission is kept for the phone's answer, in seconds
@@ -76,7 +78,8 @@ public sealed class Reach : IDisposable {
     readonly HashSet<string> heard = new HashSet<string>();
     /// Whether a tool has told of anything since this program started: its hooks do reach it.
     public bool Heard(string tool) { lock (gate) return heard.Contains(tool); }
-    readonly string pipe; readonly Func<int> idle, wait;
+    readonly string pipe; readonly Func<int> idle, wait; readonly Func<int, string, string, bool> own;
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint process);
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     volatile bool closed;
     /// Something about a conversation changed: the phone is to be told at once.
@@ -84,8 +87,9 @@ public sealed class Reach : IDisposable {
     public string Pipe { get { return pipe; } }
 
     /// `waitSeconds`: how long a tool that stops is kept waiting now, as its owner has it; asked at every stop.
-    public Reach(string pipeName, Func<int> idleSeconds = null, Func<int> waitSeconds = null) {
-        pipe = pipeName; idle = idleSeconds ?? IdleSeconds; wait = waitSeconds ?? (() => 0);
+    /// `ownTerminal`: whether a hook (its process, its tool, its conversation) runs in one of this program's own terminals.
+    public Reach(string pipeName, Func<int> idleSeconds = null, Func<int> waitSeconds = null, Func<int, string, string, bool> ownTerminal = null) {
+        pipe = pipeName; idle = idleSeconds ?? IdleSeconds; wait = waitSeconds ?? (() => 0); own = ownTerminal;
         new Thread(Listen) { IsBackground = true, Name = "reach" }.Start();
         watch = new System.Threading.Timer(Rested, null, 1000, 1000);
     }
@@ -214,7 +218,9 @@ public sealed class Reach : IDisposable {
                 bool gone = false;
                 var rest = new byte[1];
                 try { stream.BeginRead(rest, 0, 1, done => { try { stream.EndRead(done); } catch { } gone = true; lock (gate) Monitor.PulseAll(gate); }, null); } catch { gone = true; }
-                string[] answer = Handle(Convert.ToString(tool), (Dictionary<string, object>)hooked, () => gone || closed);
+                uint process = 0;       // the hook's own process, as the system tells it: from there up, what started it
+                try { if (!GetNamedPipeClientProcessId(stream.SafePipeHandle.DangerousGetHandle(), out process)) process = 0; } catch (ObjectDisposedException) { }
+                string[] answer = Handle(Convert.ToString(tool), (Dictionary<string, object>)hooked, () => gone || closed, (int)process);
                 WriteFrame(stream, Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string, object> { { "out", answer[0] }, { "code", Int32.Parse(answer[1]) } })));
                 try { stream.WaitForPipeDrain(); } catch { }
             } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }      // a pipe that closed, or words that are not an event
@@ -258,7 +264,7 @@ public sealed class Reach : IDisposable {
     }
 
     /// One event of a tool. Returns what the hook writes for the tool to read, and the code it ends with.
-    string[] Handle(string tool, Dictionary<string, object> hooked, Func<bool> gone) {
+    string[] Handle(string tool, Dictionary<string, object> hooked, Func<bool> gone, int process) {
         string name = Text(hooked, "hook_event_name"), session = Text(hooked, "session_id");
         if ((tool != "claude" && tool != "codex") || !Regex.IsMatch(session, Uuid)) return Nothing;
         if (Scripted(tool, hooked)) return Nothing;
@@ -278,20 +284,23 @@ public sealed class Reach : IDisposable {
         if (o == null) return Nothing;
         if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") { o.Status = "idle"; o.Held = false; } } Tell(); return Nothing; }
         if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.Answerable = o.Held = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
-        if (name == "PermissionRequest") return Asked(o, tool, hooked, gone);
-        if (name == "Stop") return Stopped(o, tool, hooked, gone);
-        return Nothing;
+        if (name != "PermissionRequest" && name != "Stop") return Nothing;
+        bool mine = false;
+        if (own != null && process > 0) try { mine = own(process, tool, session); } catch (Exception) { }
+        if (name == "PermissionRequest") return Asked(o, tool, hooked, gone, mine);
+        return Stopped(o, tool, hooked, gone, mine);
     }
     // The tool asks for permission. The hook is kept waiting until the phone answers; or the tool lets the hook go, or
     // tells of something else (the question was answered at the computer); or, for a tool that does not show its
     // question while a hook runs, somebody is at the computer; or it has been long enough. That the conversation is
     // written to says nothing here: Claude Code writes to it while it asks.
-    string[] Asked(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone) {
-        bool beside = tool == "claude";         // its question is on the computer's screen while the hook runs
+    // `mine`: it runs in one of this program's own terminals. Its question is the terminal's to answer.
+    string[] Asked(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone, bool mine) {
+        bool beside = tool == "claude" && !mine;         // its question is on the computer's screen while the hook runs
         string id; var began = DateTime.UtcNow; bool? verdict = null;
         lock (gate) {
             id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null;
-            o.Status = "confirm"; o.Answerable = beside || idle() >= Unattended; o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
+            o.Status = "confirm"; o.Answerable = !mine && (beside || idle() >= Unattended); o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
         }
         Tell();
         lock (gate) {
@@ -327,12 +336,12 @@ public sealed class Reach : IDisposable {
                 { "additionalContext", FromPhone + ". It is the next message of the user of this conversation:\n\n" + message } } } });
         return json.Serialize(new Dictionary<string, object> { { "decision", "block" }, { "reason", FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message } });
     }
-    string[] Stopped(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone) {
+    string[] Stopped(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone, bool mine) {
         string message = null; var began = DateTime.UtcNow; int turn, kept = wait(); bool held = false;
         lock (gate) {
             o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = o.Held = false; turn = o.Turn;
             if (o.Queued != null) { message = o.Queued; o.Queued = null; Monitor.PulseAll(gate); }
-            else if (idle() >= Unattended) {
+            else if (!mine && idle() >= Unattended) {
                 // nobody is at the computer: it is the phone's turn. The hook is kept only where its owner chose a
                 // time for that; else the tool stops as it would without this program.
                 o.Status = "waiting"; o.Message = null; o.Stopped = began; o.Held = held = kept > 0;

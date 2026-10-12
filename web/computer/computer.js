@@ -113,7 +113,7 @@
     // one with more choices than a row holds is chosen on a sheet, which says what it is for; `needs`: the switch
     // without which it has nothing to do
     { name: 'wait', needs: 'reach', title: '对话停下后等手机消息', sheet: true, choices: [['0', '不等'], ['60', '1 分钟'], ['300', '5 分钟'], ['900', '15 分钟'], ['1800', '30 分钟']],
-      explained: '不等：对话做完就停下，电脑上看不到任何变化；手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十秒左右。选了时间：电脑无人操作满 1 分钟后，对话做完先等这么久，这期间发的消息立即送达；等的时候电脑上显示钩子正在运行，有人碰键盘或鼠标就结束。' },
+      explained: '不等：对话做完就停下，电脑上看不到任何变化；手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十几秒。选了时间：电脑无人操作满 1 分钟后，对话做完先等这么久，这期间发的消息立即送达；等的时候电脑上显示钩子正在运行，有人碰键盘或鼠标就结束。' },
     { name: 'update', title: '自动检查更新', about: '有新版本时提示' }];
   let device = null, told = null, busy = false, problem = '';
   const name = line => line.name || KIND[line.kind][0];

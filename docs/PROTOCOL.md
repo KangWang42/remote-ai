@@ -272,6 +272,9 @@ keyboard or mouse for a minute, and lets it go the moment somebody does; a reque
 stops is not kept waiting unless the program's owner chose a time for that (the setting `wait`, below): then, while
 nobody is at the computer, it waits that long for a message, which it takes at once, and the tool shows its hook as
 running all that while. A conversation that has stopped is idle, and is told where it says `wake` (see `say` above).
+Nothing is kept for a conversation that runs in one of the program's own terminals (its hook was started, however
+many steps down, by the program, or tells of the conversation a terminal runs): the phone is at that terminal, where
+the tool shows its own question and takes what is typed.
 
 ### The program itself
 

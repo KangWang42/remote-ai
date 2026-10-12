@@ -72,7 +72,7 @@ public sealed partial class App {
     // How long a tool that stops while nobody is at the computer waits for the phone's message (Reach.Waits): not at
     // all, unless its owner chooses a time. The agent reads the setting where a tool stops.
     static readonly string[] WaitTitles = { "不等", "1 分钟", "5 分钟", "15 分钟", "30 分钟" };
-    const string WaitFor = "不等：对话做完就停下，电脑上看不到任何变化。手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十秒左右。\n"
+    const string WaitFor = "不等：对话做完就停下，电脑上看不到任何变化。手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十几秒。\n"
         + "选了时间：电脑无人操作满 1 分钟后，对话做完先等这么久，这期间手机发的消息立即送达；\n"
         + "等的时候工具显示钩子正在运行（Claude Code 里写作“" + Reach.Waiting + "”），碰一下键盘或鼠标就结束。";
     int Waiting {

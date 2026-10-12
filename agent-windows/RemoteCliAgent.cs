@@ -119,7 +119,7 @@ public sealed class TerminalAgent {
     readonly string dataDir;
     public TerminalAgent(string dataFolder = null) {
         dataDir = dataFolder ?? DefaultData;
-        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, WaitAtStop); Reach.Changed += Wake;
+        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, WaitAtStop, InOwnTerminal); Reach.Changed += Wake;
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
@@ -580,6 +580,13 @@ public sealed class TerminalAgent {
     // Settings and state live in %LOCALAPPDATA%\RemoteCli; REMOTECLI_DATA points a second copy (or a test) elsewhere.
     public static string DefaultData { get { string wanted = Environment.GetEnvironmentVariable("REMOTECLI_DATA"); return !String.IsNullOrWhiteSpace(wanted) ? wanted : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RemoteCli"); } }
     // config.json: Server (address of the relay), RemoteEnabled, RemoteMaxMode (full, edit or read) and RemoteDirs ("name=folder").
+    // Whether a hook runs in one of this program's own terminals: started, however many steps down, by this program,
+    // or reporting the conversation one of the terminals is known to run (a tool may run its hooks from a service
+    // of its own, which this program did not start).
+    bool InOwnTerminal(int hook, string tool, string session) {
+        if (SessionOrigin.Descends(hook, Process.GetCurrentProcess().Id)) return true;
+        lock (work) return terminals.Values.Any(t => !t.Pty.Closed && t.Tool == tool && String.Equals(t.Session, session, StringComparison.OrdinalIgnoreCase));
+    }
     // How long a tool that stops is kept waiting for the phone, as the settings have it now. Asked by the hooks'
     // threads: read on its own, without what Preferences does besides.
     int WaitAtStop() {
