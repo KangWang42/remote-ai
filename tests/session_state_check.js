@@ -33,7 +33,7 @@ assert.match(app, /className: 'icon take', ariaLabel: '接到手机终端', html
 assert.match(app, /session\.can_takeover === true && \(!locked \|\| inTerminal\(session\)\) \? \{ label: '接到手机终端（关闭电脑上的）', value: 'close' \}/, 'and a held press says that the computer closes it');
 assert.match(app, /const current = now\(\); finish\(null\); into\(current, 'close'\);/, 'the window is left, and the terminal started with the conversation');
 // The steps of a conversation stand open, each with its command and the first lines of what came back.
-assert.match(app, /el\('details', \{ className: 'did', open: true \}/, 'what the tool did is shown, not folded away');
+assert.match(app, /el\('details', \{ className: 'did', open: saved\('steps', 'open'\) !== 'shut' \}/, 'what the tool did is shown, not folded away, unless its reader chose that');
 assert.match(app, /m\.detail \? el\('code', \{ className: 'ran', textContent: m\.detail \}\) : '', m\.result \? el\('pre', \{ className: 'got', textContent: m\.result \}\) : ''/);
 
 // The window says in one line how the conversation stands and for how long, offers to end it on the computer where
