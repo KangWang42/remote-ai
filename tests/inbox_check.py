@@ -70,7 +70,7 @@ def main():
     homes.codex_saved(thesis, HELD, "被占着的对话", 3, held=True)
     # a conversation of Claude Code's that the desktop app has loaded and nobody is at: a process keeps it, half an hour after it was last used
     homes.claude_saved(shop, IDLE, "桌面版里闲置的对话", 0.5, said=("结算页的金额有时多出一位小数，帮我看看", "好的。问题在 `formatPrice`：金额从分换算成元之后没有固定两位小数。\n\n- 换算后统一用 `toFixed(2)`\n- 在 `cart.test.js` 补了一条用例\n\n要顺便检查优惠券那里的金额吗？"))
-    homes.claude_open(shop, IDLE)
+    homes.claude_open(shop, IDLE, version="2.1.283")        # a Claude Code that takes the phone's words as added context at a stop
     removed = Path(temp.name) / "removed"            # where a conversation that is deleted goes here, in place of the recycle bin
     environment = homes.environment(RCLI_PASSWORD=password, REMOTECLI_UNATTENDED="600", REMOTECLI_REMOVED=str(removed))       # nobody is at the computer
     environment["PATH"] = str(homes.stand_ins(temp.name, queue=True)) + ";" + environment["PATH"]
@@ -210,13 +210,15 @@ def main():
         # ---- by what needs its owner: what asks, what is at work, what was used lately, across the projects
         first = lists(lambda seen: seen["needs"] and seen["recent"] and seen["active"], "the lists are filled")
         report["first"] = first
-        # what runs in an app is told apart from what runs in a terminal by its tint: the cards, and the projects
-        TINT = "((list, title) => { const c = Array.from(document.querySelectorAll(list + ' .card')).find(c => c.querySelector('b') && c.querySelector('b').textContent === title); return c ? [c.dataset.source || '', getComputedStyle(c).backgroundColor, getComputedStyle(c).backgroundImage !== 'none'] : null; })"
-        tint = lambda where, title: page_value("%s(%s, %s)" % (TINT, json.dumps(where), json.dumps(title, ensure_ascii=False)))
-        app, term, both, plain = tint("#overview", "桌面版里闲置的对话"), tint("#overview", "看日志"), tint("#project-list", "web-shop"), tint("#project-list", "thesis")
-        report["tints"] = {"app": app, "terminal": term, "project_both": both, "project_terminal": plain}
-        assert app[0] == "app" and term[0] == "term" and both[0] == "both" and plain[0] == "term", report["tints"]
-        assert app[1] != term[1] and term[1] == plain[1] and both[2] and not term[2], report["tints"]
+        # what runs in an app is told from what runs in a terminal in words, in the same place on every card; a
+        # project says by what it is used. No card differs from another in its ground.
+        SAYS = "((list, title) => { const c = Array.from(document.querySelectorAll(list + ' .card')).find(c => c.querySelector('b') && c.querySelector('b').textContent === title); return c ? [Array.from(c.querySelectorAll('.meta > span:not(.pill)')).map(s => s.textContent), getComputedStyle(c).backgroundColor, getComputedStyle(c).backgroundImage] : null; })"
+        says = lambda where, title: page_value("%s(%s, %s)" % (SAYS, json.dumps(where), json.dumps(title, ensure_ascii=False)))
+        app, term, both, plain = says("#overview", "桌面版里闲置的对话"), says("#overview", "看日志"), says("#project-list", "web-shop"), says("#project-list", "thesis")
+        report["where"] = {"app": app, "terminal": term, "project_both": both, "project_terminal": plain}
+        assert app[0][1] == "Claude 桌面版" and term[0][1].startswith("PowerShell · 手机终端"), report["where"]
+        assert both[0][-1] == "终端 · 应用 · 6 段对话" and plain[0][-1] == "终端 · 4 段对话", report["where"]
+        assert len({tuple(seen[1:]) for seen in (app, term, both, plain)}) == 1 and app[2] == "none", report["where"]
         mine = (first["needs"] or []) + (first["active"] or [])
         assert "部署到测试环境" in first["needs"] and "整理读书笔记" in first["active"] and "看日志" in mine and len(mine) == 3, first
         assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券"] and first["more"], first
@@ -253,8 +255,8 @@ def main():
         corner = page_value("(() => Array.from(document.querySelectorAll('#sheet .bar > button')).slice(1).map(b => [b.getAttribute('aria-label'), b.hidden || !b.offsetParent]))()")
         assert corner == [["查看项目文件", False], ["字体和版式", False]], corner
         # how it is read: behind "Aa", the type, its size and the spacing of the lines; what is chosen is kept
-        PICKS = "(() => { const r = document.querySelector('#sheet .reading'); return r.hidden ? null : Array.from(r.querySelectorAll('.pick')).map(g => Array.from(g.querySelectorAll('button')).map(b => (b.getAttribute('aria-pressed') === 'true' ? '*' : '') + b.textContent)); })()"
-        pick = lambda group, text: page_value("(() => { Array.from(document.querySelectorAll('#sheet .reading .pick')[%d].querySelectorAll('button')).find(b => b.textContent === %s).click(); return 1; })()" % (group, json.dumps(text, ensure_ascii=False)))
+        PICKS = "(() => { const r = document.querySelector('#sheet .reading.format'); return r.hidden ? null : Array.from(r.querySelectorAll('.pick')).map(g => Array.from(g.querySelectorAll('button')).map(b => (b.getAttribute('aria-pressed') === 'true' ? '*' : '') + b.textContent)); })()"
+        pick = lambda group, text: page_value("(() => { Array.from(document.querySelectorAll('#sheet .reading.format .pick')[%d].querySelectorAll('button')).find(b => b.textContent === %s).click(); return 1; })()" % (group, json.dumps(text, ensure_ascii=False)))
         READ = "(() => { const s = getComputedStyle(document.querySelector('#sheet .said')), page = getComputedStyle(document.documentElement); return { font: s.fontFamily, size: parseFloat(s.fontSize) / parseFloat(page.fontSize), line: parseFloat(s.lineHeight) / parseFloat(s.fontSize), kept: ['readfont', 'readsize', 'readline'].map(key => localStorage.getItem('rcli-' + key)) }; })()"
         assert page_value(PICKS) is None, "folded until it is asked for"
         page_value("(() => { document.querySelector('#sheet .bar .type').click(); return 1; })()")
@@ -297,7 +299,8 @@ def main():
         assert "Remote AI wake-up" in woke["given"] and "再加一个例子" not in woke["given"] and saying.is_alive(), woke["given"]
         stopped = hook("Stop", IDLE, shop, tool="claude", last_assistant_message="…", stop_hook_active=False)
         given = json.loads(stopped.communicate(timeout=10)[0].decode("utf-8"))
-        assert given["decision"] == "block" and given["reason"].endswith("\n\n再加一个例子") and "from their phone" in given["reason"], given
+        handed = given["hookSpecificOutput"]["additionalContext"]
+        assert "decision" not in given and given["hookSpecificOutput"]["hookEventName"] == "Stop" and handed.endswith("\n\n再加一个例子") and "from their phone" in handed, given
         saying.join(15)
         assert answers.get("got") == {"now": True, "woke": True}, answers
 
@@ -404,7 +407,14 @@ def main():
         # is made of it. Here by a copy: what holds this one open is a made-up lock, which cannot be asked to close.
         page_value("(() => { %s('整理读书笔记').querySelector('button.open').click(); return 1; })()" % CARD)
         until(lambda: page_value(WINDOW), 8, "the window of the one outside")
-        assert page_value("document.querySelector('#sheet .bar .files').hidden") is True, "one outside every project has no files to show"
+        # the phone is shown the files of projects only: for one outside every project the folder offers to make its
+        # folder a project and open the files, in one step
+        OFFER = "(() => { const o = document.querySelector('#sheet .reading.offer'); return o.hidden ? null : [o.querySelector('span').textContent, o.querySelector('button').textContent]; })()"
+        assert page_value("document.querySelector('#sheet .bar .files').hidden") is False and page_value(OFFER) is None
+        page_value("(() => { document.querySelector('#sheet .bar .files').click(); return 1; })()")
+        assert page_value(OFFER) == ["reading-notes", "加为项目并查看文件"], page_value(OFFER)
+        page_value("(() => { document.querySelector('#sheet .bar .files').click(); return 1; })()")
+        assert page_value(OFFER) is None and "/files/" not in page_value("location.pathname")
         # the window works beside the conversation: what is said on the computer appears in it while it is open
         with open(homes.rollouts[WORKING], "a", encoding="utf-8") as stream:
             stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "第二部分写好了。"}]}}, ensure_ascii=False) + "\n")

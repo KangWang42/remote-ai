@@ -190,7 +190,10 @@ public final class AggregateSessionsCheck {
         told.get(0).told(Arrays.asList("codex"), Arrays.asList("Codex 桌面版", "终端"));
         told.get(2).told(Arrays.asList("claude"), Collections.singletonList("Claude 桌面版"));
         require(told.get(0).passes("codex", "app") && told.get(0).passes("claude", "term") && told.get(2).passes("claude", "app") && !told.get(2).passes("claude", "term") && !told.get(2).passes("codex", "app"), "as the computer says of the folder");
-        require("both".equals(told.get(0).source()) && "term".equals(told.get(1).source()) && "app".equals(told.get(2).source()) && new AggregateSessions.Project("x").source().isEmpty(), "for the tint of its row");
+        require("终端 · 应用".equals(told.get(0).uses()) && "终端".equals(told.get(1).uses()) && "应用".equals(told.get(2).uses()) && new AggregateSessions.Project("x").uses().isEmpty(), "by what it is used, in the words of the filters");
+        // where a thing runs is said in words: a saved conversation by what started it, one in an editor's terminal as that
+        require("Codex 桌面版 · web-shop".equals(AggregateSessions.where(drawn)) && "终端 · web-shop".equals(AggregateSessions.where(typed)) && "web-shop".equals(AggregateSessions.where(past2)), AggregateSessions.where(drawn) + " | " + AggregateSessions.where(typed) + " | " + AggregateSessions.where(past2));
+        require("Positron 的终端 · web-shop".equals(AggregateSessions.where(inEditor)) && "VS Code · web-shop".equals(AggregateSessions.where(extension)), AggregateSessions.where(inEditor) + " | " + AggregateSessions.where(extension));
         // one search over all of it: every word, whatever its case, in the name, the place, the tool, the computer; the hidden too
         require("out".equals(ids.apply(AggregateSessions.board(things, " 读书 ", "", "").found)) && AggregateSessions.board(things, "读书", "", "").searched, "by a word of the name");
         require("看日志 past-1 只有画面的终端".equals(ids.apply(AggregateSessions.board(things, "THESIS", "", "").found)), "by the project, what is open first: " + ids.apply(AggregateSessions.board(things, "THESIS", "", "").found));

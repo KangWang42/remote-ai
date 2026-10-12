@@ -27,7 +27,7 @@
 在服务器上用 root 运行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/relay/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/relay/install.sh | sudo bash
 ```
 
 脚本把中转装成一个系统服务，开机自启，只监听本机的 `127.0.0.1:8722`，外面还访问不到。完成时会显示访问密码，记下它，第三步要用。
@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/relay/in
 
 ```bash
 # 在能访问 GitHub 的电脑上
-curl -L -o remote-cli.tar.gz https://github.com/KangWang42/remote-cli/archive/refs/heads/main.tar.gz
+curl -L -o remote-cli.tar.gz https://github.com/KangWang42/remote-ai/archive/refs/heads/main.tar.gz
 scp remote-cli.tar.gz root@服务器地址:/root/
 
 # 在服务器上
@@ -230,7 +230,7 @@ Linux 电脑端用 `--url` 指定中转地址，见 [Linux 电脑端](LINUX.md)�
 电脑端和 App 更新之后，建议把中转也更新到同一版本：新版本的页面和终端功能由中转提供。从手机切换线路（1.2.0 起）时，要切换到的中转需为 1.2.0 或更高版本。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/relay/install.sh | sudo bash -s -- update
+curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/relay/install.sh | sudo bash -s -- update
 ```
 
 这样更新用的是最新的安装脚本，它对服务本身的改进（例如 1.2.1 对启动失败的处理）会一并生效。服务器不能访问 GitHub 时，按安装时的方法把源码包和其中的 `install.sh` 传上去，运行 `sudo bash install.sh update --source /root/remote-cli.tar.gz`。
@@ -281,7 +281,7 @@ python tools/relay_list.py hide "线路 1" https://relay.example.com 口令
 不用安装脚本时，中转就是一个命令：
 
 ```bash
-git clone https://github.com/KangWang42/remote-cli && cd remote-cli
+git clone https://github.com/KangWang42/remote-ai && cd remote-ai
 RCLI_PASSWORD='一个足够长的密码' python3 relay/server.py --host 127.0.0.1 --port 8722 --data /var/lib/remote-cli
 ```
 

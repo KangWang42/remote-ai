@@ -907,7 +907,7 @@ public sealed partial class App : Form {
             (updateRow = new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 34)) };
         for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 48, 648, 48);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 544, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
-        Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 544, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-cli") { UseShellExecute = true }); } catch (Exception) { } });
+        Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 544, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-ai") { UseShellExecute = true }); } catch (Exception) { } });
         Action(settings, "退出 Remote AI", Theme.IconPower, ButtonKind.Danger, 530, 544, 150, 36, (s, e) => Quit());
 
         // ---- toast, tray, timers

@@ -6,10 +6,10 @@
 </p>
 
 <p align="center">
-  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/KangWang42/remote-cli?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=7aa2f7" alt="最新版本"></a>
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/KangWang42/remote-ai?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=7aa2f7" alt="最新版本"></a>
   <img src="https://img.shields.io/badge/%E7%94%B5%E8%84%91-Windows%2010%20%2F%2011%20%C2%B7%20Linux-9ece6a" alt="电脑：Windows 10 / 11、Linux">
   <img src="https://img.shields.io/badge/%E6%89%8B%E6%9C%BA-Android%208.0%2B-9ece6a" alt="手机：Android 8.0 及以上">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/KangWang42/remote-cli?label=%E8%AE%B8%E5%8F%AF&color=8189ad" alt="许可：MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/KangWang42/remote-ai?label=%E8%AE%B8%E5%8F%AF&color=8189ad" alt="许可：MIT"></a>
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
   <img src="docs/images/files-word.png" alt="Word 文件带格式的预览" width="31%">
 </p>
 
-> 本项目原名 Remote CLI，1.5.7 起改名为 Remote AI。仓库地址、安装包文件名和安装目录沿用原来的写法（`remote-cli`、`RemoteCli-…`），旧版可以直接覆盖更新。
+> 本项目原名 Remote CLI，1.5.7 起改名为 Remote AI，仓库随后改名为 `remote-ai`（旧地址会自动跳转）。安装包文件名、安装目录和 Linux 上的命令沿用原来的写法（`RemoteCli-…`、`remote-cli`），旧版可以直接覆盖更新；1.5.7 及更早的版本需要手动安装一次 1.5.8 或更高版本，之后应用内更新照常可用。
 
 ## 概述
 
@@ -46,7 +46,7 @@ Remote AI 把电脑上的这些对话带到手机上，有两种用法，可以�
 
 - **远程处理确认请求。** 请求原文和“允许 / 拒绝”显示在任务列表的卡片上，无需进入对话或终端。
 - **任务状态通知。** 开启任务提醒后，任务等待确认或执行完成时，手机收到通知。
-- **按“终端 / 应用”整理。** 项目和对话都标明是在终端里用的还是在桌面应用里用的，用底色区分，也可以按它筛选。
+- **按“终端 / 应用”整理。** 每张卡片在工具名后面写明它在哪里运行（手机终端、命令行、编辑器的终端、桌面版），项目写明是在终端里用的还是在应用里用的，也可以按它筛选。
 
 Remote AI 不提供模型服务，也不托管账号。它使用电脑上已安装的 `claude`、`codex` 和命令行，以及电脑本地的文件、配置和登录状态。
 
@@ -165,7 +165,7 @@ App 分为三层：**工作台**（所有电脑）、**电脑**（该电脑的�
 ### Linux 电脑
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/agent-linux/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/agent-linux/install.sh | bash
 ```
 
 在需要远程使用的 Linux 电脑上执行上述命令，终端显示二维码后用手机 App 扫描。无需域名、账号和 root 权限：公网地址由 Cloudflare 临时隧道提供，程序安装在当前用户目录。需要 Python 3.9 及以上和 systemd。项目文件夹可在连接后通过手机添加。使用自有域名、仅在局域网内使用、卸载和更新等内容见 [Linux 电脑端](docs/LINUX.md)。
@@ -182,7 +182,7 @@ curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/agent-li
 | 手机与电脑共用终端 | 同一终端在两端显示同一画面，均可输入，无需交接 |
 | 任务状态 | 等待确认、已完成、正在执行、等待输入分别以不同颜色标示 |
 | 列表内处理确认请求 | 程序请求授权时，请求原文和“允许 / 拒绝”显示在列表卡片上 |
-| 终端 / 应用 | 对话和项目标明是在终端里用的（手机终端、命令行窗口、编辑器里的终端）还是在应用里用的（桌面版、编辑器扩展）；应用的卡片底色略有不同，可按它筛选 |
+| 终端 / 应用 | 对话和项目用文字标明是在终端里用的（手机终端、命令行窗口、编辑器里的终端）还是在应用里用的（桌面版、编辑器扩展），可按它筛选 |
 | 识别已有项目 | 电脑端“项目”页的“终端项目”“应用项目”列出已有对话的文件夹，可逐个或全部添加；手机上添加项目时也会列出 |
 | 管理项目和对话 | 手机上长按项目可重命名或移除；长按历史对话可置顶、隐藏或删除。删除的对话可以找回：Claude Code 的进回收站，Codex 的由 Codex 归档 |
 | 在手机上切换线路和更改设置 | 人不在电脑前时，在手机上切换连接线路、更改电脑端的几项设置；新线路连不上时，电脑自动回到原线路 |

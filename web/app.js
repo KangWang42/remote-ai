@@ -301,8 +301,21 @@
     const choice = await openSheet((form, finish) => {
       const now = () => (data.sessions || []).find(s => s.id === session.id && s.tool === session.tool) || session;
       const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
+      // the way back from the files leads to this window again
+      const files = name => {
+        history.replaceState(history.state, '', location.pathname + '?take=' + encodeURIComponent(session.id));
+        location.href = 'files/?dir=' + encodeURIComponent(name);
+      };
+      const samePath = (a, b) => String(a || '').replace(/[\\/]+$/, '').toLowerCase() === String(b || '').replace(/[\\/]+$/, '').toLowerCase();
+      const outside = el('div', { className: 'reading offer', hidden: true }, el('span', { textContent: base(session.folder) }),
+        el('button', { type: 'button', className: 'solid', onclick: async () => {
+          if (!await run({ action: 'project_add', path: session.folder, name: '', create: false }, '正在添加…')) return;
+          try { data = await api('api/terminal'); } catch (error) { return toast(error.message); }
+          const made = (data.device.projects || []).find(p => samePath(p.path, session.folder));
+          if (made) files(made.name); else toast('已加为项目');
+        } }, el('span', { textContent: '加为项目并查看文件' })));
       // how it is read: chosen behind "Aa", kept with the look (in the app for every computer)
-      const format = el('div', { className: 'reading', hidden: true });
+      const format = el('div', { className: 'reading format', hidden: true });
       Object.keys(READ).forEach(key => {
         const [label, choices, usual] = READ[key], group = el('span', { className: 'pick', role: 'group', ariaLabel: label });
         Object.keys(choices).forEach(value => group.append(el('button', { type: 'button', textContent: choices[value][0], ariaPressed: String(saved(key, usual) === value), onclick: () => {
@@ -313,15 +326,16 @@
       });
       form.append(el('div', { className: 'above' }, el('div', { className: 'bar' }, el('button', { type: 'button', className: 'icon', ariaLabel: '返回', html: ICON.back, onclick: () => finish(null) }),
         el('div', { className: 'who' }, el('h3', { textContent: session.title }), head),
-        // at the top right, as on a terminal's page: the files of its project (one outside every project has none
-        // to show), and how it is read
-        el('button', { type: 'button', className: 'icon files', ariaLabel: '查看项目文件', html: ICON.folder, hidden: !session.dir || !(data.device.features || []).includes('files'), onclick: () => {
+        // at the top right, as on a terminal's page: the files of its project, and how it is read. The phone is shown
+        // the files of projects only: for a conversation outside every project the folder offers to make its folder
+        // one, and opens the files then.
+        el('button', { type: 'button', className: 'icon files', ariaLabel: '查看项目文件', html: ICON.folder, hidden: !(session.dir || session.folder) || !(data.device.features || []).includes('files'), onclick: () => {
           if (!usable()) return toast('电脑离线，暂时无法查看文件');
-          // the way back from the files leads to this window again
-          history.replaceState(history.state, '', location.pathname + '?take=' + encodeURIComponent(session.id));
-          location.href = 'files/?dir=' + encodeURIComponent(session.dir);
+          const current = now();
+          if (current.dir) return files(current.dir);
+          outside.hidden = !outside.hidden;
         } }),
-        el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), format), said, asks, below, write);
+        el('button', { type: 'button', className: 'icon type', ariaLabel: '字体和版式', textContent: 'Aa', onclick: () => { format.hidden = !format.hidden; } })), outside, format), said, asks, below, write);
       // ---- what is said there
       // The window asks the computer for the conversation itself, again and again while it is open, and says what
       // it has (`since`): the computer gives it anew only when it changed, with how it stands. So what is said on
@@ -491,11 +505,16 @@
   const needsYou = x => x.live && (x.phase === 'confirm' || x.phase === 'done' || x.phase === 'waiting');
   const byRank = (a, b) => a.rank - b.rank || b.at - a.at, byTime = (a, b) => b.at - a.at;
   // by what it runs and where, in the words of the cards
+  // Every card says it the same way: the tool, then where it runs. A terminal of the phone's; for a conversation
+  // that a program has open, that program (a desktop app by its own name, which names the tool too; a command
+  // line; an editor, and whether it is the editor's terminal); for one that is only saved, by what it was started.
   const whereOf = x => {
     const tool = TOOLS[x.tool];
     if (x.t) return tool + (x.live ? ' · ' + PHONE : '');
-    const origin = x.live && x.s.origin && x.s.origin !== '电脑独立终端' ? x.s.origin : '';
-    return !origin ? tool : /桌面版|后台服务/.test(origin) ? origin : tool + ' · ' + origin;
+    const kind = x.s.kind || '';
+    if (!x.live) return !kind ? tool : /桌面版/.test(kind) ? kind : tool + ' · ' + kind;
+    const origin = x.s.origin && x.s.origin !== '电脑独立终端' ? x.s.origin : '';
+    return !origin ? tool : /桌面版|后台服务/.test(origin) ? origin : tool + ' · ' + origin + (kind === '终端' && origin !== '命令行' ? ' 的终端' : '');
   };
   // what a search looks through
   const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? PHONE : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
@@ -611,8 +630,7 @@
     meta.append(el('span', { className: 'chip' + (x.apart ? ' apart' : ''), textContent: x.place }));
     if (x.apart) meta.append(el('span', { textContent: '未加入项目' }));
   }
-  // (what runs in an app is told apart from what runs in a terminal by its tint)
-  const card = (x, withProject) => { const made = held(x.t ? terminalCard(x, withProject) : sessionCard(x, withProject), () => manage(x)); if (x.source) made.dataset.source = x.source; return made; };
+  const card = (x, withProject) => held(x.t ? terminalCard(x, withProject) : sessionCard(x, withProject), () => manage(x));
   // A terminal opened from the phone.
   function terminalCard(x, withProject) {
     const t = x.t, phase = x.phase, meta = el('span', { className: 'meta' }, pill(phase, PHASE[phase][0]));
@@ -775,20 +793,19 @@
       const list = wanted.map(name => {
         const folder = folderOf(name);
         const own = mine.filter(x => x.project === name), count = sessions.filter(x => x.project === name).length;
-        // a project is an app's, a terminal's or both: by what its folder is used for, and by what is in it now
+        // a project says by what it is used, in the words of the filters: by what its folder is used for, and by what is in it now
         const uses = new Set((folder.kinds || []).map(sourceOfKind).concat(everything.filter(x => x.project === name).map(x => x.source)).filter(Boolean));
-        const source = uses.has('app') ? (uses.has('term') ? 'both' : 'app') : uses.has('term') ? 'term' : '';
+        const source = Object.keys(SOURCE).filter(key => uses.has(key)).map(key => SOURCE[key]).join(' · ');
         const need = stands(own, 'confirm'), done = stands(own, 'done'), work = stands(own, 'busy');
         const meta = el('span', { className: 'meta' });
         if (need) { const c = el('span', { className: 'count', textContent: need + ' 个等你确认' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--bad)'); c.style.color = 'var(--bad)'; meta.append(c); }
         if (done) { const c = el('span', { className: 'count', textContent: done + ' 个已完成' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--good)'); c.style.color = 'var(--good)'; meta.append(c); }
         if (work) { const c = el('span', { className: 'count', textContent: work + ' 个在执行' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--busy)'); c.style.color = 'var(--busy)'; meta.append(c); }
         if (own.length && !need && !done && !work) meta.append(el('span', { textContent: own.length + ' 个终端开着' }));
-        meta.append(el('span', { textContent: count ? count + ' 段对话' : '还没有对话' }));
+        meta.append(el('span', { textContent: (source ? source + ' · ' : '') + (count ? count + ' 段对话' : '还没有对话') }));
         const made = held(el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => enter(name) },
           el('span', { className: 'tool folder', html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev }))),
           () => manageProject(name, folder));
-        if (source) made.dataset.source = source;
         return { name, card: made, sign: [name, need, done, work, own.length, count, folder.path, source] };
       });
       const cardsP = list.map(x => x.card);

@@ -48,6 +48,15 @@ public static class SaidCheck {
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"加了。\"}]}}",
                 "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"someone-else\",\"body\":\"check the tests over there\"},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
                 "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":\"Stop hook feedback:\\nrun the linter first\"}}",
+                // handed over at a stop as added context (a Claude Code that takes it notes that as an attachment): the user's
+                // words all the same; what another hook added, or a Stop hook of someone else's, is none of the phone's
+                "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"remote-cli-phone-02\",\"body\":" + Quoted(ClaudeRelay.Wake) + "},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Understood.\"}]}}",
+                "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_success\",\"hookName\":\"Stop\",\"content\":\"\",\"stdout\":\"{}\"}}",
+                "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"Stop\",\"content\":[" + Quoted(Reach.FromPhone + ". It is the next message of the user of this conversation:\n\n作为上下文交来的\n第二行") + "]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"照做了。\"}]}}",
+                "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"PostToolUse\",\"content\":[" + Quoted(Reach.FromPhone + ":\n\n别的钩子加的") + "]}}",
+                "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"Stop\",\"content\":[\"The linter still fails.\\n\\nfix it\"]}}",
                 // written while the program went by its earlier name: read as its own as well
                 "{\"type\":\"user\",\"isMeta\":true,\"origin\":{\"kind\":\"peer\",\"name\":\"remote-cli-phone-01\",\"body\":\"Remote CLI wake-up: the user of this conversation is sending it a message from their phone.\"},\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message: ...\"}}",
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"…\"}]}}",
@@ -55,7 +64,7 @@ public static class SaidCheck {
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"收到。\"}]}}");
             // what the tools are told names the program as it is called now (tried with the real tools in these words)
             Require(Reach.FromPhone.Contains("Remote AI") && ClaudeRelay.Wake.StartsWith("Remote AI wake-up") && ClaudeRelay.Framed("x").Contains("Remote AI"), "the words the tools are told in");
-            Require(Shown(TerminalAgent.Said(phone, "claude")) == "user:在电脑上说的 | assistant:好的。 | user:把结论再写短一点\n\n分两段 | assistant:改短了。 | user:再加一个例子 | assistant:加了。 | user:改名之前发的 | assistant:收到。", "what the phone said: " + Shown(TerminalAgent.Said(phone, "claude")));
+            Require(Shown(TerminalAgent.Said(phone, "claude")) == "user:在电脑上说的 | assistant:好的。 | user:把结论再写短一点\n\n分两段 | assistant:改短了。 | user:再加一个例子 | assistant:加了。 | user:作为上下文交来的\n第二行 | assistant:照做了。 | user:改名之前发的 | assistant:收到。", "what the phone said: " + Shown(TerminalAgent.Said(phone, "claude")));
             var messages = ((IEnumerable)result["messages"]).Cast<Dictionary<string, object>>().ToList();
             Require(messages.Count == 4, "claude count: " + Shown(result));
             Require(Shown(result).StartsWith("user:第一句 | assistant:我先看看登录的代码。 | tool:Bash：grep -rn login src | assistant:长长", StringComparison.Ordinal), "claude: " + Shown(result).Substring(0, 80));

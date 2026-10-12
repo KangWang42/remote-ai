@@ -58,10 +58,6 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .section-head[data-fold].folded::after { transform: rotate(-90deg); }
 .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .card { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
-/* What runs in an app (a desktop app, an editor) has a tint of its own; what runs in a terminal is as the page is.
-   A project used both ways has the tint at its start only. */
-.card[data-source="app"] { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 26%, var(--line)); }
-.card[data-source="both"] { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, var(--panel)), var(--panel) 46%); }
 .card > button.open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; text-align: left; min-height: 64px; }
 .card > button.open:active { background: var(--raised); }
 /* ending a terminal: a quiet disc beside the card's text, with room around it for a thumb */
@@ -173,6 +169,8 @@ dialog.window .bar .files[hidden] { display: none; }
 dialog.window .bar .files svg { width: 21px; height: 21px; }
 dialog.window .reading { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 12px; margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); font-size: .86rem; color: var(--muted); }
 dialog.window .reading[hidden] { display: none; }
+dialog.window .reading > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.window .reading button.solid { min-height: 42px; padding: 0 14px; }
 dialog.window .reading .pick { display: flex; gap: 4px; padding: 3px; border-radius: 11px; background: var(--bg); border: 1px solid var(--line); }
 dialog.window .reading .pick button { flex: 1; min-height: 34px; border-radius: 8px; color: var(--muted); font-size: .86rem; white-space: nowrap; }
 dialog.window .reading .pick button[aria-pressed="true"] { background: var(--raised); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }

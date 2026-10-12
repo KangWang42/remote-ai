@@ -125,6 +125,18 @@ public static class ReachCheck {
                 var went = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(next);
                 Require(Convert.ToString(went["decision"]) == "block" && Convert.ToString(went["reason"]).Contains("然后把文档也更新了") && Convert.ToString(went["reason"]).Contains("phone"), "the tool is told to go on with it: " + next);
                 Require(codex(two).Status == "busy", "and works on");
+                // How the words are handed over hangs on the tool. Claude Code of a version that takes it is given them
+                // as added context (its screen then says "Stop hook feedback", no error); an earlier one, one of an
+                // unknown version, and Codex are told by a blocked stop, as before.
+                Func<string, Dictionary<string, object>> answered = said => new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(said);
+                var modern = answered(Reach.AtStop("claude", "2.1.283", "把结论再写短一点\n分两段"));
+                var added = (Dictionary<string, object>)modern["hookSpecificOutput"];
+                Require(!modern.ContainsKey("decision") && Convert.ToString(added["hookEventName"]) == "Stop" && Convert.ToString(added["additionalContext"]).StartsWith(Reach.FromPhone) && Convert.ToString(added["additionalContext"]).EndsWith("\n\n把结论再写短一点\n分两段"), "added context for a Claude Code that takes it");
+                Require(answered(Reach.AtStop("claude", "3.0.0", "x")).ContainsKey("hookSpecificOutput") && answered(Reach.AtStop("claude", "2.2.0", "x")).ContainsKey("hookSpecificOutput"), "and for a later one");
+                foreach (var earlier in new[] { new[] { "claude", "2.1.282" }, new[] { "claude", "" }, new[] { "claude", null }, new[] { "claude", "latest" }, new[] { "codex", "2.1.283" }, new[] { "codex", "" } }) {
+                    var blocked = answered(Reach.AtStop(earlier[0], earlier[1], "x"));
+                    Require(Convert.ToString(blocked["decision"]) == "block" && Convert.ToString(blocked["reason"]).EndsWith("\n\nx") && !blocked.ContainsKey("hookSpecificOutput"), "a blocked stop for " + earlier[0] + " " + earlier[1]);
+                }
                 // nobody at the computer: a tool that stops is kept waiting for the phone's message
                 idle = 600;
                 var stopped = Run("claude", Event("Stop", one, ",\"last_assistant_message\":\"Finished the tests.\""));

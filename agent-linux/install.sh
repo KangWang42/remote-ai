@@ -2,7 +2,7 @@
 # remote-cli on Linux in one command: the relay and the agent of this computer as services
 # of your own user, a public address, and the code for the phone to scan.
 #
-#   curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/agent-linux/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/agent-linux/install.sh | bash
 #   curl -fsSL .../install.sh | bash -s -- --dir ~/projects/demo --name my-server
 #
 #   install.sh [--dir PATH[=NAME]]... [--name NAME] [--port N] [--tunnel | --url URL | --lan]

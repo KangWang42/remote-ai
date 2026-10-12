@@ -7,7 +7,7 @@
 Linux 上没有带窗口的程序。电脑端是一个 Python 文件，和中转一起作为你自己这个用户的后台服务运行，不需要 root，也不往系统目录里装东西。需要 Python 3.9 及以上和 systemd。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/agent-linux/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/agent-linux/install.sh | bash
 ```
 
 这一行会：下载程序放到 `~/.local/share/remote-cli-agent`，生成一个密码，把中转、电脑端和公网隧道注册成用户服务并启动，最后在终端里显示地址、密码和二维码。手机 App 点“扫码添加电脑”扫它即可。项目文件夹可以连上后在手机里添加。
@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/agent-li
 要加参数时写在 `bash -s --` 后面，例如指定两个项目文件夹和手机上显示的名称：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/agent-linux/install.sh | bash -s -- --dir ~/projects/demo --dir ~/work=工作 --name 我的服务器
+curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/agent-linux/install.sh | bash -s -- --dir ~/projects/demo --dir ~/work=工作 --name 我的服务器
 ```
 
 | 参数 | 含义 |

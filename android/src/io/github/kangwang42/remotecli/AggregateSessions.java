@@ -135,7 +135,12 @@ final class AggregateSessions {
     static String sourceOfKind(String kind) { return kind == null || kind.isEmpty() ? "" : "终端".equals(kind) ? "term" : "app"; }
     /** By what a thing runs and where it is, in the words of a card: "手机终端 · thesis", "Codex 桌面版 · notes（未加入项目）". */
     static String where(Entry entry) {
-        String runs = entry.terminal ? (entry.running() ? "手机终端" : "") : entry.live && !"电脑独立终端".equals(entry.origin) ? entry.origin : "";
+        // a terminal of the phone's; the program that has a conversation open (and whether it is an editor's terminal);
+        // for one that is only saved, by what it was started
+        String runs = entry.terminal ? (entry.running() ? "手机终端" : "")
+            : !entry.live ? entry.kind
+            : "电脑独立终端".equals(entry.origin) ? ""
+            : entry.origin + ("终端".equals(entry.kind) && !entry.origin.isEmpty() && !"命令行".equals(entry.origin) && !entry.origin.contains("桌面版") ? " 的终端" : "");
         String place = entry.place() + (entry.apart() ? "（未加入项目）" : "");
         return runs.isEmpty() ? place : place.isEmpty() ? runs : runs + " · " + place;
     }
@@ -205,8 +210,8 @@ final class AggregateSessions {
         final Set<String> tools = new HashSet<>(), sources = new HashSet<>();
         boolean fixed;          // it stands in the computer's own settings: changed from the phone only where the computer says so
         Project(String name) { this.name = name; }
-        /** "app", "term", "both", or "" where nothing says: for the tint of its row. */
-        String source() { return sources.contains("app") ? (sources.contains("term") ? "both" : "app") : sources.contains("term") ? "term" : ""; }
+        /** By what it is used, in the words of the filters: "终端", "应用", "终端 · 应用"; "" where nothing says. */
+        String uses() { return (sources.contains("term") ? "终端" : "") + (sources.contains("term") && sources.contains("app") ? " · " : "") + (sources.contains("app") ? "应用" : ""); }
         /** What the computer says of the folder: the tools, and by what it is used ("终端", "Codex 桌面版", …). */
         void told(List<String> tools, List<String> kinds) {
             this.tools.addAll(tools);

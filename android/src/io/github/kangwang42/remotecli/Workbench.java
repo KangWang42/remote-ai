@@ -524,9 +524,7 @@ final class Workbench {
         LinearLayout card = kit.row();
         card.setMinimumHeight(kit.dp(66)); card.setPadding(kit.dp(14), kit.dp(11), kit.dp(14), kit.dp(11));
         int edge = "confirm".equals(task.kind) ? Kit.mix(kit.BAD, kit.LINE, .55f) : "done".equals(task.kind) || "waiting".equals(task.kind) ? Kit.mix(kit.GOOD, kit.LINE, .45f) : kit.LINE;
-        // what runs in an app (a desktop app, an editor) has a tint of its own; what runs in a terminal is as the page is
-        boolean app = "app".equals(entry.source());
-        card.setBackground(kit.shape(app ? Kit.mix(kit.ACCENT, kit.PANEL, .08f) : kit.PANEL, app && edge == kit.LINE ? Kit.mix(kit.ACCENT, kit.LINE, .26f) : edge, 16));
+        card.setBackground(kit.shape(kit.PANEL, edge, 16));
         card.addView(kit.tile(toolIcon(entry.tool), toolColor(entry.tool), 40));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(12), 0, 0, 0);
@@ -889,12 +887,12 @@ final class Workbench {
         boolean open = unfolded.contains(key);
         LinearLayout row = kit.row();
         row.setMinimumHeight(kit.dp(52)); row.setPadding(kit.dp(16), kit.dp(8), kit.dp(12), kit.dp(8));
-        // a project an app uses has the app's tint, fainter where it is used in a terminal too
-        if ("app".equals(project.source()) || "both".equals(project.source())) row.setBackgroundColor(Kit.mix(kit.ACCENT, kit.PANEL, "app".equals(project.source()) ? .08f : .04f));
         row.addView(kit.icon(R.drawable.ic_folder, open ? kit.ACCENT : kit.MUTED, 20));
         TextView name = kit.title(project.name, 15, kit.INK, open);
         name.setPadding(kit.dp(12), 0, kit.dp(8), 0);
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+        // by what the project is used, in the words of the filters
+        if (!project.uses().isEmpty()) { TextView uses = kit.text(project.uses(), 12.5f, kit.MUTED); uses.setPadding(0, 0, kit.dp(8), 0); row.addView(uses); }
         // each state keeps its own colour here too: red asks for a decision, green is finished work not yet looked at
         int[] counts = { need, done, work }, shades = { kit.BAD, kit.GOOD, kit.BUSY };
         String[] says = { " 个等你确认", " 个已完成", " 个在执行" };

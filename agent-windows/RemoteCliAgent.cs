@@ -710,6 +710,18 @@ public sealed class TerminalAgent {
             string type = at(row, "type") as string;
             if (tool == "claude") {
                 var message = at(row, "message") as Dictionary<string, object>;
+                if (type == "attachment") {
+                    // What a Stop hook handed the conversation as added context: the phone's words, where they came that way.
+                    var attached = at(row, "attachment") as Dictionary<string, object>;
+                    var handed = at(attached, "content") as IEnumerable;
+                    if (handed == null || at(attached, "content") is string || !"hook_additional_context".Equals(at(attached, "type")) || !"Stop".Equals(at(attached, "hookName"))) continue;
+                    foreach (object one in handed) {
+                        string context = one as string ?? ""; int from = context.IndexOf("\n\n", StringComparison.Ordinal);
+                        if (from < 0 || context.IndexOf("from their phone", StringComparison.Ordinal) < 0 || !Reach.Names.Any(name => context.IndexOf(name, StringComparison.Ordinal) >= 0)) continue;
+                        add("user", context.Substring(from + 2)); woken = false;
+                    }
+                    continue;
+                }
                 if ((type != "user" && type != "assistant") || true.Equals(at(row, "isSidechain")) || message == null) continue;
                 if (true.Equals(at(row, "isMeta"))) {
                     // What Claude Code notes for itself is left out, but for what the phone said: it reached the

@@ -60,7 +60,7 @@ class Homes:
         self.rollouts[session] = path
         return path
 
-    def claude_open(self, folder, session, socket="\\\\.\\pipe\\LOCAL\\cc-msg-made-up", entry="claude-desktop-3p", status="idle"):
+    def claude_open(self, folder, session, socket="\\\\.\\pipe\\LOCAL\\cc-msg-made-up", entry="claude-desktop-3p", status="idle", version=None):
         """A conversation of Claude Code's that a program has open, as Claude Code notes it: the note names a process
         that runs (one is started here and ended by close()), and where the conversation takes messages from other
         sessions. The desktop app keeps such a process for every conversation it has loaded."""
@@ -70,7 +70,8 @@ class Homes:
         self.holders.append(holder)
         time.sleep(0.5)             # the note is written after the process began, as Claude Code writes it
         (self.claude / "sessions" / ("%d.json" % holder.pid)).write_text(json.dumps(
-            {"pid": holder.pid, "sessionId": session, "cwd": str(folder), "status": status, "kind": "interactive", "entrypoint": entry, "messagingSocketPath": socket}), encoding="utf-8")
+            dict({"pid": holder.pid, "sessionId": session, "cwd": str(folder), "status": status, "kind": "interactive", "entrypoint": entry, "messagingSocketPath": socket},
+                 **({"version": version} if version else {}))), encoding="utf-8")
         return holder
 
     QUEUE = '''using System; using System.IO; using System.Text;

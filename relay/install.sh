@@ -2,7 +2,7 @@
 # The relay alone, as a service on a server of your own: a fixed address for the phone, and a shorter way than a
 # Cloudflare tunnel when the phone and the computer are both close to the server.
 #
-#   curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-cli/main/relay/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/relay/install.sh | sudo bash
 #   sudo bash install.sh [--port N] [--source remote-cli.tar.gz] [--public [--key WORD] [--spaces N]]
 #
 #   install.sh status       is the service running, which version, which port
@@ -13,7 +13,7 @@
 # --port N       the port on this machine, 8722 unless given. The relay listens on 127.0.0.1 only: a web server
 #                in front of it supplies https (docs/SELF_HOSTING.md)
 # --source FILE  take the program from a source archive that is already on the server, for a server that cannot
-#                reach GitHub: download https://github.com/KangWang42/remote-cli/archive/refs/heads/main.tar.gz
+#                reach GitHub: download https://github.com/KangWang42/remote-ai/archive/refs/heads/main.tar.gz
 #                elsewhere and copy it over
 # --public       a relay for everyone instead of one's own: it has no password; every computer that asks is given a
 #                place of its own, with a password only that computer and its phones know (docs/SELF_HOSTING.md).
@@ -83,7 +83,7 @@ find_source() {
             fi && { got=1; break; }
         done
         [ -n "$got" ] || fail "下载失败：${sources[*]}
-服务器访问不了 GitHub 时，在别的电脑上下载 https://github.com/KangWang42/remote-cli/archive/refs/heads/main.tar.gz，传到服务器后用 --source 指定它。"
+服务器访问不了 GitHub 时，在别的电脑上下载 https://github.com/KangWang42/remote-ai/archive/refs/heads/main.tar.gz，传到服务器后用 --source 指定它。"
     fi
     [ -f "$archive" ] || fail "找不到源码压缩包：$archive"
     mkdir -p "$fetched/source"

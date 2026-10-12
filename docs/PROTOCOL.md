@@ -257,6 +257,12 @@ it stays open on the computer and is used there as before.
   conversation in its data folder (`conversation-marks.json`, at most 300 of each kind); the overview says the new
   state at once.
 
+What a Stop hook answers to hand its tool the phone's words hangs on the tool: Claude Code from 2.1.283 on is given
+them as added context (`hookSpecificOutput.additionalContext`), with which the conversation goes on and which its
+screen shows as feedback; an earlier Claude Code, and Codex, are told by a blocked stop (`decision: "block"`, the words
+as the `reason`), which Claude Code shows as an error of the hook although nothing failed. Either way the words stand
+in what `read` gives as what the user said.
+
 How this reaches the tools: Claude Code and Codex run hooks of the computer's program (it puts them into the tools'
 own settings when its owner switches that on). A hook for a request for permission is answered with the phone's
 answer; a hook that runs as the tool stops is answered with the message, as something to go on with. Claude Code

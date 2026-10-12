@@ -248,7 +248,7 @@ public sealed class Reach : IDisposable {
         if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") o.Status = "idle"; } Tell(); return Nothing; }
         if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.Answerable = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
         if (name == "PermissionRequest") return Asked(o, tool, hooked, gone);
-        if (name == "Stop") return Stopped(o, hooked, gone);
+        if (name == "Stop") return Stopped(o, tool, hooked, gone);
         return Nothing;
     }
     // The tool asks for permission. The hook is kept waiting until the phone answers; or the tool lets the hook go, or
@@ -282,7 +282,21 @@ public sealed class Reach : IDisposable {
     }
     // The tool has stopped. A message that waited for this goes to it now. Else, while nobody is at the computer, it
     // is kept waiting for one.
-    string[] Stopped(Open o, Dictionary<string, object> hooked, Func<bool> gone) {
+    /// The first Claude Code this was tried with. From it on, a Stop hook may hand Claude Code added context and the
+    /// conversation goes on with it (docs: "non-error feedback that continues the conversation"); an earlier one
+    /// might take no notice of that, and the words would be lost.
+    public static readonly Version ContextAtStop = new Version(2, 1, 283);
+    /// What a Stop hook answers to hand its tool the phone's words. Claude Code of a version that takes it is given
+    /// them as added context: its screen then says "Stop hook feedback" and no error. Else the stop is blocked with
+    /// the words as the reason, which every tool takes (Claude Code shows that as "Stop hook error").
+    public static string AtStop(string tool, string version, string message) {
+        Version runs; var json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
+        if (tool == "claude" && System.Version.TryParse(version ?? "", out runs) && runs >= ContextAtStop)
+            return json.Serialize(new Dictionary<string, object> { { "hookSpecificOutput", new Dictionary<string, object> { { "hookEventName", "Stop" },
+                { "additionalContext", FromPhone + ". It is the next message of the user of this conversation:\n\n" + message } } } });
+        return json.Serialize(new Dictionary<string, object> { { "decision", "block" }, { "reason", FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message } });
+    }
+    string[] Stopped(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone) {
         string message = null; var began = DateTime.UtcNow; int turn;
         lock (gate) {
             o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = false; turn = o.Turn;
@@ -305,8 +319,7 @@ public sealed class Reach : IDisposable {
         if (message != null) lock (gate) { if (o.Turn == turn) { o.Status = "busy"; o.Last = ""; } }
         Tell();
         if (message == null) return Nothing;
-        string reason = FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message;
-        return new[] { json.Serialize(new Dictionary<string, object> { { "decision", "block" }, { "reason", reason } }), "0" };
+        return new[] { AtStop(tool, tool == "claude" ? ClaudeSessions.Version(Text(hooked, "session_id")) : "", message), "0" };
     }
 
     /// The hook itself, as the tools run it: hands the event it was given to the program that listens on the pipe

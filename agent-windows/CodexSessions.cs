@@ -88,13 +88,16 @@ public sealed class ClaudeSessions {
     }
     /// How a session was started, as Claude Code notes it ("cli", "claude-desktop…", "sdk-cli" for a script's run);
     /// "" when it has no note. Whether its program still runs is not looked at.
-    public static string Entry(string session) {
+    public static string Entry(string session) { return Noted(session, "entrypoint"); }
+    /// The version of the Claude Code that runs a session, as it notes it ("2.1.283"); "" when it has no note.
+    public static string Version(string session) { return Noted(session, "version"); }
+    static string Noted(string session, string what) {
         try {
             foreach (string file in Directory.GetFiles(Path.Combine(Home, "sessions"), "*.json")) {
                 try {
                     var record = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
                     object value;
-                    if (record != null && record.TryGetValue("sessionId", out value) && Convert.ToString(value) == session) return record.TryGetValue("entrypoint", out value) ? Convert.ToString(value) : "";
+                    if (record != null && record.TryGetValue("sessionId", out value) && Convert.ToString(value) == session) return record.TryGetValue(what, out value) ? Convert.ToString(value) : "";
                 } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
             }
         } catch (IOException) { } catch (UnauthorizedAccessException) { }
