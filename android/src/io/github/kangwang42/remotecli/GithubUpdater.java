@@ -40,7 +40,10 @@ final class GithubUpdater {
         IntentFilter filter = new IntentFilter(ACTION); if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED); else activity.registerReceiver(receiver, filter);
     }
     void stop() { stopped = true; try { activity.unregisterReceiver(receiver); } catch (Exception ignored) {} worker.shutdownNow(); }
-    void checkIfDue() { long last = activity.getPreferences(Context.MODE_PRIVATE).getLong("github_update_check", 0); if (System.currentTimeMillis() - last < 6L * 60 * 60 * 1000) return; check(false); }
+    /** Looking by itself is off until its owner switches it on; looking by hand (check(true)) is always there. */
+    boolean automatic() { return activity.getPreferences(Context.MODE_PRIVATE).getBoolean("auto_update", false); }
+    void automatic(boolean on) { activity.getPreferences(Context.MODE_PRIVATE).edit().putBoolean("auto_update", on).apply(); if (on) check(false); }
+    void checkIfDue() { if (!automatic()) return; long last = activity.getPreferences(Context.MODE_PRIVATE).getLong("github_update_check", 0); if (System.currentTimeMillis() - last < 6L * 60 * 60 * 1000) return; check(false); }
     void check(boolean manual) { if (checking) return; checking = true; activity.getPreferences(Context.MODE_PRIVATE).edit().putLong("github_update_check", System.currentTimeMillis()).apply(); if (manual) listener.message("正在检查 GitHub 最新版本…");
         worker.execute(() -> { try { Release found = fetch(); latest = found; if (found != null) activity.runOnUiThread(() -> { checking = false; if (!stopped) listener.found(found); }); else finish("已是最新版"); } catch (Exception e) { finish(manual ? "检查更新失败，请稍后重试" : ""); } }); }
     private void finish(String text) { activity.runOnUiThread(() -> { checking = false; if (!stopped && text.length() > 0) listener.message(text); }); }

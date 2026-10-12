@@ -195,7 +195,7 @@ def main():
                 seen = page_value(LISTS)
                 if test(seen):
                     return seen
-                assert time.time() < deadline, (what, seen)
+                assert time.time() < deadline, (what, seen, page_value("(document.getElementById('toast') || {}).textContent"))
                 time.sleep(0.3)
 
         # ---- by what needs its owner: what asks, what is at work, what was used lately, across the projects
@@ -205,7 +205,7 @@ def main():
         assert "部署到测试环境" in first["needs"] and "整理读书笔记" in first["active"] and "看日志" in mine and len(mine) == 3, first
         assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券"] and first["more"], first
         assert first["background"] == ["桌面版里闲置的对话", "被占着的对话"] and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and "等你确认" in first["summary"], first
-        assert first["filters"][:4] == ["*全部", "Claude Code", "Codex", "PowerShell"] and "手机终端" in first["filters"], first
+        assert first["filters"] == ["*全部", "Claude Code", "Codex", "PowerShell", "终端", "应用"], first
         # each card says where it is and by what it runs; the one outside every project says its folder, and that it is none
         outside, shell = about("整理读书笔记"), about("看日志")
         assert outside["pill"] == "正在执行" and outside["apart"] and outside["meta"][:2] == ["reading-notes", "未加入项目"], outside
@@ -234,6 +234,8 @@ def main():
         until(lambda: "好的。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 10, "what was said in it")
         picture("conversation.png")
         page_value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '把结论再写短一点'; document.querySelector('#sheet .write button').click(); return 1; })()")
+        # what is written stands in the window at once, while it is still on its way
+        assert page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.mine'); return mine.length === 1 && mine[0].textContent === '把结论再写短一点' && document.querySelector('#sheet .write button').disabled; })()"), "shown at once"
         until(lambda: page_value("(() => { const mine = document.querySelectorAll('#sheet .said .turn.user'); return mine.length && mine[mine.length - 1].textContent === '把结论再写短一点' && !document.querySelector('#sheet .write button').disabled; })()"), 30, "what was written stands in the window as what the user said")
         if out:
             # the picture for the guide, in the size of its other pictures
@@ -276,12 +278,20 @@ def main():
         press("Claude Code")
         only = lists(lambda seen: seen["filters"][1] == "*Claude Code", "one tool")
         assert only["needs"] is None and only["active"] is None and only["background"] == ["桌面版里闲置的对话"] and len(only["recent"]) == 2 and "画流程图" not in only["recent"] and not only["nothing"], only
-        press("手机终端")
-        none = lists(lambda seen: seen["nothing"], "nothing is both")
-        assert none["recent"] is None and "*手机终端" in none["filters"] and none["projects"] == ["web-shop", "thesis"], none
+        # in an app: the conversation the desktop app holds, not the ones started in a terminal; and the project it is in
+        press("应用")
+        both = lists(lambda seen: "*应用" in seen["filters"] and seen["recent"] is None, "one tool, in an app")
+        assert both["background"] == ["桌面版里闲置的对话"] and both["needs"] is None and both["active"] is None and "web-shop" in both["projects"], both
+        # in a terminal: the phone's own, and what was started in one; the projects that are used so
         press("Claude Code")
-        phone = lists(lambda seen: not seen["nothing"], "what runs from the phone")
-        assert (phone["needs"] or []) + (phone["active"] or []) == ["看日志"] and phone["recent"] is None, phone
+        press("终端")
+        term = lists(lambda seen: "*终端" in seen["filters"] and seen["filters"][1] == "Claude Code", "what runs in a terminal")
+        assert "看日志" in (term["needs"] or []) + (term["active"] or []) and "桌面版里闲置的对话" not in (term["background"] or []) and term["recent"] and term["projects"] == ["web-shop", "thesis"], term
+        # a tool nothing of which is in an app: nothing, and no project
+        press("PowerShell")
+        press("应用")
+        none = lists(lambda seen: seen["nothing"], "nothing is both")
+        assert none["recent"] is None and none["projects"] == [], none
         press("全部")
         lists(lambda seen: seen["filters"][0] == "*全部" and seen["recent"] and len(seen["recent"]) == 2, "everything again")
 
@@ -360,7 +370,8 @@ def main():
         # the window works beside the conversation: what is said on the computer appears in it while it is open
         with open(homes.rollouts[WORKING], "a", encoding="utf-8") as stream:
             stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "第二部分写好了。"}]}}, ensure_ascii=False) + "\n")
-        until(lambda: "第二部分写好了。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 30, "what is said on the computer appears in the open window")
+        # the window asks the computer for the conversation itself: it is there within a moment, whatever the lists know
+        until(lambda: "第二部分写好了。" in (page_value("document.querySelector('#sheet .said').textContent") or ""), 4, "what is said on the computer appears in the open window")
         head = page_value("document.querySelector('#sheet .stands').textContent")
         assert head == "正在执行 · Codex · reading-notes", head
         # a message is written in the window; it stays open

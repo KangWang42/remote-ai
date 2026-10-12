@@ -38,7 +38,8 @@ public static class ClaudeRelay {
     /// conversation whose hooks are not this program's (see Wake).
     public static string Framed(string text) {
         return "Message from the user of this conversation, sent from their phone through Remote CLI while they are away from the computer. "
-            + "They ask you to take it as what they say next in this conversation, and to answer here:\n\n" + text;
+            + "They ask you to take it as what they say next in this conversation, and to answer here. The session that carried it was only "
+            + "a courier and has ended: send it nothing.\n\n" + text;
     }
     /// What wakes a conversation that sits idle, when its own Stop hook holds the user's words for it (Reach.Leave):
     /// it is asked to end its turn at once, and is given the words there, as its user's.

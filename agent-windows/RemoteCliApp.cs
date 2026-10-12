@@ -44,6 +44,10 @@ public sealed partial class App : Form {
     TextBox passwordBox { get { return passwordField.Box; } }
     readonly PictureBox qr = new PictureBox();
     readonly RowList folders = new RowList(), activity = new RowList();
+    // What the list of folders shows: the projects, or the folders with conversations that are no projects yet
+    // (those used in a terminal; those used by a desktop app or an editor).
+    readonly Segmented projectPick = new Segmented { Items = new[] { "已添加", "终端项目", "应用项目" } };
+    string offeredMark = "";
     readonly Switch enabledSwitch = new Switch(), autostartSwitch = new Switch(), autoUpdateSwitch = new Switch(), reachSwitch = new Switch();
     SettingRow reachRow, updateRow;
     readonly Segmented rights = new Segmented { Items = new[] { "默认", "自动改文件", "只读" } }, protocol = new Segmented { Items = new[] { "自动", "HTTP/2" } };
@@ -386,6 +390,7 @@ public sealed partial class App : Form {
     void Go(int index) {
         for (int i = 0; i < pages.Count; i++) { pages[i].Visible = i == index; nav[i].Chosen = i == index; }
         if (index == 2) RefreshActivity();
+        if (index == 1) { offeredMark = ""; ShowProjects(); }
     }
     // A short confirmation that fades by itself, e.g. after copying.
     void Toast(string text) {
@@ -562,28 +567,58 @@ public sealed partial class App : Form {
         ShowMode();
         Invalidate(true);
     }
+    Action projectsShown = () => { };
     void ShowProjects() {
-        folders.Show(Dirs().Select(line => {
-            int at = line.IndexOf('=');
-            string name = at > 0 ? line.Substring(0, at) : line, path = at > 0 ? line.Substring(at + 1) : "";
-            bool there = false; try { there = Directory.Exists(path); } catch { }
-            return new Row { Glyph = Theme.IconFolder, Title = name, About = path, Tag = there ? "" : "文件夹不存在", TagColour = Theme.Bad, Value = path };
-        }));
-        nav[1].SetBadge(folders.Rows.Count > 0 ? folders.Rows.Count.ToString() : "");
+        var lines = Dirs();
+        nav[1].SetBadge(lines.Count > 0 ? lines.Count.ToString() : "");
+        if (projectPick.Chosen == 0) {
+            folders.EmptyTitle = "还没有项目文件夹"; folders.EmptyAbout = "把文件夹拖到这里，或点下面的“添加文件夹”。\n添加后在手机上就能看到这个项目。";
+            folders.Show(lines.Select(line => {
+                int at = line.IndexOf('=');
+                string name = at > 0 ? line.Substring(0, at) : line, path = at > 0 ? line.Substring(at + 1) : "";
+                bool there = false; try { there = Directory.Exists(path); } catch { }
+                return new Row { Glyph = Theme.IconFolder, Title = name, About = path, Tag = there ? "" : "文件夹不存在", TagColour = Theme.Bad, Value = path };
+            }));
+        } else ShowOffered(lines);
+        projectsShown();
     }
-    void AddProject(string path) {
+    /// The folders with conversations of Claude Code or Codex that are no projects yet: those used in a terminal,
+    /// or those used by a desktop app or an editor (also while that app is closed: here they are only added).
+    public static IEnumerable<Row> OfferedRows(IEnumerable<Dictionary<string, object>> offered, bool apps) {
+        foreach (var one in offered) {
+            var kinds = ((string[])one["kinds"]).Where(kind => (kind != Folders.Terminal) == apps).ToArray();
+            if (kinds.Length == 0) continue;
+            string tools = String.Join(" · ", Convert.ToString(one["tools"]).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(tool => tool == "claude" ? "Claude Code" : tool == "codex" ? "Codex" : tool));
+            yield return new Row { Glyph = apps ? Theme.IconFolder : Theme.IconTerminal, Title = Convert.ToString(one["name"]), About = Convert.ToString(one["path"]), Tag = apps ? String.Join(" · ", kinds) : tools, Value = Convert.ToString(one["path"]) };
+        }
+    }
+    void ShowOffered(List<string> lines) {
+        bool apps = projectPick.Chosen == 2;
+        var dirs = new Dictionary<string, string>();
+        foreach (string line in lines) { int at = line.IndexOf('='); if (at > 0) dirs[line.Substring(0, at)] = line.Substring(at + 1); }
+        var rows = agent == null ? new List<Row>() : OfferedRows(agent.Offer(dirs, true, 300), apps).ToList();
+        folders.EmptyTitle = apps ? "没有可添加的应用项目" : "没有可添加的终端项目";
+        folders.EmptyAbout = apps ? "在 Codex 或 Claude 桌面版、编辑器里用过的文件夹会列在这里。" : "在终端里用过 Claude Code 或 Codex 的文件夹会列在这里。";
+        // (looked at every few seconds while it is shown: drawn anew only when it changed, so that what is chosen stays chosen)
+        string mark = projectPick.Chosen + "\n" + String.Join("\n", rows.Select(row => row.Value + "\t" + row.Tag));
+        if (mark == offeredMark) return;
+        offeredMark = mark;
+        folders.Show(rows);
+    }
+    void AddProject(string path) { AddProject(path, false); }
+    void AddProject(string path, bool quiet) {
         var list = Dirs();
         string full; try { full = Path.GetFullPath(path).TrimEnd('\\'); } catch { return; }
         if (!Directory.Exists(full)) return;
-        if (list.Any(line => String.Equals(line.Substring(line.IndexOf('=') + 1).TrimEnd('\\'), full, StringComparison.OrdinalIgnoreCase))) { Toast("这个文件夹已经在列表里"); return; }
+        if (list.Any(line => String.Equals(line.Substring(line.IndexOf('=') + 1).TrimEnd('\\'), full, StringComparison.OrdinalIgnoreCase))) { if (!quiet) Toast("这个文件夹已经在列表里"); return; }
         string name = new DirectoryInfo(full).Name.Replace("=", " ");
         if (name.Length == 0 || name.EndsWith(":") || name.EndsWith("\\")) name = "磁盘 " + full.Substring(0, 1);
         string wanted = name;
         for (int n = 2; list.Any(line => line.StartsWith(name + "=")); n++) name = wanted + " " + n;
         list.Add(name + "=" + full);
-        Keep("RemoteDirs", list.ToArray()); ShowProjects();
-        folders.SelectedIndex = folders.Items.Count - 1;
-        Toast("已添加 " + name);
+        Keep("RemoteDirs", list.ToArray()); offeredMark = ""; ShowProjects();
+        if (projectPick.Chosen == 0) folders.SelectedIndex = folders.Items.Count - 1;
+        if (!quiet) Toast("已添加 " + name);
     }
     static string Since(DateTime started) {
         TimeSpan gone = DateTime.UtcNow - started;
@@ -765,11 +800,18 @@ public sealed partial class App : Form {
 
         // ---- page: projects
         var projects = Page("项目文件夹", "手机只能在这些文件夹里新建终端和继续对话。可以把文件夹直接拖进来。");
-        var listCard = Place(projects, new Card(), 28, 92, 652, 410);
-        Place(listCard, folders, 8, 8, 636, 394);
-        folders.EmptyTitle = "还没有项目文件夹"; folders.EmptyAbout = "把文件夹拖到这里，或点下面的“添加文件夹”。\n添加后在手机上就能看到这个项目。";
-        Action(projects, "添加文件夹", Theme.IconAdd, ButtonKind.Primary, 28, 518, 128, 36, (s, e) => {
+        Place(projects, projectPick, 28, 92, 300, 34);
+        var listCard = Place(projects, new Card(), 28, 136, 652, 366);
+        Place(listCard, folders, 8, 8, 636, 350);
+        var browse = Action(projects, "添加文件夹", Theme.IconAdd, ButtonKind.Primary, 28, 518, 128, 36, (s, e) => {
             using (var dialog = new FolderBrowserDialog { Description = "选择一个项目文件夹" }) if (dialog.ShowDialog(this) == DialogResult.OK) AddProject(dialog.SelectedPath);
+        });
+        // of the folders that are offered: the one chosen, or all of them
+        var take = Action(projects, "添加", Theme.IconAdd, ButtonKind.Primary, 28, 518, 128, 36, (s, e) => { var row = folders.Selected; if (row != null) AddProject(Convert.ToString(row.Value)); });
+        var takeAll = Action(projects, "全部添加", Theme.IconCheck, ButtonKind.Normal, 164, 518, 100, 36, (s, e) => {
+            var offered = folders.Rows.Select(row => Convert.ToString(row.Value)).ToArray();
+            foreach (string path in offered) AddProject(path, true);
+            if (offered.Length > 0) Toast("已添加 " + offered.Length + " 个项目");
         });
         var rename = Action(projects, "重命名", Theme.IconEdit, ButtonKind.Normal, 164, 518, 100, 36, (s, e) => {
             int at = folders.SelectedIndex; if (at < 0) return;
@@ -788,9 +830,15 @@ public sealed partial class App : Form {
             if (!Confirm("移除“" + folders.Rows[at].Title + "”？", "仅取消手机对该文件夹的访问，文件夹及其中的对话不会被删除。", "移除", true)) return;
             var list = Dirs(); list.RemoveAt(at); Keep("RemoteDirs", list.ToArray()); ShowProjects();
         });
-        EventHandler chosen = (s, e) => { rename.Enabled = open.Enabled = remove.Enabled = folders.SelectedIndex >= 0; };
+        EventHandler chosen = (s, e) => {
+            bool added = projectPick.Chosen == 0, one = folders.SelectedIndex >= 0;
+            browse.Visible = rename.Visible = remove.Visible = added; take.Visible = takeAll.Visible = !added;
+            rename.Enabled = remove.Enabled = added && one; open.Enabled = one; take.Enabled = !added && one; takeAll.Enabled = !added && folders.Rows.Count > 0;
+        };
         folders.SelectedIndexChanged += chosen; chosen(null, EventArgs.Empty);
-        folders.DoubleClick += (s, e) => open.PerformClick();
+        folders.DoubleClick += (s, e) => { if (projectPick.Chosen == 0) open.PerformClick(); else take.PerformClick(); };
+        projectPick.Changed += (s, e) => { offeredMark = ""; ShowProjects(); chosen(null, EventArgs.Empty); };
+        projectsShown = () => chosen(null, EventArgs.Empty);
         foreach (Control target in new Control[] { projects, listCard, folders }) {
             target.AllowDrop = true;
             target.DragEnter += (s, e) => { e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Link : DragDropEffects.None; };
@@ -855,7 +903,7 @@ public sealed partial class App : Form {
             new SettingRow("公网隧道的协议", "隧道经常断开或出现 1033 时改用 HTTP/2", protocol, 170, 34),
             new SettingRow("本机端口", "局域网直连和公网隧道使用，被占用时换一个", portBox, 96, 32),
             new SettingRow("外观", "和手机 App 相同的几种配色，默认与 App 一致", skinPick, 170, 34),
-            new SettingRow("自动更新", "关闭时需在此处或手机上手动发起；开启后在终端空闲时自动安装", autoUpdateSwitch, 46, 26),
+            new SettingRow("自动检查更新", "开启后定期检查，有新版本时提示", autoUpdateSwitch, 46, 26),
             (updateRow = new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 34)) };
         for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 48, 648, 48);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 544, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
@@ -866,7 +914,7 @@ public sealed partial class App : Form {
         Place(this, toast, 0, WindowHeight - 58, 200, 34);
         toast.Visible = false; toast.BackColor = Theme.Ink; toast.ForeColor = Theme.OnAccent; toast.TextAlign = ContentAlignment.MiddleCenter; toast.Font = Theme.Text(9f, true);
         toastTimer.Interval = 1600; toastTimer.Tick += (s, e) => { toastTimer.Stop(); toast.Visible = false; };
-        activityTimer.Interval = 2000; activityTimer.Tick += (s, e) => RefreshActivity();
+        activityTimer.Interval = 2000; activityTimer.Tick += (s, e) => { RefreshActivity(); if (pages.Count > 1 && pages[1].Visible && projectPick.Chosen != 0) ShowProjects(); };
         tray.Icon = Theme.MarkIcon(32); tray.Visible = true; tray.Text = "Remote CLI";
         tray.DoubleClick += (s, e) => Reveal();
         tray.ContextMenuStrip = new ContextMenuStrip();
@@ -917,9 +965,13 @@ public sealed partial class App : Form {
             CheckForUpdate(false);
         };
     }
-    // manual: the button in this window. remote: the phone asked. Neither: the program looks by itself every ten minutes.
+    // manual: the button in this window. remote: the phone asked. Neither: the program looks by itself every ten
+    // minutes, where that is switched on; switched off, it looks only when it is asked to.
+    string toldUpdate = "";
     async void CheckForUpdate(bool manual, bool remote = false) {
         if (updateButton == null || !updateButton.Enabled) return;
+        string step = AutoUpdater.Step(manual, remote, Convert.ToString(config["AutoUpdate"]) == "True");
+        if (step == "none") return;
         if (!manual && !remote) {
             DateTime previous;
             if (config.ContainsKey("UpdateCheckUtc") && DateTime.TryParse(Convert.ToString(config["UpdateCheckUtc"]), null, System.Globalization.DateTimeStyles.RoundtripKind, out previous) && DateTime.UtcNow - previous < TimeSpan.FromMinutes(9)) return;
@@ -931,23 +983,28 @@ public sealed partial class App : Form {
             if (agent != null) agent.Newer = found == null ? "" : found.Version;
             if (found == null) { updateButton.Text = "已是最新版"; updateButton.Glyph = Theme.IconCheck; if (manual) Toast("已是最新版"); return; }
             updateButton.Text = "更新到 v" + found.Version; updateButton.Kind = ButtonKind.Primary; updateButton.Glyph = Theme.IconDownload; nav[3].SetBadge("新");
-            string step = AutoUpdater.Step(manual, remote, Convert.ToString(config["AutoUpdate"]) == "True");
             if (step == "install") { updateButton.Enabled = true; await InstallUpdate(found); }
             else if (step == "ask") {
                 // a terminal that is at work is said: the restart cuts into what it is doing, and it goes on with its conversation afterwards
                 bool working = agent != null && !agent.Quiet(20);
                 if (Confirm("发现新版本 v" + found.Version, (working ? "有终端正在工作，更新会打断它手上的这一步。" : "") + "现在下载并重启更新吗？手机会断开几秒，终端随后接回原对话，公网隧道的地址不变。", "下载并更新", false)) { waitingUpdate = null; updateButton.Enabled = true; await InstallUpdate(found); }
             }
-            else if (step == "wait") waitingUpdate = found;      // installed by quietTimer when no terminal is at work
+            // found by itself: said once for a version, in the window and at the tray; nothing is installed until someone asks
+            else if (toldUpdate != found.Version) {
+                toldUpdate = found.Version;
+                Toast("发现新版本 v" + found.Version);
+                if (!Visible) try { tray.ShowBalloonTip(6000, "Remote CLI 有新版本 v" + found.Version, "打开窗口，在“设置”里更新。", ToolTipIcon.Info); } catch (InvalidOperationException) { }
+            }
             ShowUpdate();
         } catch (Exception error) { updateButton.Text = "检查更新"; if (manual) Toast("检查更新失败：" + error.Message); }
         finally { updateButton.Enabled = true; }
     }
-    // What the row of the version says: that an update waits for a quiet moment, and that the button installs it now.
+    // What the row of the version says: that there is a newer one, or that one waits for the phone to finish changing the line.
     void ShowUpdate() {
         if (updateRow == null) return;
-        if (waitingUpdate != null) updateRow.Say("v" + waitingUpdate.Version + " 会在终端都空闲时自动安装；点右侧按钮立即更新", Theme.Busy);
-        else updateRow.Say("从 GitHub 发布页检查并安装新版本；手机上也可以发起", Theme.Muted);
+        if (waitingUpdate != null) updateRow.Say("v" + waitingUpdate.Version + " 在手机切换线路完成后安装", Theme.Busy);
+        else if (availableUpdate != null) updateRow.Say("有新版本 v" + availableUpdate.Version, Theme.Busy);
+        else updateRow.Say("从 GitHub 发布页检查并安装；手机上也可以发起", Theme.Muted);
     }
     async Task InstallUpdate(ReleaseUpdate found) {
         if (Changing) { waitingUpdate = found; ShowUpdate(); Toast("手机正在切换连接线路，切换完成后自动更新"); return; }      // the program does not restart under a phone that is changing the line
@@ -1041,6 +1098,16 @@ public sealed partial class App : Form {
                         "server=" + Convert.ToString(window.config["Server"]), "saved=" + window.relays.Own().Count, "published=" + window.relays.Published().Count,
                         "new_password_button=" + window.changePassword.Visible, "skin=" + Theme.Skin, "side=" + window.sideLine, "tools=" + window.sideTools,
                         "side_lines=" + (window.sideAbove.Visible ? window.sideAbove.Line + "|" : "") + window.sideStatus.Line), new UTF8Encoding(false));
+                }
+                // "terminal" or "apps" after the page of projects opens that list of folders a project can be made of, once
+                // the conversations have been looked at; "all" after it adds them all. What is listed is written beside the picture.
+                if (args.Length >= 4 && (args[3] == "terminal" || args[3] == "apps")) {
+                    wait(9);
+                    window.projectPick.Choose(args[3] == "apps" ? 2 : 1);
+                    wait(1);
+                    var listed = window.folders.Rows.Select(row => row.Title + "\t" + row.Tag + "\t" + row.About).ToArray();
+                    if (args.Length >= 5 && args[4] == "all") { foreach (string path in window.folders.Rows.Select(row => Convert.ToString(row.Value)).ToArray()) window.AddProject(path, true); wait(1); }
+                    File.WriteAllText(args[1] + ".txt", String.Join("\n", listed) + "\n--\n" + String.Join("\n", window.Dirs()) + "\n--\n" + String.Join("\n", window.folders.Rows.Select(row => row.Title)), new UTF8Encoding(false));
                 }
                 var until = DateTime.UtcNow.AddSeconds(4);
                 while (DateTime.UtcNow < until) { Application.DoEvents(); Thread.Sleep(30); }

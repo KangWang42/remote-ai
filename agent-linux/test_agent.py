@@ -390,6 +390,14 @@ class Pure(unittest.TestCase):
             self.assertEqual([(c["path"], c["name"], c["live"], c["tools"], c["kinds"]) for c in sessions.candidates],
                              [(apart, "读书 笔记", True, "claude codex", ["终端"]), (edited, "edited", False, "codex", ["编辑器"]), (quiet, "old-notes", False, "claude", ["终端"])])
             self.assertEqual([c["updated"] for c in sessions.candidates[1:]], [1700000, 1500000])
+            # every project is told with the tools and by what its folder is used; each conversation with by what it was started
+            self.assertEqual(sessions.told([{"name": "项目", "path": project}, {"name": "空", "path": "/srv/empty"}]),
+                             [{"name": "项目", "path": project, "tools": "claude", "kinds": ["终端"]}, {"name": "空", "path": "/srv/empty", "tools": "", "kinds": []}])
+            self.assertEqual({entry["kind"] for entry in found}, {"终端"})
+            # a page that follows a conversation is given it anew only when its file has changed
+            first = sessions.read(outside, "claude", "", {"项目": project})
+            self.assertEqual(sessions.read(outside, "claude", "", {"项目": project}, first["stamp"]), {"same": True, "stamp": first["stamp"], "title": "整理读书笔记", "status": ""})
+            self.assertIn("messages", sessions.read(outside, "claude", "", {"项目": project}, "1.1"))
             # it is read where it is; one of a project is read by its project as before
             self.assertEqual(sessions.read(outside, "claude", "", {"项目": project})["messages"], [{"role": "user", "text": "整理读书笔记"}])
             self.assertEqual(sessions.read(codex_out, "codex", "", {"项目": project})["messages"], [])

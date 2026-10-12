@@ -116,7 +116,7 @@ public final class AggregateSessionsCheck {
         outside.folder = "D:\\notes\\reading-notes\\"; outside.origin = "Codex 桌面版"; outside.reached = true; outside.used = 500;
         AggregateSessions.Entry posix = new AggregateSessions.Entry(false, "px", "", "别的", "claude", "", "", "", true, "cli", "", "");
         posix.folder = "/srv/读书 笔记";
-        require(outside.apart() && "reading-notes".equals(outside.place()) && "读书 笔记".equals(posix.place()) && "app".equals(outside.source()) && "cli".equals(posix.source()), "where it is and where it runs: " + outside.place() + " " + posix.place());
+        require(outside.apart() && "reading-notes".equals(outside.place()) && "读书 笔记".equals(posix.place()) && "app".equals(outside.source()) && "term".equals(posix.source()), "where it is and where it runs: " + outside.place() + " " + posix.place());
         require("Codex 桌面版 · reading-notes（未加入项目）".equals(AggregateSessions.where(outside)), AggregateSessions.where(outside));
         AggregateSessions.Entry lost = new AggregateSessions.Entry(false, "lost", "", "没有文件夹的", "codex", "", "", "", true, "cli", "", "");
         List<AggregateSessions.Project> withOutside = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(works, outside, posix, lost));
@@ -130,7 +130,7 @@ public final class AggregateSessionsCheck {
         left.folder = "D:\\notes\\reading-notes";
         AggregateSessions.Entry its = new AggregateSessions.Entry(false, "out-2", "", "整理读书笔记", "codex", "", "", "", false, "", "", "");
         its.folder = took.folder;
-        require(took.apart() && "reading-notes".equals(took.place()) && "phone".equals(took.source()) && "手机终端 · reading-notes（未加入项目）".equals(AggregateSessions.where(took)), AggregateSessions.where(took));
+        require(took.apart() && "reading-notes".equals(took.place()) && "term".equals(took.source()) && "手机终端 · reading-notes（未加入项目）".equals(AggregateSessions.where(took)), AggregateSessions.where(took));
         List<AggregateSessions.Project> taken = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(took, left, its, outside));
         AggregateSessions.Project nameless = taken.get(taken.size() - 1);
         require(nameless.name.isEmpty() && nameless.active.size() == 2 && nameless.ended.size() == 1 && nameless.history.isEmpty(), "a terminal outside every project is listed, its own conversation is not listed beside it: " + nameless.active.size() + " " + nameless.ended.size() + " " + nameless.history.size());
@@ -159,12 +159,29 @@ public final class AggregateSessionsCheck {
         require("out 看日志".equals(ids.apply(board.active)), "what is at work, by how it stands: " + ids.apply(board.active));
         // an ended terminal whose conversation is listed is not listed twice; what is hidden and what a program holds are left out
         require("past-1 只有画面的终端".equals(ids.apply(board.recent)) && !board.searched && board.found.isEmpty(), "what was used lately: " + ids.apply(board.recent));
-        require("[claude, codex, shell]".equals(board.tools.toString()) && "[phone, cli, app]".equals(board.sources.toString()), board.tools + " " + board.sources);
+        require("[claude, codex, shell]".equals(board.tools.toString()) && "[term, app]".equals(board.sources.toString()), board.tools + " " + board.sources);
         // narrowed by tool and by where a thing runs
         AggregateSessions.Board claudeOnly = AggregateSessions.board(things, "", "claude", "");
         require("a b".equals(ids.apply(claudeOnly.needs)) && "past-2".equals(ids.apply(claudeOnly.pinned)) && claudeOnly.active.isEmpty() && "past-1".equals(ids.apply(claudeOnly.recent)), "one tool");
-        AggregateSessions.Board phoneOnly = AggregateSessions.board(things, "", "", "phone");
-        require(phoneOnly.needs.isEmpty() && "看日志".equals(ids.apply(phoneOnly.active)) && phoneOnly.recent.isEmpty() && phoneOnly.tools.size() == 3, "what runs from the phone");
+        // in a terminal (one of the phone's, a command line on the computer), or in an app
+        AggregateSessions.Board termOnly = AggregateSessions.board(things, "", "", "term"), appOnly = AggregateSessions.board(things, "", "", "app");
+        require(ids.apply(termOnly.active).contains("看日志") && !ids.apply(termOnly.active).contains("out") && termOnly.tools.size() == 3, "what runs in a terminal: " + ids.apply(termOnly.active));
+        require("out".equals(ids.apply(appOnly.active)) && !ids.apply(appOnly.recent).contains("past"), "what runs in an app: " + ids.apply(appOnly.active) + " | " + ids.apply(appOnly.recent));
+        // one that no program has open is told by what started it, where the computer says so
+        AggregateSessions.Entry drawn = new AggregateSessions.Entry(false, "drawn", "web-shop", "桌面版里画的", "codex", "", "", "", false, "", "", ""), typed = new AggregateSessions.Entry(false, "typed", "web-shop", "终端里写的", "codex", "", "", "", false, "", "", "");
+        drawn.kind = "Codex 桌面版"; typed.kind = "终端";
+        require("app".equals(drawn.source()) && "term".equals(typed.source()) && past1.source().isEmpty() && "app".equals(AggregateSessions.sourceOfKind("编辑器")), "by what started it");
+        things.add(on.apply(drawn));
+        require(ids.apply(AggregateSessions.board(things, "", "", "app").recent).contains("drawn") && "drawn".equals(ids.apply(AggregateSessions.board(things, "桌面版里画的 codex 桌面版", "", "").found)), "listed and found as an app's");
+        things.remove(things.size() - 1);
+        // a project is of the tools and kinds its folder is used by: as the computer says of the folder, and by what is in it
+        List<AggregateSessions.Project> told = AggregateSessions.projects(Arrays.asList("web-shop", "thesis", "empty"), Arrays.asList(shell, past1, past2, past3));
+        require(told.get(0).passes("claude", "") && told.get(0).passes("codex", "") && !told.get(0).passes("", "app") && !told.get(0).passes("", "term"), "by what is in it: the tools, and nothing of where while nothing says");
+        require(told.get(1).passes("shell", "term") && told.get(1).passes("claude", "term") && !told.get(1).passes("codex", ""), "a terminal of the phone's makes it one of the terminal");
+        require(told.get(2).passes("", "") && !told.get(2).passes("claude", "") && !told.get(2).passes("", "app"), "an empty one passes only where nothing is asked");
+        told.get(0).told(Arrays.asList("codex"), Arrays.asList("Codex 桌面版", "终端"));
+        told.get(2).told(Arrays.asList("claude"), Collections.singletonList("Claude 桌面版"));
+        require(told.get(0).passes("codex", "app") && told.get(0).passes("claude", "term") && told.get(2).passes("claude", "app") && !told.get(2).passes("claude", "term") && !told.get(2).passes("codex", "app"), "as the computer says of the folder");
         // one search over all of it: every word, whatever its case, in the name, the place, the tool, the computer; the hidden too
         require("out".equals(ids.apply(AggregateSessions.board(things, " 读书 ", "", "").found)) && AggregateSessions.board(things, "读书", "", "").searched, "by a word of the name");
         require("看日志 past-1 只有画面的终端".equals(ids.apply(AggregateSessions.board(things, "THESIS", "", "").found)), "by the project, what is open first: " + ids.apply(AggregateSessions.board(things, "THESIS", "", "").found));

@@ -201,6 +201,8 @@ public final class MainActivity extends Activity {
         show(bench.build(problem), "home");
         bench.refresh();
     }
+    boolean autoUpdate() { return updater != null && updater.automatic(); }
+    void toggleAutoUpdate() { if (updater == null) return; updater.automatic(!updater.automatic()); home(""); }
     void checkUpdate() { message.setTextColor(kit.MUTED); message.setText("正在检查新版本…"); updater.check(true); }
     void manage(String url) {
         int found = -1;
@@ -483,6 +485,8 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> { if (web == null) return; bars(shade); web.setBackgroundColor(shade); });
         }
         /** Looks for a newer version of the app now; the answer comes as a short notice or a question. */
+        @JavascriptInterface public boolean autoUpdate() { return updater != null && updater.automatic(); }
+        @JavascriptInterface public void setAutoUpdate(boolean on) { runOnUiThread(() -> { if (updater != null) updater.automatic(on); }); }
         @JavascriptInterface public void update() { runOnUiThread(() -> { android.widget.Toast.makeText(MainActivity.this, "正在检查新版本…", android.widget.Toast.LENGTH_SHORT).show(); updater.check(true); }); }
         @JavascriptInterface public String version() { return versionName(); }
         /**

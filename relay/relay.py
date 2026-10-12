@@ -74,6 +74,8 @@ def _name(value, limit=40):
     return isinstance(value, str) and 0 < len(value.strip()) <= limit and not any(ord(c) < 32 for c in value)
 
 
+_stamp = re.compile(r"[0-9.]{1,48}")         # how the file of a conversation was when it was read, in the words of the computer
+
 def _folders(items, limit):
     """Folders as the computer reports them; the relay only shows them and hands the chosen one back."""
     out = []
@@ -811,7 +813,11 @@ class Relay:
             more = {mark: payload[mark] for mark in MARKS if mark in payload}
             if not more or any(type(value) is not bool for value in more.values()):
                 raise RemoteError("标记无效")
-        elif action != "read":
+        elif action == "read":
+            # a page that follows a conversation says what it has: the computer answers {"same": true} to that
+            if isinstance(payload.get("since"), str) and _stamp.fullmatch(payload["since"]):
+                more = {"since": payload["since"]}
+        else:
             raise RemoteError("不支持此操作")
         with self._changed:
             self._expire(now)
@@ -914,6 +920,8 @@ class Relay:
                      "live": s.get("live") is True, "status": s.get("status") if s.get("status") in ("idle", "busy", "confirm", "waiting") else "", **_reached(s),
                      "host": s.get("host") if s.get("host") in ("cli", "shared", "remote", "unknown") else "",
                      "origin": str(s.get("origin") or "")[:60],
+                     # by what it is used, in the computer's words: by the program that has it open, else by what started it
+                     "kind": str(s.get("kind") or "")[:20],
                      "can_takeover": s.get("can_takeover") is True, "ownership_known": s.get("ownership_known") is True,
                      "takeover_reason": str(s.get("takeover_reason") or "")[:200]}
                     for s in payload["sessions"][:120]

@@ -169,6 +169,10 @@ final class Workbench {
         version.setMinHeight(kit.dp(44)); version.setGravity(Gravity.CENTER_VERTICAL);
         kit.press(version, activity::checkUpdate);
         page.addView(version);
+        TextView looks = kit.text(activity.autoUpdate() ? "自动检查更新：已开启" : "自动检查更新：未开启 · 点这里开启", 13, kit.ACCENT);
+        looks.setMinHeight(kit.dp(44)); looks.setGravity(Gravity.CENTER_VERTICAL);
+        kit.press(looks, activity::toggleAutoUpdate);
+        page.addView(looks);
         if (list.length() > 0) {
             TextView remind = kit.text(activity.watching() ? "任务提醒：已开启 · 离开 App 后，有任务等你确认或完成时通知你" : "任务提醒：未开启 · 点这里开启", 13, kit.ACCENT);
             remind.setMinHeight(kit.dp(44)); remind.setGravity(Gravity.CENTER_VERTICAL);
@@ -324,7 +328,7 @@ final class Workbench {
                 made.reached = reach != null;
                 made.folder = entry.optString("folder");
                 made.now = terminal || entry.optBoolean("now", true);
-                if (!terminal) { made.origin = entry.optString("origin"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
+                if (!terminal) { made.origin = entry.optString("origin"); made.kind = entry.optString("kind"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
                 for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
                 made.shell = device.optString("shell");
                 made.used = terminal ? (made.at > 0 ? made.at : entry.optLong("created")) : entry.optLong("updated");
@@ -337,6 +341,12 @@ final class Workbench {
         for (AggregateSessions.Entry entry : entries) if (!entry.terminal && entry.pinned) pinned.add(entry.tool + ':' + entry.id);
         for (AggregateSessions.Entry entry : entries) if (entry.terminal && !entry.session.isEmpty() && pinned.contains(entry.tool + ':' + entry.session)) entry.pinned = true;
         List<AggregateSessions.Project> groups = AggregateSessions.projects(names, entries);
+        // with which tools and by what the computer says each project's folder is used
+        for (int i = 0; projects != null && i < projects.length(); i++) {
+            JSONObject project = projects.optJSONObject(i);
+            if (project == null) continue;
+            for (AggregateSessions.Project group : groups) if (group.name.equals(project.optString("name"))) group.told(strings(project.optJSONArray("tools")), strings(project.optJSONArray("kinds")));
+        }
         int[] counts = AggregateSessions.counts(groups, seen(url));
         List<String> parts = new ArrayList<>();
         if (counts[0] > 0) parts.add(counts[0] + " 个等你确认");
@@ -462,9 +472,19 @@ final class Workbench {
         for (int i = 0; !folded && i < Math.min(most, things.size()); i++) into.addView(taskCard(things.get(i), several), kit.below(i == 0 && fold != null ? 0 : 8));
     }
     /** The row under the search: narrow the lists to a tool, and to where a thing runs. Offered only where it tells something apart. */
+    private static List<String> strings(JSONArray array) {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; array != null && i < array.length(); i++) if (!array.optString(i).isEmpty()) out.add(array.optString(i));
+        return out;
+    }
     private void drawFilters(AggregateSessions.Board board) {
         if (filters == null) return;
         List<String> tools = new ArrayList<>(board.tools), sources = new ArrayList<>(board.sources);
+        // (a project whose folder is used by an app or in a terminal is told apart too, also while nothing of it is listed)
+        for (Snapshot snapshot : snapshots.values()) for (AggregateSessions.Project project : snapshot.projects) {
+            for (String known : new String[]{"claude", "codex"}) if (project.tools.contains(known) && !tools.contains(known)) tools.add(known);
+            for (String known : new String[]{"term", "app"}) if (project.sources.contains(known) && !sources.contains(known)) sources.add(known);
+        }
         if (!tool.isEmpty() && !tools.contains(tool)) tools.add(tool);
         if (!source.isEmpty() && !sources.contains(source)) sources.add(source);
         if (tools.size() < 2 && tool.isEmpty()) tools.clear();
@@ -765,7 +785,8 @@ final class Workbench {
         card.addView(head);
         if (on && !folded) {
             List<AggregateSessions.Project> order = new ArrayList<>(), named = new ArrayList<>();
-            for (AggregateSessions.Project project : snapshot.projects) if (!project.name.isEmpty()) named.add(project);       // what is open outside every project is in the lists above
+            // what is open outside every project is in the lists above; with a filter chosen, the projects of that tool or kind
+            for (AggregateSessions.Project project : snapshot.projects) if (!project.name.isEmpty() && project.passes(tool, source)) named.add(project);
             for (AggregateSessions.Project project : named) if (!project.active.isEmpty()) order.add(project);
             int busy = order.size();
             for (AggregateSessions.Project project : named) if (project.active.isEmpty() && !project.ended.isEmpty()) order.add(project);
@@ -773,7 +794,7 @@ final class Workbench {
             boolean all = expanded.contains(url);
             int shown = all ? order.size() : Math.max(busy, Math.min(SHOWN, order.size()));
             for (int i = 0; i < shown; i++) { card.addView(rule()); card.addView(projectRow(computer, order.get(i), looked)); }
-            if (order.isEmpty()) { card.addView(rule()); card.addView(note("还没有项目。在电脑端的“项目”页添加文件夹。")); }
+            if (order.isEmpty()) { card.addView(rule()); card.addView(note(tool.isEmpty() && source.isEmpty() ? "还没有项目。在电脑端的“项目”页添加文件夹。" : "没有符合筛选的项目。")); }
             else {
                 // A terminal is started from here without walking to a project first.
                 card.addView(rule());

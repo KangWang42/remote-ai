@@ -15,6 +15,6 @@ with tempfile.TemporaryDirectory(prefix="remote-cli-in-use-") as folder:
     subprocess.run([str(compiler), "/nologo", "/target:exe", "/platform:x64", "/codepage:65001",
                     "/reference:System.Management.dll", "/reference:System.Net.Http.dll", "/reference:System.Web.Extensions.dll",
                     "/reference:System.Security.dll", "/main:InUseCheck", "/out:" + str(exe),
-                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "agent-windows/Marks.cs"), str(ROOT / "agent-windows/ClaudeRelay.cs"), str(ROOT / "agent-windows/CodexQueue.cs"), str(ROOT / "agent-windows/RemoteCliAgent.cs"),
+                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "agent-windows/Marks.cs"), str(ROOT / "agent-windows/ClaudeRelay.cs"), str(ROOT / "agent-windows/Folders.cs"), str(ROOT / "agent-windows/CodexQueue.cs"), str(ROOT / "agent-windows/RemoteCliAgent.cs"),
                     str(ROOT / "agent-windows/AutoUpdater.cs"), str(ROOT / "tests/InUseCheck.cs")], check=True)
     subprocess.run([str(exe)], check=True, timeout=60)

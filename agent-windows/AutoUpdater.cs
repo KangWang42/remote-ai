@@ -20,12 +20,13 @@ public static class AutoUpdater {
         Version a, b;
         return Version.TryParse(latest.TrimStart('v'), out a) && Version.TryParse(current.TrimStart('v'), out b) && a > b;
     }
-    /// What is done with a newer version that was found. "install": at once (the phone asked for it). "ask": the
-    /// person pressed the button in the window, and is asked on the spot whether to restart now, whatever the
-    /// automatic setting says: a press is never answered with nothing. "wait": found by the program itself with
-    /// automatic updates on, installed in the first quiet moment. "tell": found by itself otherwise; the button says so.
+    /// What is done about a newer version. "install": it is looked for and installed at once (the phone asked for
+    /// it). "ask": the person pressed the button in the window, and is asked on the spot whether to restart now: a
+    /// press is never answered with nothing. Otherwise the program acts by itself, and only where that was switched
+    /// on: "tell", it looks now and then and says that there is a newer version, installing nothing; "none", it does
+    /// not look.
     public static string Step(bool manual, bool remote, bool automatic) {
-        return remote ? "install" : manual ? "ask" : automatic ? "wait" : "tell";
+        return remote ? "install" : manual ? "ask" : automatic ? "tell" : "none";
     }
     public static Task<ReleaseUpdate> CheckAsync(string current) { return Task.Run(() => Check(current)); }
     static ReleaseUpdate Check(string current) {

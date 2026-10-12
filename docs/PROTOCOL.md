@@ -34,10 +34,10 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
 
 ```json
 {"device": {"online": true, "enabled": true, "workspaces": ["demo"], "tools": ["claude", "codex", "shell"],
-            "projects": [{"name": "demo", "path": "D:\\demo", "fixed": true, "exists": true}],
+            "projects": [{"name": "demo", "path": "D:\\demo", "fixed": true, "exists": true, "tools": ["codex"], "kinds": ["Codex 桌面版", "终端"]}],
             "candidates": [{"name": "notes", "path": "D:\\notes", "updated": 1700000000000, "live": false, "tools": ["claude"], "kinds": ["Claude 桌面版", "终端"]}]},
  "terminals": [{"id": "...", "tool": "shell", "dir": "demo", "title": "PowerShell", "state": "running", "status": "idle", "seq": 12, "cols": 80, "rows": 24, "session": ""}],
- "sessions": [{"id": "<uuid>", "tool": "claude", "dir": "demo", "folder": "", "title": "...", "updated": 1700000000000, "live": false, "now": false, "status": "",
+ "sessions": [{"id": "<uuid>", "tool": "claude", "dir": "demo", "folder": "", "kind": "终端", "title": "...", "updated": 1700000000000, "live": false, "now": false, "status": "",
                "pinned": false, "hidden": false, "terminal": ""}]}
 ```
 
@@ -46,7 +46,10 @@ have conversations of Claude Code or Codex, for a project to be made of (`projec
 the ones in use (`live`) first, then by when they were last used. `kinds` says by what a folder is used, in the
 computer's own words for the phone to show and search: a desktop app (`Codex 桌面版`, `Claude 桌面版`), an editor
 (`编辑器`), a terminal (`终端`); a computer of an earlier version says none. The Windows computer leaves out a folder
-that only a desktop app uses while that app does not run. `sessions` are conversations the tools saved on
+that only a desktop app uses while that app does not run. `projects` say the same of each project's folder (`tools`,
+`kinds`; a closed app is not left out there), and each of the `sessions` says by what it is used in `kind`: by the
+program that has it open, else by what started it. The phone tells apart two: the terminal's word, and every other
+(an app). `sessions` are conversations the tools saved on
 the computer; `live` means a program on the computer has it open, `terminal` is set when one of the relay's
 terminals already shows it. `state` is `starting`, `running` or `closed`; `status` is `busy`, `idle` or empty.
 
@@ -212,6 +215,11 @@ With `"action": "say"` or `"action": "answer"` the same request acts on a conver
 `reach` (the computer needs the `reach` capability). Neither takes the conversation from the program that has it:
 it stays open on the computer and is used there as before.
 
+- Without an action (or with `"read"`) the answer is what was last said in it: `{"messages": [...], "more": false,
+  "title": "...", "stamp": "<the computer's word for how its file was>", "status": "busy"}`. A page that follows a
+  conversation asks again every moment and says what it has, `"since": "<that stamp>"`: the computer then answers
+  `{"same": true, "stamp": "...", "status": "..."}` unless the file has changed. `status` is how the conversation
+  stands now, as in the list. A computer of an earlier version gives no stamp and answers in full every time.
 - `{"action": "answer", "ask": "<id of the request>", "allow": true|false}` answers the request for permission the
   conversation waits on. → `{}`. A request that was answered meanwhile, on the computer or the phone, is refused.
 - `{"action": "say", "text": "<1 to 8000 characters>"}` leaves a message for it. → `{"now": true}` when the tool

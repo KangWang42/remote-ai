@@ -110,7 +110,7 @@
     { name: 'tunnel', title: '公网隧道的协议', about: '隧道经常断开时改用 HTTP/2，下次建立时生效', choices: [['auto', '自动'], ['http2', 'HTTP/2']] },
     { name: 'autostart', title: '登录 Windows 后自动启动' },
     { name: 'reach', title: '手机处理电脑上的对话', about: '电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用' },
-    { name: 'update', title: '自动更新', about: '在终端空闲时安装新版本' }];
+    { name: 'update', title: '自动检查更新', about: '有新版本时提示' }];
   let device = null, told = null, busy = false, problem = '';
   const name = line => line.name || KIND[line.kind][0];
   const has = feature => !!device && (device.features || []).includes(feature);
@@ -186,7 +186,15 @@
   function fixed() {
     if (native && native.update) {
       $('part-app').hidden = false;
-      $('app').replaceChildren(row({ act: () => native.update() }, text('App 版本', native.version ? 'v' + native.version() : ''), el('span', { className: 'act', textContent: '检查更新' })));
+      const rows = [];
+      // looking by itself is off until it is switched on (an app that cannot say so looks by itself as before)
+      if (native.autoUpdate && native.setAutoUpdate) {
+        const on = native.autoUpdate();
+        rows.push(row(null, text('自动检查更新', '有新版本时提示'), el('button', { type: 'button', className: 'flip', role: 'switch', 'aria-checked': String(on === true), 'aria-label': '自动检查更新',
+          onclick: () => { native.setAutoUpdate(!on); toast('已保存'); fixed(); } })));
+      }
+      rows.push(row({ act: () => native.update() }, text('App 版本', native.version ? 'v' + native.version() : ''), el('span', { className: 'act', textContent: '检查更新' })));
+      $('app').replaceChildren(...rows);
     }
     $('account').replaceChildren(row({ kind: 'danger', act: async () => {
       if (!await confirm('退出登录？', '下次需要重新扫码或输入密码。', '退出登录', true)) return;

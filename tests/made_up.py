@@ -36,11 +36,15 @@ class Homes:
         os.utime(path, (at, at))
         return path
 
-    def codex_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), held=False, originator=None):
+    def codex_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), held=False, originator=None, source=None, instructions=None):
         """A conversation Codex saved for a folder; `held`: something has it open (its lock is held until close());
-        `originator`: what started it, as Codex notes it ("codex-tui", "Codex Desktop")."""
+        `originator` and `source`: what started it, as Codex notes it ("codex-tui" and "cli"; "Codex Desktop" and
+        "vscode"); `instructions`: written before the folder, as an earlier Codex wrote them."""
         path = self.codex / "sessions" / "2026" / "10" / "11" / ("rollout-2026-10-11T08-00-00-%s.jsonl" % session)
-        rows = [{"type": "session_meta", "payload": dict({"id": session, "cwd": str(folder)}, **({"originator": originator} if originator else {}))}] + [
+        meta = dict({"id": session}, **({"instructions": instructions} if instructions else {}))
+        meta["cwd"] = str(folder)
+        meta.update({key: value for key, value in (("originator", originator), ("source", source)) if value})
+        rows = [{"type": "session_meta", "payload": meta}] + [
             {"type": "response_item", "payload": {"type": "message", "role": role, "content": [{"type": "input_text" if role == "user" else "output_text", "text": text}]}}
             for role, text in zip(("user", "assistant"), said)]
         path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")

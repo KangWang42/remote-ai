@@ -287,19 +287,37 @@
       form.append(el('div', { className: 'bar' }, el('button', { type: 'button', className: 'icon', ariaLabel: '返回', html: ICON.back, onclick: () => finish(null) }),
         el('div', { className: 'who' }, el('h3', { textContent: session.title }), head)), said, asks, below, write);
       // ---- what is said there
-      let read = '', reading = false;
+      // The window asks the computer for the conversation itself, again and again while it is open, and says what
+      // it has (`since`): the computer gives it anew only when it changed, with how it stands. So what is said on
+      // the computer is here within a moment, whatever the lists know. (A computer of an earlier version gives no
+      // such word; it is asked when the lists say that the conversation changed.)
+      let stamp = '', seen = '', read = false, reading = false, stands = null, quick = 0;
+      const pending = [];        // what was written here and is on its way: shown at once, until the conversation's own record has it
+      const same = (messages, text) => messages.filter(m => m.role === 'user' && String(m.text || '').trim() === text).length;
+      let record = [];
+      function waiting() {
+        said.querySelectorAll('.turn.mine').forEach(node => node.remove());
+        pending.forEach(p => said.append(el('div', { className: 'turn user mine' + (p.sent ? '' : ' going') }, el('div', { className: 'plain', textContent: p.text }))));
+      }
       async function follow(current) {
-        const stamp = [current.updated, current.status, current.last || ''].join('\n');
-        if (!canPeek || reading || stamp === read) return;
+        const listed = [current.updated, current.status, current.last || ''].join('\n');
+        if (!canPeek || reading || (read && stamp === null && listed === seen)) return;
         reading = true;
         try {
-          const got = await api('api/conversation', { id: newId(), session: session.id }), messages = got.messages || [];
-          const atEnd = !read || said.scrollHeight - said.scrollTop - said.clientHeight < 60, was = said.scrollTop;
-          const fresh = el('div');
-          await writeSaid(fresh, messages, TOOLS[session.tool]);
-          said.replaceChildren(...fresh.childNodes);
-          said.scrollTop = atEnd ? said.scrollHeight : was;      // what was said last is what one came to see; someone reading further up is left there
-          read = stamp;
+          const got = await api('api/conversation', Object.assign({ id: newId(), session: session.id }, stamp ? { since: stamp } : {}));
+          if (typeof got.status === 'string') stands = got.status;
+          if (!got.same) {
+            record = got.messages || [];
+            // what was written here stands in the record now, or something newer of the user's does
+            for (let i = pending.length - 1; i >= 0; i--) if (same(record, pending[i].text) > pending[i].before || (pending[i].sent && record.filter(m => m.role === 'user').length > pending[i].users)) pending.splice(i, 1);
+            const atEnd = !read || said.scrollHeight - said.scrollTop - said.clientHeight < 60, was = said.scrollTop;
+            const fresh = el('div');
+            await writeSaid(fresh, record, TOOLS[session.tool]);
+            said.replaceChildren(...fresh.childNodes);
+            waiting();
+            said.scrollTop = atEnd ? said.scrollHeight : was;      // what was said last is what one came to see; someone reading further up is left there
+          }
+          stamp = typeof got.stamp === 'string' ? got.stamp : null; seen = listed; read = true;
         } catch (error) { if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
         reading = false;
       }
@@ -309,23 +327,24 @@
       const send = el('button', { type: 'button', className: 'solid', textContent: '发送', onclick: async () => {
         const text = box.value.trim();
         if (!text) return box.focus();
-        send.disabled = true; left = '发送中…'; show();
-        try {
-          await api('api/conversation', { id: newId(), session: session.id, action: 'say', text });
-          box.value = ''; box.style.height = 'auto'; left = '';
-          // what was written is shown at once, as what the user said; the conversation's own record follows
-          said.append(el('div', { className: 'turn user' }, el('div', { className: 'plain', textContent: text }))); said.scrollTop = said.scrollHeight;
-        } catch (error) { left = ''; toast(error.message); }
-        send.disabled = false; refresh(); show();
+        // what is written stands in the window at once, as what the user said, while it is on its way
+        const mine = { text, before: same(record, text), users: record.filter(m => m.role === 'user').length, sent: false };
+        pending.push(mine); box.value = ''; box.style.height = 'auto';
+        waiting(); said.scrollTop = said.scrollHeight;
+        send.disabled = true; quick = Date.now() + 45000;
+        try { await api('api/conversation', { id: newId(), session: session.id, action: 'say', text }); mine.sent = true; }
+        catch (error) { pending.splice(pending.indexOf(mine), 1); if (!box.value) box.value = text; toast(error.message); }
+        send.disabled = false; waiting(); refresh(); show();
       } });
       write.append(box, send);
-      let shown = '', left = '';
+      let shown = '';
       function show() {
-        const current = now(), phase = current.live ? reachPhase(current) : '';
-        const stamp = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, left]);
-        follow(current);
-        if (stamp === shown) return;
-        shown = stamp;
+        // how it stands is what the computer said of it last: with the conversation itself, or in the lists
+        const listed = now(), current = stands === null || listed.ask ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
+        const signature = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir]);
+        follow(listed);
+        if (signature === shown) return;
+        shown = signature;
         head.textContent = (phase && phase !== 'stopped' ? PHASE[phase][0] + ' · ' : '') + whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));
         // what it asks is answered here, under what was said
         asks.textContent = '';
@@ -338,7 +357,6 @@
         const sayable = can(current, 'say') && !current.ask;
         write.hidden = !sayable;
         below.textContent = '';
-        if (left) below.append(el('p', { className: 'quiet', textContent: left }));
         // where it cannot be told anything from here, it can still be taken into a terminal: the one thing left to do
         if (!sayable && !current.ask) {
           const taken = current.live ? ways(current) : current.dir ? [{ label: '在手机终端继续', value: 'resume' }] : [];
@@ -346,7 +364,9 @@
         }
       }
       show();
-      watch = setInterval(() => { if ($('sheet').open) show(); }, 1500);
+      // every second; for a while after something was written here, twice as often
+      let ticks = 0;
+      watch = setInterval(() => { if ($('sheet').open && (++ticks % 2 === 0 || Date.now() < quick)) show(); }, 500);
     }, true);
     clearInterval(watch);
     if (choice) into(choice.session, choice.value);
@@ -404,11 +424,16 @@
   // A terminal of the phone's, a conversation that is open on the computer, a conversation that is only saved: each
   // is a thing with a name, a place (its project, or the folder it is open in), a tool, a source (where it runs), a
   // phase, and the time it was last used. The lists, the search and the filters all work on these.
-  const SOURCE = { phone: '手机终端', cli: '命令行', app: '应用' };
+  // Where a thing runs is told apart in two: in a terminal (one of the phone's, or a command line on the computer),
+  // or in an app (a desktop app, an editor). The computer says by what a conversation or a folder is used (`kind`,
+  // `kinds`: docs/PROTOCOL.md); every word of it but the terminal's is an app.
+  const SOURCE = { term: '终端', app: '应用' }, PHONE = '手机终端';
+  const sourceOfKind = kind => !kind ? '' : kind === '终端' ? 'term' : 'app';
   const marks = () => (data.device.features || []).includes('marks');
   const base = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(path || '');
   // where a conversation that a program has open runs: the desktop app or an editor ('app'), or a command line
-  const sourceOf = s => !s.live ? '' : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'cli';
+  // (one that no program has open is told by what started it)
+  const sourceOf = s => !s.live ? sourceOfKind(s.kind) : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'term';
   function things() {
     const sessions = data.sessions || [], saved = {};
     sessions.forEach(s => { saved[s.tool + ':' + s.id] = s; });
@@ -416,7 +441,7 @@
       const s = t.session ? saved[t.tool + ':' + t.session] || null : null, phase = phaseOf(t), live = running(t);
       // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
       return { t, s, tool: t.tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
-        source: live ? 'phone' : '', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
+        source: 'term', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
     });
     sessions.filter(s => !s.terminal).forEach(s => {
       const phase = s.live ? reachPhase(s) : '';
@@ -430,12 +455,12 @@
   // by what it runs and where, in the words of the cards
   const whereOf = x => {
     const tool = TOOLS[x.tool];
-    if (x.t) return tool + (x.live ? ' · ' + SOURCE.phone : '');
+    if (x.t) return tool + (x.live ? ' · ' + PHONE : '');
     const origin = x.live && x.s.origin && x.s.origin !== '电脑独立终端' ? x.s.origin : '';
     return !origin ? tool : /桌面版|后台服务/.test(origin) ? origin : tool + ' · ' + origin;
   };
   // what a search looks through
-  const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.s && x.s.origin || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
+  const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? PHONE : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
   // what a card shows: it is built again when any of this changes
   const signed = x => x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned]
     : [x.s.id, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), x.s.ask ? x.s.ask.id : '', x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state];
@@ -443,7 +468,11 @@
   // ---- the filters: by tool, and by where a thing runs. They last as long as the page is kept open.
   let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 2, hiddenShown = false;
   try { filter = Object.assign(filter, JSON.parse(sessionStorage.getItem('rcli-filter') || '{}')); } catch (error) { /* no storage */ }
+  if (!SOURCE[filter.source]) filter.source = '';
   const pass = x => (!filter.tool || x.tool === filter.tool) && (!filter.source || x.source === filter.source);
+  // a project is one of a tool or of a kind by what its folder is used for, or by what is in it now
+  const passProject = (folder, inside) => (!filter.tool || (folder.tools || []).includes(filter.tool) || inside.some(x => x.tool === filter.tool))
+    && (!filter.source || (folder.kinds || []).some(kind => sourceOfKind(kind) === filter.source) || inside.some(x => x.source === filter.source));
   function choose(change) {
     filter = Object.assign({}, filter, change);
     try { sessionStorage.setItem('rcli-filter', JSON.stringify(filter)); } catch (error) { /* no storage */ }
@@ -451,8 +480,9 @@
   }
   function drawFilters(all) {
     // a row is offered only where it tells something apart, or to take back what was chosen
-    const tools = Object.keys(TOOLS).filter(tool => tool === filter.tool || all.some(x => x.tool === tool));
-    const sources = Object.keys(SOURCE).filter(source => source === filter.source || all.some(x => x.source === source));
+    const folders = data.device.projects || [];
+    const tools = Object.keys(TOOLS).filter(tool => tool === filter.tool || all.some(x => x.tool === tool) || folders.some(f => (f.tools || []).includes(tool)));
+    const sources = Object.keys(SOURCE).filter(source => source === filter.source || all.some(x => x.source === source) || folders.some(f => (f.kinds || []).some(kind => sourceOfKind(kind) === source)));
     const offered = (tools.length > 1 ? tools : filter.tool ? [filter.tool] : []), places = (sources.length > 1 ? sources : filter.source ? [filter.source] : []);
     const box = $('filters'), signature = JSON.stringify([offered, places, filter, TOOLS.shell]);
     box.hidden = !offered.length && !places.length;
@@ -677,9 +707,12 @@
         $('nothing').hidden = !(filter.tool || filter.source) || needs.length + pinned.length + active.length + recent.length + background.length > 0;
       }
       // the projects: all of them, or those the search names
-      const sessions = everything.filter(x => !x.t), wanted = searching ? names.filter(name => asked.every(word => name.toLowerCase().includes(word))) : names;
+      // (with a filter chosen, those of that tool or kind)
+      const sessions = everything.filter(x => !x.t), folderOf = name => (device.projects || []).find(p => p.name === name) || {};
+      const wanted = (searching ? names.filter(name => asked.every(word => name.toLowerCase().includes(word))) : names)
+        .filter(name => passProject(folderOf(name), everything.filter(x => x.project === name)));
       const list = wanted.map(name => {
-        const folder = (device.projects || []).find(p => p.name === name) || {};
+        const folder = folderOf(name);
         const own = mine.filter(x => x.project === name), count = sessions.filter(x => x.project === name).length;
         const need = stands(own, 'confirm'), done = stands(own, 'done'), work = stands(own, 'busy');
         const meta = el('span', { className: 'meta' });
@@ -695,7 +728,7 @@
       if (ready && !searching) cardsP.push(el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', onclick: addProject, html: ICON.plus + '<span>添加项目</span>' })));
       $('projects').hidden = searching && !list.length;
       fill($('project-list'), cardsP, JSON.stringify([list.map(x => x.sign), ready, searching]));
-      $('project-summary').textContent = searching ? list.length + ' 个' : names.length ? names.length + ' 个' : '还没有项目';
+      $('project-summary').textContent = searching || filter.tool || filter.source ? list.length + ' 个' : names.length ? names.length + ' 个' : '还没有项目';
       return;
     }
 

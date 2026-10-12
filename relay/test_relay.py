@@ -428,6 +428,26 @@ class TerminalRelayTests(unittest.TestCase):
         waiting.join(5)
         self.assertEqual(answers["got"]["messages"], said)
         self.assertNotIn(ask["id"], self.relay._pending)        # nothing of it is kept
+        self.assertNotIn("since", asked[0])
+        # a page that follows it says what it has, in the computer's own word; the computer answers that it is the same
+        again = dict(ask, id="d" * 32, since="2048.638000000000000000")
+        waiting = threading.Thread(target=lambda: answers.update(same=self.relay.conversation(again, now=1003, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual((asked[0]["action"], asked[0]["since"]), ("session_read", "2048.638000000000000000"))
+        self.relay.agent({"info": info, "acks": [{"id": again["id"], "error": "", "result": {"same": True, "stamp": again["since"], "status": "busy"}}]}, now=1004)
+        waiting.join(5)
+        self.assertEqual(answers["same"], {"same": True, "stamp": again["since"], "status": "busy"})
+        # anything else in its place is not passed on
+        waiting = threading.Thread(target=lambda: answers.update(odd=self.relay.conversation(dict(ask, id="e" * 32, since="x; rm"), now=1005, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertNotIn("since", asked[0])
+        self.relay.agent({"info": info, "acks": [{"id": "e" * 32, "error": "", "result": {"messages": said}}]}, now=1006)
+        waiting.join(5)
+        # by what a conversation is used is passed on as the computer says it
+        self.relay.agent({"info": info, "sessions": [{"id": sid, "tool": "claude", "dir": "demo", "title": "原对话", "updated": 1, "live": True, "host": "cli", "kind": "Claude 桌面版"}]}, now=1007)
+        self.assertEqual([s["kind"] for s in self.relay.overview(now=1007)["sessions"]], ["Claude 桌面版"])
 
     def test_a_conversation_is_pinned_or_hidden_from_the_phone_and_the_computer_keeps_it(self):
         import threading
