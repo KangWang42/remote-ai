@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Text;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -39,12 +41,98 @@ public static class Setup {
         return earlier.Length > 0 ? earlier : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "RemoteCli");
     }
     /// The folder the program goes into. A folder that already holds other things gets a "RemoteCli" folder inside it.
+    /// A folder that is the program's own is used as it is: where it is installed, also when an installation that
+    /// broke off left only part of it there, or nothing but what the installer itself puts there.
     public static string Resolve(string chosen) {
         string path = Path.GetFullPath(chosen.Trim().Trim('"')).TrimEnd('\\');
         if (path.Length < 3) path += "\\";                                   // a drive root such as D:
-        bool ours = File.Exists(Path.Combine(path, "RemoteCli.exe"));
-        bool empty = !Directory.Exists(path) || !Directory.EnumerateFileSystemEntries(path).Any();
-        return ours || empty ? path : Path.Combine(path, "RemoteCli");
+        bool there = Directory.Exists(path);
+        var held = there ? Directory.EnumerateFileSystemEntries(path).Select(Path.GetFileName).ToList() : new List<string>();
+        bool ours = String.Equals(path, Installed().TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)
+            || held.Any(name => name.Equals("RemoteCli.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("Uninstall.exe", StringComparison.OrdinalIgnoreCase))
+            || (held.Count > 0 && held.All(name => OwnFolders.Concat(OwnFiles).Concat(Aside).Contains(name, StringComparer.OrdinalIgnoreCase)));
+        return ours || held.Count == 0 ? path : Path.Combine(path, "RemoteCli");
+    }
+    // Inside the folder, for the time of an installation: the new copy as it is unpacked, and the one it replaces.
+    const string Incoming = ".incoming", Previous = ".previous";
+    static readonly string[] Aside = { Incoming, Previous };
+    // What was done is written down beside the settings (a test writes elsewhere); what failed is left for the program
+    // to tell its owner when it starts, since a quiet installation has nobody to tell.
+    static string Notes { get { return Sandbox ? Path.Combine(Path.GetTempPath(), "RemoteCli-Sandbox") : Data; } }
+    static void Note(string line) {
+        try { Directory.CreateDirectory(Notes); File.AppendAllText(Path.Combine(Notes, "install.log"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + Version + " " + line + "\r\n", new UTF8Encoding(false)); }
+        catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+    static void Failed(string why) {
+        try { Directory.CreateDirectory(Notes); File.WriteAllText(Path.Combine(Notes, "update-failed.txt"), Version + "\n" + why, new UTF8Encoding(false)); }
+        catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+    static void Clear(string folder) { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+    static void Move(string from, string to) { if (Directory.Exists(from)) Directory.Move(from, to); else File.Move(from, to); }
+    // The programs this installer puts there, still running from the folder: a hook that a tool started as it was
+    // closed, the relay that has not ended yet. They are the installation's own and are ended.
+    static void Free(string folder) {
+        string under = Path.GetFullPath(folder).TrimEnd('\\') + "\\";
+        foreach (string name in new[] { "RemoteCliAgent", "python", "pythonw" })
+            foreach (Process running in Process.GetProcessesByName(name))
+                try { using (running) if (running.MainModule.FileName.StartsWith(under, StringComparison.OrdinalIgnoreCase)) { running.Kill(); running.WaitForExit(3000); } }
+                catch (System.ComponentModel.Win32Exception) { } catch (InvalidOperationException) { } catch (NotSupportedException) { }
+    }
+    // A file in use for a moment is waited for: twenty seconds in all, with what is ours and still runs ended first.
+    static void Patiently(string folder, Action act) {
+        for (int tries = 0; ; tries++) {
+            try { act(); return; }
+            catch (IOException) { if (tries >= 40) throw; }
+            catch (UnauthorizedAccessException) { if (tries >= 40) throw; }
+            if (tries == 0) Free(folder);
+            Thread.Sleep(500);
+        }
+    }
+    static void Unpack(string folder) {
+        using (Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip"))
+        using (var archive = new ZipArchive(payload, ZipArchiveMode.Read)) {
+            string root = Path.GetFullPath(folder).TrimEnd('\\') + Path.DirectorySeparatorChar;
+            foreach (ZipArchiveEntry entry in archive.Entries) {
+                string path = Path.GetFullPath(Path.Combine(folder, entry.FullName));
+                if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new IOException("安装包内容无效");
+                if (entry.FullName.EndsWith("/")) { Directory.CreateDirectory(path); continue; }
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                entry.ExtractToFile(path, true);
+            }
+        }
+        File.Copy(Application.ExecutablePath, Path.Combine(folder, "Uninstall.exe"), true);
+    }
+    /// Puts the new copy in the place of the one that is installed. The new one is unpacked whole first, beside the
+    /// old; then the old is set aside by renaming, and the new moved in. Whatever cannot be done, what was there is
+    /// put back as it was: the folder holds a whole program before and after, the old one or the new.
+    static void Replace(string target) {
+        string incoming = Path.Combine(target, Incoming), previous = Path.Combine(target, Previous);
+        Directory.CreateDirectory(target);
+        Patiently(target, () => { Clear(incoming); Clear(previous); });
+        var aside = new List<string>(); var placed = new List<string>();
+        try {
+            Directory.CreateDirectory(incoming);
+            Unpack(incoming);
+            Directory.CreateDirectory(previous);
+            foreach (string name in OwnFolders.Concat(OwnFiles)) {
+                string here = Path.Combine(target, name);
+                if (!Directory.Exists(here) && !File.Exists(here)) continue;
+                Patiently(target, () => Move(here, Path.Combine(previous, name)));
+                aside.Add(name);
+            }
+            foreach (string name in Directory.EnumerateFileSystemEntries(incoming).Select(Path.GetFileName).ToList()) {
+                Patiently(target, () => Move(Path.Combine(incoming, name), Path.Combine(target, name)));
+                placed.Add(name);
+            }
+        } catch (Exception) {
+            foreach (string name in placed) try { string here = Path.Combine(target, name); if (Directory.Exists(here)) Directory.Delete(here, true); else File.Delete(here); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            foreach (string name in aside) try { Move(Path.Combine(previous, name), Path.Combine(target, name)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            try { Clear(incoming); if (Directory.Exists(previous) && !Directory.EnumerateFileSystemEntries(previous).Any()) Directory.Delete(previous); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            throw;
+        }
+        // what was set aside may still be in use for a moment (a hook that has not ended): the program removes it when it starts
+        // (a program that was running when its folder was renamed still names the place it was started from)
+        try { Clear(incoming); Free(target); Patiently(target, () => Clear(previous)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
     static void RemoveOwn(string folder) {
         foreach (string name in OwnFolders) { string path = Path.Combine(folder, name); if (Directory.Exists(path)) Directory.Delete(path, true); }
@@ -112,31 +200,25 @@ public static class Setup {
         string target = wanted.Length > 0 ? Resolve(wanted) : DefaultTarget();
         if (!quiet) { target = Ask(target); if (target == null) return 1; }
         if (Running()) { if (!quiet) MessageBox.Show(Name + " 正在运行。请先在托盘图标上点右键选“退出”，再重新运行安装程序。", "安装 " + Name); return 1; }
-        string earlier = Installed();
-        try {
-            Directory.CreateDirectory(target);
-            if (earlier.Length > 0 && Directory.Exists(earlier) && !String.Equals(earlier.TrimEnd('\\'), target.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) {
-                RemoveOwn(earlier);                                           // moved: the earlier copy goes, its folder only if nothing else is in it
-                if (!Directory.EnumerateFileSystemEntries(earlier).Any()) Directory.Delete(earlier);
-            }
-            RemoveOwn(target);
-            using (Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip"))
-            using (var archive = new ZipArchive(payload, ZipArchiveMode.Read)) {
-                string root = Path.GetFullPath(target).TrimEnd('\\') + Path.DirectorySeparatorChar;
-                foreach (ZipArchiveEntry entry in archive.Entries) {
-                    string path = Path.GetFullPath(Path.Combine(target, entry.FullName));
-                    if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new IOException("安装包内容无效");
-                    if (entry.FullName.EndsWith("/")) { Directory.CreateDirectory(path); continue; }
-                    Directory.CreateDirectory(Path.GetDirectoryName(path));
-                    entry.ExtractToFile(path, true);
-                }
-            }
-        } catch (UnauthorizedAccessException) {
-            if (!quiet) MessageBox.Show("没有权限写入\n" + target + "\n\n请换一个位置，或右键安装程序选“以管理员身份运行”。", "安装 " + Name);
+        string earlier = Installed(), program = Path.Combine(target, "RemoteCli.exe"), remover = Path.Combine(target, "Uninstall.exe");
+        bool moved = earlier.Length > 0 && Directory.Exists(earlier) && !String.Equals(earlier.TrimEnd('\\'), target.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+        try { Replace(target); }
+        catch (Exception error) {
+            if (!(error is IOException) && !(error is UnauthorizedAccessException)) throw;
+            // Nothing was changed for good: what was installed is as it was, and is started again where the program
+            // asked for this installation (an update), so that the computer is not left without it.
+            string why = error is UnauthorizedAccessException ? "没有权限写入安装位置，或有文件正被占用：" + error.Message : error.Message;
+            Note("not installed into " + target + ": " + why);
+            if (quiet) Failed(why);
+            else MessageBox.Show("没有安装成功，原来的程序没有改动。\n" + target + "\n\n" + why + "\n\n可以换一个位置，或右键安装程序选“以管理员身份运行”。", "安装 " + Name);
+            string still = File.Exists(program) ? program : moved && File.Exists(Path.Combine(earlier, "RemoteCli.exe")) ? Path.Combine(earlier, "RemoteCli.exe") : null;
+            if (launch && still != null) try { Process.Start(new ProcessStartInfo(still) { WorkingDirectory = Path.GetDirectoryName(still), UseShellExecute = true }); } catch (System.ComponentModel.Win32Exception) { }
             return 2;
         }
-        string program = Path.Combine(target, "RemoteCli.exe"), remover = Path.Combine(target, "Uninstall.exe");
-        File.Copy(Application.ExecutablePath, remover, true);
+        Note("installed into " + target);
+        try { File.Delete(Path.Combine(Notes, "update-failed.txt")); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        // moved: the earlier copy goes, its folder only if nothing else is in it. The new one is in place by now.
+        if (moved) try { Free(earlier); RemoveOwn(earlier); foreach (string left in Aside) Clear(Path.Combine(earlier, left)); if (!Directory.EnumerateFileSystemEntries(earlier).Any()) Directory.Delete(earlier); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         foreach (string file in Shortcuts) Shortcut(file, program);
         foreach (string file in EarlierShortcuts) try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         using (var key = Registry.CurrentUser.CreateSubKey(UninstallKey)) {

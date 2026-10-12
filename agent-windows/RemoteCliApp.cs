@@ -982,6 +982,19 @@ public sealed partial class App : Form {
             agent.Reach.Changed += () => { if (IsHandleCreated && Reaching && Hooked.Any(tool => agent.Reach.Heard(tool))) try { BeginInvoke(new Action(ShowReach)); } catch (InvalidOperationException) { } };
             agent.Reach.Changed += () => { if (IsHandleCreated) try { BeginInvoke(new Action(ShowKept)); } catch (InvalidOperationException) { } };
             ShowSettings();
+            // An update that could not be installed leaves the program as it was and starts it again: why it was not
+            // installed is said here, once. What an installation set aside and could not remove yet is removed now.
+            try {
+                string left = Path.Combine(dataDir, "update-failed.txt");
+                if (File.Exists(left) && !offstage) {
+                    string[] told = File.ReadAllText(left, Encoding.UTF8).Split(new[] { '\n' }, 2);
+                    File.Delete(left);
+                    string words = "v" + told[0].Trim() + " 没有装上，仍在使用 v" + Version + (told.Length > 1 ? "：" + told[1].Trim() : "");
+                    Say(words, true);
+                    try { tray.ShowBalloonTip(8000, "Remote AI 更新没有完成", words, ToolTipIcon.Warning); } catch (InvalidOperationException) { }
+                }
+                foreach (string aside in new[] { ".previous", ".incoming" }) if (Directory.Exists(Path.Combine(appDir, aside))) Directory.Delete(Path.Combine(appDir, aside), true);
+            } catch (IOException) { } catch (UnauthorizedAccessException) { }
             updateTimer.Tick += (t, a) => { CheckForUpdate(false); if (DateTime.UtcNow - listRead > TimeSpan.FromHours(6)) ReadList(); };
             ReadList();
             quietTimer.Tick += async (t, a) => {
