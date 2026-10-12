@@ -51,8 +51,9 @@ public static class ReachCheck {
         transcript = Path.Combine(folder, "conversation.jsonl"); File.WriteAllText(transcript, "{}\n");
         pipe = "RemoteCli.reach.check" + Guid.NewGuid().ToString("N").Substring(0, 8);
         int idle = 0, told = 0;       // idle: seconds nobody has touched the computer, as the check says it
+        int wait = 300;               // how long a tool that stops is kept waiting, as its owner would have chosen
         try {
-            using (var reach = new Reach(pipe, () => idle)) {
+            using (var reach = new Reach(pipe, () => idle, () => wait)) {
                 reach.Changed += () => Interlocked.Increment(ref told);
                 string one = Guid.NewGuid().ToString();
                 Func<string, Reach.Open> claude = session => reach.Of("claude", session), codex = session => reach.Of("codex", session);
@@ -152,12 +153,24 @@ public static class ReachCheck {
                 Require(Answer(stopped, 3000, "somebody came back") == "" && claude(one).Status == "idle", "a tool is not kept waiting once somebody is at the computer");
                 // nobody comes, and no message either: after its time it is let go, and has stopped. That time is
                 // minutes, well inside what the tools are told a hook may take.
-                Require(reach.Lingers == Reach.Linger && Reach.Linger == 300 && Reach.Linger < Reach.Hold && Reach.Hold < Reach.Patience, "five minutes at a stop, half an hour for a request");
-                idle = 600; reach.Lingers = 1;
+                Require(Reach.Waits.All(seconds => seconds < Reach.Patience) && Reach.Hold < Reach.Patience, "no wait is longer than the tools are told a hook may take");
+                idle = 600; wait = 1;
                 stopped = Run("claude", Event("Stop", one, ",\"last_assistant_message\":\"Ran a third time.\""));
                 Require(Until(() => claude(one).Status == "waiting", 3000) && !stopped.Program.WaitForExit(400), "waits a third time");
-                Require(Answer(stopped, 4000, "its time is over") == "" && claude(one).Status == "idle" && !claude(one).Sayable, "a tool is let go when its time is over");
-                reach.Lingers = Reach.Linger; idle = 5;
+                Require(Answer(stopped, 4000, "its time is over") == "" && Until(() => !claude(one).Held, 1000) && claude(one).Status == "waiting" && !claude(one).Sayable, "a tool is let go when its time is over, and it is the phone's turn still");
+                Require(Refused(() => reach.Say("claude", one, "too late for the hook")).Contains("已经在电脑上停下"), "what is said to it then goes in by the tool's own way, not through the hook");
+                idle = 5;
+                Require(Until(() => claude(one).Status == "idle", 3000), "somebody came back to one that had stopped: it is the phone's turn no more");
+                idle = 600;
+                // unless its owner chose a time, a tool is not kept waiting at all: it stops as it would without this
+                // program. What is kept in the settings is read as one of the times there are, else as none.
+                Require(Reach.Wait(300) == 300 && Reach.Wait("900") == 900 && Reach.Wait(0) == 0 && Reach.Wait(null) == 0 && Reach.Wait("") == 0 && Reach.Wait(7) == 0 && Reach.Wait("soon") == 0, "the time as the settings keep it");
+                wait = 0;
+                int tellings = told;
+                Require(Answer(Run("claude", Event("Stop", one, ",\"last_assistant_message\":\"Ran a fourth time.\"")), 3000, "not to wait") == "" && claude(one).Last == "Ran a fourth time.", "with no time to wait a tool that stops is let go at once");
+                Require(claude(one).Status == "waiting" && !claude(one).Held && !claude(one).Sayable && told > tellings, "and it is the phone's turn all the same: it has stopped while nobody was at the computer");
+                wait = 300; idle = 5; tellings = told;
+                Require(Until(() => claude(one).Status == "idle", 3000) && Until(() => told > tellings, 1000), "until somebody is back at the computer, which is told");
 
                 // ---- a run no person sits at (a script's `claude -p`, `codex exec`, a helper thread of a conversation) is
                 // never kept waiting, however long nobody has been at the computer, and is no conversation for a phone
@@ -232,6 +245,10 @@ public static class ReachCheck {
             Require(((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 1 && hooks.Count == 6, "the person's own hooks stay, this program's stand beside them: " + String.Join(",", hooks.Keys));
             var mine = (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)((IEnumerable)hooks["PermissionRequest"]).Cast<object>().Single())["hooks"]).Cast<object>().Single();
             Require(Convert.ToString(mine["command"]) == program && String.Join(" ", ((IEnumerable)mine["args"]).Cast<object>()) == "--hook claude RemoteCli.reach.abc123" && Convert.ToInt32(mine["timeout"]) == Reach.Patience, "Claude Code is given the program and its arguments apart");
+            // the one hook that can run for minutes says on Claude Code's screen what it is doing; the others say nothing
+            Func<string, Dictionary<string, object>> entry = name => ((IEnumerable)hooks[name]).Cast<object>().Select(group => (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)group)["hooks"]).Cast<object>().First()).Single(hook => Convert.ToString(hook["command"]) == program);
+            Require(Convert.ToString(entry("Stop")["statusMessage"]) == Reach.Waiting && Reach.Events.Where(name => name != "Stop").All(name => !entry(name).ContainsKey("statusMessage")), "the hook at a stop says what it waits for");
+            Require(File.ReadAllText(settings, Encoding.UTF8).Contains(Reach.Waiting), "in the words as they are, not as escapes");
             Require(File.ReadAllText(settings + ".before-remotecli", Encoding.UTF8) == before, "the file as it was is kept beside it");
             ReachHooks.Set("claude", false, program, "RemoteCli.reach.abc123");
             read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(settings, Encoding.UTF8));
@@ -242,6 +259,7 @@ public static class ReachCheck {
             Require(ReachHooks.Installed("codex") && !File.Exists(codexHooks + ".before-remotecli"), "installed for Codex, with nothing to keep from before");
             var line = Convert.ToString(((Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(codexHooks, Encoding.UTF8))["hooks"])["Stop"]).Cast<object>().Single())["hooks"]).Cast<object>().Single())["command"]);
             Require(line == "& '" + program + "' --hook codex RemoteCli.reach.abc123", "a path with a space in it is called the way PowerShell calls one: " + line);
+            Require(!File.ReadAllText(codexHooks, Encoding.UTF8).Contains("statusMessage"), "Codex's hooks are as they were: it asks anew whether a changed hook is trusted");
             ReachHooks.Set("codex", true, @"D:\Tools\RemoteCliAgent.exe", "RemoteCli.reach.abc123");
             Require(File.ReadAllText(codexHooks, Encoding.UTF8).Contains("\"D:\\\\Tools\\\\RemoteCliAgent.exe --hook codex RemoteCli.reach.abc123\"") && ReachHooks.Installed("codex", @"D:\Tools\RemoteCliAgent.exe", "RemoteCli.reach.abc123"), "one without is a command as it stands");
             ReachHooks.Set("codex", false, program, "RemoteCli.reach.abc123");

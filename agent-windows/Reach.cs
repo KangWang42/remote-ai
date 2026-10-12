@@ -23,26 +23,37 @@ namespace RemoteCli {
 ///   the phone only while nobody is at the computer;
 /// - what to do next. A hook that runs as the tool stops can tell it to go on with something: a message from the
 ///   phone is passed to it there. One sent while the tool works waits for that moment; and while nobody is at the
-///   computer, a tool that stops is kept waiting for the phone's message for a while.
+///   computer, a tool that stops is kept waiting for the phone's message for a while, where its owner chose that.
 /// As soon as somebody touches the keyboard or the mouse, whatever was kept waiting is let go, and the tool does
 /// what it would have done without this.
 public sealed class Reach : IDisposable {
     public const int Unattended = 60;       // seconds without a key or the mouse after which nobody is taken to be at the computer
     public const int Hold = 1800;           // the longest a request for permission is kept for the phone's answer, in seconds
-    public const int Linger = 300;          // the longest a tool that stops is kept waiting for the phone's message, in seconds:
-                                            // the tool shows its hook as running all that while, and a conversation that
-                                            // has been let go is reached all the same (CodexQueue, ClaudeRelay)
+    /// How long a tool that stops can be kept waiting for the phone's message, in seconds, as the program's owner
+    /// chooses: not at all unless they ask for it. A tool shows its hook as running all the while it is kept, and a
+    /// conversation that has stopped is told from the phone all the same, by the tool's own way in (CodexQueue,
+    /// ClaudeRelay): waiting only makes the words arrive at once.
+    public static readonly int[] Waits = { 0, 60, 300, 900, 1800 };
+    /// The choice as it is kept in the settings ("ReachWait"), read: one of Waits, none where nothing valid is kept.
+    public static int Wait(object kept) { int seconds; return Int32.TryParse(Convert.ToString(kept), out seconds) && Array.IndexOf(Waits, seconds) >= 0 ? seconds : 0; }
+    /// What Claude Code shows on its screen while its Stop hook runs, in place of "running stop hook": what the hook
+    /// is there for, and how a wait ends. It is read by the person at the computer, not by the model.
+    public const string Waiting = "Remote AI 查收手机消息，碰一下键盘或鼠标就结束";
     public const int Patience = 2000;       // what the tools are told a hook may take, in seconds: longer than any hold
     public static readonly string[] Events = { "SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop", "SessionEnd" };
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
 
     /// What is known of one conversation. Status: "busy" (the tool works), "confirm" (it asks for permission),
-    /// "waiting" (it has stopped and is kept waiting for a message from the phone), "idle" (it has stopped).
+    /// "waiting" (it has stopped while nobody was at the computer: it is the phone's turn, until somebody comes back
+    /// or `Hold` has passed), "idle" (it has stopped).
     public sealed class Open {
         public string Tool = "", Session = "", Status = "idle", AskId = "", AskText = "", Last = "";
         public bool Answerable;             // the request can be answered from the phone (else only at the computer)
-        public bool Sayable { get { return Status != "idle"; } }     // a message can be left for it: it takes it now, or when it has done what it is doing
-        internal string Transcript = "", Queued, Message; internal bool? Verdict; internal DateTime Seen, AskedAt; internal int Turn; internal long AskStamp;
+        public bool Held;                   // while it waits, its hook is kept: a message is taken at once. Else it has
+                                            // stopped for good, and is told by its tool's own way in, where it has one
+        /// A message can be left for it here: it takes it now, or when it has done what it is doing.
+        public bool Sayable { get { return Status == "busy" || Status == "confirm" || (Status == "waiting" && Held); } }
+        internal string Transcript = "", Queued, Message; internal bool? Verdict; internal DateTime Seen, AskedAt, Stopped; internal int Turn; internal long AskStamp;
         internal Open Copy() { return (Open)MemberwiseClone(); }
     }
 
@@ -65,21 +76,36 @@ public sealed class Reach : IDisposable {
     readonly HashSet<string> heard = new HashSet<string>();
     /// Whether a tool has told of anything since this program started: its hooks do reach it.
     public bool Heard(string tool) { lock (gate) return heard.Contains(tool); }
-    readonly string pipe; readonly Func<int> idle;
-    /// How long a tool that stops is kept waiting, in seconds. A test says less.
-    public int Lingers = Linger;
+    readonly string pipe; readonly Func<int> idle, wait;
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     volatile bool closed;
     /// Something about a conversation changed: the phone is to be told at once.
     public event Action Changed;
     public string Pipe { get { return pipe; } }
 
-    public Reach(string pipeName, Func<int> idleSeconds = null) {
-        pipe = pipeName; idle = idleSeconds ?? IdleSeconds;
+    /// `waitSeconds`: how long a tool that stops is kept waiting now, as its owner has it; asked at every stop.
+    public Reach(string pipeName, Func<int> idleSeconds = null, Func<int> waitSeconds = null) {
+        pipe = pipeName; idle = idleSeconds ?? IdleSeconds; wait = waitSeconds ?? (() => 0);
         new Thread(Listen) { IsBackground = true, Name = "reach" }.Start();
+        watch = new System.Threading.Timer(Rested, null, 1000, 1000);
+    }
+    readonly System.Threading.Timer watch;
+    // A conversation whose hook is not kept has nothing that notices somebody coming back to the computer, or its
+    // time passing: this looks, once a second, and then it has simply stopped.
+    void Rested(object unused) {
+        bool changed = false; int away = -1;
+        lock (gate) {
+            if (closed) return;
+            foreach (Open o in open.Values) {
+                if (o.Status != "waiting" || o.Held) continue;
+                if (away < 0) away = idle();
+                if (away < Unattended || DateTime.UtcNow - o.Stopped > TimeSpan.FromSeconds(Hold)) { o.Status = "idle"; changed = true; }
+            }
+        }
+        if (changed) Tell();
     }
     public void Dispose() {
-        closed = true;
+        closed = true; watch.Dispose();
         lock (gate) Monitor.PulseAll(gate);
         try { using (var poke = new NamedPipeClientStream(".", pipe, PipeDirection.InOut)) poke.Connect(100); } catch { }
     }
@@ -104,7 +130,7 @@ public sealed class Reach : IDisposable {
         lock (gate) {
             Open o;
             if (!open.TryGetValue(Key(tool, session), out o)) throw new InvalidOperationException("电脑上的这段对话现在联系不上，请刷新后重试");
-            if (o.Status == "waiting") { o.Message = text; Monitor.PulseAll(gate); return true; }
+            if (o.Status == "waiting" && o.Held) { o.Message = text; Monitor.PulseAll(gate); return true; }
             if (o.Status == "busy" || o.Status == "confirm") { o.Queued = o.Queued == null ? text : o.Queued + "\n\n" + text; return false; }
             throw new InvalidOperationException("这段对话已经在电脑上停下，等着在电脑上输入。它下次工作时发的消息，会在它做完后收到");
         }
@@ -250,8 +276,8 @@ public sealed class Reach : IDisposable {
         }
         if (o == null || first) Tell();
         if (o == null) return Nothing;
-        if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") o.Status = "idle"; } Tell(); return Nothing; }
-        if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.Answerable = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
+        if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") { o.Status = "idle"; o.Held = false; } } Tell(); return Nothing; }
+        if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.Answerable = o.Held = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
         if (name == "PermissionRequest") return Asked(o, tool, hooked, gone);
         if (name == "Stop") return Stopped(o, tool, hooked, gone);
         return Nothing;
@@ -302,26 +328,34 @@ public sealed class Reach : IDisposable {
         return json.Serialize(new Dictionary<string, object> { { "decision", "block" }, { "reason", FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message } });
     }
     string[] Stopped(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone) {
-        string message = null; var began = DateTime.UtcNow; int turn;
+        string message = null; var began = DateTime.UtcNow; int turn, kept = wait(); bool held = false;
         lock (gate) {
-            o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = false; turn = o.Turn;
+            o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = o.Held = false; turn = o.Turn;
             if (o.Queued != null) { message = o.Queued; o.Queued = null; Monitor.PulseAll(gate); }
             else if (idle() >= Unattended) {
-                o.Status = "waiting"; o.Message = null;
+                // nobody is at the computer: it is the phone's turn. The hook is kept only where its owner chose a
+                // time for that; else the tool stops as it would without this program.
+                o.Status = "waiting"; o.Message = null; o.Stopped = began; o.Held = held = kept > 0;
                 Monitor.PulseAll(gate);
             } else o.Status = "idle";
         }
         if (message == null) {
             Tell();
-            lock (gate) {
-                while (o.Status == "waiting" && o.Turn == turn) {
-                    if (o.Message != null) { message = o.Message; o.Message = null; break; }
-                    if (gone() || idle() < Unattended || DateTime.UtcNow - began > TimeSpan.FromSeconds(Lingers)) { o.Status = "idle"; break; }
-                    Monitor.Wait(gate, 300);
+            if (held) {
+                bool let = false;
+                lock (gate) {
+                    while (o.Status == "waiting" && o.Held && o.Turn == turn) {
+                        if (o.Message != null) { message = o.Message; o.Message = null; break; }
+                        if (gone() || idle() < Unattended) { o.Status = "idle"; o.Held = false; break; }
+                        // its time is over: the tool stops, and it is the phone's turn still
+                        if (DateTime.UtcNow - began > TimeSpan.FromSeconds(kept)) { o.Held = false; let = true; break; }
+                        Monitor.Wait(gate, 300);
+                    }
                 }
+                if (let) Tell();
             }
         }
-        if (message != null) lock (gate) { if (o.Turn == turn) { o.Status = "busy"; o.Last = ""; } }
+        if (message != null) lock (gate) { if (o.Turn == turn) { o.Status = "busy"; o.Last = ""; o.Held = false; } }
         Tell();
         if (message == null) return Nothing;
         return new[] { AtStop(tool, tool == "claude" ? ClaudeSessions.Version(Text(hooked, "session_id")) : "", message), "0" };
@@ -370,12 +404,15 @@ public static class ReachHooks {
         string line = (one.TryGetValue("command", out value) ? Convert.ToString(value) : "") + " " + (one.TryGetValue("args", out value) && value is IEnumerable && !(value is string) ? String.Join(" ", ((IEnumerable)value).Cast<object>()) : "");
         return line.IndexOf("RemoteCli.reach.", StringComparison.Ordinal) >= 0 && line.IndexOf("--hook", StringComparison.Ordinal) >= 0;
     }
-    static Dictionary<string, object> Entry(string tool, string program, string pipe) {
+    static Dictionary<string, object> Entry(string tool, string name, string program, string pipe) {
         var hook = new Dictionary<string, object> { { "type", "command" } };
         // Claude Code starts a program with its arguments as they are given; Codex takes one line for a shell.
         if (tool == "claude") { hook["command"] = program; hook["args"] = new object[] { "--hook", "claude", pipe }; }
         else hook["command"] = Plain(program) + " --hook codex " + pipe;
         hook["timeout"] = Reach.Patience;
+        // The one hook that can run for minutes says what it is doing. Codex's entries stay as they were: Codex asks
+        // its user anew whether a hook that has changed is trusted.
+        if (tool == "claude" && name == "Stop") hook["statusMessage"] = Reach.Waiting;
         return new Dictionary<string, object> { { "hooks", new object[] { hook } } };
     }
     static Dictionary<string, object> Read(string file) {
@@ -404,8 +441,7 @@ public static class ReachHooks {
         try {
             object hooks; var all = Read(FileOf(tool));
             if (!all.TryGetValue("hooks", out hooks) || !(hooks is Dictionary<string, object>)) return false;
-            string wanted = Write(Entry(tool, program, pipe), 0);
-            return Reach.Events.All(name => { object groups; return ((Dictionary<string, object>)hooks).TryGetValue(name, out groups) && Items(groups).Any(group => group is Dictionary<string, object> && Write(group, 0) == wanted); });
+            return Reach.Events.All(name => { object groups; string wanted = Write(Entry(tool, name, program, pipe), 0); return ((Dictionary<string, object>)hooks).TryGetValue(name, out groups) && Items(groups).Any(group => group is Dictionary<string, object> && Write(group, 0) == wanted); });
         } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } catch (InvalidOperationException) { return false; }
     }
     public static bool Installed(string tool) {
@@ -426,7 +462,7 @@ public static class ReachHooks {
         foreach (string name in Reach.Events.Concat(hooks.Keys.ToArray()).Distinct().ToArray()) {
             object groups; hooks.TryGetValue(name, out groups);
             var kept = Others(groups);
-            if (on && Array.IndexOf(Reach.Events, name) >= 0) kept.Add(Entry(tool, program, pipe));
+            if (on && Array.IndexOf(Reach.Events, name) >= 0) kept.Add(Entry(tool, name, program, pipe));
             if (kept.Count > 0) hooks[name] = kept.ToArray(); else hooks.Remove(name);
         }
         if (hooks.Count == 0) all.Remove("hooks");

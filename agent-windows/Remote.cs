@@ -69,6 +69,16 @@ public sealed partial class App {
             Keep("Reach", value);
         }
     }
+    // How long a tool that stops while nobody is at the computer waits for the phone's message (Reach.Waits): not at
+    // all, unless its owner chooses a time. The agent reads the setting where a tool stops.
+    static readonly string[] WaitTitles = { "不等", "1 分钟", "5 分钟", "15 分钟", "30 分钟" };
+    const string WaitFor = "不等：对话做完就停下，电脑上看不到任何变化。手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十秒左右。\n"
+        + "选了时间：电脑无人操作满 1 分钟后，对话做完先等这么久，这期间手机发的消息立即送达；\n"
+        + "等的时候工具显示钩子正在运行（Claude Code 里写作“" + Reach.Waiting + "”），碰一下键盘或鼠标就结束。";
+    int Waiting {
+        get { return Reach.Wait(config["ReachWait"]); }
+        set { Keep("ReachWait", (object)value); }       // as a setting: with an int, Keep(url, port) of the tunnel would be meant
+    }
     // How each tool that is used on this computer stands, while the switch is on: "good" (its hooks are this program's
     // and it has told of a conversation through them), "ready" (they are, and it has yet to), "failed" (they are not,
     // and could not be written). A tool that has told once is known to: Codex runs new hooks only once its user has
@@ -107,6 +117,7 @@ public sealed partial class App {
         else if (name == "tunnel" && Array.IndexOf(Protocols, word) >= 0) Keep("TunnelProtocol", word);
         else if (name == "autostart" && value is bool) Autostart = (bool)value;
         else if (name == "update" && value is bool) Keep("AutoUpdate", (bool)value);
+        else if (name == "wait" && word != null && Array.IndexOf(Reach.Waits.Select(seconds => seconds.ToString()).ToArray(), word) >= 0) Waiting = Int32.Parse(word);
         else if (name == "reach" && value is bool) {
             try { Reaching = (bool)value; }
             catch (IOException) { throw new InvalidOperationException("写不了 Claude Code 或 Codex 的配置文件，没有改动"); }
@@ -122,6 +133,7 @@ public sealed partial class App {
         autostartSwitch.On = Autostart;
         autoUpdateSwitch.On = Convert.ToString(config["AutoUpdate"]) == "True";
         reachSwitch.On = Reaching;
+        waitPick.Set(WaitTitles[Array.IndexOf(Reach.Waits, Waiting)]);
         ShowReach();
     }
 
@@ -148,7 +160,7 @@ public sealed partial class App {
         }
         return new Dictionary<string, object> { { "name", ComputerName }, { "version", Version }, { "lines", lines }, { "change", now },
             { "settings", new Dictionary<string, object> { { "rights", Convert.ToString(config["RemoteMaxMode"]) }, { "tunnel", Convert.ToString(config["TunnelProtocol"]) },
-                { "autostart", Autostart }, { "update", Convert.ToString(config["AutoUpdate"]) == "True" }, { "reach", Reaching } } }, { "reach", ReachStates() } };
+                { "autostart", Autostart }, { "update", Convert.ToString(config["AutoUpdate"]) == "True" }, { "reach", Reaching }, { "wait", Waiting.ToString() } } }, { "reach", ReachStates() } };
     }
     static string Word(Dictionary<string, object> op, string key) { object value; return op.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : ""; }
     // Called by the agent, on its thread, for each question; what takes time is done elsewhere.

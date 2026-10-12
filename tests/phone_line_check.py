@@ -186,6 +186,22 @@ def pages(chrome, out, folder, first, addresses, config):
         press("Array.from(document.querySelectorAll('#settings .pick button')).find(b => b.textContent === '自动改文件')")
         until(lambda: config()["RemoteMaxMode"] == "edit", "the setting to be kept", 15)
         until(lambda: value("Array.from(document.querySelectorAll('#settings .pick button')).find(b => b.textContent === '自动改文件').getAttribute('aria-pressed')") == "true", "the page to show it", 10)
+        # how long a tool that stops waits for the phone is offered once the phone handles the computer's
+        # conversations: the row says what is chosen, and a sheet says what the wait is for and offers the times
+        WAIT = "Array.from(document.querySelectorAll('#settings li')).find(li => li.textContent.includes('对话停下后等手机消息'))"
+        assert value("!!(%s)" % WAIT) is False
+        press("Array.from(document.querySelectorAll('#settings li')).find(li => li.textContent.includes('手机处理电脑上的对话')).querySelector('.flip')")
+        until(lambda: config()["Reach"] is True and value("!!(%s)" % WAIT), "the switch to be kept and the row to come", 15)
+        assert value("(%s).querySelector('.act').textContent" % WAIT) == "5 分钟" and value("document.querySelectorAll('#settings li').length") == 7
+        press("(%s).querySelector('button')" % WAIT)
+        until(lambda: value("document.querySelectorAll('#sheet[open] .choice').length") == 5, "the times to choose from", 10)
+        assert value("Array.from(document.querySelectorAll('#sheet .choice')).map(b => b.firstChild.textContent + (b.querySelector('.tick') ? '*' : ''))") == ["不等", "1 分钟", "5 分钟*", "15 分钟", "30 分钟"]
+        assert "不等：对话做完就停下" in value("document.querySelector('#sheet p').textContent") and "钩子正在运行" in value("document.querySelector('#sheet p').textContent")
+        picture("computer-wait.png")
+        press("Array.from(document.querySelectorAll('#sheet .choice')).find(b => b.firstChild.textContent === '1 分钟')")
+        until(lambda: config()["ReachWait"] == 60 and value("(%s).querySelector('.act').textContent" % WAIT) == "1 分钟", "the time to be kept and shown", 15)
+        press("Array.from(document.querySelectorAll('#settings li')).find(li => li.textContent.includes('手机处理电脑上的对话')).querySelector('.flip')")
+        until(lambda: config()["Reach"] is False and not value("!!(%s)" % WAIT), "the switch off again, and the row gone with it", 15)
         # the kind first, then one of its relays from the list, each with how fast it answered the computer
         press("document.querySelector('#lines li.current button')")
         until(lambda: value("document.querySelectorAll('#sheet[open] .choice').length") == 3, "the list of relays", 10)
@@ -260,8 +276,14 @@ def main():
             assert first.ask("settings_change", name="rights", value="read")["settings"]["rights"] == "read" and config()["RemoteMaxMode"] == "read"
             assert first.ask("settings_change", name="tunnel", value="http2")["settings"]["tunnel"] == "http2" and config()["TunnelProtocol"] == "http2"
             assert first.ask("settings_change", name="tunnel", value="auto")["settings"]["tunnel"] == "auto"
-            for name, value in (("rights", "everything"), ("port", "9000"), ("update", "yes")):
+            # how long a tool that stops waits for the phone: so many seconds, as a word; not at all unless a time is chosen
+            assert told["settings"]["wait"] == "0", told["settings"]
+            changed = first.ask("settings_change", name="wait", value="900")
+            assert isinstance(changed, dict) and changed["settings"]["wait"] == "900" and config()["ReachWait"] == 900, (changed, config().get("ReachWait"))
+            assert first.ask("settings_change", name="wait", value="0")["settings"]["wait"] == "0" and config()["ReachWait"] == 0
+            for name, value in (("rights", "everything"), ("port", "9000"), ("update", "yes"), ("wait", "7"), ("wait", "forever"), ("wait", True)):
                 assert "没有这项设置" in first.ask("settings_change", name=name, value=value), (name, value)
+            assert config()["ReachWait"] == 0 and first.ask("settings_change", name="wait", value="300")["settings"]["wait"] == "300"
             assert config()["Port"] == LOCAL and config()["RemoteMaxMode"] == "read"
 
             def turn(phone, to, expect_address, twice=False):

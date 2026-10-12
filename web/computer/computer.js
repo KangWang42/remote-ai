@@ -110,6 +110,10 @@
     { name: 'tunnel', title: '公网隧道的协议', about: '隧道经常断开时改用 HTTP/2，下次建立时生效', choices: [['auto', '自动'], ['http2', 'HTTP/2']] },
     { name: 'autostart', title: '登录 Windows 后自动启动' },
     { name: 'reach', title: '手机处理电脑上的对话', about: '电脑上开着的 Claude Code 和 Codex 对话，可在手机上查看、确认和发消息，电脑上照常使用' },
+    // one with more choices than a row holds is chosen on a sheet, which says what it is for; `needs`: the switch
+    // without which it has nothing to do
+    { name: 'wait', needs: 'reach', title: '对话停下后等手机消息', sheet: true, choices: [['0', '不等'], ['60', '1 分钟'], ['300', '5 分钟'], ['900', '15 分钟'], ['1800', '30 分钟']],
+      explained: '不等：对话做完就停下，电脑上看不到任何变化；手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十秒左右。选了时间：电脑无人操作满 1 分钟后，对话做完先等这么久，这期间发的消息立即送达；等的时候电脑上显示钩子正在运行，有人碰键盘或鼠标就结束。' },
     { name: 'update', title: '自动检查更新', about: '有新版本时提示' }];
   let device = null, told = null, busy = false, problem = '';
   const name = line => line.name || KIND[line.kind][0];
@@ -151,8 +155,10 @@
     const reached = told && told.settings.reach === true && (told.reach || []).length
       ? told.reach.map(one => one.name + stands[one.state] + (one.state === 'ready' && one.tool === 'codex' ? '，首次需在 Codex 里确认信任' : '')).join(' · ') : '';
     const well = !!reached && told.reach.every(one => one.state === 'good');
-    const rows = (told ? SETTINGS.filter(setting => setting.name in told.settings) : []).map(setting => {
+    const rows = (told ? SETTINGS.filter(setting => setting.name in told.settings && (!setting.needs || told.settings[setting.needs] === true)) : []).map(setting => {
       const value = told.settings[setting.name];
+      if (setting.sheet) return row({ act: () => pick(setting, value), disabled: busy }, text(setting.title),
+        el('span', { className: 'act', textContent: (setting.choices.find(([key]) => key === value) || ['', value])[1] }), el('span', { className: 'chev', html: ICON.chev }));
       if (setting.name === 'reach' && reached) {
         const about = text(setting.title, reached);
         about.classList.toggle('well', well);
@@ -171,6 +177,18 @@
     }
     $('settings').hidden = !rows.length; $('settings-note').hidden = !!rows.length; $('settings-note').textContent = why;
     $('settings').replaceChildren(...rows);
+  }
+  // A setting with more choices than a row holds: what it is for, and the choices.
+  function pick(setting, value) {
+    const form = $('sheet-form'), sheet = $('sheet');
+    let picked = null;
+    form.replaceChildren(el('h3', { textContent: setting.title }), el('p', { textContent: setting.explained }),
+      ...setting.choices.map(([key, label]) => el('button', { type: 'button', className: 'choice', onclick: () => { picked = key; sheet.close(); } },
+        el('span', null, label), key === value ? el('i', { className: 'tick', textContent: '当前' }) : '')),
+      el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
+    sheet.onclose = () => { sheet.onclose = null; if (picked !== null && picked !== value) change(setting.name, picked); };
+    sheet.onclick = event => { if (event.target === sheet) sheet.close(); };
+    sheet.showModal();
   }
   async function change(setting, value) {
     try { told = await ask('settings_change', { name: setting, value }); toast('已保存'); }

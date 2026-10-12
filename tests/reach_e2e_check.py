@@ -70,7 +70,7 @@ def main():
     tools.mkdir()
     (tools / "codex.cmd").write_text("@exit /b 2\r\n", encoding="mbcs")
     environment["PATH"] = str(tools) + ";" + environment["PATH"]
-    (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full", "RemoteDirs": ["demo=" + str(work)]}), encoding="utf-8")
+    (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full", "ReachWait": 300, "RemoteDirs": ["demo=" + str(work)]}), encoding="utf-8")       # its owner has a tool that stops wait for the phone
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(PORT), "--data", str(Path(temp.name) / "relay")], env=environment, stdout=subprocess.DEVNULL)
     agent_exe = ROOT / "agent-windows" / "bin" / "RemoteCliAgent.exe"
     subprocess.run([str(agent_exe), "--set-password", str(data)], input=password.encode(), check=True)
@@ -152,6 +152,19 @@ def main():
         went = json.loads(said(stopping))
         assert went["decision"] == "block" and "再跑一遍测试" in went["reason"], went
         until(lambda: listed()["status"] == "busy", 10, "it works on")
+        # ---- unless its owner chose a time, a tool that stops is not kept: its hook ends at once, and the phone is
+        # told all the same that it is its turn. What is said then goes in by the tool's own way, where it has one
+        # (this stand-in for Codex has none: tests/inbox_check.py sends such a message).
+        settings = json.loads((data / "config.json").read_text(encoding="utf-8"))
+        (data / "config.json").write_text(json.dumps(dict(settings, ReachWait=0)), encoding="utf-8")
+        began = time.time()
+        assert said(hook("Stop", last_assistant_message="测试也跑完了。", stop_hook_active=False)) == "" and time.time() - began < 5
+        rested = until(lambda: (lambda s: s if s["status"] == "waiting" else None)(listed()), 10, "it has stopped, and it is the phone's turn")
+        assert rested["last"] == "测试也跑完了。" and rested["reach"] == [] and rested["wake"] is False, rested
+        report["listed_when_it_has_stopped_unkept"] = {key: rested[key] for key in ("status", "reach", "wake", "last")}
+        (data / "config.json").write_text(json.dumps(settings), encoding="utf-8")
+        said(hook("UserPromptSubmit", prompt="接着做"))
+        until(lambda: listed()["status"] == "busy", 10, "it works on, told at the computer")
 
         # ---- pinned and hidden from the phone: the computer keeps it, and goes on saying so in its own reports
         assert "marks" in call("/api/terminal")["device"]["features"] and (listed()["pinned"], listed()["hidden"]) == (False, False)
