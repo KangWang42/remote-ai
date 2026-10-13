@@ -53,6 +53,41 @@ class TerminalRelayTests(unittest.TestCase):
         with self.assertRaises(RemoteError):
             self.relay.command(dict(op, draft="changed"), now=1005)
 
+    def test_a_desktop_app_is_opened_for_each_tool_the_computer_offers_it_for(self):
+        op = {"id": "b" * 32, "action": "app_open", "tool": "claude", "dir": "demo", "draft": "草稿"}
+        self.info["features"] = ["codex-desktop-open"]
+        self.relay.agent({"info": self.info}, now=1001)
+        with self.assertRaisesRegex(RemoteError, "暂不支持"):
+            self.relay.command(op, now=1002)
+        self.info["features"] = ["codex-desktop-open", "claude-desktop-open", "gemini-desktop-open"]
+        self.relay.agent({"info": self.info}, now=1003)
+        self.assertEqual(self.relay.overview(now=1003)["device"]["features"], ["codex-desktop-open", "claude-desktop-open"])
+        with self.assertRaisesRegex(RemoteError, "暂不支持"):
+            self.relay.command(dict(op, tool="gemini"), now=1003)
+        self.assertEqual(self.relay.command(op, now=1003)["terminal"], "")
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"]
+        self.assertEqual([(o["action"], o["tool"], o["dir"], o["draft"]) for o in asked], [("app_open", "claude", "demo", "草稿")])
+
+    def test_the_way_of_each_thing_and_the_reasons_are_passed_on(self):
+        sid, other, quiet = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        info = dict(self.info, features=["peek", "reach"])
+        at_work = {"id": sid, "tool": "codex", "dir": "demo", "title": "桌面版里的", "updated": 1, "live": True, "status": "busy", "reach": ["say", "stop"], "transport": "codex-desktop", "turn": "turn-1",
+                   "ways": {"say": "hook", "stop": "codex-desktop", "answer": "", "end": "", "other": "x"}, "why": {"end": "这段对话由电脑上的应用管理，请在那里关闭它", "other": "x", "say": 5}}
+        # one whose stop names no turn is not let through, and no way is said for it; one whose tool tells nothing keeps its reasons
+        no_turn = dict(at_work, id=other, turn="", ways={"say": "hook", "stop": "codex-desktop", "answer": "bogus", "end": "process"}, why={"stop": "长" * 300})
+        untold = {"id": quiet, "tool": "codex", "dir": "demo", "title": "不通报的", "updated": 1, "live": True, "ways": {"say": "", "stop": "", "answer": "", "end": "process"}, "why": {"say": "现在收不到手机的消息"}}
+        saved = {"id": "12121212-3434-5656-7878-909090909090", "tool": "claude", "dir": "demo", "title": "存着的", "updated": 1, "live": False, "ways": {"say": "wake"}}
+        self.relay.agent({"info": info, "sessions": [at_work, no_turn, untold, saved]}, now=1001)
+        shown = {s["id"]: s for s in self.relay.overview(now=1001)["sessions"]}
+        self.assertEqual((shown[sid]["ways"], shown[sid]["why"]), ({"say": "hook", "stop": "codex-desktop", "answer": "", "end": ""}, {"end": "这段对话由电脑上的应用管理，请在那里关闭它"}))
+        self.assertEqual((shown[other]["reach"], shown[other]["ways"], len(shown[other]["why"]["stop"])), (["say"], {"say": "hook", "stop": "", "answer": "", "end": "process"}, 200))
+        self.assertEqual((shown[quiet]["reach"], shown[quiet]["ways"], shown[quiet]["why"]), (None, {"say": "", "stop": "", "answer": "", "end": "process"}, {"say": "现在收不到手机的消息"}))
+        self.assertEqual((shown[saved["id"]]["ways"], shown[saved["id"]]["why"]), (None, None))
+        # a computer of an earlier version says neither: nothing is made up for it
+        self.relay.agent({"info": info, "sessions": [{k: v for k, v in at_work.items() if k not in ("ways", "why")}]}, now=1002)
+        earlier = self.relay.overview(now=1002)["sessions"][0]
+        self.assertEqual((earlier["ways"], earlier["why"], earlier["transport"], earlier["reach"]), (None, None, "codex-desktop", ["say", "stop"]))
+
     def test_desktop_timeout_never_claims_not_executed(self):
         self.info["features"] = ["codex-desktop-open"]
         self.relay.agent({"info": self.info}, now=1001)

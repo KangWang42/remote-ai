@@ -1,0 +1,262 @@
+"""The window of a conversation that is open on the computer, the same for Claude Code and Codex: sending, stopping
+and ending go by the way the computer names for each thing, and the computer's words are shown where a thing cannot
+be done. The real embedded page and the real relay; the computer is played here, so nothing real is opened or told.
+
+Usage: python tests/ways_ui_check.py <Edge/Chrome executable> <screenshot directory>
+"""
+import base64
+import http.client
+import http.server
+import json
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'relay'))
+from relay import Relay
+from ws_client import Socket
+
+CLAUDE, CLI, APP, OUTSIDE = ('11111111-2222-3333-4444-55555555555%d' % n for n in range(1, 5))
+PROJECT = '中文项目'
+
+
+def main():
+    out = Path(sys.argv[2]); out.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='remote-ai-ways-ui-') as temporary:
+        relay = Relay(str(Path(temporary) / 'relay.json'))
+        info = {'instance': 'c' * 32, 'enabled': True, 'tools': ['claude', 'codex'], 'workspaces': [PROJECT],
+                'features': ['peek', 'reach', 'end', 'codex-desktop-control', 'codex-desktop-open', 'claude-desktop-open']}
+        now = int(time.time() * 1000)
+        usual = dict(dir=PROJECT, updated=now, live=True, host='shared', status='busy')
+        sessions = [
+            # Claude Code in its desktop app, at work: told and stopped through its hooks; its application closes it
+            dict(usual, id=CLAUDE, tool='claude', title='Claude 桌面版里的对话', origin='Claude 桌面版', kind='Claude 桌面版', reach=['say', 'stop'], transport='hook', can_takeover=False,
+                 ways={'say': 'hook', 'stop': 'hook', 'answer': '', 'end': ''}, why={'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
+            # Codex's command line, at work: told through its hooks; it cannot be stopped, it can be ended
+            dict(usual, id=CLI, tool='codex', title='命令行里的 Codex', origin='命令行', kind='终端', reach=['say'], transport='', can_takeover=True,
+                 ways={'say': 'hook', 'stop': '', 'answer': '', 'end': 'process'}, why={'stop': 'Codex 命令行的回答不能从外面单独停止'}),
+            # Codex's desktop app, at work: stopped by the application's channel, told through its hooks meanwhile
+            dict(usual, id=APP, tool='codex', title='Codex 桌面版里的对话', origin='Codex 桌面版', kind='Codex 桌面版', reach=['say', 'stop'], transport='codex-desktop', turn='turn-7', can_takeover=False,
+                 ways={'say': 'hook', 'stop': 'codex-desktop', 'answer': '', 'end': ''}, why={'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
+            # Codex's desktop app, a conversation outside the projects that sits idle: nothing can be said to it
+            dict(usual, id=OUTSIDE, tool='codex', title='项目之外的对话', origin='Codex 桌面版', kind='Codex 桌面版', status='idle', reach=[], transport='', can_takeover=False,
+                 ways={'say': '', 'stop': '', 'answer': '', 'end': ''}, why={'say': 'Codex 桌面版里的这段对话现在不能从手机发消息：它不在已添加的项目里', 'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
+        ]
+        asked, opened, events, refuse = [], [], [], [False]
+        transcript = [{'role': 'user', 'text': '电脑上的第一句'}, {'role': 'assistant', 'text': '电脑上的回答。'}]
+
+        def report():
+            relay.agent({'info': info, 'sessions': sessions})
+
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=str(ROOT / 'web'), **kwargs)
+
+            def log_message(self, *args):
+                pass
+
+            def reply(self, value, status=200):
+                body = json.dumps(value, ensure_ascii=False).encode('utf-8')
+                self.send_response(status); self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == '/api/session':
+                    return self.reply({'signed_in': True})
+                if self.path == '/api/terminal':
+                    report()
+                    return self.reply(relay.overview())
+                if self.path == '/favicon.ico':
+                    self.send_response(204); self.end_headers(); return
+                super().do_GET()
+
+            def do_POST(self):
+                payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if self.path == '/api/conversation':
+                    if payload.get('action', 'read') == 'read':
+                        one = next(s for s in sessions if s['id'] == payload['session'])
+                        return self.reply({'messages': transcript, 'status': one['status'], 'stamp': str(len(transcript))})
+                    asked.append(payload)
+                    answers = {}
+
+                    def handle():
+                        try: answers['value'] = relay.conversation(payload, wait=5)
+                        except Exception as error: answers['error'] = str(error)
+                    worker = threading.Thread(target=handle); worker.start()
+                    operations = relay.pull({'instance': info['instance'], 'wait': 2})['operations']
+                    if operations:
+                        # the computer answers as the program does: the same shape for every way of saying
+                        op, by = operations[0], payload.get('transport', '')
+                        if refuse[0]:
+                            ack = {'id': op['id'], 'error': '电脑上的这段对话现在联系不上，请刷新后重试'}
+                        elif op['action'] == 'session_say':
+                            ack = {'id': op['id'], 'result': {'status': 'accepted', 'sent': True, 'now': False, 'way': 'hook'}}
+                        elif op['action'] == 'session_stop':
+                            ack = {'id': op['id'], 'result': {'status': 'asked', 'transport': 'hook'} if by == 'hook' else {'status': 'confirmed', 'turn': op.get('turn')}}
+                        else:
+                            ack = {'id': op['id'], 'result': {}}
+                        relay.agent({'info': info, 'acks': [ack]})
+                    worker.join(6)
+                    if 'error' in answers: return self.reply({'error': answers['error']}, 400)
+                    return self.reply(answers['value'])
+                assert self.path == '/api/terminal', self.path
+                opened.append(payload)
+                answer = relay.command(payload)
+                relay.agent({'info': info, 'acks': [{'id': payload['id'], 'result': {'status': 'handed_off', 'sent': False, 'message': '已交给 Claude 桌面应用。请在电脑上确认项目和草稿，内容尚未发送。'}}]})
+                self.reply(answer)
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        browser = subprocess.Popen([sys.argv[1], '--headless=new', '--no-first-run', '--remote-debugging-port=0',
+                                    '--remote-allow-origins=*', '--user-data-dir=' + temporary + '/browser', 'about:blank'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        pipe = None
+        try:
+            active = Path(temporary) / 'browser/DevToolsActivePort'
+            for _ in range(100):
+                if active.exists(): break
+                time.sleep(.1)
+            debug = int(active.read_text().splitlines()[0])
+            conn = http.client.HTTPConnection('127.0.0.1', debug)
+            conn.request('PUT', '/json/new?about:blank')
+            page = json.loads(conn.getresponse().read()); conn.close()
+            pipe = Socket('http://127.0.0.1:%d' % debug, '/devtools/page/' + page['id'], '')
+            sequence = [0]
+
+            def ask(method, **params):
+                sequence[0] += 1
+                pipe.send({'id': sequence[0], 'method': method, 'params': params})
+                while True:
+                    message = pipe.receive(15)
+                    if message.get('id') == sequence[0]:
+                        assert 'error' not in message, message
+                        return message.get('result', {})
+                    if message.get('method') in ('Runtime.exceptionThrown', 'Log.entryAdded'):
+                        events.append(message)
+
+            def value(code):
+                result = ask('Runtime.evaluate', expression=code, returnByValue=True, awaitPromise=True)
+                assert 'exceptionDetails' not in result, result
+                return result.get('result', {}).get('value')
+
+            def until(code, why=''):
+                for _ in range(100):
+                    result = value(code)
+                    if result: return result
+                    time.sleep(.1)
+                raise AssertionError(why or code)
+
+            def picture(name):
+                (out / name).write_bytes(base64.b64decode(ask('Page.captureScreenshot', format='png')['data']))
+
+            def window(session):
+                ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, session))
+                until("document.querySelector('#sheet .state') && document.querySelector('#sheet .said')?.textContent.includes('电脑上的第一句')", 'the window of ' + session)
+                time.sleep(.3)
+
+            button = lambda text: "Array.from(document.querySelectorAll('#sheet button')).find(b => b.textContent === '%s')" % text
+            shown = lambda text: value("(b => !!b && !b.hidden)(%s)" % button(text))
+            write = lambda text: value("(() => { const box = document.querySelector('#sheet .write textarea'); box.value = '%s'; document.querySelector('#sheet .write button.solid').click(); })()" % text)
+            toast = "document.getElementById('toast').textContent"
+
+            ask('Page.enable'); ask('Runtime.enable'); ask('Log.enable')
+            ask('Emulation.setDeviceMetricsOverride', width=390, height=844, deviceScaleFactor=1, mobile=True)
+
+            # ---- Claude Code in its desktop app, at work
+            window(CLAUDE)
+            assert shown('停止回答') and not shown('结束') and not value("document.querySelector('#sheet .write').hidden"), 'at work: it can be told and stopped; its application closes it'
+            picture('claude-at-work.png')
+            write('做完这一步后看这里')
+            until("document.querySelector('#sheet .said').textContent.includes('已排队，等待当前任务结束')", 'what was said is left for it')
+            assert asked[-1] == {'id': asked[-1]['id'], 'session': CLAUDE, 'action': 'say', 'text': '做完这一步后看这里'}, asked[-1]
+            assert not value("document.querySelector('#sheet .said').textContent.includes('查询发送结果')"), 'nothing is asked after: its hooks have said that they took it'
+            value(button('停止回答') + '.click()')
+            until(toast + ".includes('已告诉它停止')", 'told to stop through its hooks')
+            assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': CLAUDE, 'action': 'stop', 'transport': 'hook'}, asked[-1]
+            # what the computer refuses was not sent: it stands in the box again, and no line of it is left above
+            refuse[0] = True
+            write('这一句送不出去')
+            until(toast + ".includes('联系不上')", 'the refusal is said')
+            until("document.querySelector('#sheet .write textarea').value === '这一句送不出去'", 'what was not sent is in the box again')
+            assert not value("Array.from(document.querySelectorAll('#sheet .said .turn.mine')).some(row => row.textContent.includes('这一句送不出去'))"), 'and does not stand as sent'
+            refuse[0] = False
+
+            # ---- Codex's command line, at work: the same line and the same buttons; stopping says why, and offers to end it
+            window(CLI)
+            assert shown('停止回答') and shown('结束') and not value("document.querySelector('#sheet .write').hidden"), 'the same controls as Claude Code has'
+            before = len(asked)
+            value(button('停止回答') + '.click()')
+            until("document.querySelector('#sheet-form .confirm')?.textContent.includes('Codex 命令行的回答不能从外面单独停止')", 'the reason, and the question whether to end it')
+            assert value("document.querySelector('#sheet-form .confirm').textContent.includes('结束电脑上的这段对话')") and len(asked) == before, 'nothing is done before its owner says so'
+            picture('codex-cli-stop.png')
+            value("document.querySelector('#sheet-form .confirm button.see').click()")
+            assert len(asked) == before and value("document.querySelector('#sheet').open"), 'not ended when that is not wanted'
+            value(button('停止回答') + '.click()')
+            until("document.querySelector('#sheet-form .confirm') !== null")
+            value("document.querySelector('#sheet-form .confirm button.no').click()")
+            until(toast + ".includes('已结束电脑上的这段对话')", 'ended on the computer')
+            assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': CLI, 'action': 'end'}, asked[-1]
+
+            # ---- Codex's desktop app, at work: stopped by its own channel, told through its hooks meanwhile
+            window(APP)
+            assert shown('停止回答') and not shown('结束')
+            write('桌面版执行时的留言')
+            until("document.querySelector('#sheet .said').textContent.includes('已排队，等待当前任务结束')")
+            assert 'transport' not in asked[-1] and asked[-1]['action'] == 'say', asked[-1]
+            value(button('停止回答') + '.click()')
+            until(toast + ".includes('已停止本次回答')", 'stopped by the application')
+            assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': APP, 'action': 'stop', 'turn': 'turn-7', 'transport': 'codex-desktop', 'receipt': False}, asked[-1]
+
+            # ---- one that cannot be told anything: the computer's words why, and no box
+            window(OUTSIDE)
+            assert value("document.querySelector('#sheet .write').hidden") and not shown('停止回答')
+            assert value("document.querySelector('#sheet .control-mode').textContent.includes('不在已添加的项目里')"), 'why nothing can be said to it'
+            picture('outside.png')
+
+            # ---- a relay of an earlier version passes neither the ways nor the reasons on: the one way it names is taken
+            for s in sessions:
+                s.pop('ways'); s.pop('why')
+            window(CLAUDE)
+            value(button('停止回答') + '.click()')
+            until(toast + ".includes('已告诉它停止')")
+            assert asked[-1]['transport'] == 'hook' and asked[-1]['action'] == 'stop', asked[-1]
+            window(APP)
+            value(button('停止回答') + '.click()')
+            until(toast + ".includes('已停止本次回答')")
+            assert asked[-1]['transport'] == 'codex-desktop' and asked[-1]['turn'] == 'turn-7', asked[-1]
+
+            # ---- a new conversation in a desktop application: each tool's own, offered alike
+            ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
+            until("document.querySelector('#sheet[open] h3')?.textContent === '新建任务'")
+            offered = value("Array.from(document.querySelectorAll('#sheet button.choice')).map(b => b.firstChild.firstChild.textContent)")
+            assert offered == ['在 Codex 桌面应用中打开', '在 Claude 桌面应用中打开'], offered
+            picture('new-task.png')
+            value("Array.from(document.querySelectorAll('#sheet button.choice')).find(b => b.textContent.includes('在 Claude 桌面应用中打开')).click()")
+            until("document.querySelector('#desktop-draft') !== null")
+            assert value("document.querySelector('#sheet-form h3').textContent") == 'Claude 桌面应用' and value("document.querySelector('#sheet button.solid').textContent") == '交给 Claude 桌面应用'
+            value("document.getElementById('desktop-draft').value = '先看一下 README'; document.querySelector('#sheet button.solid').click()")
+            until("document.querySelector('#sheet button.solid').textContent === '已交给应用，尚未发送'")
+            assert {k: v for k, v in opened[-1].items() if k != 'id'} == {'action': 'app_open', 'tool': 'claude', 'dir': PROJECT, 'draft': '先看一下 README'}, opened[-1]
+            picture('claude-draft.png')
+            info['features'] = ['peek', 'reach', 'codex-desktop-open']
+            ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
+            until("document.querySelector('#sheet[open] h3')?.textContent === '新建任务'")
+            assert value("Array.from(document.querySelectorAll('#sheet button.choice')).map(b => b.firstChild.firstChild.textContent)") == ['在 Codex 桌面应用中打开'], 'only what the computer offers'
+
+            assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
+            errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']
+            assert len(errors) == 1 and '400' in errors[0]['params']['entry']['text'], errors      # the one refusal that was played
+            print('ways UI: Claude Code and Codex are told, stopped and ended by the same controls, each by its own way; reasons shown; a desktop app opened for either')
+        finally:
+            if pipe: pipe.close()
+            browser.terminate(); browser.wait(timeout=10)
+            server.shutdown(); server.server_close()
+
+
+if __name__ == '__main__':
+    main()

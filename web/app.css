@@ -198,6 +198,8 @@ dialog.window .state.confirm .dot { background: var(--bad); opacity: 1; }
 dialog.window .state.waiting .dot { background: var(--good); opacity: 1; }
 dialog.window .state .end { margin-left: auto; flex: none; min-height: 34px; padding: 0 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); font-size: .86rem; font-weight: 600; background: transparent; }
 dialog.window .state .end[hidden] { display: none; }
+/* the two stand together at the right: stopping what it is at, then ending it */
+dialog.window .state .end.halt:not([hidden]) + .end { margin-left: 8px; }
 @keyframes working { 0%, 100% { transform: scale(.7); opacity: .5; } 50% { transform: scale(1.15); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { dialog.window .state.busy .dot { animation: none; } }
 #sheet-form .said .earlier { margin: 0 0 4px; text-align: center; color: var(--muted); font-size: .8rem; }

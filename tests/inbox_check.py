@@ -319,15 +319,15 @@ def main():
         given = json.loads(stopped.communicate(timeout=10)[0].decode("utf-8"))
         handed = given["hookSpecificOutput"]["additionalContext"]
         assert "decision" not in given and given["hookSpecificOutput"]["hookEventName"] == "Stop" and handed.endswith("\n\n再加一个例子") and "from their phone" in handed, given
-        saying.join(15)
-        assert answers.get("got") == {"now": True, "woke": True}, answers
+        saying.join(30)
+        assert answers.get("got") == {"status": "accepted", "sent": True, "now": True, "woke": True, "way": "wake"}, answers
 
         # ---- and so is a Codex conversation that a program holds idle: through Codex's own queue, as what its user says
         # next, whatever signs the message holds
         held = listed(HELD)
         assert (held["live"], held["reach"], held["wake"], held["activity"]) == (True, ["say"], True, "locked"), held
         words = '把 "结论" 再写短一点 & 100% 保留 <原样>\n第二行 \\ 结尾\\'
-        assert call("/api/conversation", {"id": new_id(), "session": HELD, "action": "say", "text": words}) == {"now": True, "woke": True}
+        assert call("/api/conversation", {"id": new_id(), "session": HELD, "action": "say", "text": words}) == {"status": "accepted", "sent": True, "now": True, "woke": True, "way": "wake"}
         assert homes.queued.read_text(encoding="utf-8") == HELD + "\n" + words, homes.queued.read_text(encoding="utf-8")
         # one that asks is answered first, and one that is at work is left its message as before: neither is woken
         assert (listed(ASKING)["wake"], listed(WORKING)["wake"]) == (False, False)
@@ -571,7 +571,7 @@ def main():
         assert back["head"].endswith("web-shop") and back["window"], back
         # ---- the window says in one line how the conversation stands and since when, and offers to end it on the
         # computer; and for someone who has gone up to read, the way back to what was said last
-        STATE = "(() => { const s = document.querySelector('#sheet .state'); if (!s) return null; const e = s.querySelector('.end'), l = document.querySelector('#sheet .latest'); return { kind: s.className, words: s.querySelector('.standing').textContent, clock: s.querySelector('.clock').textContent, end: !e.hidden && !!e.offsetParent, latest: !l.hidden, asked: !!document.querySelector('#sheet .confirm') }; })()"
+        STATE = "(() => { const s = document.querySelector('#sheet .state'); if (!s) return null; const e = s.querySelector('.end:not(.halt)'), h = s.querySelector('.end.halt'), l = document.querySelector('#sheet .latest'); return { kind: s.className, words: s.querySelector('.standing').textContent, clock: s.querySelector('.clock').textContent, end: !e.hidden && !!e.offsetParent, stop: !h.hidden && !!h.offsetParent, latest: !l.hidden, asked: !!document.querySelector('#sheet .confirm') }; })()"
         state = until(lambda: (lambda got: got if got and got["clock"] else None)(page_value(STATE)), 10, lambda: "how it stands, and since when: %r" % (page_value(STATE),))
         report["window_state"] = state
         # (it was told things above and is at work: the clock runs; one that has stopped says since when)
@@ -579,6 +579,8 @@ def main():
         assert (state["kind"], state["words"]) in (("state busy", "正在执行"), ("state stopped", "已停下"), ("state waiting", "等你的消息")) and not state["latest"], state
         assert _re.fullmatch(r"\d+:\d\d(:\d\d)?", state["clock"]) if state["kind"] == "state busy" else ("前" in state["clock"] or state["clock"] == "刚刚"), state
         assert "end" in call("/api/terminal")["device"]["features"]
+        # while it works it can be told to stop, whatever its tool; one that has stopped has nothing to stop
+        assert state["stop"] == (state["kind"] == "state busy"), state
         # a short window has nothing above to go to; made low, what was said scrolls, and the way back shows
         ask("Emulation.setDeviceMetricsOverride", width=412, height=420, deviceScaleFactor=2, mobile=True)
         page_value("(() => { const s = document.querySelector('#sheet .said'); s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); return 1; })()")
@@ -593,14 +595,14 @@ def main():
         if listed(IDLE)["can_takeover"] is True:
             assert state["end"], state
             # asked once, in the words of what happens; "取消" leaves everything as it is
-            page_value("(() => { document.querySelector('#sheet .state .end').click(); return 1; })()")
+            page_value("(() => { document.querySelector('#sheet .state .end:not(.halt)').click(); return 1; })()")
             until(lambda: page_value(STATE)["asked"], 5, "the question before it is ended")
             assert "对话记录保留" in page_value("document.querySelector('#sheet .confirm p').textContent")
             picture("conversation-end.png")
             page_value("(() => { document.querySelector('#sheet .confirm .see').click(); return 1; })()")
             assert page_value(STATE)["asked"] is False and listed(IDLE)["live"] is True
             # "结束": the computer closes the program that has it. It is open no more, its record stays
-            page_value("(() => { document.querySelector('#sheet .state .end').click(); return 1; })()")
+            page_value("(() => { document.querySelector('#sheet .state .end:not(.halt)').click(); return 1; })()")
             until(lambda: page_value(STATE)["asked"], 5, "the question again")
             page_value("(() => { document.querySelector('#sheet .confirm .no').click(); return 1; })()")
             ended = until(lambda: (lambda s: s if s and not s["live"] else None)(listed(IDLE)), 25, "the conversation is no longer open on the computer")
@@ -610,7 +612,9 @@ def main():
             assert not state["end"], state
             refused = call("/api/conversation", {"id": uuid(900).replace("-", ""), "session": IDLE, "action": "end"}, expect=400)
             report["ending_refused_here"] = refused
-            assert "远程终端" in refused["error"] and listed(IDLE)["live"] is True, refused
+            # (in the computer's own words for it, the ones it lists the conversation with: which they are depends on
+            # how this check was started, another Remote AI's terminal or a program it cannot tell)
+            assert refused["error"] == listed(IDLE)["why"]["end"] and ("远程终端" in refused["error"] or "无法核实" in refused["error"]) and listed(IDLE)["live"] is True, (refused, listed(IDLE)["why"])
         print(json.dumps(report, ensure_ascii=False))
         print("the first page: by what needs its owner, filtered, searched, pinned, hidden, and a folder made a project")
     finally:

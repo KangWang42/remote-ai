@@ -131,6 +131,9 @@ def main():
         assert said(hook("UserPromptSubmit", prompt="加上优惠券")) == ""
         busy = until(lambda: (lambda s: s if s["status"] == "busy" else None)(listed()), 10, "it works")
         assert (busy["reach"], busy["activity"], busy["ask"]) == (["say"], "active", None), busy
+        # (and by which way each thing is done, with the computer's words for what cannot be: Codex's command line
+        # is told through its hooks while it works, and cannot be stopped from outside)
+        assert busy["ways"]["say"] == "hook" and busy["ways"]["stop"] == "" and "Codex 命令行" in busy["why"]["stop"] and "say" not in busy["why"], (busy["ways"], busy["why"])
         # ---- it asks for permission, with nobody at the computer: the phone is shown the request and answers it
         asking = hook("PermissionRequest", tool_name="Bash", tool_input={"command": "npm install coupon-kit", "description": "Install the coupon library"})
         asked = until(lambda: (lambda s: s if s["status"] == "confirm" else None)(listed()), 10, "it asks")
@@ -142,14 +145,14 @@ def main():
         assert verdict["hookSpecificOutput"]["decision"]["behavior"] == "allow", verdict
         until(lambda: listed()["status"] == "busy" and listed()["ask"] is None, 10, "it works again")
         # ---- a message left while it works reaches it when it stops; then it waits, and one is taken at once
-        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "say", "text": "然后把说明文档也更新"}) == {"now": False}
+        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "say", "text": "然后把说明文档也更新"}) == {"status": "accepted", "sent": True, "now": False, "way": "hook"}
         went = json.loads(said(hook("Stop", last_assistant_message="优惠券已经加上了。", stop_hook_active=False)))
         assert went["decision"] == "block" and "然后把说明文档也更新" in went["reason"], went
         stopping = hook("Stop", last_assistant_message="文档也更新了。", stop_hook_active=True)
         waiting = until(lambda: (lambda s: s if s["status"] == "waiting" else None)(listed()), 10, "it has stopped and waits for the phone")
         assert waiting["last"] == "文档也更新了。" and waiting["reach"] == ["say"] and stopping.poll() is None, waiting
         report["listed_while_it_waits"] = {key: waiting[key] for key in ("status", "reach", "last", "activity", "host")}
-        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "say", "text": "再跑一遍测试"}) == {"now": True}
+        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "say", "text": "再跑一遍测试"}) == {"status": "accepted", "sent": True, "now": True, "way": "hook"}
         went = json.loads(said(stopping))
         assert went["decision"] == "block" and "再跑一遍测试" in went["reason"], went
         until(lambda: listed()["status"] == "busy", 10, "it works on")
@@ -195,7 +198,7 @@ def main():
         # its tool tells of it: it is told from the phone like any other
         assert said(hook("UserPromptSubmit", OUTSIDE, prompt="整理提纲")) == ""
         until(lambda: (lambda s: s if s["status"] == "busy" and s["reach"] == ["say"] else None)(listed(OUTSIDE)), 10, "the one outside works")
-        assert call("/api/conversation", {"id": new_id(), "session": OUTSIDE, "action": "say", "text": "再加一节小结"}) == {"now": False}
+        assert call("/api/conversation", {"id": new_id(), "session": OUTSIDE, "action": "say", "text": "再加一节小结"}) == {"status": "accepted", "sent": True, "now": False, "way": "hook"}
         went = json.loads(said(hook("Stop", OUTSIDE, last_assistant_message="提纲写好了。", stop_hook_active=False)))
         assert went["decision"] == "block" and "再加一节小结" in went["reason"], went
         # a terminal of the phone's takes it on like any other, by closing what has it open or by a copy: without either it is refused, as one in a project is

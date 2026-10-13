@@ -75,6 +75,29 @@ public static class CodexDesktopControlCheck {
         shown = list.Invoke(agent, new object[] { sessions[0] });
         Require(true.Equals(shown.GetType().GetProperty("wake").GetValue(shown, null)) && ((string[])shown.GetType().GetProperty("reach").GetValue(shown, null)).Contains("say") && (string)shown.GetType().GetProperty("transport").GetValue(shown, null) == "", "Claude's desktop app is told where it sits idle, by Claude Code's own way");
         sessions[0].Tool = "codex"; sessions[0].Origin = "Codex 桌面版";
+        // While the application works, its channel takes no message: what is said is left for the conversation
+        // through its hooks, as for any conversation at work, whether the phone asked by the channel's name or not.
+        // The listing says the way of each thing, and why for what cannot be done.
+        var states = (Dictionary<string, CodexDesktopSessions.State>)Field(Field(agent, "NativeDesktop"), "states");
+        states[Session] = new CodexDesktopSessions.State { Folder = root, Busy = true, Ready = false, Turn = "turn-9", At = DateTime.UtcNow };
+        var heard = (Dictionary<string, Reach.Open>)Field(agent.Reach, "open");
+        heard["codex " + Session.ToLowerInvariant()] = new Reach.Open { Tool = "codex", Session = Session, Status = "busy", Seen = DateTime.UtcNow };
+        shown = list.Invoke(agent, new object[] { sessions[0] });
+        var ways = (Dictionary<string, object>)shown.GetType().GetProperty("ways").GetValue(shown, null);
+        var why = (Dictionary<string, string>)shown.GetType().GetProperty("why").GetValue(shown, null);
+        Require((string)ways["say"] == "hook" && (string)ways["stop"] == "codex-desktop" && (string)ways["end"] == "" && !why.ContainsKey("say") && !why.ContainsKey("stop") && why["end"].Length > 0 && (string)shown.GetType().GetProperty("transport").GetValue(shown, null) == "codex-desktop",
+            "at work: said through its hooks, stopped by the application's channel: " + Json.Serialize(ways) + Json.Serialize(why));
+        foreach (bool named in new[] { true, false }) {
+            var left = request(); if (!named) left.Remove("transport");
+            var answer = Object(run(left)["result"]);
+            Require((string)answer["status"] == "accepted" && true.Equals(answer["sent"]) && false.Equals(answer["now"]) && (string)answer["way"] == "hook" && conversation.Sends == 1, "left for it through its hooks, the channel not asked: " + Json.Serialize(answer));
+        }
+        states[Session].Busy = false; states[Session].Ready = true; states[Session].Turn = ""; heard.Clear();
+        shown = list.Invoke(agent, new object[] { sessions[0] });
+        Require((string)((Dictionary<string, object>)shown.GetType().GetProperty("ways").GetValue(shown, null))["say"] == "codex-desktop", "ready again: by the application's channel");
+        var unnamed = request(); unnamed.Remove("transport");
+        Require(((string)run(unnamed)["error"]).Contains("再发一次") && conversation.Sends == 1, "the channel is only used where it was asked for by name, with a receipt");
+        states.Clear();
         Console.WriteLine("native agent: async dispatch, receipt identity, project/cwd checks and permission revocation passed");
     }
     sealed class Peer : Stream {

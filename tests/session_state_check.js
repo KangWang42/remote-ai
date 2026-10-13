@@ -43,11 +43,13 @@ assert.match(app, /m\.detail \? el\('code', \{ className: 'ran', textContent: m\
 // The window says in one line how the conversation stands and for how long, offers to end it on the computer where
 // the computer can, and has a way back to what was said last.
 assert.match(app, /const state = el\('div', \{ className: 'state' \}, el\('span', \{ className: 'dot' \}\), standing, clock, stopping, ending\);/);
-assert.match(app, /const canEnd = s => s\.live && s\.can_takeover === true && \(data\.device\.features \|\| \[\]\)\.includes\('end'\);/, 'ending is offered where the computer says it can end it');
+assert.match(app, /const canEnd = s => wayOf\(s, 'end'\) === 'process' && \(data\.device\.features \|\| \[\]\)\.includes\('end'\);/, 'ending is offered where the computer says it can end it');
 assert.match(app, /action: 'end' \}\); toast\('已结束电脑上的这段对话'\); finish\(null\); refresh\(\);/);
 assert.match(app, /className: 'latest', hidden: true, ariaLabel: '回到最新'/);
 assert.match(app, /clock\.textContent = !from \? '' : kind === 'busy' \? lasted\(Date\.now\(\) - from\) : ago\(from\);/, 'at work, for how long; stopped, since when');
-// A conversation at work is told to stop by the way the computer names: the application's own channel stops the turn
-// that is named; a tool's hooks (Claude Code) stop it before its next step, and nothing is asked after.
-assert.match(app, /if \(!stopAttempt && current\.transport === 'hook'\) \{/, 'stopping through a tool\'s hooks is a way of its own');
-assert.match(app, /action: 'stop', transport: 'hook' \}\); toast\('已告诉它停止：它会在下一步之前停下'\);/);
+// What is done to a conversation goes by the way the computer names for each thing (`ways`), the same for every
+// tool; how the window behaves by them is checked in a browser (tests/ways_ui_check.py). Here only that nothing in
+// the page decides a way by the tool's name.
+assert.match(app, /const wayOf = \(s, thing\) =>/, 'one place says by which way a thing is done');
+assert.doesNotMatch(app, /tool === 'codex' && [^\n]*(say|stop)|tool === 'claude' && [^\n]*(say|stop)/, 'no way of saying or stopping is chosen by the tool\'s name');
+assert.doesNotMatch(app, /'codex-desktop-open'|Claude 桌面应用暂不支持/, 'a desktop application is offered for whichever tool the computer names');

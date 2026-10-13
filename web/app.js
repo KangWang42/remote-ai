@@ -167,13 +167,23 @@
   // it stands in the lists like a terminal, by how it stands. '' for one whose tool tells nothing.
   const reachPhase = s => !Array.isArray(s.reach) ? '' : s.status === 'confirm' ? 'confirm' : s.status === 'waiting' ? 'waiting' : s.status === 'busy' ? 'busy' : 'stopped';
   const can = (s, way) => Array.isArray(s.reach) && s.reach.includes(way);
+  // By which way the computer does a thing to a conversation ("say", "stop", "answer", "end"; docs/PROTOCOL.md,
+  // `ways`): its application's own channel, its tool's hooks, its tool's own way to one that sits idle. '' where
+  // there is none, and then the computer's words why. (A relay of an earlier version passes neither on: the one
+  // way it names for the conversation is taken then.)
+  const APP = 'codex-desktop';
+  const wayOf = (s, thing) => !s || !s.live ? '' : s.ways ? s.ways[thing] || ''
+    : thing === 'end' ? (s.can_takeover === true ? 'process' : '') : !can(s, thing) ? '' : thing !== 'answer' && s.transport === APP ? APP : 'hook';
+  const whyNot = (s, thing, usual) => (s && s.why && s.why[thing]) || usual;
+  // The desktop application of each tool, by its name: opened from the phone where the computer offers it.
+  const APPS = { codex: 'Codex', claude: 'Claude' };
   const running = t => t.state === 'running' || t.state === 'starting';
   const usable = () => data && data.device.online && data.device.enabled;
 
   // Reading a transcript alone does not imply that the original application accepts remote input.
   const controlMode = session => {
     if (!session || !session.live) return 'saved';
-    return session.transport === 'codex-desktop' || can(session, 'say') || can(session, 'answer') ? 'shared' : 'read';
+    return session.transport === APP || can(session, 'say') || can(session, 'answer') || can(session, 'stop') ? 'shared' : 'read';
   };
   const controlCopy = {
     shared: '连接电脑上的原对话 · 返回不结束任务',
@@ -234,7 +244,7 @@
   // The same for a conversation that is open on the computer: this is shared collaboration. The message is delivered
   // to the program that owns the conversation and the window stays there; it is never presented as a hand-off.
   async function tell(s) {
-    if (s.transport === 'codex-desktop') return takeOver(s);
+    if (s.transport === APP) return takeOver(s);
     if (!usable()) return toast('电脑离线，暂时不能发送');
     const text = await openSheet((form, finish) => {
       const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '发送消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
@@ -325,8 +335,8 @@
   // For how long: 0:07, 3:25, 1:02:10.
   const lasted = ms => { const s = Math.max(0, Math.floor(ms / 1000)), two = n => String(n).padStart(2, '0'); return s >= 3600 ? Math.floor(s / 3600) + ':' + two(Math.floor(s / 60) % 60) + ':' + two(s % 60) : Math.floor(s / 60) + ':' + two(s % 60); };
   // Ending a conversation on the computer closes the program that has it there: asked once, in the words of what happens.
-  const confirmEnd = (s, busy) => new Promise(done => {
-    const box = el('div', { className: 'confirm' }, el('p', { textContent: busy ? '结束电脑上的这段对话？它正在执行，会被中断。对话记录保留，之后可以继续。' : '结束电脑上的这段对话？对话记录保留，之后可以继续。' }),
+  const confirmEnd = (s, busy, first = '') => new Promise(done => {
+    const box = el('div', { className: 'confirm' }, el('p', { textContent: first + (busy ? '结束电脑上的这段对话？它正在执行，会被中断。对话记录保留，之后可以继续。' : '结束电脑上的这段对话？对话记录保留，之后可以继续。') }),
       el('div', { className: 'answers' }, el('button', { type: 'button', className: 'no', textContent: '结束', onclick: () => { box.remove(); done(true); } }), el('button', { type: 'button', className: 'see', textContent: '取消', onclick: () => { box.remove(); done(false); } })));
     const old = document.querySelector('#sheet-form .confirm'); if (old) old.remove();
     const anchor = document.querySelector('#sheet-form .state');
@@ -345,27 +355,27 @@
       const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
       const control = el('div', { className: 'control-mode', role: 'status' });
       const phoneTexts = new Set();
-      const native = () => now().transport === 'codex-desktop';
+      // Stopping what it is at, the same for every tool: by its application's channel (the one turn that is named,
+      // with a receipt that can be asked for again), or through its tool's hooks (before its next step). Where it
+      // has neither, it can still be ended, if the computer can close its program: asked first, with the reason.
       let stopAttempt = null;
-      const stopping = el('button', { type: 'button', className: 'end', textContent: '停止回答', hidden: true, onclick: async () => {
+      const stopping = el('button', { type: 'button', className: 'end halt', textContent: '停止回答', hidden: true, onclick: async () => {
         if (stopping.disabled || !usable()) return;
-        const current = now();
-        // Claude Code is told through its hooks: it ends its turn before its next step. Nothing is to be asked after.
-        if (!stopAttempt && current.transport === 'hook') {
-            if (!can(current, 'stop')) return;
-            stopping.disabled = true;
-            try { await api('api/conversation', { id: newId(), session: current.id, action: 'stop', transport: 'hook' }); toast('已告诉它停止：它会在下一步之前停下'); }
-            catch (error) { toast(error.message); }
-            stopping.disabled = false; refresh(); show();
-            return;
+        const current = now(), way = stopAttempt ? APP : wayOf(current, 'stop');
+        if (!way) {
+          const why = whyNot(current, 'stop', '这段对话现在不能从手机停止');
+          if (!canEnd(current)) return toast(why);
+          if (await confirmEnd(current, true, why + '。')) endIt(current);
+          return;
         }
-        if (!stopAttempt && (!can(current, 'stop') || !current.turn)) return;
+        if (way === APP && !stopAttempt && !current.turn) return;
         const query = !!stopAttempt;
-        if (!stopAttempt) stopAttempt = { id: newId(), session: current.id, action: 'stop', turn: current.turn, transport: 'codex-desktop' };
+        if (way === APP && !stopAttempt) stopAttempt = { id: newId(), session: current.id, action: 'stop', turn: current.turn, transport: APP };
         stopping.disabled = true;
         try {
-          const result = await api('api/conversation', { ...stopAttempt, receipt: query });
+          const result = await api('api/conversation', way === APP ? { ...stopAttempt, receipt: query } : { id: newId(), session: current.id, action: 'stop', transport: way });
           if (result.status === 'confirmed') { toast(result.goal_pause_error ? '本次回答已停止，但目标未暂停，请在电脑上检查' : '已停止本次回答，可以继续对话'); stopAttempt = null; }
+          else if (result.status === 'asked') toast('已告诉它停止：它会在下一步之前停下');
           else toast('停止结果未知，请检查电脑上的原对话');
         } catch (error) { toast(error.message); }
         stopping.disabled = false; stopping.textContent = stopAttempt ? '查询停止结果' : '停止回答'; refresh(); show();
@@ -373,12 +383,14 @@
       // How it stands, in one line above the box, as a terminal says it at its foot: at work and for how long, asking,
       // waiting for what its user says, or stopped and since when. Beside it, the way to end it on the computer.
       const standing = el('span', { className: 'standing' }), clock = el('span', { className: 'clock' });
-      const canEnd = s => s.live && s.can_takeover === true && (data.device.features || []).includes('end');
-      const ending = el('button', { type: 'button', className: 'end', textContent: '结束', hidden: true, onclick: async () => {
-        const current = now(), busy = reachPhase(current) === 'busy';
-        if (!await confirmEnd(current, busy)) return;
+      const canEnd = s => wayOf(s, 'end') === 'process' && (data.device.features || []).includes('end');
+      const endIt = async current => {
         try { await api('api/conversation', { id: newId(), session: current.id, action: 'end' }); toast('已结束电脑上的这段对话'); finish(null); refresh(); }
         catch (error) { toast(error.message); }
+      };
+      const ending = el('button', { type: 'button', className: 'end', textContent: '结束', hidden: true, onclick: async () => {
+        const current = now();
+        if (await confirmEnd(current, reachPhase(current) === 'busy')) endIt(current);
       } });
       const state = el('div', { className: 'state' }, el('span', { className: 'dot' }), standing, clock, stopping, ending);
       // back to what was said last, for someone who has gone up to read
@@ -451,19 +463,28 @@
         pending.forEach(p => {
           const row = el('div', { className: 'turn user mine' + (p.sent || p.uncertain ? '' : ' going') }, el('div', { className: 'plain', textContent: p.text }),
             el('small', { className: 'phone-delivery', textContent: p.delivery || '手机消息 · 正在送达' }));
-          if (p.payload && p.uncertain) row.append(el('button', { type: 'button', textContent: '查询发送结果', onclick: async event => {
+          if (p.payload.transport === APP && p.uncertain) row.append(el('button', { type: 'button', textContent: '查询发送结果', onclick: async event => {
             event.currentTarget.disabled = true;
             try { await deliver(p, true); } finally { waiting(); refresh(); }
           } }));
           said.append(row);
         });
       }
+      // Hands a message to the computer, which answers the same for every way: accepted, and whether the tool has
+      // it now or takes it when it has done what it is at. The application's channel keeps a receipt that can be
+      // asked for again when the answer was lost; by any other way a refusal is final. False: it was not sent.
       async function deliver(mine, query = false) {
+        const receipt = mine.payload.transport === APP;
         try {
-          const result = await api('api/conversation', { ...mine.payload, receipt: query });
+          const result = await api('api/conversation', receipt ? { ...mine.payload, receipt: query } : mine.payload);
           mine.uncertain = result.status !== 'accepted' || result.sent !== true; mine.sent = !mine.uncertain;
           mine.settledAt = Date.now(); mine.delivery = deliveryText(result);
-        } catch (error) { mine.uncertain = true; mine.delivery = '发送结果未确认，请查询本次结果'; toast(error.message); }
+          return true;
+        } catch (error) {
+          toast(error.message);
+          if (receipt) { mine.uncertain = true; mine.delivery = '发送结果未确认，请查询本次结果'; }
+          return receipt;
+        }
       }
       async function follow(current) {
         const listed = [current.updated, current.status, current.last || ''].join('\n');
@@ -501,14 +522,14 @@
         if (send.disabled || !usable() || !can(now(), 'say') || now().ask) return;
         if (!text) return box.focus();
         // what is written stands in the window at once, as what the user said, while it is on its way
-        const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false };
-        if (native()) mine.payload = { id: newId(), session: session.id, action: 'say', text, transport: 'codex-desktop' };
+        const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false, payload: { id: newId(), session: session.id, action: 'say', text } };
+        if (wayOf(now(), 'say') === APP) mine.payload.transport = APP;
         pending.push(mine); box.value = ''; box.style.height = 'auto';
         phoneTexts.add(text);
         waiting(); said.scrollTop = said.scrollHeight;
         sending = true; send.disabled = true; quick = Date.now() + 45000;
-        try { if (mine.payload) await deliver(mine); else { const result = await api('api/conversation', { id: newId(), session: session.id, action: 'say', text }); mine.sent = true; mine.settledAt = Date.now(); mine.delivery = deliveryText(result); phoneTexts.add(text); } }
-        catch (error) { phoneTexts.delete(text); mine.delivery = '发送未确认，请先查看电脑对话再重试'; if (!box.value) box.value = text; toast(error.message); }
+        // what was not sent goes back into the box, to be sent again or changed
+        if (!await deliver(mine)) { pending.splice(pending.indexOf(mine), 1); phoneTexts.delete(text); if (!box.value) { box.value = text; box.dispatchEvent(new Event('input')); } }
         sending = false; send.disabled = false; waiting(); refresh(); seen = ''; shown = ''; show();
       } });
       // a conversation that has stopped is most often told to go on: one press, beside what is typed
@@ -517,11 +538,12 @@
       let shown = '';
       function show() {
         // how it stands is what the computer said of it last: with the conversation itself, or in the lists
-        const listed = now(), current = stands === null || listed.ask || listed.transport === 'codex-desktop' ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
+        const listed = now(), current = stands === null || listed.ask || listed.transport === APP ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
         const mode = controlMode(current);
         control.className = 'control-mode ' + mode;
-        control.textContent = controlCopy[mode] + (mode === 'shared' && current.can_takeover === true ? ' 需要完整终端时，可选择“接管”。' : '');
-        const signature = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, current.transport, current.turn]);
+        // (where it can only be read, the computer's own words why it cannot be told anything)
+        control.textContent = mode === 'read' ? whyNot(current, 'say', controlCopy.read) : controlCopy[mode] + (mode === 'shared' && current.can_takeover === true ? ' 需要完整终端时，可选择“接管”。' : '');
+        const signature = JSON.stringify([current.live, current.status, current.reach, current.ways, current.why, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, current.transport, current.turn]);
         follow(listed);
         // the line of how it stands: its clock goes on between the computer's words
         const kind = !current.live ? 'stopped' : phase || 'stopped';
@@ -532,7 +554,8 @@
         standing.textContent = !current.live ? '已在电脑上关闭' : PHASE[kind][0];
         clock.textContent = !from ? '' : kind === 'busy' ? lasted(Date.now() - from) : ago(from);
         ending.hidden = !canEnd(current);
-        stopping.hidden = !stopAttempt && !can(current, 'stop');
+        // while it works it can be told to stop, whatever its tool: the press says what happens where it cannot
+        stopping.hidden = !stopAttempt && kind !== 'busy' && !can(current, 'stop');
         goOn.hidden = !(can(current, 'say') && !current.ask && (kind === 'stopped' || kind === 'waiting') && record.length > 0);
         if (signature === shown) return;
         shown = signature;
@@ -545,10 +568,14 @@
           else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
           asks.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: current.ask.text }), answers)));
         }
-        const sayable = can(current, 'say') && !current.ask;
-        write.hidden = !sayable && !native();
-        if (native()) { send.disabled = sending || !sayable; box.placeholder = sayable ? '发消息' : '可以先写下一句，等待当前回答结束'; }
+        // The box stands wherever something can be said, and also where it will be once the conversation has done
+        // what it is at (its application takes nothing meanwhile): the next thing can be written there already.
+        const sayable = can(current, 'say') && !current.ask, later = !sayable && !current.ask && current.live && current.transport === APP;
+        write.hidden = !sayable && !later;
+        send.disabled = sending || !sayable; box.placeholder = sayable ? '发消息' : '可以先写下一句，等待当前回答结束';
         below.textContent = '';
+        // why nothing can be said to it now, where that is not said above already
+        if (!sayable && !later && !current.ask && current.live && mode !== 'read' && whyNot(current, 'say', '')) below.append(el('p', { className: 'quiet', textContent: whyNot(current, 'say', '') }));
         // where it cannot be told anything from here, it can still be taken into a terminal: the one thing left to do
         if (!sayable && !current.ask) {
           const taken = current.live ? ways(current) : current.dir ? [{ label: '在手机终端继续', value: 'resume' }] : [];
@@ -573,33 +600,34 @@
     const tools = Object.keys(TOOLS).filter(t => (data.device.tools || []).includes(t));
     const latest = name => Math.max(0, ...data.terminals.filter(t => t.dir === name).map(t => t.created || 0), ...(data.sessions || []).filter(s => s.dir === name).map(s => s.updated || 0));
     const names = (data.device.workspaces || []).slice().sort((a, b) => latest(b) - latest(a));
-    const desktop = (data.device.features || []).includes('codex-desktop-open');
-    if (!names.length || (!tools.length && !desktop)) return toast(names.length ? '电脑上没有可用的工具' : '请先添加一个项目');
+    const apps = Object.keys(APPS).filter(tool => (data.device.features || []).includes(tool + '-desktop-open'));
+    if (!names.length || (!tools.length && !apps.length)) return toast(names.length ? '电脑上没有可用的工具' : '请先添加一个项目');
     const picked = await openSheet((form, finish) => {
       form.append(el('h3', { textContent: '新建任务' }));
-      if (desktop) form.append(el('button', { type: 'button', className: 'choice', onclick: () => finish({ desktop: true }) },
-        el('span', null, '在 Codex 桌面应用中打开', el('small', { textContent: '选择项目并预填新对话，在电脑上确认发送' }))));
-      else form.append(el('p', { className: 'quiet', textContent: '桌面应用入口暂不可用；支持的 Codex Windows 桌面应用安装后，需重启 Remote AI。Claude 桌面应用暂不支持。' }));
+      apps.forEach(tool => form.append(el('button', { type: 'button', className: 'choice', onclick: () => finish({ desktop: tool }) },
+        el('span', null, '在 ' + APPS[tool] + ' 桌面应用中打开', el('small', { textContent: '选择项目并预填新对话，在电脑上确认发送' })))));
+      if (!apps.length) form.append(el('p', { className: 'quiet', textContent: '桌面应用入口暂不可用：安装或更新 Codex、Claude 的 Windows 桌面应用后，重启 Remote AI。' }));
       if (tools.length) form.append(el('p', { textContent: '共享终端 · 手机和电脑可以轮流输入' }));
       const list = el('div', { className: 'anywhere' });
       names.slice(0, 12).forEach(name => list.append(el('div', { className: 'row' }, el('b', { textContent: name }),
         el('span', null, ...tools.map(tool => el('button', { type: 'button', className: 'tool ' + tool, ariaLabel: '在 ' + name + ' 新建 ' + TOOLS[tool], html: ICON[tool], onclick: () => finish({ tool, name }) }))))));
       if (tools.length) form.append(list);
     });
-    if (picked && picked.desktop) desktopDraft(names);
+    if (picked && picked.desktop) desktopDraft(names, picked.desktop);
     else if (picked) start(picked.tool, picked.name);
   }
-  async function desktopDraft(names) {
+  async function desktopDraft(names, tool) {
+    const app = APPS[tool];
     await openSheet(form => {
       const folder = el('select', { id: 'desktop-project' }, ...names.map(name => el('option', { value: name, textContent: name })));
       const draft = el('textarea', { id: 'desktop-draft', rows: 4, maxLength: 1000, placeholder: '可留空，或预填一段内容', autocapitalize: 'off', spellcheck: false });
       const status = el('p', { role: 'status', 'aria-live': 'polite', className: 'quiet' });
       let operation = null;
-      const button = el('button', { type: 'button', className: 'choice solid', textContent: '交给 Codex 桌面应用', onclick: async () => {
+      const button = el('button', { type: 'button', className: 'choice solid', textContent: '交给 ' + app + ' 桌面应用', onclick: async () => {
         if (button.disabled) return;
-        if (!operation) operation = { id: newId(), action: 'app_open', tool: 'codex', dir: folder.value, draft: draft.value };
+        if (!operation) operation = { id: newId(), action: 'app_open', tool, dir: folder.value, draft: draft.value };
         button.disabled = true; folder.disabled = true; draft.readOnly = true;
-        status.textContent = '正在交给电脑上的 Codex…';
+        status.textContent = '正在交给电脑上的 ' + app + '…';
         try {
           let answer = await api('api/terminal', operation);
           for (let n = 0; n < 60 && answer.state === 'queued' && status.isConnected && $('sheet').open; n++) {
@@ -610,15 +638,15 @@
           if (answer.error) { status.textContent = answer.error; button.textContent = '操作未确认'; return; }
           const result = answer.result || {};
           if (!['handed_off', 'unknown'].includes(result.status) || result.sent !== false) throw new Error('未收到可确认的桌面操作结果，请查询同一次操作。');
-          status.textContent = result.message || '请在电脑上检查 Codex，内容尚未发送。';
+          status.textContent = result.message || '请在电脑上检查 ' + app + '，内容尚未发送。';
           button.textContent = result.status === 'handed_off' ? '已交给应用，尚未发送' : '结果未知，请检查电脑';
         } catch (error) {
           status.textContent = error.message;
           button.textContent = '查询本次操作结果'; button.disabled = false;
         }
       } });
-      form.append(el('h3', { textContent: 'Codex 桌面应用' }),
-        el('p', { textContent: '将打开电脑上的应用，选中或建立该文件夹对应的项目，并进入新对话。可能切换电脑当前显示的页面；草稿需要在电脑上确认发送。' }),
+      form.append(el('h3', { textContent: app + ' 桌面应用' }),
+        el('p', { textContent: '将打开电脑上的应用，在这个文件夹里进入一段新对话。可能切换电脑当前显示的页面；草稿需要在电脑上确认发送。' }),
         el('label', { htmlFor: folder.id, textContent: '项目文件夹' }), folder,
         el('label', { htmlFor: draft.id, textContent: '新对话草稿（可不填）' }), draft, button, status);
       // Dismissal disconnects this view; it does not cancel an operation already handed to the computer.

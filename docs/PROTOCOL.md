@@ -83,7 +83,9 @@ open on the computer") carries more: `status` may also be `confirm` (it asks for
 stopped and is kept waiting for a message from the phone); `reach` lists what the phone can do to it now, of `say`
 and `answer`; `ask` is the request it waits on, `{"id", "text"}`, or null; `last` is what it said last;
 `wake` says that a message is handed to it where it sits idle (see there) instead of waiting for its next stop. Where the
-tool tells nothing, `reach` and `ask` are null and `last` is empty. `activity` is `active` for a conversation in a
+tool tells nothing, `reach` and `ask` are null and `last` is empty. Every live conversation also carries `ways`
+and `why` (see "The ways into a conversation, and stopping one"): by which way each thing is done to it, and the
+computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
 Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek` and `settings`. These are forwarded
@@ -444,11 +446,17 @@ again.
 
 ## Desktop application adapter (Windows)
 
-An agent advertises `codex-desktop-open` only when it finds the current user's installed
-`OpenAI.Codex` Windows x64 package (26.1007.2314.0 or later) and its desktop executable.
-Installing/updating the desktop app requires restarting Remote AI to discover its new path.
+An agent advertises `<tool>-desktop-open` for each tool whose desktop application it can open a project in:
+
+- `codex-desktop-open` when it finds the current user's installed `OpenAI.Codex` Windows x64 package
+  (26.1007.2314.0 or later) and its desktop executable;
+- `claude-desktop-open` when it finds the installed `Claude` Windows x64 package (2.31226.1.0 or later), the
+  package declares the `claude:` scheme as its own, and its owner has not given that scheme to another program.
+
+Installing/updating a desktop app requires restarting Remote AI to discover it.
 This capability means opening a project/composer, not RPC control of running turns.
-It does not depend on a Codex CLI installation. Claude, Linux and older agents do not advertise it.
+It does not depend on a CLI installation. Linux and older agents do not advertise it. The relay passes
+on the names it knows (`DESKTOP_TOOLS`) and refuses `app_open` for a tool the computer did not name.
 
 Use the existing authenticated `POST /api/terminal` operation queue:
 
@@ -473,7 +481,15 @@ the user sends it on the computer. There is no returned conversation ID or autom
 `status: "unknown", sent: false` means an earlier attempt may have reached the app and is not replayed.
 An error or timeout must not be displayed as successful creation or proof that nothing happened.
 
-The adapter invokes the installed desktop executable with a single quoted, percent-encoded
+Each application is opened by a link of its own scheme, the entry it has for that itself
+(`LinkedDesktopApp` in `DesktopAdapters.cs`; one class per application says where it is installed, what its
+link is and how the link is given). Claude's is `claude://code/new?folder=...&q=...`: a new conversation of
+Claude Code in that folder with the draft standing in its box, the link the app's own `ccd <folder>` command
+builds (inspected in Claude Windows 2.31226.1.0). It is handed to Windows, which gives it to the application
+that registered the scheme. The application refuses a folder on a network path, so the adapter does before
+anything is reserved.
+
+Codex's adapter invokes the installed desktop executable with a single quoted, percent-encoded
 `codex://threads/new?path=...&prompt=...` argument. This route and its project-selection/creation behavior
 were inspected in Codex Windows 26.1007.2314.0 (`bootstrap` and `main` packaged modules). This is a desktop
 entry point, not an app-server API. The app handles its existing-instance dispatch. The adapter never
@@ -491,20 +507,49 @@ fingerprint and outcome, not the path or draft. They are retained with the compu
 removes replay protection for those IDs. A corrupt record fails closed. The phone disables duplicate clicks
 and queries the same operation after a network failure; leaving the form does not cancel dispatch.
 
-Checks: `tests/desktop_adapter_check.py` (isolated adapter/journal and real agent dispatch),
-`relay/test_relay.py` (capability, validation, replay and timeout), `tests/desktop_ui_check.py` (real embedded
-page and relay, simulated app receipts). The tests do not create real desktop conversations.
+Checks: `tests/desktop_adapter_check.py` (isolated adapter/journal and real agent dispatch, both links),
+`relay/test_relay.py` (capability per tool, validation, replay and timeout), `tests/desktop_ui_check.py` and
+`tests/ways_ui_check.py` (real embedded page and relay, simulated app receipts). The tests do not create real
+desktop conversations.
 
 ## The ways into a conversation, and stopping one
 
 A conversation that a program on the computer has open is reached by the best way that is there, each tool by
 what is its own:
 
-| way | what it does | where |
-| --- | --- | --- |
-| the application's own channel (`transport: "codex-desktop"`) | `say` while it is ready, `stop` of the one turn that is named | Codex's Windows desktop app, a version the computer knows, a conversation of a project |
-| the tool's hooks | `answer` to a request for permission; `say` left for a conversation at work, handed over when it stops; `stop` before its next step (`transport: "hook"`) | Claude Code and Codex in any program, for the hooks they run |
-| the tool's own way to a conversation that sits idle (`wake`) | `say`: the conversation is woken where it is | Claude Code by its messages between conversations (the desktop app's conversations too); Codex's command line by `codex queue`, never the desktop app's |
+| way | name | what it does | where |
+| --- | --- | --- | --- |
+| the application's own channel | `codex-desktop` | `say` while it is ready, `stop` of the one turn that is named | Codex's Windows desktop app, a version the computer knows, a conversation of a project |
+| the tool's hooks | `hook` | `answer` to a request for permission; `say` left for a conversation at work, handed over when it stops; `stop` before its next step | Claude Code and Codex in any program, for the hooks they run |
+| the tool's own way to a conversation that sits idle | `wake` | `say`: the conversation is woken where it is | Claude Code by its messages between conversations (the desktop app's conversations too); Codex's command line by `codex queue`, never the desktop app's |
+| closing its program | `process` | `end` | where the computer knows for certain which program has it (`can_takeover`) |
+
+One place on the computer decides this (`Ways.cs`), for the list the phone is shown and for carrying out what
+it asks, the same for every tool. For each thing the best way that is there is used, and the next where it is
+not: Codex's desktop app takes no message through its channel while it works, so what is said then is left for
+the conversation through its hooks, as for any other conversation at work. A live conversation is listed with
+
+```json
+"ways": {"say": "hook", "stop": "codex-desktop", "answer": "", "end": ""},
+"why": {"end": "这段对话由电脑上的应用管理，请在那里关闭它"}
+```
+
+`ways` names the way of each thing, `""` where there is none; `why` gives, for what cannot be done now, the
+computer's words for the person (for `say` and `end` always, for `stop` while it works, for `answer` while it
+asks). `reach`, `transport`, `turn` and `wake` say the same for a page or relay that knows one way for a
+conversation only: `transport` is `codex-desktop` where the application's channel is there, else `hook` where
+the hooks stop it. A relay passes `ways` on only for what it lets through in `reach`; one of an earlier
+version passes neither on, and the page then takes the one way `transport` names.
+
+The phone names the way it was told of (`transport` with `say` and `stop` for the application's channel, with
+`stop` for the hooks); which way is used is decided on the computer as things stand then. Every `say` is
+answered in one shape, whatever carried it: `{"status": "accepted", "sent": true, "now": <bool>, "way": ...}`,
+`now` false when it was left for the conversation to take after what it is doing.
+
+What has no way: the answer of Codex's command line cannot be stopped from outside. Codex 0.162.1 refuses a
+hook before a step that answers `continue: false` ("unsupported"), and the conversation of its window is not
+one of its shared background service's, so no other client of that service can interrupt its turn. It is
+ended (`end`), or taken into a terminal of the phone's.
 
 `stop` with `transport: "hook"` names no turn: Claude Code runs a hook before each step it takes (`PreToolUse`),
 and the computer answers the next one with `continue: false`. The turn ends there; the conversation and its
@@ -516,7 +561,8 @@ before that hook was in its settings is not.
 
 `codex-desktop-control` identifies the Windows agent's native-control protocol support. A session advertises
 `transport: "codex-desktop"` only after a fresh owner discovery and snapshot from the supported application,
-with its working directory matching a Remote AI project. `reach` contains `say` while ready, and `stop` when
+with its working directory matching a Remote AI project. `reach` contains `say` while ready (by the channel)
+and while it works where its hooks tell of it (left for it through them, `ways.say: "hook"`), and `stop` when
 one active turn is identified. `turn` names that execution. Cached capabilities expire after 15 seconds;
 every mutation opens a fresh connection and checks ownership and the project again. Expired or incompatible
 connections do not fall back to a second backend or Codex queue. What they fall back on is the tool's hooks, which
@@ -558,9 +604,9 @@ version 4 with `expectedTurnId`. No app database, writer lock, hidden security s
 is modified. The adapter does not expose the snapshot's settings or full history to the relay.
 
 Claude Windows 2.31226.1.0 contains internal session-management tools, but this adapter has no supported
-external transport for them. Claude desktop idle sessions therefore do not use the Haiku courier as a
-native-control fallback. Existing CLI courier and desktop hook paths retain their own semantics.
-Neither app currently has a confirmed create-project/create-and-send/close-conversation adapter here.
+external transport for them: Claude Code's conversations, its desktop app's too, are told through its hooks
+and its own messages between conversations (see "The ways into a conversation"), not through a channel of
+the application. Neither app has a confirmed create-and-send or close-conversation adapter here.
 
 Validation: `tests/desktop_adapter_check.py` covers framed native transport, ownership/version checks,
 permission revocation, exact-turn stop, unknown outcomes and restart replay. `relay/test_relay.py` covers

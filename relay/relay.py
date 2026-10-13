@@ -65,6 +65,8 @@ _session = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 _word = re.compile(r"^[a-z0-9_]{1,40}$")
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 DESKTOP_ACTIONS = ("app_open",)
+# the tools whose desktop application a computer can offer to open: it says so for each by "<tool>-desktop-open"
+DESKTOP_TOOLS = ("codex", "claude")
 UPDATE_ACTION = "update"      # the program on the computer looks for a newer version of itself and installs it
 MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 8, 12, 2_000_000, 300_000
 LABELS = {"claude": "Claude Code", "codex": "Codex", "shell": "PowerShell"}
@@ -286,6 +288,9 @@ WAKE_SECONDS = 85       # a message that is handed to a conversation where it si
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
 REACH = ("say", "answer", "stop")
+# By which way the computer does each thing to a conversation that a program there has open (docs/PROTOCOL.md):
+# its application's own channel, its tool's hooks, its tool's own way to one that sits idle; ending closes its program.
+WAYS = {"say": ("codex-desktop", "hook", "wake"), "stop": ("codex-desktop", "hook"), "answer": ("hook",), "end": ("process",)}
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
 ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_stop", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS     # operations whose acknowledgment carries an answer
@@ -295,8 +300,13 @@ _ask = re.compile(r"^[a-f0-9]{8,32}$")
 def _reached(session):
     """What the computer says of a conversation its tool tells of: what the phone can do, the request it waits on,
     and what it said last. Nothing of it where the tool tells nothing."""
+    # the way of each thing, and for what cannot be done the computer's words why: None from a computer that says neither
+    ways, why = session.get("ways"), session.get("why")
+    told = isinstance(ways, dict) and session.get("live") is True
+    ways = {thing: ways[thing] if ways.get(thing) in allowed else "" for thing, allowed in WAYS.items()} if told else None
+    why = {thing: text[:200] for thing, text in why.items() if thing in WAYS and isinstance(text, str) and text} if told and isinstance(why, dict) else {} if told else None
     if not isinstance(session.get("reach"), list):
-        return {"reach": None, "ask": None, "last": "", "wake": False}
+        return {"reach": None, "ask": None, "last": "", "wake": False, "ways": ways and dict(ways, say="", stop="", answer=""), "why": why}
     ask = session.get("ask")
     ask = {"id": ask["id"], "text": ask["text"][:600]} if (session.get("status") == "confirm" and isinstance(ask, dict) and isinstance(ask.get("id"), str)
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
@@ -305,9 +315,12 @@ def _reached(session):
     # told to stop through its tool's hooks, before its next step (Claude Code): no turn is named for that
     hook = session.get("transport") == "hook" and session.get("live") is True
     turn = session.get("turn") if isinstance(session.get("turn"), str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", session["turn"]) else ""
-    return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask) and (way != "stop" or (native and turn) or hook)], "ask": ask, "last": str(session.get("last") or "")[:300],
+    reach = [way for way in REACH if way in session["reach"] and (way != "answer" or ask) and (way != "stop" or (native and turn) or hook)]
+    return {"reach": reach, "ask": ask, "last": str(session.get("last") or "")[:300],
             "transport": "codex-desktop" if native else "hook" if hook else "", "turn": turn if native else "",
-            "wake": session.get("wake") is True and "say" in session["reach"]}
+            "wake": session.get("wake") is True and "say" in session["reach"],
+            # (a way is said only for what the list above lets through)
+            "ways": ways and {thing: way if thing not in REACH or thing in reach else "" for thing, way in ways.items()}, "why": why}
 
 
 def _placed(session):
@@ -636,7 +649,7 @@ class Relay:
                     raise RemoteError("电脑端版本不支持从手机更新，请先在电脑上更新一次")
             elif action in DESKTOP_ACTIONS:
                 terminal = ""
-                if payload.get("tool") != "codex" or "codex-desktop-open" not in self._device.get("features", []):
+                if payload.get("tool") not in DESKTOP_TOOLS or payload["tool"] + "-desktop-open" not in self._device.get("features", []):
                     raise RemoteError("这台电脑暂不支持此桌面应用入口")
                 if payload.get("dir") not in self._device["workspaces"]:
                     raise RemoteError("电脑没有报告这个项目")
@@ -985,7 +998,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "codex-desktop-open", "codex-desktop-control")],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "codex-desktop-control") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))

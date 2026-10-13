@@ -9,9 +9,11 @@ using RemoteCli;
 
 public static class DesktopAdapterCheck {
     sealed class App : IDesktopAdapter {
-        public string Tool { get { return "codex"; } }
+        public string Tool { get { return Named; } }
         public bool Available { get { return true; } }
+        public string Named = "codex", Unfit = "";
         public int Calls; public bool Fail;
+        public void Check(string folder, string draft) { if (Unfit.Length > 0 && folder.Contains(Unfit)) throw new ArgumentException("this application does not open that folder"); }
         public ManualResetEvent Entered = new ManualResetEvent(false), Release = new ManualResetEvent(true);
         public Dictionary<string, object> Open(string folder, string draft) {
             Interlocked.Increment(ref Calls); Entered.Set(); Release.WaitOne(4000);
@@ -32,6 +34,15 @@ public static class DesktopAdapterCheck {
         Refused(() => CodexDesktopAdapter.Link("relative", ""));
         Refused(() => CodexDesktopAdapter.Link(folder, new string('x', 1001)));
         Refused(() => CodexDesktopAdapter.Link(folder, "\0"));
+        // Claude's desktop app: its own link for a new conversation of Claude Code in a folder, the draft in `q`
+        uri = new Uri(ClaudeDesktopAdapter.Link(folder, draft));
+        query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        Require(uri.Scheme == "claude" && uri.Host == "code" && uri.AbsolutePath == "/new" && query.Count == 2 && query["folder"] == folder && query["q"] == draft, "Claude's link: " + uri);
+        Require(!ClaudeDesktopAdapter.Link(folder, "").Contains("q="), "Claude: empty composer");
+        Refused(() => ClaudeDesktopAdapter.Link("relative", ""));
+        Refused(() => ClaudeDesktopAdapter.Link(@"\\server\share\project", ""));      // the application refuses a folder on another computer
+        Refused(() => ClaudeDesktopAdapter.Link(folder, new string('x', 1001)));
+        Refused(() => ClaudeDesktopAdapter.Link(folder, "\0"));
         var app = new App(); var service = new DesktopOperations(root, app);
         Parallel.For(0, 8, n => Require((string)service.Open(id, "codex", folder, draft)["status"] == "handed_off", "receipt"));
         Require(app.Calls == 1, "concurrent retry must not reopen");
@@ -74,8 +85,22 @@ public static class DesktopAdapterCheck {
         run(op('f', "demo")); Require(app.Calls == 1, "in flight duplicate"); app.Release.Set();
         for (int n = 0; n < 100; n++) { lock (Field(agent, "work")) { if (done.ContainsKey(new string('f', 32))) break; } Thread.Sleep(20); }
         lock (Field(agent, "work")) Require(done.ContainsKey(new string('f', 32)) && done[new string('f', 32)].ContainsKey("result"), "async receipt completed");
+        // every tool that has an adapter is opened the same way, each by its own; one that has none is refused, and
+        // what an application would not take is refused before anything is reserved
+        var other = new App { Named = "claude", Unfit = "项目" };
+        var both = new DesktopOperations(Path.Combine(root, "agent"), app, other);
+        typeof(TerminalAgent).GetField("Desktop", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(agent, both);
+        Require(String.Join(",", both.Tools) == "codex,claude", "the tools whose application can be opened: " + String.Join(",", both.Tools));
+        var unfit = op('1', "demo"); unfit["tool"] = "claude"; run(unfit);
+        Require(Convert.ToString(done[new string('1', 32)]["error"]).Contains("does not open") && other.Calls == 0 && !File.Exists(Path.Combine(root, "agent", "desktop-operations", new string('1', 32) + ".json")), "refused by its application's own rule, nothing reserved");
+        other.Unfit = "";
+        var claude = op('2', "demo"); claude["tool"] = "claude"; run(claude);
+        for (int n = 0; n < 100; n++) { lock (Field(agent, "work")) { if (done.ContainsKey(new string('2', 32))) break; } Thread.Sleep(20); }
+        lock (Field(agent, "work")) Require(other.Calls == 1 && app.Calls == 1 && done[new string('2', 32)].ContainsKey("result"), "Claude's application is opened by its own adapter");
+        var unknown = op('3', "demo"); unknown["tool"] = "gemini"; run(unknown);
+        Require(Convert.ToString(done[new string('3', 32)]["error"]).Contains("暂不支持") && other.Calls == 1 && app.Calls == 1, "a tool without an adapter is refused");
         Console.WriteLine("desktop adapter: URL isolation, durable replay, crash/failure, permissions and nonblocking dispatch passed");
-        Console.WriteLine("installed Codex desktop entry available: " + new CodexDesktopAdapter().Available);
+        Console.WriteLine("installed Codex desktop entry available: " + new CodexDesktopAdapter().Available + ", Claude: " + new ClaudeDesktopAdapter().Available);
         CodexDesktopControlCheck.Run(Path.Combine(root, "native"));
     }
 }
