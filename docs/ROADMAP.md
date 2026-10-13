@@ -32,7 +32,7 @@
 | 中转 | `relay/relay.py` 的 `work()`（`/api/work`，功能名 `work`、`chains`） | `relay/test_relay.py` |
 | 发给手机终端里的对话 | 电脑端把消息作为粘贴文字输入到运行这段对话的手机终端（`Tell`、`Agent.tell`） | `tests/work_e2e_check.py`（真实的 Windows 电脑端和中转：统计、交接、到点提问、规则的增删）、`agent-linux/test_agent.py` |
 
-## 已完成（2026-10-14，1.6.1 之后）
+## 已完成（1.6.2）
 
 | 项目 | 做法与文件 | 检查 |
 | --- | --- | --- |
