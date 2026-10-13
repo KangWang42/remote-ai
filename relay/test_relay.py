@@ -622,6 +622,28 @@ class TerminalRelayTests(unittest.TestCase):
         for change in [dict(live=False), dict(tool="claude"), dict(transport="other"), dict(turn="../bad")]:
             self.assertEqual(_reached(dict(base, **change))["reach"], [])
 
+    def test_a_conversation_at_work_is_told_to_stop_through_its_tools_hooks(self):
+        import threading
+        sid, other = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"
+        info = dict(self.info, features=["peek", "reach"])
+        busy = {"id": sid, "tool": "claude", "dir": "demo", "title": "正在做的", "updated": 1, "live": True, "host": "cli", "status": "busy", "reach": ["say", "stop"], "transport": "hook"}
+        # "stop" is passed on where the computer says how: by its tool's hooks here; not for one that names no way
+        self.relay.agent({"info": info, "sessions": [busy, dict(busy, id=other, transport="")]}, now=1001)
+        shown = {s["id"]: s for s in self.relay.overview(now=1001)["sessions"]}
+        self.assertEqual([(shown[sid]["reach"], shown[sid]["transport"]), (shown[other]["reach"], shown[other]["transport"])], [(["say", "stop"], "hook"), (["say"], "")])
+        with self.assertRaisesRegex(RemoteError, "没有可用的停止接口"):
+            self.relay.conversation({"id": "a" * 32, "session": sid, "action": "stop"}, now=1001, wait=0)
+        with self.assertRaisesRegex(RemoteError, "没有在执行"):
+            self.relay.conversation({"id": "b" * 32, "session": other, "action": "stop", "transport": "hook"}, now=1001, wait=0)
+        answers = {}
+        waiting = threading.Thread(target=lambda: answers.update(got=self.relay.conversation({"id": "c" * 32, "session": sid, "action": "stop", "transport": "hook"}, now=1001, wait=5)))
+        waiting.start()
+        asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+        self.assertEqual([{k: v for k, v in o.items() if k not in ("at", "terminal")} for o in asked], [{"id": "c" * 32, "action": "session_stop", "session": sid, "tool": "claude", "dir": "demo"}])
+        self.relay.agent({"info": info, "acks": [{"id": "c" * 32, "error": "", "result": {"status": "asked", "transport": "hook"}}]}, now=1002)
+        waiting.join(5)
+        self.assertEqual(answers["got"], {"status": "asked", "transport": "hook"})
+
     def test_a_conversation_that_sits_idle_is_told_where_it_is_and_the_answer_is_waited_for(self):
         import threading
         sid, other = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"

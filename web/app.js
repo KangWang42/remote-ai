@@ -350,6 +350,15 @@
       const stopping = el('button', { type: 'button', className: 'end', textContent: '停止回答', hidden: true, onclick: async () => {
         if (stopping.disabled || !usable()) return;
         const current = now();
+        // Claude Code is told through its hooks: it ends its turn before its next step. Nothing is to be asked after.
+        if (!stopAttempt && current.transport === 'hook') {
+            if (!can(current, 'stop')) return;
+            stopping.disabled = true;
+            try { await api('api/conversation', { id: newId(), session: current.id, action: 'stop', transport: 'hook' }); toast('已告诉它停止：它会在下一步之前停下'); }
+            catch (error) { toast(error.message); }
+            stopping.disabled = false; refresh(); show();
+            return;
+        }
         if (!stopAttempt && (!can(current, 'stop') || !current.turn)) return;
         const query = !!stopAttempt;
         if (!stopAttempt) stopAttempt = { id: newId(), session: current.id, action: 'stop', turn: current.turn, transport: 'codex-desktop' };

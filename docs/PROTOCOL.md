@@ -495,6 +495,23 @@ Checks: `tests/desktop_adapter_check.py` (isolated adapter/journal and real agen
 `relay/test_relay.py` (capability, validation, replay and timeout), `tests/desktop_ui_check.py` (real embedded
 page and relay, simulated app receipts). The tests do not create real desktop conversations.
 
+## The ways into a conversation, and stopping one
+
+A conversation that a program on the computer has open is reached by the best way that is there, each tool by
+what is its own:
+
+| way | what it does | where |
+| --- | --- | --- |
+| the application's own channel (`transport: "codex-desktop"`) | `say` while it is ready, `stop` of the one turn that is named | Codex's Windows desktop app, a version the computer knows, a conversation of a project |
+| the tool's hooks | `answer` to a request for permission; `say` left for a conversation at work, handed over when it stops; `stop` before its next step (`transport: "hook"`) | Claude Code and Codex in any program, for the hooks they run |
+| the tool's own way to a conversation that sits idle (`wake`) | `say`: the conversation is woken where it is | Claude Code by its messages between conversations (the desktop app's conversations too); Codex's command line by `codex queue`, never the desktop app's |
+
+`stop` with `transport: "hook"` names no turn: Claude Code runs a hook before each step it takes (`PreToolUse`),
+and the computer answers the next one with `continue: false`. The turn ends there; the conversation and its
+program stay. The answer to the request is `{"status": "asked", "transport": "hook"}` at once. A conversation
+offers it (`stop` in `reach`) only while it is at work and has been heard before a step, which one opened
+before that hook was in its settings is not.
+
 ## Codex desktop conversation control (Windows)
 
 `codex-desktop-control` identifies the Windows agent's native-control protocol support. A session advertises
@@ -502,7 +519,9 @@ page and relay, simulated app receipts). The tests do not create real desktop co
 with its working directory matching a Remote AI project. `reach` contains `say` while ready, and `stop` when
 one active turn is identified. `turn` names that execution. Cached capabilities expire after 15 seconds;
 every mutation opens a fresh connection and checks ownership and the project again. Expired or incompatible
-connections do not fall back to a second backend or Codex queue.
+connections do not fall back to a second backend or Codex queue. What they fall back on is the tool's hooks, which
+run in the application's own process: a message left for a conversation at work is handed to it when it stops.
+A conversation of the desktop app that sits idle, without the application's channel, cannot be told.
 
 The embedded reader sends `POST /api/conversation`:
 

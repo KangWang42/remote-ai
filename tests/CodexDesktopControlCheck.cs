@@ -62,13 +62,19 @@ public static class CodexDesktopControlCheck {
         Require(((string)task.Result["error"]).Length > 0 && conversation.Sends == 1, "remote disable during inspect prevents dispatch");
         prefs["RemoteEnabled"] = true; save();
         var list = typeof(TerminalAgent).GetMethod("Listed", BindingFlags.Instance | BindingFlags.NonPublic);
-        foreach (string tool in new[] { "codex", "claude" }) {
-            sessions[0].Tool = tool; sessions[0].Origin = tool == "codex" ? "Codex 桌面版" : "Claude 桌面版"; sessions[0].Wakes = true;
-            var shown = list.Invoke(agent, new object[] { sessions[0] });
-            Require(!true.Equals(shown.GetType().GetProperty("wake").GetValue(shown, null)), "desktop cannot advertise legacy courier wake");
-            var fallback = request(); fallback["tool"] = tool; fallback.Remove("transport");
-            Require(((string)run(fallback)["error"]).Length > 0 && conversation.Sends == 1, "desktop legacy send must not dispatch courier");
-        }
+        // The ways into a conversation fall back on one another, each tool by what is its own. Codex's desktop app is
+        // never told through Codex's queue (that is another program's, which would write to a conversation the app
+        // has): without the app's channel nothing is sent to one that sits idle. Claude Code's conversations, the
+        // desktop app's too, take a message where they sit idle by Claude Code's own way between conversations.
+        sessions[0].Tool = "codex"; sessions[0].Origin = "Codex 桌面版"; sessions[0].Wakes = true;
+        var shown = list.Invoke(agent, new object[] { sessions[0] });
+        Require(!true.Equals(shown.GetType().GetProperty("wake").GetValue(shown, null)), "Codex's desktop app is not told through Codex's queue");
+        var fallback = request(); fallback["tool"] = "codex"; fallback.Remove("transport");
+        Require(((string)run(fallback)["error"]).Contains("不能从手机发消息") && conversation.Sends == 1, "and without its channel nothing is dispatched to one that sits idle");
+        sessions[0].Tool = "claude"; sessions[0].Origin = "Claude 桌面版"; sessions[0].Wakes = true;
+        shown = list.Invoke(agent, new object[] { sessions[0] });
+        Require(true.Equals(shown.GetType().GetProperty("wake").GetValue(shown, null)) && ((string[])shown.GetType().GetProperty("reach").GetValue(shown, null)).Contains("say") && (string)shown.GetType().GetProperty("transport").GetValue(shown, null) == "", "Claude's desktop app is told where it sits idle, by Claude Code's own way");
+        sessions[0].Tool = "codex"; sessions[0].Origin = "Codex 桌面版";
         Console.WriteLine("native agent: async dispatch, receipt identity, project/cwd checks and permission revocation passed");
     }
     sealed class Peer : Stream {

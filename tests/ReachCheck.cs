@@ -42,6 +42,9 @@ public static class ReachCheck {
         while (DateTime.UtcNow < until) { if (test()) return true; Thread.Sleep(40); }
         return test();
     }
+    static Dictionary<string, object> entry0(Dictionary<string, object> hooks, string name, string program) {
+        return ((IEnumerable)hooks[name]).Cast<object>().Select(group => (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)group)["hooks"]).Cast<object>().First()).Single(hook => Convert.ToString(hook["command"]) == program);
+    }
     static string Refused(Action act) { try { act(); return ""; } catch (InvalidOperationException error) { return error.Message; } catch (ArgumentException error) { return error.Message; } }
 
     public static int Main(string[] args) {
@@ -208,6 +211,33 @@ public static class ReachCheck {
                 theirs.Program.Kill();
                 Environment.SetEnvironmentVariable("REMOTECLI_HOLD", null);
 
+                // ---- Claude Code is told to stop: it is heard before each step it takes, and answered there. One
+                // that was opened before the hook for that was in its settings is not heard so, and is not offered it.
+                string halting = Guid.NewGuid().ToString();
+                idle = 5;
+                Answer(Run("claude", Event("UserPromptSubmit", halting, ",\"prompt\":\"compare them\"")), 3000, "asked to work");
+                Require(claude(halting).Status == "busy" && !claude(halting).Steps && !claude(halting).Stoppable && Refused(() => reach.Stop("claude", halting)).Contains("重新打开"), "not before it has been heard before a step");
+                Require(Answer(Run("claude", Event("PreToolUse", halting, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo one\"}")), 3000, "before its first step") == "" && claude(halting).Steps && claude(halting).Stoppable, "before a step nothing is said, and it can be told to stop from now on");
+                reach.Stop("claude", halting);
+                string halted = Answer(Run("claude", Event("PreToolUse", halting, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo two\"}")), 3000, "before its next step");
+                Require(halted.Contains("\"continue\":false") && halted.Contains(Reach.StoppedFromPhone), "told to stop there: " + halted);
+                // Claude Code runs no hook for a turn that was stopped so: how it stands is said at once
+                Require(claude(halting).Status == "idle" && !claude(halting).Stoppable, "and it has stopped, as the phone is told");
+                Answer(Run("claude", Event("UserPromptSubmit", halting, ",\"prompt\":\"go on\"")), 3000, "told to go on");
+                Require(Answer(Run("claude", Event("PreToolUse", halting, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo three\"}")), 3000, "asked once only") == "", "it is told once");
+                Answer(Run("claude", Event("Stop", halting, ",\"last_assistant_message\":\"Stopped.\"")), 3000, "it has stopped");
+                Require(claude(halting).Status == "idle" && !claude(halting).Stoppable && Refused(() => reach.Stop("claude", halting)).Contains("没有在执行"), "one that is not at work has nothing to stop");
+                // a stop that was asked for and not taken (the turn ended first) does not stop the next turn
+                Answer(Run("claude", Event("UserPromptSubmit", halting, ",\"prompt\":\"again\"")), 3000, "at work again");
+                Answer(Run("claude", Event("PreToolUse", halting, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "a step");
+                reach.Stop("claude", halting);
+                Answer(Run("claude", Event("Stop", halting)), 3000, "ended by itself");
+                Answer(Run("claude", Event("UserPromptSubmit", halting, ",\"prompt\":\"once more\"")), 3000, "the next turn");
+                Require(Answer(Run("claude", Event("PreToolUse", halting, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "its first step") == "", "the next turn is not stopped by what was asked of the one before");
+                // a conversation nothing was heard of yet is not made known by a step alone
+                Require(Answer(Run("claude", Event("PreToolUse", Guid.NewGuid().ToString(), ",\"tool_name\":\"Read\"")), 3000, "a step of one unknown") == "", "nothing is said before a step of a conversation that is not known");
+                Answer(Run("claude", Event("Stop", halting)), 3000, "and it rests");
+
                 // ---- where its owner switched that off, a request of Codex's is not kept: Codex asks its hooks before
                 // it shows its question, and kept it shows a running hook. It shows its own question at once then, and
                 // the phone is told that it asks, at the computer. Claude Code's is kept as ever: beside its own question.
@@ -323,7 +353,9 @@ public static class ReachCheck {
             var hooks = (Dictionary<string, object>)read["hooks"];
             Require(Convert.ToString(read["model"]) == "opus" && Convert.ToString(read["note"]) == "保留原样" && Convert.ToString(read["number"], System.Globalization.CultureInfo.InvariantCulture) == "1.5", "what else is in the file stays");
             Require(File.ReadAllText(settings, Encoding.UTF8).Contains("保留原样"), "letters of any language are written as they are");
-            Require(((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 1 && hooks.Count == 6, "the person's own hooks stay, this program's stand beside them: " + String.Join(",", hooks.Keys));
+            // (the person had a hook of their own before each step, and one at a stop: this program's stand beside both)
+            Require(((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 2 && hooks.Count == 6, "the person's own hooks stay, this program's stand beside them: " + String.Join(",", hooks.Keys));
+            Require(Reach.EventsOf("claude").Contains(Reach.Step) && !Reach.EventsOf("codex").Contains(Reach.Step) && Convert.ToInt32(entry0(hooks, Reach.Step, program)["timeout"]) == 10 && Convert.ToString(entry0(hooks, Reach.Step, program)["statusMessage"]) == "Remote AI", "Claude Code is heard before each step, briefly; Codex is not");
             var mine = (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)((IEnumerable)hooks["PermissionRequest"]).Cast<object>().Single())["hooks"]).Cast<object>().Single();
             Require(Convert.ToString(mine["command"]) == program && String.Join(" ", ((IEnumerable)mine["args"]).Cast<object>()) == "--hook claude RemoteCli.reach.abc123" && Convert.ToInt32(mine["timeout"]) == Reach.Patience, "Claude Code is given the program and its arguments apart");
             // the one hook that can run for minutes says on Claude Code's screen what it is doing; the others say nothing
@@ -334,7 +366,7 @@ public static class ReachCheck {
             ReachHooks.Set("claude", false, program, "RemoteCli.reach.abc123");
             read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(settings, Encoding.UTF8));
             hooks = (Dictionary<string, object>)read["hooks"];
-            Require(!ReachHooks.Installed("claude") && hooks.Count == 2 && ((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 1 && File.ReadAllText(settings, Encoding.UTF8).Contains("echo mine") && !File.ReadAllText(settings, Encoding.UTF8).Contains("RemoteCli.reach"), "taken out again, the person's own untouched");
+            Require(!ReachHooks.Installed("claude") && hooks.Count == 2 && ((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 1 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 1 && File.ReadAllText(settings, Encoding.UTF8).Contains("echo mine") && !File.ReadAllText(settings, Encoding.UTF8).Contains("RemoteCli.reach"), "taken out again, the person's own untouched");
             // Codex: a file that is not there yet is made; the hook is one line for a shell
             ReachHooks.Set("codex", true, program, "RemoteCli.reach.abc123");
             Require(ReachHooks.Installed("codex") && !File.Exists(codexHooks + ".before-remotecli"), "installed for Codex, with nothing to keep from before");

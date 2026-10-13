@@ -47,3 +47,7 @@ assert.match(app, /const canEnd = s => s\.live && s\.can_takeover === true && \(
 assert.match(app, /action: 'end' \}\); toast\('已结束电脑上的这段对话'\); finish\(null\); refresh\(\);/);
 assert.match(app, /className: 'latest', hidden: true, ariaLabel: '回到最新'/);
 assert.match(app, /clock\.textContent = !from \? '' : kind === 'busy' \? lasted\(Date\.now\(\) - from\) : ago\(from\);/, 'at work, for how long; stopped, since when');
+// A conversation at work is told to stop by the way the computer names: the application's own channel stops the turn
+// that is named; a tool's hooks (Claude Code) stop it before its next step, and nothing is asked after.
+assert.match(app, /if \(!stopAttempt && current\.transport === 'hook'\) \{/, 'stopping through a tool\'s hooks is a way of its own');
+assert.match(app, /action: 'stop', transport: 'hook' \}\); toast\('已告诉它停止：它会在下一步之前停下'\);/);

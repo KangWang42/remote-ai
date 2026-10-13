@@ -240,12 +240,19 @@ public sealed class TerminalAgent {
         // a message handed to it by its tool's own means: as Claude Code's sessions hand each other messages, or
         // through Codex's queue. Either way it stays where it is.
         bool hooked = known != null && known.Sayable, wake = s.Live && s.Wakes && !hooked && !(known != null && known.Status == "confirm");
-        if (s.Origin == "Codex 桌面版") { hooked = false; wake = false; }
-        if (s.Origin == "Claude 桌面版") wake = false;
+        // A conversation has several ways in, and the best one that is there is used. The application's own channel
+        // (Codex's desktop app, where this program knows its version and the conversation is one of a project) comes
+        // first. Without it the tool's hooks still hand over what is left for a conversation at work. What is not
+        // done for Codex's desktop app is Codex's queue: that is another program's, which would write to a
+        // conversation the app has. Claude Code's conversations, the desktop app's too, take a message where they
+        // sit idle by Claude Code's own way from one conversation to another.
+        if (s.Origin == "Codex 桌面版") wake = false;
         if (native != null) { status = known != null && known.Status == "confirm" ? "confirm" : native.Busy ? "busy" : native.Ready ? "waiting" : "confirm"; hooked = false; wake = false; }
+        // told to stop: by the application's channel where there is one, else before its next step (Claude Code)
+        bool stops = native == null && known != null && known.Stoppable;
         return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, kind = s.Kind, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = native != null ? native.Busy || status == "confirm" : s.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
-            reach = native != null ? new[] { native.Ready && status != "confirm" ? "say" : null, native.Turn.Length > 0 ? "stop" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray() : known == null && !wake ? null : new[] { hooked || wake ? "say" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
-            transport = native != null ? "codex-desktop" : "", turn = native != null ? native.Turn : "",
+            reach = native != null ? new[] { native.Ready && status != "confirm" ? "say" : null, native.Turn.Length > 0 ? "stop" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray() : known == null && !wake ? null : new[] { hooked || wake ? "say" : null, stops ? "stop" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
+            transport = native != null ? "codex-desktop" : stops ? "hook" : "", turn = native != null ? native.Turn : "",
             wake = wake,
             ask = known != null && known.Status == "confirm" ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
     }
@@ -1271,7 +1278,13 @@ public sealed class TerminalAgent {
                 });
                 return;
             }
-            else if (action == "session_stop") throw new InvalidOperationException("此对话没有可用的原应用停止接口");
+            else if (action == "session_stop") {
+                // Without an application's channel: Claude Code, told before its next step. It ends its turn there and stays open.
+                string session = Get(op, "session"), tool = Get(op, "tool");
+                if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+                Reach.Stop(tool, session);
+                result = new Dictionary<string, object> { { "status", "asked" }, { "transport", "hook" } };
+            }
             else if (action == "session_read") result = ReadConversation(op, prefs);
             else if (action == "session_mark") {
                 // pinned or hidden, or no longer: of a conversation this computer listed
@@ -1317,9 +1330,11 @@ public sealed class TerminalAgent {
                 if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && (s.Dir.Length == 0 ? s.Folder.Length > 0 : AllDirs(prefs).ContainsKey(s.Dir)))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 if (action == "session_say") {
                     var listed = sessions.First(s => s.Id == session && s.Tool == tool && s.Live);
-                    if (listed.Origin == "Codex 桌面版") throw new InvalidOperationException("请通过原应用控制连接发送，或等待桌面连接恢复");
                     var told = Reach.Of(tool, session);
-                    if (listed.Origin == "Claude 桌面版" && !(told != null && told.Sayable)) throw new InvalidOperationException("Claude 桌面原对话当前未提供消息接收接口，请在电脑应用中继续");
+                    // Codex's desktop app without its own channel (a conversation outside the projects, an app of
+                    // another version): what is said is left for it through its hooks while it works; one that sits
+                    // idle there cannot be told (Codex's queue is not the app's).
+                    if (listed.Origin == "Codex 桌面版" && !(told != null && told.Sayable)) throw new InvalidOperationException("Codex 桌面版里的这段对话现在不能从手机发消息：它不在已添加的项目里，或桌面应用的版本还没有适配。它执行时发的消息会在它做完后收到");
                     if (listed.Wakes && !(told != null && (told.Sayable || told.Status == "confirm"))) {
                         // It sits idle: the message is handed to it where it is. That takes some seconds, so it is done
                         // beside the terminals' work, and the operation is answered when it has been taken or has failed.

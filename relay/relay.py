@@ -302,9 +302,11 @@ def _reached(session):
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
     # wake: it sits idle, and a message is handed to it where it is (that takes some seconds), instead of being left for its next stop
     native = session.get("tool") == "codex" and session.get("transport") == "codex-desktop" and session.get("live") is True
+    # told to stop through its tool's hooks, before its next step (Claude Code): no turn is named for that
+    hook = session.get("transport") == "hook" and session.get("live") is True
     turn = session.get("turn") if isinstance(session.get("turn"), str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", session["turn"]) else ""
-    return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask) and (way != "stop" or native and turn)], "ask": ask, "last": str(session.get("last") or "")[:300],
-            "transport": "codex-desktop" if native else "", "turn": turn if native else "",
+    return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask) and (way != "stop" or (native and turn) or hook)], "ask": ask, "last": str(session.get("last") or "")[:300],
+            "transport": "codex-desktop" if native else "hook" if hook else "", "turn": turn if native else "",
             "wake": session.get("wake") is True and "say" in session["reach"]}
 
 
@@ -823,9 +825,11 @@ class Relay:
                 raise RemoteError("消息需为 1 至 8000 字")
             more = {"text": payload["text"]}
         elif action == "stop":
-            if not isinstance(payload.get("turn"), str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", payload["turn"]):
-                raise RemoteError("执行轮次无效，请刷新后重试")
-            more = {"turn": payload["turn"]}
+            # the application's channel stops the one turn that is named; a tool's hooks stop what it is at
+            if payload.get("transport") == "codex-desktop":
+                if not isinstance(payload.get("turn"), str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", payload["turn"]):
+                    raise RemoteError("执行轮次无效，请刷新后重试")
+                more = {"turn": payload["turn"]}
         elif action == "answer":
             if not isinstance(payload.get("ask"), str) or not _ask.fullmatch(payload["ask"]) or type(payload.get("allow")) is not bool:
                 raise RemoteError("回答无效")
@@ -845,8 +849,8 @@ class Relay:
         native = payload.get("transport") == "codex-desktop" and action in ("say", "stop")
         if "receipt" in payload and type(payload["receipt"]) is not bool:
             raise RemoteError("回执查询无效")
-        if action == "stop" and not native:
-            raise RemoteError("此对话没有可用的原应用停止接口")
+        if action == "stop" and not native and payload.get("transport") != "hook":
+            raise RemoteError("此对话没有可用的停止接口")
         if native:
             more.update(transport="codex-desktop", receipt=payload.get("receipt") is True)
         with self._changed:
@@ -889,7 +893,9 @@ class Relay:
                 return answer
             if action != "read":
                 if not (native and more["receipt"]) and action not in (saved.get("reach") or []):
-                    raise RemoteError("这个确认请求已经处理过了，或只能在电脑上回答" if action == "answer" else "这段对话现在不能从手机发消息，请刷新后重试")
+                    raise RemoteError("这个确认请求已经处理过了，或只能在电脑上回答" if action == "answer" else "这段对话现在没有在执行，请刷新后重试" if action == "stop" else "这段对话现在不能从手机发消息，请刷新后重试")
+                if action == "stop" and not native and saved.get("transport") != "hook":
+                    raise RemoteError("这段对话的停止方式已变化，请刷新后重试")
                 if action == "answer" and saved["ask"]["id"] != more["ask"]:
                     raise RemoteError("这个确认请求已经处理过了")
                 if action == "say" and saved.get("wake") and wait == FILE_SECONDS:
