@@ -42,11 +42,11 @@ def main():
             # Codex's desktop app, at work: stopped by the application's channel, told through its hooks meanwhile
             dict(usual, id=APP, tool='codex', title='Codex 桌面版里的对话', origin='Codex 桌面版', kind='Codex 桌面版', reach=['say', 'stop'], transport='codex-desktop', turn='turn-7', can_takeover=False,
                  ways={'say': 'hook', 'stop': 'codex-desktop', 'answer': '', 'end': ''}, why={'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
-            # Codex's desktop app, a conversation outside the projects that sits idle: nothing can be said to it
-            dict(usual, id=OUTSIDE, tool='codex', title='项目之外的对话', origin='Codex 桌面版', kind='Codex 桌面版', status='idle', reach=[], transport='', can_takeover=False,
-                 ways={'say': '', 'stop': '', 'answer': '', 'end': ''}, why={'say': 'Codex 桌面版里的这段对话现在不能从手机发消息：它不在已添加的项目里', 'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
+            # A discovered conversation outside projects whose native channel is temporarily unavailable.
+            dict(usual, id=OUTSIDE, dir='', folder='D:\\outside', tool='codex', title='项目之外的对话', origin='Codex 桌面版', kind='Codex 桌面版', status='idle', reach=[], transport='', can_takeover=False,
+                 ways={'say': '', 'stop': '', 'answer': '', 'end': ''}, why={'say': '暂时无法连接 Codex 原对话：应用连接尚未就绪、工作目录无法确认，或此版本尚未适配。请在电脑上打开这段对话后刷新；无需先添加项目', 'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
         ]
-        asked, opened, events, refuse = [], [], [], [False]
+        asked, forwarded, opened, events, refuse = [], [], [], [], [False]
         transcript = [{'role': 'user', 'text': '电脑上的第一句'}, {'role': 'assistant', 'text': '电脑上的回答。'}]
 
         def report():
@@ -91,10 +91,11 @@ def main():
                     if operations:
                         # the computer answers as the program does: the same shape for every way of saying
                         op, by = operations[0], payload.get('transport', '')
+                        forwarded.append(op)
                         if refuse[0]:
                             ack = {'id': op['id'], 'error': '电脑上的这段对话现在联系不上，请刷新后重试'}
                         elif op['action'] == 'session_say':
-                            ack = {'id': op['id'], 'result': {'status': 'accepted', 'sent': True, 'now': False, 'way': 'hook'}}
+                            ack = {'id': op['id'], 'result': {'status': 'accepted', 'sent': True, 'now': by == 'codex-desktop', 'way': by or 'hook', 'turn': 'turn-8'}}
                         elif op['action'] == 'session_stop':
                             ack = {'id': op['id'], 'result': {'status': 'asked', 'transport': 'hook'} if by == 'hook' else {'status': 'confirmed', 'turn': op.get('turn')}}
                         elif op['action'] in ('session_withdraw', 'session_release'):
@@ -238,8 +239,25 @@ def main():
             # ---- one that cannot be told anything: the computer's words why, and no box
             window(OUTSIDE)
             assert value("document.querySelector('#sheet .write').hidden") and not shown('停止回答')
-            assert value("document.querySelector('#sheet .control-mode').textContent.includes('不在已添加的项目里')"), 'why nothing can be said to it'
+            assert value("document.querySelector('#sheet .control-mode').textContent.includes('无需先添加项目')"), 'why nothing can be said to it'
             picture('outside.png')
+
+            # The same outside conversation becomes reachable as soon as the app channel is available.
+            sessions[3].update(status='waiting', reach=['say'], transport='codex-desktop',
+                               ways={'say': 'codex-desktop', 'stop': '', 'answer': '', 'end': ''}, why={})
+            window(OUTSIDE)
+            assert not value("document.querySelector('#sheet .write').hidden"), 'project membership is not required for the composer'
+            write('项目外也能接着问')
+            until("document.querySelector('#sheet .said').textContent.includes('项目外也能接着问')")
+            until("document.querySelector('#sheet .write button.solid').disabled === false")
+            assert asked[-1]['transport'] == 'codex-desktop' and forwarded[-1]['dir'] == '', forwarded[-1]
+            picture('outside-connected.png')
+            sessions[3].update(status='busy', reach=['say', 'stop'], turn='turn-8',
+                               ways={'say': 'codex-desktop', 'stop': 'codex-desktop', 'answer': '', 'end': ''})
+            window(OUTSIDE)
+            value(button('停止回答') + '.click()')
+            until(toast + ".includes('已停止本次回答')")
+            assert forwarded[-1]['dir'] == '' and forwarded[-1]['action'] == 'session_stop', forwarded[-1]
 
             # ---- a relay of an earlier version passes neither the ways nor the reasons on: the one way it names is taken
             for s in sessions:

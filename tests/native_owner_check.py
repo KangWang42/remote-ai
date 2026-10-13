@@ -15,6 +15,7 @@ with tempfile.TemporaryDirectory(prefix='remote-cli-native-') as folder:
                     str(ROOT/'agent-windows/CodexSessions.cs'), str(ROOT/'agent-windows/Reach.cs'), str(ROOT/'agent-windows/Outbox.cs'), str(ROOT/'agent-windows/Running.cs'), str(ROOT/'agent-windows/Marks.cs'), str(ROOT / "agent-windows/ClaudeRelay.cs"), str(ROOT / "agent-windows/Folders.cs"), str(ROOT / "agent-windows/Removal.cs"), str(ROOT / "agent-windows/CodexQueue.cs"),str(ROOT / "agent-windows/DesktopAdapters.cs"), str(ROOT / "agent-windows/Ways.cs"), str(ROOT / "agent-windows/CodexDesktopControl.cs"), str(ROOT/'agent-windows/RemoteCliAgent.cs'),
                     str(ROOT/'tests/CodexOwnerCheck.cs')],check=True)
     shutil.copy2(exe, Path(folder)/'RemoteCliAgent.exe')
-    shutil.copy2(exe, Path(folder)/'Positron.exe')
+    for host in ['Positron', 'Code', 'rstudio']:
+        shutil.copy2(exe, Path(folder)/(host + '.exe'))
     shutil.copy2(exe, Path(folder)/'claude.exe')
     subprocess.run([str(exe)],check=True,timeout=90)

@@ -67,7 +67,7 @@ public sealed class Ways {
         // (never Codex's queue for its desktop app: the queue is another program's, which would write to a conversation the app has)
         else if (s.Wakes && !desktop && !asks) ways.Say = Wake;
         else ways.Why["say"] = channel != null ? "Codex 桌面版还没有就绪：等它当前的执行或电脑上的确认结束后再发"
-            : desktop ? "Codex 桌面版里的这段对话现在不能从手机发消息：它不在已添加的项目里，或桌面应用的版本还没有适配。它执行时发的消息会在它做完后收到"
+            : desktop ? "暂时无法连接 Codex 原对话：应用连接尚未就绪、工作目录无法确认，或此版本尚未适配。请在电脑上打开这段对话后刷新；无需先添加项目"
             : "电脑上的 " + (claude ? "Claude Code" : "Codex 命令行") + " 现在收不到手机的消息：它执行时发的消息会在它做完后收到";
 
         // ---- stopping what it is at; it stays open
@@ -76,7 +76,7 @@ public sealed class Ways {
         else ways.Why["stop"] = !busy ? "这段对话现在没有在执行"
             : channel != null ? "Codex 桌面版正在执行一个目标，或同时有几轮在进行：这种情况只能在电脑上停止"
             : claude ? "这段对话是在可以从手机停止之前打开的，在电脑上重新打开它之后才行"
-            : desktop ? "Codex 桌面版里的这段对话不在已添加的项目里，或桌面应用的版本还没有适配：只能在电脑上停止"
+            : desktop ? "暂时无法连接 Codex 原对话的停止接口，请在电脑上停止；无需通过添加项目解锁"
             : "Codex 命令行的回答不能从外面单独停止";
 
         // ---- answering what it asks

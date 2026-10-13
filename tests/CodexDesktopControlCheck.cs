@@ -70,7 +70,7 @@ public static class CodexDesktopControlCheck {
         var shown = list.Invoke(agent, new object[] { sessions[0] });
         Require(!true.Equals(shown.GetType().GetProperty("wake").GetValue(shown, null)), "Codex's desktop app is not told through Codex's queue");
         var fallback = request(); fallback["tool"] = "codex"; fallback.Remove("transport");
-        Require(((string)run(fallback)["error"]).Contains("不能从手机发消息") && conversation.Sends == 1, "and without its channel nothing is dispatched to one that sits idle");
+        Require(((string)run(fallback)["error"]).Contains("暂时无法连接 Codex 原对话") && conversation.Sends == 1, "and without its channel nothing is dispatched to one that sits idle");
         sessions[0].Tool = "claude"; sessions[0].Origin = "Claude 桌面版"; sessions[0].Wakes = true;
         shown = list.Invoke(agent, new object[] { sessions[0] });
         Require(true.Equals(shown.GetType().GetProperty("wake").GetValue(shown, null)) && ((string[])shown.GetType().GetProperty("reach").GetValue(shown, null)).Contains("say") && (string)shown.GetType().GetProperty("transport").GetValue(shown, null) == "", "Claude's desktop app is told where it sits idle, by Claude Code's own way");
@@ -114,6 +114,33 @@ public static class CodexDesktopControlCheck {
         typeof(TerminalAgent).GetField("Desktop", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(agent, new DesktopOperations(root));
         switched["receipt"] = true;
         Require((string)Object(run(switched)["result"])["way"] == "hook" && conversation.Sends == 1, "fallback receipt survives restart and channel loss");
+        // A desktop conversation found in a folder that is not a phone project keeps its own verified folder as
+        // the control boundary. It must not become controllable by supplying a different phone path.
+        sessions[0].Dir = ""; sessions[0].Folder = root; sessions[0].ControlFolder = root;
+        prefs["RemoteDirs"] = new string[0]; save();
+        var outside = request(); outside["dir"] = ""; outside["transport"] = "codex-desktop";
+        Require((string)Object(run(outside)["result"])["status"] == "accepted" && conversation.Sends == 2, "native control works outside a project");
+        var wrongFolder = request(); wrongFolder["dir"] = "other"; wrongFolder["transport"] = "codex-desktop";
+        Require(((string)run(wrongFolder)["error"]).Length > 0 && conversation.Sends == 2, "outside conversation cannot be redirected by a phone path");
+        states[Session] = new CodexDesktopSessions.State { Folder = root, Ready = true, At = DateTime.UtcNow };
+        shown = list.Invoke(agent, new object[] { sessions[0] });
+        Require((string)((Dictionary<string, object>)shown.GetType().GetProperty("ways").GetValue(shown, null))["say"] == Ways.App, "outside session advertises the native send route");
+        var outsideStop = request(); outsideStop["dir"] = ""; outsideStop["action"] = "session_stop"; outsideStop["turn"] = "turn-1"; outsideStop.Remove("text");
+        Require((string)Object(run(outsideStop)["result"])["status"] == "confirmed" && conversation.Stops == 2, "outside native stop retains the application");
+        conversation.Folder = root + "-other";
+        outside["id"] = Guid.NewGuid().ToString("N");
+        Require(((string)run(outside)["error"]).Length > 0 && conversation.Sends == 2, "outside native snapshot must still match the discovered folder");
+        conversation.Folder = root;
+        sessions[0].Folder = sessions[0].ControlFolder = Path.Combine(root, "missing");
+        outside["id"] = Guid.NewGuid().ToString("N");
+        Require(((string)run(outside)["error"]).Length > 0 && conversation.Sends == 2, "a deleted outside folder cannot authorize dispatch");
+        sessions[0].Folder = sessions[0].ControlFolder = root;
+        sessions[0].Tool = "claude"; sessions[0].Origin = Ways.ClaudeDesktop;
+        heard["claude " + Session] = new Reach.Open { Tool = "claude", Session = Session, Status = "busy", Steps = true, Seen = DateTime.UtcNow };
+        var outsideClaude = request(); outsideClaude["dir"] = ""; outsideClaude["tool"] = "claude"; outsideClaude.Remove("transport");
+        Require((string)Object(run(outsideClaude)["result"])["way"] == Ways.Hook && agent.Reach.Outbox.Find((string)outsideClaude["id"]) != null, "outside Claude receives messages through its own hook");
+        outsideClaude["id"] = Guid.NewGuid().ToString("N"); outsideClaude["action"] = "session_stop"; outsideClaude.Remove("text");
+        Require((string)Object(run(outsideClaude)["result"])["transport"] == Ways.Hook, "outside Claude stops through its own hook");
         Console.WriteLine("native agent: async dispatch, receipt identity, project/cwd checks and permission revocation passed");
     }
     sealed class Peer : Stream {

@@ -51,6 +51,20 @@ public sealed class SessionOrigin {
         }
         return false;
     }
+    /// Maps a process name to the nearest user-visible host. Kept separate so new editor hosts can be tested and
+    /// added without changing ownership or takeover rules.
+    public static string HostOf(string processName) {
+        string name = processName ?? "";
+        if (name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) || name.Equals("Codex", StringComparison.Ordinal)) return "Codex 桌面版";
+        if (name.Equals("Claude", StringComparison.Ordinal)) return "Claude 桌面版";
+        if (name.Equals("Positron", StringComparison.OrdinalIgnoreCase)) return "Positron";
+        if (name.Equals("Code", StringComparison.OrdinalIgnoreCase) || name.Equals("Code - Insiders", StringComparison.OrdinalIgnoreCase)) return "VS Code";
+        if (name.Equals("Cursor", StringComparison.OrdinalIgnoreCase)) return "Cursor";
+        if (name.Equals("Windsurf", StringComparison.OrdinalIgnoreCase)) return "Windsurf";
+        if (name.Equals("RStudio", StringComparison.OrdinalIgnoreCase) || name.Equals("rsession", StringComparison.OrdinalIgnoreCase)) return "RStudio";
+        if (name.Equals("idea64", StringComparison.OrdinalIgnoreCase) || name.Equals("pycharm64", StringComparison.OrdinalIgnoreCase) || name.Equals("webstorm64", StringComparison.OrdinalIgnoreCase) || name.Equals("rider64", StringComparison.OrdinalIgnoreCase) || name.Equals("clion64", StringComparison.OrdinalIgnoreCase)) return "JetBrains";
+        return "";
+    }
     /// `parents`: the list to read from, where one was taken already (several conversations are looked at in a row).
     public static SessionOrigin Inspect(int pid, Dictionary<int, int> parents = null) {
         var result = new SessionOrigin();
@@ -68,14 +82,16 @@ public sealed class SessionOrigin {
                     }
                     // The desktop apps run the tools as their own children. Claude's app is Claude.exe, its command line
                     // claude.exe: the two differ in the capital only.
-                    if (name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) || name.Equals("Codex", StringComparison.Ordinal)) result.Name = "Codex 桌面版";
-                    else if (name.Equals("Claude", StringComparison.Ordinal)) result.Name = "Claude 桌面版";
-                    else if (name.Equals("Positron", StringComparison.OrdinalIgnoreCase)) result.Name = "Positron";
-                    else if (name.Equals("Code", StringComparison.OrdinalIgnoreCase)) result.Name = "VS Code";
-                    else if (name.Equals("Cursor", StringComparison.OrdinalIgnoreCase)) result.Name = "Cursor";
-                    else if (name.Equals("Windsurf", StringComparison.OrdinalIgnoreCase)) result.Name = "Windsurf";
+                    // The first recognized host above the tool is the one the owner sees. Do not let a
+                    // shared Codex/Claude process farther up the tree overwrite an editor such as Positron.
+                    // This matters when an editor starts an app-server through its own helper process.
+                    if (result.Name == CommandLine) {
+                        string host = HostOf(name);
+                        if (host.Length > 0) result.Name = host;
+                    }
                 }
             } catch (ArgumentException) { break; }
+            catch (InvalidOperationException) { break; }
             catch (System.ComponentModel.Win32Exception) { break; }
             pid = parent;
         }

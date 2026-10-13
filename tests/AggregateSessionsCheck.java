@@ -194,6 +194,11 @@ public final class AggregateSessionsCheck {
         // where a thing runs is said in words: a saved conversation by what started it, one in an editor's terminal as that
         require("Codex 桌面版 · web-shop".equals(AggregateSessions.where(drawn)) && "终端 · web-shop".equals(AggregateSessions.where(typed)) && "web-shop".equals(AggregateSessions.where(past2)), AggregateSessions.where(drawn) + " | " + AggregateSessions.where(typed) + " | " + AggregateSessions.where(past2));
         require("Positron 的终端 · web-shop".equals(AggregateSessions.where(inEditor)) && "VS Code · web-shop".equals(AggregateSessions.where(extension)), AggregateSessions.where(inEditor) + " | " + AggregateSessions.where(extension));
+        for (String origin : Arrays.asList("Positron", "VS Code", "RStudio", "编辑器")) {
+            AggregateSessions.Entry sharedTerminal = new AggregateSessions.Entry(false, "shared-term", "web-shop", "命令行对话", "codex", "", "", "idle", true, "shared", "", "");
+            sharedTerminal.origin = origin; sharedTerminal.kind = "终端";
+            require("term".equals(sharedTerminal.source()) && (origin + " 的终端 · web-shop").equals(AggregateSessions.where(sharedTerminal)), "shared writer preserves terminal provenance: " + AggregateSessions.where(sharedTerminal));
+        }
         // one search over all of it: every word, whatever its case, in the name, the place, the tool, the computer; the hidden too
         require("out".equals(ids.apply(AggregateSessions.board(things, " 读书 ", "", "").found)) && AggregateSessions.board(things, "读书", "", "").searched, "by a word of the name");
         require("看日志 past-1 只有画面的终端".equals(ids.apply(AggregateSessions.board(things, "THESIS", "", "").found)), "by the project, what is open first: " + ids.apply(AggregateSessions.board(things, "THESIS", "", "").found));

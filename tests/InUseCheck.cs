@@ -41,7 +41,12 @@ public static class InUseCheck {
         // holds one; told with each kind once, the terminal last; a desktop app that is closed is left out where asked
         string app = Folders.CodexApp, desk = Folders.ClaudeApp, term = Folders.Terminal, editor = Folders.Editor;
         Require(Folders.OfCodex("cli", "codex-tui") == term && Folders.OfCodex("exec", "codex_exec") == term && Folders.OfCodex("", "") == term, "Codex in a terminal");
-        Require(Folders.OfCodex("vscode", "Codex Desktop") == app && Folders.OfCodex("vscode", "codex-tui") == app && Folders.OfCodex("", "codex_work_desktop") == app, "Codex's app says vscode of itself");
+        Require(Folders.OfCodex("vscode", "Codex Desktop") == app && Folders.OfCodex("", "codex_work_desktop") == app, "Codex's app says vscode of itself");
+        Require(Folders.OfCodex("vscode", "codex-tui") == term && Folders.OfCodex("vscode", "codex_exec") == term, "explicit terminal client identity overrides vscode source");
+        Require(Folders.CodexOrigin("Codex 后台服务", "vscode", "codex-tui") == "编辑器" && Folders.CodexOrigin("Positron", "vscode", "codex-tui") == "Positron" && Folders.CodexOrigin("Codex 后台服务", "cli", "codex-tui") == SessionOrigin.CommandLine, "client provenance is not the shared writer service");
+        foreach (var pair in new[] { new[] { "Positron", "Positron" }, new[] { "Code", "VS Code" }, new[] { "Code - Insiders", "VS Code" }, new[] { "rstudio", "RStudio" }, new[] { "rsession", "RStudio" }, new[] { "Cursor", "Cursor" }, new[] { "Windsurf", "Windsurf" } })
+            Require(SessionOrigin.HostOf(pair[0]) == pair[1] && Folders.Held(pair[1], term) == term, "known editor terminal: " + pair[0]);
+        Require(SessionOrigin.HostOf("codex") == "" && SessionOrigin.HostOf("claude") == "" && SessionOrigin.HostOf("powershell") == "", "tool CLI and shell ancestors are not desktop apps");
         Require(Folders.OfCodex("vscode", "codex_vscode") == editor, "Codex in an editor");
         Require(Folders.OfClaude("cli") == term && Folders.OfClaude("") == term && Folders.OfClaude("claude-desktop-3p") == desk && Folders.OfClaude("claude-vscode") == editor, "Claude Code");
         Require(String.Join(",", Folders.Told(new[] { term, app, term, desk })) == app + "," + desk + "," + term, "each once, the terminal last");

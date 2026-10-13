@@ -21,9 +21,18 @@ public sealed class Folders {
     /// By what a Codex conversation was started, as its file says: `source` is "cli", "exec" or "vscode" (the
     /// desktop app says "vscode" too), `originator` names the program.
     public static string OfCodex(string source, string originator) {
+        // A TUI connected to the daemon can say "vscode" of its source. Its explicit client identity is stronger.
+        if (String.Equals(originator, "codex-tui", StringComparison.OrdinalIgnoreCase) || String.Equals(originator, "codex_exec", StringComparison.OrdinalIgnoreCase)) return Terminal;
         bool editor = (originator ?? "").IndexOf("vscode", StringComparison.OrdinalIgnoreCase) >= 0;
         bool app = source == "vscode" || (originator ?? "").IndexOf("desktop", StringComparison.OrdinalIgnoreCase) >= 0;
         return editor ? Editor : app ? CodexApp : Terminal;
+    }
+    /// Display provenance is distinct from writer ownership. A detached shared daemon does not identify the
+    /// foreground client; keep the known client kind without guessing an editor from another open project.
+    public static string CodexOrigin(string origin, string source, string originator) {
+        if (!String.IsNullOrEmpty(origin) && origin != "Codex 后台服务") return origin;
+        if (String.Equals(originator, "codex-tui", StringComparison.OrdinalIgnoreCase)) return source == "vscode" ? "编辑器" : SessionOrigin.CommandLine;
+        return origin ?? "";
     }
     /// By what a Claude Code conversation was started, as its file says (`entrypoint`: "cli", "claude-desktop…", "claude-vscode").
     public static string OfClaude(string entrypoint) {

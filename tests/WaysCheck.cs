@@ -10,6 +10,9 @@ public static class WaysCheck {
     static TerminalAgent.SessionInfo In(string tool, string origin, bool wakes, bool ends, string reason = "") {
         return new TerminalAgent.SessionInfo { Id = Guid.NewGuid().ToString(), Tool = tool, Dir = "demo", Title = "t", Origin = origin, Live = true, Now = true, Wakes = wakes, CanTakeover = ends, TakeoverReason = reason, Status = "idle" };
     }
+    static TerminalAgent.SessionInfo Outside(string tool, string origin, bool wakes) {
+        return new TerminalAgent.SessionInfo { Id = Guid.NewGuid().ToString(), Tool = tool, Dir = "", Folder = @"C:\outside", ControlFolder = @"C:\outside", Title = "t", Origin = origin, Live = true, Now = false, Wakes = wakes, Status = "idle" };
+    }
     static Reach.Open Hooked(string status, bool steps = false, bool held = false, bool answerable = true) { return new Reach.Open { Status = status, Steps = steps, Held = held, Answerable = answerable }; }
     static CodexDesktopSessions.State Channel(bool ready, bool busy, string turn, bool takes = false) { return new CodexDesktopSessions.State { Folder = "x", Ready = ready, Busy = busy, Takes = takes, Turn = turn, At = DateTime.UtcNow }; }
     static void Is(string what, Ways ways, string say, string stop, string answer, string end, string status, string reach, string transport) {
@@ -54,11 +57,13 @@ public static class WaysCheck {
         Is("codex app neither ready nor at work", Ways.Of(In("codex", D, true, false), null, Channel(false, false, "")), "", "", "", "", "confirm", "", A);
         Require(Ways.Of(In("codex", D, true, false), Hooked("busy"), Channel(false, true, "")).Why["stop"].Contains("目标"), "why a goal cannot be stopped from here");
 
-        // ---- Codex's desktop app without it (a conversation outside the projects, another version): hooks only, never the queue
+        // ---- Codex's desktop app without a working channel (unready or another version): hooks only, never the queue
         Is("codex app without channel, at work", Ways.Of(In("codex", D, true, false), Hooked("busy"), null), H, "", "", "", "busy", "say", "");
         Is("codex app without channel, idle", Ways.Of(In("codex", D, true, false), Hooked("idle"), null), "", "", "", "", "idle", "", "");
         Is("codex app without channel, untold", Ways.Of(In("codex", D, true, false), null, null), "", "", "", "", "idle", "null", "");
-        Require(Ways.Of(In("codex", D, true, false), Hooked("idle"), null).Why["say"].Contains("已添加的项目") && !Ways.Of(In("codex", D, true, false), Hooked("idle"), null).Woken, "Codex's desktop app is never told through Codex's queue, and says why it cannot be told");
+        Require(Ways.Of(In("codex", D, true, false), Hooked("idle"), null).Why["say"].Contains("无需先添加项目") && !Ways.Of(In("codex", D, true, false), Hooked("idle"), null).Woken, "Codex's desktop app is never told through Codex's queue, and explains that project membership is not the unlock");
+        Is("codex app outside a project, native channel ready", Ways.Of(Outside("codex", D, false), null, Channel(true, false, "")), A, "", "", "", "waiting", "say", A);
+        Is("claude app outside a project, idle message wake", Ways.Of(Outside("claude", "Claude 桌面版", true), null, null), W, "", "", "", "idle", "say", "");
 
         // ---- Codex's command line: hooks while it works, its queue while it sits idle; it cannot be stopped, it can be ended
         Is("codex cli at work", Ways.Of(In("codex", "", true, true), Hooked("busy"), null), H, "", "", P, "busy", "say", "");

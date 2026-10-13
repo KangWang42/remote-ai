@@ -54,6 +54,14 @@ other (an app). `sessions` are conversations the tools saved on
 the computer; `live` means a program on the computer has it open, `terminal` is set when one of the relay's
 terminals already shows it. `state` is `starting`, `running` or `closed`; `status` is `busy`, `idle` or empty.
 
+`origin` describes the user-facing host, independently of `host` (writer ownership and takeover protection).
+Windows checks the nearest recognized ancestor, verifies parent start times, and supports Positron, VS Code
+(including Insiders), RStudio/rsession, Cursor, Windsurf and JetBrains hosts. A more distant ancestor cannot replace
+that host; Remote AI ancestry still protects its child processes. Codex's explicit `originator: codex-tui` denotes
+a terminal even with `source: vscode`. When a detached daemon has lost the foreground ancestry, that pair only
+identifies an editor terminal (`origin: 编辑器`, `kind: 终端`), not a specific editor. No other project's running
+process is used to guess the host. The writer remains `host: shared` and cannot be terminated by a display hint.
+
 A conversation belongs to a project, named in `dir`. One that a program has open in a folder that is no project is
 listed too: its `dir` is empty and `folder` is the full path of that folder. It can be looked at, answered and told
 things where its tool lets it be reached, and taken on by a terminal like any other: `start` with an empty `dir` and
@@ -64,6 +72,8 @@ conversation (not `live` any more), so that the terminal keeps its name and mark
 there is no project: not a new terminal, and not a conversation the computer did not list there. Saved
 conversations of folders that are no projects, which nothing has open, are not listed. Once the folder is made a
 project (`project_add` with that path) the computer lists its conversations under that project.
+An idle conversation still held by an application remains listed outside projects too; `now` continues to determine
+whether it belongs in the active list. This does not expose closed history from unlisted folders.
 
 `now` says of a `live` conversation whether it is in use: at work, asking or kept waiting for the phone; or in a
 window of its own (a command line, open for as long as its program runs); or used in the last ten minutes. A desktop
@@ -501,7 +511,10 @@ entry point, not an app-server API. The app handles its existing-instance dispat
 starts a separate app-server, edits the app database, removes locks or sends keyboard input.
 Future desktop versions may change this entry point; launch success alone is deliberately not a native
 UI completion check. This entry does not provide list/rename projects or close. Existing-conversation control
-uses the separate capability below.
+uses the separate capability below. A conversation already open and verified by the computer can be read, sent to
+and stopped even when its folder is not in the phone's project list. Projects still control file browsing, new tasks
+and project management. The computer uses the folder found during its scan; a path from the phone never grants
+access to another folder.
 
 Repeat the identical payload and `id` to query; using the same ID with different parameters is rejected.
 The relay retains answers in its existing 10-minute operation cache. The computer reserves each operation
@@ -627,7 +640,7 @@ the message as its box would restore it, `{"text", "context": {"workspaceRoots",
 "collaborationMode"}}`; its answer names the running turn), and `stop` when one active turn is identified. While the
 conversation shows a request of its own (`requests` in its state, or flags on its runtime status) the channel
 takes no message, and `say` goes by the hooks where they tell of it (`ways.say: "hook"`). `turn` names that execution. Cached capabilities expire after 15 seconds;
-every mutation opens a fresh connection and checks ownership and the project again. Expired or incompatible
+every mutation opens a fresh connection and checks ownership and the discovered working folder again. Expired or incompatible
 connections do not fall back to a second backend or Codex queue. What they fall back on is the tool's hooks, which
 run in the application's own process: a message left for a conversation at work is handed to it when it stops.
 A conversation of the desktop app that sits idle, without the application's channel, cannot be told.
@@ -653,8 +666,9 @@ The computer journals a fingerprint of action/tool/session/project/text/expected
 An identical ID returns its persisted outcome across restarts; changed content is rejected. The phone's
 retry uses the same payload and ID plus `receipt: true`. This is strictly a query: a missing receipt never
 executes an operation, even if the relay lost the original request. Queries may run while the conversation
-is busy or its native connection is unavailable. The computer still requires remote control and project
-access. Pending messages remain in memory when the reader is closed and reopened within the same page;
+is busy or its native connection is unavailable. The computer still requires remote control and a verified live
+conversation. Project membership is required for file operations and new tasks, but not for an already open
+conversation. Pending messages remain in memory when the reader is closed and reopened within the same page;
 a full page reload does not restore them. Journal files contain fingerprints and results, not prompts.
 
 Implementation: `CodexDesktopControl.cs` uses the installed package's `codex-ipc` named pipe, verifies the

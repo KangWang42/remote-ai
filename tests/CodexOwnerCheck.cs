@@ -20,9 +20,9 @@ public static class CodexOwnerCheck {
     }
     public static int Main(string[] args) {
         if (args.Length == 2) {
-            if (args[0] == "remote-host" || args[0] == "editor-host" || args[0] == "claude-remote-host") {
-                bool claude = args[0] == "claude-remote-host";
-                using (var writer = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), claude ? "claude.exe" : "codex.exe"), (claude ? "claude-hold " : "hold ") + args[1]) { UseShellExecute = false, CreateNoWindow = true })) writer.WaitForExit();
+            if (args[0] == "remote-host" || args[0] == "editor-host" || args[0] == "editor-server" || args[0] == "claude-remote-host" || args[0] == "editor-claude") {
+                bool claude = args[0] == "claude-remote-host" || args[0] == "editor-claude";
+                using (var writer = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), claude ? "claude.exe" : "codex.exe"), (claude ? "claude-hold " : args[0] == "editor-server" ? "app-server " : "hold ") + args[1]) { UseShellExecute = false, CreateNoWindow = true })) writer.WaitForExit();
                 return 0;
             }
             if (args[0] == "claude-hold") {
@@ -79,12 +79,23 @@ public static class CodexOwnerCheck {
             refused = false;
             try { CodexSessions.Takeover(remoteId, new int[0], new Dictionary<int, int>()); } catch (InvalidOperationException) { refused = true; }
             Require(refused && !host.HasExited, "Other remote terminal was terminated");
-            string editorId = Guid.NewGuid().ToString();
-            var editor = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), "Positron.exe"), "editor-host " + editorId) { UseShellExecute = false, CreateNoWindow = true }); children.Add(editor);
-            for (int n = 0; n < 100 && !File.Exists(Path.Combine(root, editorId + ".ready")); n++) Thread.Sleep(50);
-            var inEditor = CodexSessions.Inspect(editorId); children.Add(Process.GetProcessById(inEditor.Pid));
-            Require(inEditor.Host == "cli" && inEditor.Origin == "Positron" && inEditor.CanTakeover, "Positron terminal did not retain exact CLI ownership");
-            CodexSessions.Takeover(editorId, new int[0], new Dictionary<int,int>());
+            foreach (var hostName in new[] { new[] { "Positron", "Positron" }, new[] { "Code", "VS Code" }, new[] { "rstudio", "RStudio" } }) {
+                foreach (string mode in new[] { "editor-host", "editor-server", "editor-claude" }) {
+                    string editorId = Guid.NewGuid().ToString();
+                    var editor = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), hostName[0] + ".exe"), mode + " " + editorId) { UseShellExecute = false, CreateNoWindow = true }); children.Add(editor);
+                    for (int n = 0; n < 100 && !File.Exists(Path.Combine(root, editorId + ".ready")); n++) Thread.Sleep(50);
+                    if (mode == "editor-claude") {
+                        var inEditor = ClaudeSessions.Inspect(Path.Combine(root, editorId + ".claude.json"));
+                        children.Add(Process.GetProcessById(inEditor.Pid));
+                        Require(inEditor.Origin == hostName[1] && inEditor.CanTakeover, hostName[1] + " Claude terminal source");
+                    } else {
+                        var inEditor = CodexSessions.Inspect(editorId); children.Add(Process.GetProcessById(inEditor.Pid));
+                        bool sharedEditor = mode == "editor-server";
+                        Require(inEditor.Host == (sharedEditor ? "shared" : "cli") && inEditor.Origin == hostName[1] && inEditor.CanTakeover == !sharedEditor, hostName[1] + " source and writer ownership stay independent");
+                        if (!sharedEditor) CodexSessions.Takeover(editorId, new int[0], new Dictionary<int,int>());
+                    }
+                }
+            }
             string claudeId = Guid.NewGuid().ToString();
             var claudeWriter = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), "claude.exe"), "claude-hold " + claudeId) { UseShellExecute = false, CreateNoWindow = true }); children.Add(claudeWriter);
             for (int n = 0; n < 100 && !File.Exists(Path.Combine(root, claudeId + ".ready")); n++) Thread.Sleep(50);

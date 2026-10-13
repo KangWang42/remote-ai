@@ -299,16 +299,32 @@ public sealed class TerminalAgent {
         }
     }
     CodexDesktopSessions.State NativeState(SessionInfo s) {
-        var state = s.Live && s.Dir.Length > 0 && s.Tool == "codex" ? NativeDesktop.Get(s.Id) : null;
+        var state = s.Live && !String.IsNullOrEmpty(s.ControlFolder) && s.Tool == "codex" ? NativeDesktop.Get(s.Id) : null;
         return state != null && SamePath(state.Folder, s.ControlFolder) ? state : null;
     }
-    void ValidateDesktopProject(string dir, string root, string server) {
+    // An existing conversation grants access to that conversation only. Its folder comes from
+    // the computer's inventory, never a path supplied by the phone. Projects still govern files/new tasks.
+    string DesktopFolder(SessionInfo s, Dictionary<string, object> prefs) {
+        string root;
+        if (s.Dir.Length > 0) {
+            if (!AllDirs(prefs).TryGetValue(s.Dir, out root) || !SamePath(root, s.ControlFolder))
+                throw new InvalidOperationException("电脑远控或项目权限已变化");
+        } else {
+            root = s.Folder;
+            if (!s.Live || String.IsNullOrEmpty(root) || !Path.IsPathRooted(root) || !Directory.Exists(root) || !SamePath(root, s.ControlFolder))
+                throw new InvalidOperationException("无法确认电脑上原对话的工作目录，请刷新后重试");
+        }
+        return root;
+    }
+    void ValidateDesktopConversation(string session, string dir, string root, string server) {
         lock (work) {
             // Read settings without Preferences' connection-reset side effects on this worker.
             var fresh = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dataDir, "config.json"), Encoding.UTF8));
-            string allowed;
-            if (Get(fresh, "RemoteEnabled") != "True" || Get(fresh, "Server") != server || !AllDirs(fresh).TryGetValue(dir, out allowed) || !SamePath(allowed, root))
+            if (Get(fresh, "RemoteEnabled") != "True" || Get(fresh, "Server") != server)
                 throw new InvalidOperationException("电脑远控或项目权限已变化");
+            var current = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Dir == dir && s.Live);
+            if (current == null || !SamePath(DesktopFolder(current, fresh), root))
+                throw new InvalidOperationException("电脑上的原对话或工作目录已变化，请刷新后重试");
         }
     }
     sealed class TitleCache { public long Stamp, Length; public string Title, Same, Kind; }
@@ -324,6 +340,7 @@ public sealed class TerminalAgent {
     // By what a conversation was started, as its own file says (Folders.OfCodex, Folders.OfClaude): read with the
     // folder, kept by the same key, forgotten with it.
     readonly Dictionary<string, string> usedBy = new Dictionary<string, string>();
+    readonly Dictionary<string, string> codexOrigins = new Dictionary<string, string>();
     // By what every folder with conversations is used: filled by each look at the conversations.
     readonly Folders folders = new Folders();
     public Folders Folders { get { return folders; } }
@@ -480,16 +497,15 @@ public sealed class TerminalAgent {
             } catch { }
         }
         // Conversations Claude Code has open in folders that are no projects: listed with their folder.
-        // Of these, only the ones in use: what a desktop app holds idle in some folder is nothing the phone has to hear of.
+        // Idle application conversations remain reachable too; Now keeps them out of the active count.
         foreach (var held in open.Where(o => !found.Any(s => s.Tool == "claude" && s.Id == o.Key))) {
             try {
-                string where = (held.Value.Dir ?? "").TrimEnd('\\', '/'), same;
+                string where = held.Value.Dir ?? "", same;
                 if (!Elsewhere(where) || dirs.Values.Any(d => SamePath(d, where)) || !Regex.IsMatch(held.Key, Uuid)) continue;
                 var file = new FileInfo(Path.Combine(ClaudeHome, "projects", ProjectFolder(where), held.Key + ".jsonl"));
                 string title = file.Exists ? ClaudeTitle(file, out same) : "";
                 if (title.Length == 0) continue;        // nothing has been said in it yet
                 var source = held.Value;
-                if (!InUse(source.Host, source.Origin, source.Status, Reach.Of("claude", held.Key), Milliseconds(file.LastWriteTimeUtc), DateTime.UtcNow)) continue;
                 found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Kind = Folders.Held(source.Origin, ClaudeKind(file)), Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Wakes = source.Socket.Length > 0, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
             } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
@@ -542,32 +558,39 @@ public sealed class TerminalAgent {
                     try { head = ReadPart(file.FullName, false, 16 * 1024); if (JsonText(head, @"""cwd"":", false).Length == 0) head = ReadPart(file.FullName, false, 160 * 1024); } catch (IOException) { continue; }
                     // A helper that a conversation started for itself is part of that conversation, not one to continue.
                     codexFolders[file.FullName] = folder = Regex.IsMatch(head, @"""parent_thread_id""\s*:\s*""") ? "" : JsonText(head, @"""cwd"":", false);
-                    usedBy[file.FullName] = Folders.OfCodex(JsonText(head, @"""source"":", false), JsonText(head, @"""originator"":", false));
+                    string source = JsonText(head, @"""source"":", false), originator = JsonText(head, @"""originator"":", false);
+                    usedBy[file.FullName] = Folders.OfCodex(source, originator);
+                    codexOrigins[file.FullName] = Folders.CodexOrigin("", source, originator);
                 }
                 if (folder.Length == 0) continue;
                 if (!usedBy.TryGetValue(file.FullName, out codexKind)) codexKind = Folders.Terminal;
-                // The conversations used lately are listed; of the earlier ones only the folder is noted, for the projects that can be made.
-                if (++listed > 150) { note(folder, "codex", file.LastWriteTimeUtc, false, codexKind); continue; }
+                // Keep live conversations regardless of age; older closed conversations only contribute project suggestions.
                 string dir = dirs.Where(d => SamePath(d.Value, folder)).Select(d => d.Key).FirstOrDefault();
                 var owner = codexSessions.Get(id);
+                string origin = owner.Origin, clientOrigin;
+                if ((owner.Origin.Length == 0 || owner.Origin == "Codex 后台服务") && codexOrigins.TryGetValue(file.FullName, out clientOrigin) && clientOrigin.Length > 0) {
+                    // Keep ownership immutable: this only supplies the display source, never a PID or kill permission.
+                    origin = clientOrigin;
+                }
                 bool live = owner.Live;
+                if (++listed > 150 && !live) { note(folder, "codex", file.LastWriteTimeUtc, false, codexKind); continue; }
                 bool phone = owner.Pid > 0 && CodexSessions.Descends(owner.Pid, running.Select(t => t.Pty.Id), ownerParents);
                 string title; codexNames.TryGetValue(id, out title); title = Tidy(title);
-                if (live && !phone) codexKind = Folders.Held(owner.Origin, codexKind);
+                if (live && !phone) codexKind = Folders.Held(origin, codexKind);
                 note(folder, "codex", file.LastWriteTimeUtc, live, codexKind);
                 if (dir == null) {
                     // one that a program has open in a folder that is no project is listed with its folder
-                    string where = folder.TrimEnd('\\', '/');
+                    string where = folder;
                     // (one that a terminal of the phone's has taken on from there is listed too, as that terminal's)
                     bool taken = running.Any(t => t.Tool == "codex" && t.Session == id && t.Folder.Length > 0 && !t.Pty.Closed);
-                    bool used = live && !phone && InUse(owner.Host, owner.Origin, "", Reach.Of("codex", id), Milliseconds(file.LastWriteTimeUtc), DateTime.UtcNow);
-                    if ((used || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Wakes = live && !phone && queues, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
+                    bool used = live && !phone;
+                    if ((used || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Wakes = live && !phone && queues, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
                     continue;
                 }
                 int count; counts.TryGetValue(dir, out count);
                 if (!live && count >= 15) continue;
                 if (!live) counts[dir] = count + 1;
-                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? owner.Origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
+                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
         foreach (SessionInfo held in found.Where(s => s.Live)) held.Now = InUse(held.Host, held.Origin, held.Status, Reach.Of(held.Tool, held.Id), held.Updated, DateTime.UtcNow);
@@ -585,7 +608,7 @@ public sealed class TerminalAgent {
         folders.End();
         candidates = Offer(dirs, false, 40);
         // (what the folders are used by is read with the folders, and forgotten with them)
-        if (claudeFolders.Count > 500 || codexFolders.Count > 3000) { claudeFolders.Clear(); codexFolders.Clear(); usedBy.Clear(); codexFiles.Clear(); }
+        if (claudeFolders.Count > 500 || codexFolders.Count > 3000) { claudeFolders.Clear(); codexFolders.Clear(); usedBy.Clear(); codexOrigins.Clear(); codexFiles.Clear(); }
         if (titles.Count > 600) titles.Clear();
         return sessions;
     }
@@ -1301,7 +1324,7 @@ public sealed class TerminalAgent {
                 string session = Get(op, "session"), dir = Get(op, "dir"), text = Get(op, "text"), expectedTurn = Get(op, "turn"), root;
                 var saved = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Dir == dir);
                 if (Get(op, "tool") != "codex" || saved == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话");
-                if (!AllDirs(prefs).TryGetValue(dir, out root) || !SamePath(root, saved.ControlFolder)) throw new ArgumentException("请先将对话所在文件夹添加为允许远控的项目");
+                root = DesktopFolder(saved, prefs);
                 if (relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
                 bool queryOnly = Get(op, "receipt") == "True";
                 string server = Get(prefs, "Server");
@@ -1310,20 +1333,20 @@ public sealed class TerminalAgent {
                     string failed = ""; Dictionary<string, object> answer = null;
                     try {
                         answer = Desktop.Run(id, new[] { action, "codex", session, dir, text, expectedTurn }, () => {
-                            ValidateDesktopProject(dir, root, server);
+                            ValidateDesktopConversation(session, dir, root, server);
                             if (action == "session_say") {
                                 lock (work) {
                                     var current = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Live && s.Dir == dir);
                                     if (current != null && SamePath(current.ControlFolder, root) && WaysOf(current, Reach.Of("codex", session)).Say == Ways.Hook) {
-                                        ValidateDesktopProject(dir, root, server);
+                                        ValidateDesktopConversation(session, dir, root, server);
                                         return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", Reach.Say("codex", session, text, id) }, { "way", Ways.Hook }, { "state", Outbox.Queued }, { "message", id } };
                                     }
                                 }
                             }
                             using (var control = OpenDesktopConversation()) {
                                 var state = control.Inspect(session);
-                                if (!SamePath(CodexDesktopControl.Folder(state), root)) throw new InvalidOperationException("桌面对话所在项目已变化");
-                                ValidateDesktopProject(dir, root, server);
+                                if (!SamePath(CodexDesktopControl.Folder(state), root)) throw new InvalidOperationException("桌面对话的工作目录已变化");
+                                ValidateDesktopConversation(session, dir, root, server);
                                 if (action == "session_say") return control.Send(id, text);
                                 var stopped = control.Interrupt(expectedTurn);
                                 Reach.Outbox.Pause("codex", session);
