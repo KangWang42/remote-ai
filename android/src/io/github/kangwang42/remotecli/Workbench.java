@@ -1,6 +1,5 @@
 package io.github.kangwang42.remotecli;
 
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
@@ -25,9 +24,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * The app's first screen. On top, everything on every computer by what needs the user: what waits for an answer, what
- * is pinned, what is at work, what was used lately, with one search over all of it and a row of filters; below, each
- * computer with its projects. Every computer is asked on its own, so one that is switched off delays nothing.
+ * Two of the app's four lists, both over every computer. 任务, the app's first screen: everything by what needs the
+ * user (what waits for an answer, what is pinned, what is at work, what was used lately), with one search over all
+ * of it and a row of filters. 项目: each computer with its projects. Every computer is asked on its own, so one that
+ * is switched off delays nothing.
  */
 final class Workbench {
     /** What one computer answered last: "on", "off" or "key" (sign in again), a line about it, and its projects. */
@@ -37,6 +37,29 @@ final class Workbench {
         final boolean marks;        // the computer keeps what is said of single conversations: pinned, hidden
         final Set<String> can = new HashSet<>();        // what else the computer says it does: "delete", "projects"
         Snapshot(String state, String line, List<AggregateSessions.Project> projects, boolean marks) { this.state = state; this.line = line; this.projects = projects; this.marks = marks; }
+    }
+    private boolean shown() { return activity.showing("home") || activity.showing("projects"); }
+    /** The computers that answer now; all of them while none has been heard of yet. */
+    List<String> reachable() {
+        List<String> all = new ArrayList<>(), on = new ArrayList<>();
+        JSONArray list = activity.computers();
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject computer = list.optJSONObject(i);
+            if (computer == null) continue;
+            String url = computer.optString("url");
+            Snapshot snapshot = snapshots.get(url);
+            all.add(url);
+            if (snapshot != null && "on".equals(snapshot.state)) on.add(url);
+        }
+        return snapshots.isEmpty() ? all : on;
+    }
+    /** A new conversation: on the computer that is online, or on the one that is chosen. Its page asks the rest (web/begin.js). */
+    private void newConversation() { activity.pick("新建对话", reachable(), activity::startNew); }
+    /** How many things wait for an answer, on every computer: said on the tab of 任务. */
+    private int waiting() {
+        int waiting = 0;
+        for (Map.Entry<String, Snapshot> one : snapshots.entrySet()) if ("on".equals(one.getValue().state)) waiting += AggregateSessions.counts(one.getValue().projects, seen(one.getKey()))[0];
+        return waiting;
     }
     private static final int SHOWN = 4, TASKS = 12, TALKS = 8, RECENT = 2, RECENT_ALL = 20, FOUND = 30;
 
@@ -97,21 +120,14 @@ final class Workbench {
         if (seenAll().remove(url) != null) activity.prefs.edit().putString("seen", seenAll().toString()).apply();
     }
 
-    // ---- the screen
-    View build(String problem) {
+    // ---- the screens: 任务, or 项目
+    View build(String tab, String problem) {
+        boolean tasks = "home".equals(tab);
         JSONArray list = activity.computers();
         LinearLayout page = kit.page(22);
-        LinearLayout head = kit.row();
-        head.addView(mark(42));
-        LinearLayout titles = kit.column();
-        titles.setPadding(kit.dp(12), 0, kit.dp(6), 0);
-        titles.addView(kit.line("Remote AI", 21, kit.INK, true));
-        summary = kit.line(list.length() == 0 ? "在手机上使用电脑里的终端" : "正在连接…", 13, kit.MUTED, false);
-        titles.addView(summary);
-        head.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
-        head.addView(kit.iconButton(R.drawable.ic_look, "外观", activity::look));
-        if (list.length() > 0) head.addView(kit.iconButton(R.drawable.ic_plus, "添加电脑", this::addComputer));
-        page.addView(head);
+        summary = kit.standing(list.length() == 0 ? "还没有添加电脑" : "正在连接…");
+        page.addView(kit.head(tasks ? "任务" : "项目", summary, list.length() == 0 ? null
+            : tasks ? kit.iconButton(R.drawable.ic_plus, "新建对话", kit.ACCENT, this::newConversation) : kit.iconButton(R.drawable.ic_plus, "添加电脑", kit.ACCENT, this::addComputer)));
         if (!problem.isEmpty()) {
             LinearLayout banner = kit.column();
             banner.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(14));
@@ -119,8 +135,12 @@ final class Workbench {
             banner.addView(kit.text(problem, 14, kit.INK));
             page.addView(banner, kit.below(16));
         }
-        holders.clear(); marks.clear(); attentionMark = null; filtersMark = null; filters = null;
-        if (list.length() > 0) {
+        holders.clear(); marks.clear(); attentionMark = null; filtersMark = null; filters = null; attention = null; recent = null;
+        if (list.length() == 0) {
+            page.addView(welcome(), kit.below(22));
+            page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(22));
+            page.addView(kit.button("手动输入地址", 1, () -> activity.add("")), kit.below(10));
+        } else if (tasks) {
             // one search over every computer's terminals and conversations, and what to tell them apart by
             page.setFocusable(true); page.setFocusableInTouchMode(true);      // the box is written in when it is touched, not as the screen opens
             android.widget.EditText find = kit.field("搜索对话、终端和项目", android.text.InputType.TYPE_CLASS_TEXT);
@@ -136,23 +156,18 @@ final class Workbench {
             android.widget.HorizontalScrollView across = new android.widget.HorizontalScrollView(activity);
             across.setHorizontalScrollBarEnabled(false); across.addView(filters);
             page.addView(across, kit.below(10));
-        }
-        attention = kit.column();
-        page.addView(attention);
-        recent = kit.column();
-        page.addView(recent);
-        if (list.length() == 0) {
-            page.addView(welcome(), kit.below(22));
-            page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(22));
-            page.addView(kit.button("手动输入地址", 1, () -> activity.add("")), kit.below(10));
+            attention = kit.column();
+            page.addView(attention);
+            recent = kit.column();
+            page.addView(recent);
+            if (!problem.isEmpty()) page.addView(kit.button("重新扫码连接电脑", 0, activity::scan), kit.below(16));
         } else {
-            page.addView(heading("电脑", list.length() + " 台"), kit.below(24));
             for (int i = 0; i < list.length(); i++) {
                 JSONObject computer = list.optJSONObject(i);
                 if (computer == null) continue;
                 LinearLayout holder = kit.column();
                 holders.put(computer.optString("url"), holder);
-                page.addView(holder, kit.below(10));
+                page.addView(holder, kit.below(i == 0 ? 16 : 10));
                 drawComputer(computer);
             }
             TextView more = kit.bold("添加电脑", 15, kit.MUTED);
@@ -162,29 +177,18 @@ final class Workbench {
             more.setBackground(dashed);
             kit.press(more, this::addComputer);
             page.addView(more, kit.below(10));
-            if (!problem.isEmpty()) page.addView(kit.button("重新扫码连接电脑", 0, activity::scan), kit.below(16));
-            draw();
+            page.addView(kit.text("凭地址和密码即可操作这台电脑上的终端，请妥善保管。", 12.5f, kit.MUTED), kit.below(22));
         }
-        page.addView(kit.text("凭地址和密码即可操作这台电脑上的终端，请妥善保管。", 12.5f, kit.MUTED), kit.below(22));
         activity.message = kit.text("", 13, kit.MUTED);
         page.addView(activity.message);
+        draw();
         return page;
-    }
-    /** The app's mark: a prompt on a rounded tile. */
-    private View mark(int size) {
-        TextView tile = kit.bold(">_", size * .36f, kit.ACCENT);
-        tile.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)); tile.setGravity(Gravity.CENTER);
-        GradientDrawable back = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{kit.RAISED, kit.PANEL});
-        back.setCornerRadius(kit.dp(size * .3f)); back.setStroke(kit.dp(1), kit.LINE);
-        tile.setBackground(back);
-        tile.setLayoutParams(new LinearLayout.LayoutParams(kit.dp(size), kit.dp(size)));
-        return tile;
     }
     private View welcome() {
         LinearLayout card = kit.column();
         card.setPadding(kit.dp(18), kit.dp(18), kit.dp(18), kit.dp(20)); card.setBackground(kit.shape(kit.PANEL, kit.LINE, 20));
         card.addView(kit.bold("连接第一台电脑", 17, kit.INK));
-        String[] steps = { "在电脑上安装并打开 Remote AI", "点下面的“扫码添加电脑”，对准电脑窗口里的二维码", "连上后选一个项目，新建 Claude Code、Codex 或 PowerShell 终端" };
+        String[] steps = { "在电脑上安装并打开 Remote AI", "点下面的“扫码添加电脑”，对准电脑窗口里的二维码", "连上后选一个项目，新建对话" };
         for (int i = 0; i < steps.length; i++) {
             LinearLayout row = new LinearLayout(activity);
             TextView number = kit.bold(String.valueOf(i + 1), 12.5f, kit.ACCENT);
@@ -230,7 +234,7 @@ final class Workbench {
     /** Asks every computer what is running; repeats while this screen is shown. */
     void refresh() {
         activity.ticker.removeCallbacks(tick);
-        if (!activity.showing("home")) return;
+        if (!activity.onTabs()) return;
         JSONArray list = activity.computers();
         for (int i = 0; i < list.length(); i++) {
             final JSONObject computer = list.optJSONObject(i);
@@ -272,7 +276,8 @@ final class Workbench {
                 activity.runOnUiThread(() -> {
                     pending.remove(url);
                     snapshots.put(url, answer == null ? new Snapshot(s, l, Collections.<AggregateSessions.Project>emptyList(), false) : read(url, answer));
-                    if (!activity.showing("home")) return;
+                    activity.waiting(waiting());
+                    if (!shown()) return;
                     drawComputer(computer); draw();
                 });
             });
@@ -361,7 +366,7 @@ final class Workbench {
      * answer, what is pinned, what is at work, what was used lately; or, while something is searched for, what was found.
      */
     private void draw() {
-        if (attention == null) return;
+        if (summary == null) return;
         JSONArray list = activity.computers();
         List<AggregateSessions.Thing> things = new ArrayList<>();
         int online = 0, known = 0;
@@ -391,9 +396,9 @@ final class Workbench {
             if (total[0] > 0) parts.add(total[0] + " 个等你确认");
             if (total[1] > 0) parts.add(total[1] + " 个已打开");
             if (total[2] > 0) parts.add(total[2] + " 个在执行");
-            summary.setText(android.text.TextUtils.join(" · ", parts));
-            summary.setTextColor(total[0] > 0 ? kit.BAD : kit.MUTED);
+            kit.stands(summary, android.text.TextUtils.join(" · ", parts), total[0] > 0 ? kit.BAD : kit.MUTED, online > 0 ? kit.GOOD : kit.BAD);
         }
+        if (attention == null) return;
         AggregateSessions.Board board = AggregateSessions.board(things, query, tool, source);
         drawFilters(board);
         boolean several = list.length() > 1;
@@ -409,7 +414,7 @@ final class Workbench {
                 if (!task.running()) mark.append(AggregateSessions.ago(AggregateSessions.recent(task.entry), now)).append('\n');
             }
         }
-        mark.append(recentOpen).append(folded("active")).append(folded("opened")).append(folded("recent")).append(board.searched).append(several).append(tool).append('|').append(source);
+        mark.append(recentOpen).append(folded("active")).append(folded("opened")).append(folded("recent")).append(board.searched).append(several).append(tool).append('|').append(source).append(online).append('/').append(known);
         if (mark.toString().equals(attentionMark)) {
             // the cards stay; only what each terminal last said is written anew
             for (AggregateSessions.Thing task : all) {
@@ -446,10 +451,27 @@ final class Workbench {
             recent.addView(toggle, kit.below(2));
             if (recentOpen && board.recent.size() > shown) recent.addView(kit.text("另外 " + (board.recent.size() - shown) + " 个可以搜索到，也在对应的项目里。", 12.5f, kit.MUTED), kit.below(4));
         }
-        if ((!tool.isEmpty() || !source.isEmpty()) && attention.getChildCount() == 0 && recent.getChildCount() == 0) {
+        if (attention.getChildCount() > 0 || recent.getChildCount() > 0) return;
+        if (!tool.isEmpty() || !source.isEmpty()) {
             TextView none = kit.text("没有符合筛选的对话或终端。", 13.5f, kit.MUTED);
             none.setGravity(Gravity.CENTER); none.setMinHeight(kit.dp(60));
             attention.addView(none, kit.below(14));
+        } else if (online > 0) {
+            // nothing anywhere yet: what to do first
+            TextView none = kit.text("还没有对话", 14.5f, kit.MUTED);
+            none.setGravity(Gravity.CENTER);
+            attention.addView(none, kit.below(56));
+            LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(-2, -2);
+            middle.gravity = Gravity.CENTER_HORIZONTAL; middle.topMargin = kit.dp(14);
+            attention.addView(kit.button("新建对话", 0, this::newConversation), middle);
+        } else if (known == list.length()) {
+            // no computer answers: which, and why, is said on 项目
+            TextView none = kit.text(list.length() == 1 ? "电脑不在线" : "电脑都不在线", 14.5f, kit.MUTED);
+            none.setGravity(Gravity.CENTER);
+            attention.addView(none, kit.below(56));
+            LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(-2, -2);
+            middle.gravity = Gravity.CENTER_HORIZONTAL; middle.topMargin = kit.dp(14);
+            attention.addView(kit.button("查看电脑", 1, () -> activity.appPage("projects")), middle);
         }
     }
     /** One of the lists: its heading, which folds the list away where `fold` names it, and the cards of its first things. */
@@ -719,7 +741,7 @@ final class Workbench {
     }
 
     private void redraw() {
-        if (!activity.showing("home")) return;
+        if (!shown()) return;
         JSONArray list = activity.computers();
         for (int i = 0; i < list.length(); i++) { JSONObject computer = list.optJSONObject(i); if (computer != null) drawComputer(computer); }
         draw();
@@ -828,8 +850,7 @@ final class Workbench {
         card.addView(head);
         if (on && !folded) {
             List<AggregateSessions.Project> order = new ArrayList<>(), named = new ArrayList<>();
-            // what is open outside every project is in the lists above; with a filter chosen, the projects of that tool or kind
-            for (AggregateSessions.Project project : snapshot.projects) if (project.passes(tool, source)) named.add(project);
+            named.addAll(snapshot.projects);
             for (AggregateSessions.Project project : named) if (!project.active.isEmpty()) order.add(project);
             int busy = order.size();
             for (AggregateSessions.Project project : named) if (project.active.isEmpty() && !project.ended.isEmpty()) order.add(project);
@@ -837,15 +858,12 @@ final class Workbench {
             boolean all = expanded.contains(url);
             int shown = all ? order.size() : Math.max(busy, Math.min(SHOWN, order.size()));
             for (int i = 0; i < shown; i++) { card.addView(rule()); card.addView(projectRow(computer, order.get(i), looked)); }
-            if (order.isEmpty()) { card.addView(rule()); card.addView(note(tool.isEmpty() && source.isEmpty() ? "还没有项目。在电脑端的“项目”页添加文件夹。" : "没有符合筛选的项目。")); }
-            else {
-                // The embedded task picker offers shared terminals and available desktop application entries.
-                card.addView(rule());
-                TextView fresh = kit.bold("＋ 新建任务", 13.5f, kit.ACCENT);
-                fresh.setGravity(Gravity.CENTER); fresh.setMinHeight(kit.dp(46));
-                kit.press(fresh, () -> activity.startNew(url));
-                card.addView(fresh);
-            }
+            // (a project is added on the computer's own page of projects, which lists the folders that have conversations)
+            card.addView(rule());
+            TextView fresh = kit.bold(order.isEmpty() ? "＋ 添加项目" : "＋ 新建对话", 13.5f, kit.ACCENT);
+            fresh.setGravity(Gravity.CENTER); fresh.setMinHeight(kit.dp(46));
+            kit.press(fresh, order.isEmpty() ? () -> activity.open(url, "") : () -> activity.startNew(url));
+            card.addView(fresh);
             if (order.size() > Math.max(busy, SHOWN) || all && order.size() > SHOWN) {
                 card.addView(rule());
                 TextView toggle = kit.text(all ? "收起" : "其余 " + (order.size() - shown) + " 个项目", 13, kit.MUTED);
@@ -939,7 +957,7 @@ final class Workbench {
         if (historyShown > 0) inside.addView(note("保存的对话"));
         for (int i = 0; i < historyShown; i++) inside.addView(talkRow(url, saved.get(i), saved.get(i).kind(looked)));
         int rest = saved.size() - historyShown, hiddenEnded = project.ended.size() - endedShown;
-        String more = project.name.isEmpty() ? "查看这台电脑的全部对话" : rest + hiddenEnded > 0 ? "新建终端 · 查看更多记录" : "新建终端 · 进入项目";
+        String more = project.name.isEmpty() ? "查看这台电脑的全部对话" : rest + hiddenEnded > 0 ? "新建对话 · 查看更多记录" : "新建对话 · 进入项目";
         TextView enter = kit.bold(more, 13.5f, kit.ACCENT);
         enter.setGravity(Gravity.CENTER_VERTICAL); enter.setMinHeight(kit.dp(46)); enter.setPadding(kit.dp(8), 0, kit.dp(8), 0);
         kit.press(enter, () -> activity.open(url, "", project.name));

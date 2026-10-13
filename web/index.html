@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="app.css">
   <script defer src="terminal/skins.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="begin.js"></script>
   <script defer src="together.js"></script>
   <script defer src="me.js"></script>
 </head>
@@ -34,7 +35,7 @@
         <h1 id="heading">任务</h1>
         <p id="device" role="status" aria-live="polite"><span id="dot" aria-hidden="true"></span><span id="device-text">正在连接…</span></p>
       </div>
-      <button type="button" class="icon" id="new-task" aria-label="新建任务" hidden></button>
+      <button type="button" class="icon" id="new-task" aria-label="新建对话" hidden></button>
       <button type="button" class="icon" id="settings" aria-label="设置" hidden></button>
     </header>
 
@@ -77,7 +78,7 @@
           <button type="button" id="more-recent" class="quiet wide" hidden>显示更多</button>
         </section>
         <p id="nothing" hidden>没有符合筛选的对话或终端。</p>
-        <div id="tasks-empty" class="blank" hidden><p>还没有对话或终端</p><button type="button" class="solid" id="first-task">新建任务</button></div>
+        <div id="tasks-empty" class="blank" hidden><p>还没有对话</p><button type="button" class="solid" id="first-task">新建对话</button></div>
       </div>
       <section id="projects">
         <div class="section-head"><h2>项目</h2><p id="project-summary"></p></div>
@@ -88,7 +89,8 @@
     <!-- one project -->
     <div id="project" hidden>
       <button type="button" id="project-files" aria-label="浏览这个项目的文件"><span class="tool folder" id="project-files-icon"></span><span class="text"><b>文件</b><span id="project-path"></span></span><span class="chev" id="project-files-chev"></span></button>
-      <div id="launch" aria-label="新建终端"></div>
+      <!-- a new conversation in this project, in an application or in a terminal (begin.js) -->
+      <section id="begin"></section>
       <section id="p-needs" hidden><div class="section-head"><h2>等你确认</h2></div><ul class="cards"></ul></section>
       <section id="p-active" hidden><div class="section-head" data-fold="active" role="button" tabindex="0" aria-expanded="false"><h2>正在运行</h2><p></p></div><ul class="cards"></ul></section>
       <section id="p-live" hidden><div class="section-head" data-fold="live" role="button" tabindex="0" aria-expanded="false"><h2>已打开</h2><p></p></div><ul class="cards"></ul></section>
@@ -100,7 +102,7 @@
         <button type="button" id="hidden-history" class="quiet wide" hidden></button>
       </section>
       <section id="p-ended" hidden><div class="section-head"><h2>历史终端</h2></div><ul class="cards"></ul><button type="button" id="more-ended" class="quiet wide" hidden>显示更多终端</button></section>
-      <p id="empty" hidden>这个项目还没有对话。用上面的按钮新建一个终端。</p>
+      <p id="empty" hidden>这个项目还没有对话</p>
     </div>
 
     <!-- conversations working together (together.js), and the owner's work in numbers (me.js) -->

@@ -128,10 +128,10 @@ class Played:
                     return self.reply({"messages": played.said.get(one["id"], []), "status": one.get("status", ""), "stamp": "1", "asked": played.now - 84000, "updated": one["updated"]})
                 # what is asked of the computer goes through the relay as it is, and the played computer answers it
                 asks = {"/api/work": played.relay.work, "/api/conversation": played.relay.conversation}.get(self.path)
-                if not asks:
+                if not asks and self.path != "/api/terminal":
                     return self.reply({"error": "这里只是画图"}, 400)
                 try:
-                    self.reply(asks(payload, wait=8))
+                    self.reply(asks(payload, wait=8) if asks else played.relay.command(payload))
                 except RemoteError as refused:
                     self.reply({"error": str(refused)}, 400)
 
@@ -194,6 +194,16 @@ class Played:
             return {"status": "accepted", "note": "已交给对话", "length": 420}
         if action == "session_say":
             return {"status": "accepted", "sent": True, "now": True, "way": "hook", "state": "handed", "message": op["id"]}
+        # a new conversation: a terminal is started (nothing runs in it here), or a desktop app is handed the first words
+        if action == "start":
+            return {}
+        if action == "app_open":
+            return {"status": "handed_off", "tool": op["tool"], "sent": False, "message": "已交给 %s 桌面应用。请在电脑上确认项目和草稿，内容尚未发送。" % {"codex": "Codex", "claude": "Claude"}[op["tool"]]}
+        if action == "project_add":
+            name = op.get("name") or op["path"].replace("\\", "/").rstrip("/").split("/")[-1]
+            self.info["workspaces"] = self.info["workspaces"] + [name]
+            self.info["projects"] = self.info.get("projects", []) + [{"name": name, "path": op["path"]}]
+            return {}
         raise RemoteError("这里只是画图")
 
 
@@ -256,7 +266,7 @@ def shots(browser, played):
     """The phone's pages as they are: the first page, a conversation at work, and the sheet for a new task."""
     browser.open(played.origin + "/", "document.querySelectorAll('.card, .task, article').length > 3 || document.body.innerText.includes('部署到测试环境')", "the first page")
     browser.picture(OUT / "overview.png")
-    browser.open(played.origin + "/?project=web-shop", "!document.getElementById('project').hidden && document.querySelectorAll('#launch button').length === 3", "one project")
+    browser.open(played.origin + "/?project=web-shop", "!document.getElementById('project').hidden && document.querySelectorAll('#launch button').length === 2", "one project")
     browser.picture(OUT / "project.png")
     browser.open(played.origin + "/?tab=together", "document.querySelectorAll('#chains .card, #schedules .card').length >= 4", "the tab of conversations working together")
     browser.picture(OUT / "together.png")
@@ -267,7 +277,7 @@ def shots(browser, played):
     browser.value("(() => { const said = document.querySelector('#sheet .said'); said.scrollTop = said.scrollHeight; })()")
     time.sleep(0.4)
     browser.picture(OUT / "look.png")
-    browser.open(played.origin + "/?tab=tasks&new=1", "document.querySelector('#sheet[open] h3')?.textContent === '新建任务'", "the sheet for a new task")
+    browser.open(played.origin + "/?tab=tasks&new=1", "document.querySelector('#sheet[open] h3')?.textContent === '新建对话'", "the sheet of a new conversation")
     browser.picture(OUT / "new-task.png")
     # the first page in a dark look; the look is kept by the browser, so the light one is put back after the picture
     browser.open(played.origin + "/?tab=tasks&skin=night", "document.body.innerText.includes('部署到测试环境')", "the first page, dark")

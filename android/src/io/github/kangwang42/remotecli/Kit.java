@@ -144,10 +144,38 @@ final class Kit {
         tile.setLayoutParams(new LinearLayout.LayoutParams(dp(size), dp(size)));
         return tile;
     }
+    /**
+     * The top of one of the app's own lists, as a computer's pages have it: the name of its tab large, a line under
+     * it that says how things stand, and at the right what is done there.
+     */
+    LinearLayout head(String title, View under, View... actions) {
+        LinearLayout head = row();
+        LinearLayout titles = column();
+        TextView name = bold(title, 29, INK);
+        name.setIncludeFontPadding(false); name.setLineSpacing(0, 1f);
+        titles.addView(name);
+        if (under != null) titles.addView(under, below(5));
+        head.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
+        for (View action : actions) if (action != null) head.addView(action);
+        return head;
+    }
+    /** The line under a list's name: a dot in the colour of how things stand, then the words. */
+    TextView standing(String text) {
+        TextView line = line(text, 13, MUTED, false);
+        line.setCompoundDrawablePadding(dp(7));
+        return line;
+    }
+    void stands(TextView line, String text, int color, int dot) {
+        line.setText(text); line.setTextColor(color);
+        GradientDrawable mark = shape(dot, 0, 4);
+        mark.setBounds(0, 0, dp(8), dp(8));
+        line.setCompoundDrawables(mark, null, null, null);
+    }
     /** An icon that is a button of its own, large enough for a thumb. */
-    View iconButton(int drawable, String says, Runnable action) {
+    View iconButton(int drawable, String says, Runnable action) { return iconButton(drawable, says, MUTED, action); }
+    View iconButton(int drawable, String says, int color, Runnable action) {
         FrameLayout box = new FrameLayout(activity);
-        box.addView(icon(drawable, MUTED, 22), new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
+        box.addView(icon(drawable, color, 22), new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
         box.setContentDescription(says);
         box.setLayoutParams(new LinearLayout.LayoutParams(dp(44), dp(44)));
         press(box, action);

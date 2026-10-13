@@ -121,11 +121,13 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 #project-files b { font-weight: 600; }
 #project-files .chev { color: var(--muted); opacity: .6; }
 #project-path { color: var(--muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-#launch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
-#launch button { display: grid; justify-items: center; gap: 8px; padding: 14px 6px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); font-size: .84rem; font-weight: 600; line-height: 1.25; text-align: center; }
+/* a new conversation in the project: the two kinds, and a button for each tool of the one that stands open */
+#begin .section-head { margin-top: 20px; align-items: center; }
+#begin .none { color: var(--muted); font-size: .9rem; }
+#launch { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+#launch button, #sheet-form .tools button { display: grid; justify-items: center; gap: 8px; padding: 14px 6px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); font-size: .84rem; font-weight: 600; line-height: 1.25; text-align: center; }
 #launch button:active { background: var(--raised); }
-#launch button small { display: block; color: var(--muted); font-weight: 400; font-size: .74rem; }
-#launch p { grid-column: 1 / -1; color: var(--muted); font-size: .9rem; }
+#launch button:disabled { opacity: .5; }
 #search { margin-bottom: 8px; min-height: 44px; }
 
 /* ---- finding: one search over everything, and a row of what to tell things apart by */
@@ -298,10 +300,14 @@ dialog.window .confirm .answers .no { color: var(--bad); }
 #sheet-form .anywhere { display: grid; gap: 6px; max-height: 56vh; overflow-y: auto; }
 #sheet-form .anywhere.folders { max-height: 38vh; grid-auto-rows: max-content; }
 #sheet-form .anywhere.folders button.choice { height: auto; }
-#sheet-form .anywhere .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px 8px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); }
-#sheet-form .anywhere .row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-#sheet-form .anywhere .row span { display: flex; gap: 6px; flex: none; }
-#sheet-form .anywhere .row button.tool { width: 42px; height: 42px; border-radius: 12px; }
+/* the sheet of a new conversation: its title beside the two kinds, the tools of the kind (one stays chosen), the projects */
+#sheet-form .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; }
+#sheet-form .tools { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+#sheet-form .tools button { background: var(--raised); padding: 12px 6px 10px; }
+#sheet-form .tools button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+#sheet-form .anywhere button.choice > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#sheet-form .anywhere button.choice .tool { width: 34px; height: 34px; border-radius: 10px; }
+#sheet-form .anywhere button.choice .chev { flex: none; display: grid; color: var(--muted); opacity: .6; }
 
 /* ---- a group of rows under its title */
 .group-title { margin: 26px 4px 8px; font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }

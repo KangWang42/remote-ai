@@ -39,8 +39,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Moves between the app's screens: the workbench (Workbench), adding a computer by scanning its code or typing its
- * address, and the pages served by the program on the chosen computer, shown full screen.
+ * Moves between the app's screens: its four lists over every computer, each under its tab at the foot (Tabs: 任务 and
+ * 项目 are Workbench's, 协作 and 我的 are AppPages'), adding a computer by scanning its code or typing its address,
+ * and the pages served by the program on one computer, shown full screen. Those pages draw the same four tabs at
+ * their foot, and a press on one there leads to the app's list of that name (Bridge.appPage).
  */
 public final class MainActivity extends Activity {
     private static final int SPEECH = 4103, CAMERA = 4104, NOTIFY = 4105;
@@ -83,19 +85,36 @@ public final class MainActivity extends Activity {
     private Kit kit;
     private Workbench bench;
     private AppPages appPages;
-    private String appTab = "home";
+    private Tabs tabs;
+    private String appTab = "home";                 // the tab the app's lists were left at
     private FrameLayout root;
     private WebView web;
     private EditText nameBox, addressBox, passwordBox;
     private GithubUpdater updater;
     private Scanner scanner;
-    private String screen = "";                 // "home", "add", "scan" or "web"
+    private String screen = "";                 // one of the tabs ("home", "projects", "together", "me"), "add", "scan" or "web"
     private final Runnable watch = this::checkConnection;
     private boolean foreground, checkingConnection;
     private String currentOrigin = "";
     private String movedFrom = "", movedTo = "";       // a computer that is turning to another line: where it was, and where its page was sent
     private ConnectionHealth connectionHealth = new ConnectionHealth();
     boolean showing(String name) { return foreground && name.equals(screen); }
+    /** One of the app's own lists is on the screen. */
+    boolean onTabs() { return foreground && Tabs.has(screen); }
+    /** How many things wait for an answer on every computer: Workbench says it, the tab of 任务 shows it. */
+    void waiting(int count) { tabs.count(count); }
+    /** One of the computers, for what is done on one of them: asked only where there are several. */
+    void pick(String title, java.util.List<String> urls, java.util.function.Consumer<String> chosen) {
+        if (urls.isEmpty()) { android.widget.Toast.makeText(this, computers().length() == 0 ? "请先添加电脑" : "没有在线的电脑", android.widget.Toast.LENGTH_SHORT).show(); return; }
+        if (urls.size() == 1) { chosen.accept(urls.get(0)); return; }
+        String[] names = new String[urls.size()];
+        JSONArray list = computers();
+        for (int i = 0; i < names.length; i++) {
+            names[i] = host(urls.get(i));
+            for (int k = 0; k < list.length(); k++) { JSONObject one = list.optJSONObject(k); if (one != null && urls.get(i).equals(one.optString("url")) && !one.optString("name").isEmpty()) names[i] = one.optString("name"); }
+        }
+        kit.sheet(title, "", names, null, -1, which -> chosen.accept(urls.get(which)));
+    }
 
     // ---- the computers this phone knows: [{"name": ..., "url": ...}]
     JSONArray computers() {
@@ -133,7 +152,7 @@ public final class MainActivity extends Activity {
             @Override public void message(String text) {
                 if (text == null || text.isEmpty()) return;
                 // Inside a computer's pages there is no line of the app's own to write on.
-                if (!"home".equals(screen) || message == null) android.widget.Toast.makeText(MainActivity.this, text, android.widget.Toast.LENGTH_LONG).show(); else { message.setTextColor(kit.MUTED); message.setText(text); }
+                if (!Tabs.has(screen) || message == null) android.widget.Toast.makeText(MainActivity.this, text, android.widget.Toast.LENGTH_LONG).show(); else { message.setTextColor(kit.MUTED); message.setText(text); }
             }
         });
         // Earlier versions took the skin from the page shown last; that one becomes the app's.
@@ -144,6 +163,7 @@ public final class MainActivity extends Activity {
         kit = new Kit(this);
         bench = new Workbench(this, kit);
         appPages = new AppPages(this, kit, bench);
+        tabs = new Tabs(this, kit);
         repaint();
         root = new FrameLayout(this);
         setContentView(root);
@@ -191,43 +211,38 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(content, new ViewGroup.LayoutParams(-1, -2));
-        if ("home".equals(name) || "together".equals(name) || "me".equals(name)) {
+        if (Tabs.has(name)) {
+            // the tabs stay at the foot while the list above them is scrolled
             LinearLayout shell = kit.column();
             shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-            LinearLayout tabs = kit.row();
-            tabs.setBackgroundColor(kit.PANEL);
-            String[] keys = {"home", "together", "me"}, labels = {"任务", "协作", "我的"};
-            for (int i = 0; i < keys.length; i++) {
-                final String key = keys[i];
-                TextView tab = kit.bold(labels[i], 15, key.equals(name) ? kit.ACCENT : kit.MUTED);
-                tab.setGravity(Gravity.CENTER); tab.setMinHeight(kit.dp(56)); tab.setSelected(key.equals(name));
-                tab.setContentDescription(labels[i] + (key.equals(name) ? "，已选中" : ""));
-                kit.press(tab, () -> appPage(key));
-                tabs.addView(tab, new LinearLayout.LayoutParams(0, -2, 1));
-            }
-            shell.addView(tabs);
+            shell.addView(tabs.build(name, this::appPage));
             root.addView(shell, new FrameLayout.LayoutParams(-1, -1));
         } else root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
         screen = name;
     }
 
-    // ---- the workbench: every computer and what is going on on each
+    // ---- the app's own lists: back to the one that was open last, or to 任务 with what went wrong
     void home(String problem) {
         repaint();
         if (problem.isEmpty() && !"home".equals(appTab)) { appPage(appTab); return; }
         appTab = "home";
-        show(bench.build(problem), "home");
+        show(bench.build("home", problem), "home");
         bench.refresh();
     }
     void appPage(String tab) {
+        if (!Tabs.has(tab)) return;
         appTab = tab;
         if ("home".equals(tab)) { home(""); return; }
         repaint();
-        show(appPages.build(tab), tab);
-        appPages.refresh(tab);
+        boolean projects = "projects".equals(tab);
+        show(projects ? bench.build(tab, "") : appPages.build(tab), tab);
+        if (!projects) appPages.refresh(tab);
+        bench.refresh();        // (also under 协作 and 我的: what waits for an answer is counted on the tab of 任务)
     }
+    /** One computer's own page of a tab: where what the app lists of it is seen whole and changed. */
     void computerPage(String url, String tab) { openPage(url, "", "/?tab=" + tab); }
-    void newChain(String url) { openPage(url, "", "/?tab=together&newchain=1"); }
+    /** That computer's page of 协作 with one of its sheets open: "handoff", "many", "chain", "schedule" (web/together.js). */
+    void together(String url, String what) { openPage(url, "", "/?tab=together&do=" + what); }
     boolean autoUpdate() { return updater != null && updater.automatic(); }
     void toggleAutoUpdate() { if (updater == null) return; updater.automatic(!updater.automatic()); home(""); }
     void checkUpdate() { message.setTextColor(kit.MUTED); message.setText("正在检查新版本…"); updater.check(true); }
@@ -348,21 +363,20 @@ public final class MainActivity extends Activity {
         else add("没有相机权限，不能扫码。可以在系统设置里允许，或在这里手动输入");
     }
 
-    /** Shows the pages of the computer at this address; a password signs in first. */
+    /** Shows the pages of the computer at this address, its projects first; a password signs in first. */
     void open(String address, String password) {
         open(address, password, "");
     }
     void open(String address, String password, String project) {
-        openPage(address, password, project.isEmpty() ? "/" : "/?project=" + Uri.encode(project));
+        openPage(address, password, project.isEmpty() ? "/?tab=projects" : "/?project=" + Uri.encode(project));
     }
     /** A conversation running on the computer: its project page asks at once how to take it over. */
     void openSession(String address, String project, String session) {
         if (session == null || !session.matches("[A-Za-z0-9-]{8,64}")) { open(address, "", project); return; }
         openPage(address, "", "/?project=" + Uri.encode(project) + "&take=" + session);
     }
-    /** Straight into one terminal; its page is told to come back here rather than to that computer's list. */
-    /** The computer's page with the sheet that starts a terminal in one of its projects. */
-    void startNew(String address) { openPage(address, "", "/?new=1"); }
+    /** The computer's page with the sheet of a new conversation: in one of its projects, in an application or in a terminal. */
+    void startNew(String address) { openPage(address, "", "/?tab=tasks&new=1"); }
     // ---- reminders: off until the person turns them on
     boolean watching() { return prefs.getBoolean("watch", false); }
     void toggleWatch() {
@@ -374,6 +388,7 @@ public final class MainActivity extends Activity {
         if (!on) Watcher.stop(this);
         home("");
     }
+    /** Straight into one terminal; its page is told to come back here rather than to that computer's list. */
     void openTerminal(String address, String terminal) {
         try { openPage(address, "", AggregateSessions.terminalPath(terminal) + "&from=bench"); }
         catch (IllegalArgumentException invalid) { android.widget.Toast.makeText(this, invalid.getMessage(), android.widget.Toast.LENGTH_SHORT).show(); }
@@ -494,7 +509,8 @@ public final class MainActivity extends Activity {
         if (drawn) script.append("if(was!=='").append(skin).append("'&&!(window.RemoteCliNative&&RemoteCliNative.pref)&&!location.hash)location.reload();");
         return script.append("}catch(e){}})()").toString();
     }
-    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "renderer", "readfont", "readsize", "readline");
+    // (and, kept the same way for every computer: the kind of conversation its owner begins, "newkind")
+    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "renderer", "readfont", "readsize", "readline", "newkind");
     private final Saver saver = new Saver(this);
     private final class Bridge {
         /** The system's speech recognizer; what was said goes into the page's message box. */
@@ -570,8 +586,20 @@ public final class MainActivity extends Activity {
         }
         /** Back to the workbench. disconnect is the name older pages call. */
         @JavascriptInterface public void home() { runOnUiThread(() -> MainActivity.this.home("")); }
+        /**
+         * The tabs at the foot of a computer's page are the app's: the page asks which of them the app has lists
+         * for, and a press on one of those leads to that list (by the page's name of the tab).
+         */
+        @JavascriptInterface public String appTabs() { return String.join(",", Tabs.NAMES); }
         @JavascriptInterface public void appPage(String tab) {
-            if ("home".equals(tab) || "together".equals(tab) || "me".equals(tab)) runOnUiThread(() -> MainActivity.this.appPage(tab));
+            final String key = Tabs.key(tab);
+            if (key != null) runOnUiThread(() -> MainActivity.this.appPage(key));
+        }
+        /** The name this phone gave the computer whose pages are shown, for the line under the page's heading. */
+        @JavascriptInterface public String computer() {
+            JSONArray list = computers();
+            for (int i = 0; i < list.length(); i++) { JSONObject one = list.optJSONObject(i); if (one != null && currentOrigin.equals(one.optString("url"))) return one.optString("name"); }
+            return "";
         }
         @JavascriptInterface public void disconnect() { home(); }
         /** The terminal page reports the finished work it has shown, so the workbench stops listing it as new. */
@@ -601,10 +629,10 @@ public final class MainActivity extends Activity {
         if ("scan".equals(screen) || "add".equals(screen)) { endScan(); home(""); return; }
         if (web != null && web.canGoBack()) { web.goBack(); return; }
         if (web != null) { home(""); return; }
-        if ("together".equals(screen) || "me".equals(screen)) { appPage("home"); return; }
+        if (Tabs.has(screen) && !"home".equals(screen)) { appPage("home"); return; }
         super.onBackPressed();
     }
     @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0 && !isFinishing()) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
-    @Override protected void onResume() { super.onResume(); foreground = true; Watcher.stop(this); if (web != null) { web.onResume(); ticker.post(watch); } if ("home".equals(screen)) bench.refresh(); else if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if (updater != null) updater.checkIfDue(); }
+    @Override protected void onResume() { super.onResume(); foreground = true; Watcher.stop(this); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if (updater != null) updater.checkIfDue(); }
     @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { web.destroy(); web = null; } super.onDestroy(); }
 }

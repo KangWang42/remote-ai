@@ -365,31 +365,29 @@ def main():
 
             # ---- a new conversation in a desktop application: each tool's own, offered alike
             ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
-            until("document.querySelector('#sheet[open] h3')?.textContent === '新建任务'")
-            offered = value("Array.from(document.querySelectorAll('#sheet button.choice')).map(b => b.firstChild.firstChild.textContent)")
-            assert offered == ['在 Codex 桌面应用中打开', '在 Claude 桌面应用中打开'], offered
+            until("document.querySelector('#sheet[open] h3')?.textContent === '新建对话'")
+            texts = lambda selector: value("Array.from(document.querySelectorAll(%s)).map(b => b.textContent)" % json.dumps(selector))
+            assert texts('#sheet .seg button') == ['应用', '终端'] and texts('#sheet .tools button') == ['Codex', 'Claude'], (texts('#sheet .seg button'), texts('#sheet .tools button'))
             picture('new-task.png')
-            value("Array.from(document.querySelectorAll('#sheet button.choice')).find(b => b.textContent.includes('在 Claude 桌面应用中打开')).click()")
+            value("Array.from(document.querySelectorAll('#sheet .tools button')).find(b => b.textContent === 'Claude').click()")
+            value("document.querySelector('#sheet .anywhere button.choice').click()")
             until("document.querySelector('#desktop-draft') !== null")
-            assert value("document.querySelector('#sheet-form h3').textContent") == 'Claude 桌面应用' and value("document.querySelector('#sheet button.solid').textContent") == '交给 Claude 桌面应用'
+            assert value("document.querySelector('#sheet-form h3').textContent") == 'Claude · ' + PROJECT and value("document.querySelector('#sheet button.solid').textContent") == '在 Claude 中打开'
             value("document.getElementById('desktop-draft').value = '先看一下 README'; document.querySelector('#sheet button.solid').click()")
-            until("document.querySelector('#sheet button.solid').textContent === '已交给应用，尚未发送'")
+            until("document.querySelector('#sheet button.solid').textContent === '在电脑上发送后开始'")
             assert {k: v for k, v in opened[-1].items() if k != 'id'} == {'action': 'app_open', 'tool': 'claude', 'dir': PROJECT, 'draft': '先看一下 README'}, opened[-1]
             picture('claude-draft.png')
             # The draft is sent on the computer, and only then is there a conversation: the computer says which one
-            # came of this operation, and it is entered from here.
+            # came of this operation, and the page goes into it.
             fresh = '11111111-2222-3333-4444-555555555559'
             sessions.append(dict(usual, id=fresh, tool='claude', title='从手机新建的对话', origin='Claude 桌面版', kind='Claude 桌面版', reach=['say'], transport='', can_takeover=False, opened=opened[-1]['id'],
                                  ways={'say': 'hook', 'stop': '', 'answer': '', 'end': ''}, why={}))
-            until("document.querySelector('#sheet button.solid').textContent === '进入这段对话'", 'the conversation that came of it is offered')
-            assert value("document.querySelector('#sheet-form [role=status]').textContent") == '对话已经在电脑上开始。'
+            until("document.querySelector('#sheet .state') && document.querySelector('#sheet h3').textContent === '从手机新建的对话'", 'the conversation that came of it, entered: its window')
             picture('claude-came.png')
-            value("document.querySelector('#sheet button.solid').click()")
-            until("document.querySelector('#sheet .state') && document.querySelector('#sheet h3').textContent === '从手机新建的对话'", 'and entered: its window')
             info['features'] = ['peek', 'reach', 'codex-desktop-open']
             ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
-            until("document.querySelector('#sheet[open] h3')?.textContent === '新建任务'")
-            assert value("Array.from(document.querySelectorAll('#sheet button.choice')).map(b => b.firstChild.firstChild.textContent)") == ['在 Codex 桌面应用中打开'], 'only what the computer offers'
+            until("document.querySelector('#sheet[open] h3')?.textContent === '新建对话'")
+            assert texts('#sheet .tools button') == ['Codex'], 'only what the computer offers'
 
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']

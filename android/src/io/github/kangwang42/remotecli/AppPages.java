@@ -10,7 +10,11 @@ import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** App-wide collaboration and settings. Each computer answers independently with its own cookie. */
+/**
+ * Two of the app's four lists, both over every computer: 协作 (what each computer keeps of conversations working
+ * together; what is set there is set on that computer's own page of it) and 我的 (the work in numbers, and the
+ * app's settings). Each computer answers independently with its own cookie.
+ */
 final class AppPages {
     private final MainActivity activity;
     private final Kit kit;
@@ -26,8 +30,16 @@ final class AppPages {
         generation++; holders.clear(); stats.clear(); answered = 0;
         boolean mine = "me".equals(tab);
         LinearLayout page = kit.page(22);
-        page.addView(kit.bold(mine ? "我的" : "协作", 24, kit.INK));
-        page.addView(kit.text(mine ? "所有电脑的工作统计与 App 设置" : "在这里查看所有电脑的接力与定时提问。", 14, kit.MUTED), kit.below(8));
+        page.addView(kit.head(mine ? "我的" : "协作", null));
+        if (!mine && activity.computers().length() > 0) {
+            // the two things done at once, as on a computer's page: on the computer that is online, or the one chosen
+            LinearLayout acts = kit.row();
+            acts.addView(kit.button("交接对话", 1, () -> activity.pick("交接对话", bench.reachable(), url -> activity.together(url, "handoff"))), new LinearLayout.LayoutParams(0, -2, 1));
+            LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(0, -2, 1);
+            beside.leftMargin = kit.dp(8);
+            acts.addView(kit.button("同时提问", 1, () -> activity.pick("同时提问", bench.reachable(), url -> activity.together(url, "many"))), beside);
+            page.addView(acts, kit.below(16));
+        }
         if (mine) {
             total = kit.text("正在读取统计…", 16, kit.INK);
             page.addView(total, kit.below(18));
@@ -51,11 +63,23 @@ final class AppPages {
             LinearLayout card = kit.column();
             card.setPadding(kit.dp(16), kit.dp(16), kit.dp(16), kit.dp(16));
             card.setBackground(kit.shape(kit.PANEL, kit.LINE, 16));
-            card.addView(kit.bold(computer.optString("name", MainActivity.host(url)), 17, kit.INK));
+            // (its name leads to that computer's own page of this tab, where everything of it is seen and changed)
+            LinearLayout name = kit.row();
+            name.setMinimumHeight(kit.dp(32));
+            name.addView(kit.line(computer.optString("name", MainActivity.host(url)), 17, kit.INK, true), new LinearLayout.LayoutParams(0, -2, 1));
+            name.addView(kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 16));
+            kit.press(name, () -> activity.computerPage(url, tab));
+            card.addView(name);
             LinearLayout body = kit.column(); body.addView(kit.text("正在连接…", 13, kit.MUTED));
             holders.put(url, body); card.addView(body, kit.below(10));
-            if (!mine) card.addView(kit.button("添加接力", 0, () -> activity.newChain(url)), kit.below(10));
-            card.addView(kit.button(mine ? "查看统计详情" : "设置接力 / 定时提问 / 交接", 1, () -> activity.computerPage(url, tab)), kit.below(10));
+            if (!mine) {
+                LinearLayout adds = kit.row();
+                adds.addView(kit.button("添加接力", 1, () -> activity.together(url, "chain")), new LinearLayout.LayoutParams(0, -2, 1));
+                LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(0, -2, 1);
+                beside.leftMargin = kit.dp(8);
+                adds.addView(kit.button("添加定时提问", 1, () -> activity.together(url, "schedule")), beside);
+                card.addView(adds, kit.below(10));
+            } else card.addView(kit.button("查看统计详情", 1, () -> activity.computerPage(url, tab)), kit.below(10));
             page.addView(card, kit.below(16));
         }
         page.addView(kit.button("刷新", 1, () -> activity.appPage(tab)), kit.below(16));

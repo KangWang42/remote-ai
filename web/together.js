@@ -291,9 +291,13 @@
     parts.scheduleCount.textContent = schedules.length ? schedules.length + ' 个' : '';
   }
 
-  let createOnOpen = new URLSearchParams(location.search).get('newchain') === '1';
+  // ?do=<name> comes from the app's own 协作, which lists every computer: what was pressed there is begun here at
+  // once, on this computer. (?newchain=1 is how the app of an earlier version asks for a new rule.)
+  const DO = { handoff: () => handoff(), many: askMany, chain: () => editChain(), schedule: () => editSchedule() };
+  const asks = new URLSearchParams(location.search);
+  let wanted = DO[asks.get('do')] || (asks.get('newchain') === '1' ? DO.chain : null);
   page.view('together', { open: () => {
     load();
-    if (createOnOpen) { createOnOpen = false; editChain(); }
+    if (wanted) { const act = wanted; wanted = null; act(); }
   }, draw, handoff });
 })();

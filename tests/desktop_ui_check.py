@@ -145,12 +145,15 @@ def main():
 
             def navigate():
                 ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
-                until("document.querySelector('#sheet[open] h3')?.textContent === '新建任务'")
+                until("document.querySelector('#sheet[open] h3')?.textContent === '新建对话'")
 
             def composer():
+                # an application stands open first, with Codex chosen: a press on the project asks for the first words
                 navigate()
-                value("Array.from(document.querySelectorAll('#sheet button')).find(b => b.textContent.includes('在 Codex 桌面应用中打开')).click()")
+                assert value("Array.from(document.querySelectorAll('#sheet [aria-pressed=\"true\"]')).map(b => b.textContent)") == ['应用', 'Codex']
+                value("document.querySelector('#sheet .anywhere button.choice').click()")
                 until("document.querySelector('#desktop-draft') !== null")
+                assert value("document.querySelector('#sheet-form h3').textContent") == 'Codex · ' + info['workspaces'][0]
 
             def picture(name):
                 (out / name).write_bytes(base64.b64decode(ask('Page.captureScreenshot', format='png')['data']))
@@ -166,18 +169,18 @@ def main():
                 assert shape['form'] <= min(560, width) and abs(shape['left'] - shape['right']) <= 1, shape
                 assert not shape['duplicateIds'] and not shape['missingAlt'] and not shape['broken'], shape
                 shapes.append(shape); picture('draft-%d.png' % width)
-            # Actual keyboard focus stays in the dialog; native select and textarea participate.
-            value("document.getElementById('desktop-project').focus()")
+            # Actual keyboard focus stays in the dialog: from the first words to the button that hands them over.
+            value("document.getElementById('desktop-draft').focus()")
             ask('Input.dispatchKeyEvent', type='keyDown', key='Tab', code='Tab', windowsVirtualKeyCode=9)
             ask('Input.dispatchKeyEvent', type='keyUp', key='Tab', code='Tab', windowsVirtualKeyCode=9)
-            assert value('document.activeElement.id') == 'desktop-draft'
+            assert value('document.activeElement.textContent') == '在 Codex 中打开' and value("!!document.activeElement.closest('#sheet')")
             value("document.getElementById('desktop-draft').value = '中文草稿 & # +\\n第二行'; document.querySelector('#sheet button.solid').click(); document.querySelector('#sheet button.solid').click()")
             until("document.querySelector('#sheet button.solid').textContent === '查询本次操作结果'")
             assert len(requests) == 1, requests
             assert value("document.getElementById('desktop-draft').value") == '中文草稿 & # +\n第二行'
             picture('retry.png')
             value("document.querySelector('#sheet button.solid').click()")
-            until("document.querySelector('#sheet button.solid').textContent === '已交给应用，尚未发送'")
+            until("document.querySelector('#sheet button.solid').textContent === '在电脑上发送后开始'")
             assert len({r['id'] for r in requests}) == 1 and all(r == requests[0] for r in requests), requests
             assert value("document.querySelector('#sheet button.solid').disabled")
             picture('handed-off.png')
@@ -187,9 +190,9 @@ def main():
             picture('unknown.png')
             info['features'] = []
             navigate()
-            assert value("document.querySelector('#sheet-form').textContent.includes('桌面应用入口暂不可用')")
-            assert not value("Array.from(document.querySelectorAll('#sheet button')).some(b => b.textContent.includes('在 Codex 桌面应用中打开'))")
-            assert value("document.querySelectorAll('#sheet button.tool').length") == 2
+            # a computer without the desktop entry offers its terminals, and no choice of kind
+            assert value("document.querySelectorAll('#sheet .seg button').length") == 0
+            assert value("Array.from(document.querySelectorAll('#sheet .tools button')).map(b => b.textContent)") == ['Codex', '终端']
             # The same real embedded reader, with native control capabilities relayed from the computer.
             info['features'] = ['peek', 'reach', 'end', 'codex-desktop-control']
             sessions.append(dict(id=sid, tool='codex', dir=info['workspaces'][0], title='电脑与手机的同一段对话', updated=int(time.time()*1000), live=True,

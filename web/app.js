@@ -1,18 +1,19 @@
 /* The list pages, under four tabs at the foot. 任务: everything on the computer at a glance, by what needs you (what
    waits for an answer, what is pinned, what is at work, what was used lately), found by one search and told apart by
    tool and by where it runs. 项目: the projects, and one project in detail. 协作 and 我的 are views of their own
-   (together.js, me.js), which this page gives what it has (window.RemoteCliPage). */
+   (together.js, me.js), and a new conversation is begun by a module of its own (begin.js): this page gives them
+   what it has (window.RemoteCliPage). Inside the app the tabs are the app's: see `go`. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
   // The plain terminal is called what the computer calls it: PowerShell on Windows, the person's shell elsewhere.
   const TOOLS = { claude: 'Claude Code', codex: 'Codex', shell: '终端' };
-  const ABOUT = { claude: 'Anthropic', codex: 'OpenAI', shell: '命令行' };
   const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const native = window.RemoteCliNative || null;
   // The look belongs to the app, not to one computer: inside the app it is kept there, so every computer's pages
-  // open in the same skin and text size. A browser keeps it per address, as it keeps everything else.
-  const LOOK = ['skin', 'text', 'readfont', 'readsize', 'readline'];
+  // open in the same skin and text size. A browser keeps it per address, as it keeps everything else. So is the
+  // kind of conversation its owner begins (begin.js): in an application, or in a terminal.
+  const LOOK = ['skin', 'text', 'readfont', 'readsize', 'readline', 'newkind'];
   const saved = (key, fallback) => {
     if (native && native.pref && LOOK.includes(key)) { const chosen = native.pref(key); if (chosen) return chosen; }
     try { return localStorage.getItem('rcli-' + key) || fallback; } catch (error) { return fallback; }
@@ -193,8 +194,6 @@
   const wayOf = (s, thing) => !s || !s.live ? '' : s.ways ? s.ways[thing] || ''
     : thing === 'end' ? (s.can_takeover === true ? 'process' : '') : !can(s, thing) ? '' : thing !== 'answer' && s.transport === APP ? APP : 'hook';
   const whyNot = (s, thing, usual) => (s && s.why && s.why[thing]) || usual;
-  // The desktop application of each tool, by its name: opened from the phone where the computer offers it.
-  const APPS = { codex: 'Codex', claude: 'Claude' };
   const running = t => t.state === 'running' || t.state === 'starting';
   const usable = () => data && data.device.online && data.device.enabled;
   const canEnd = s => wayOf(s, 'end') === 'process' && (data.device.features || []).includes('end');
@@ -270,12 +269,17 @@
   // the computer is asked at once, and the terminal that follows leads back to the workbench.
   let take = new URLSearchParams(location.search).get('take') || '', anew = new URLSearchParams(location.search).get('new') === '1', fromBench = !!take || anew;
   function open(terminal) { location.href = 'terminal/?id=' + encodeURIComponent(terminal) + (fromBench ? '&from=bench' : ''); }
+  // What the app's own lists opened this page for (a new conversation, one conversation's window) leads back to
+  // them when it is left without going on to a terminal's page.
+  const leave = left => { if (!left && fromBench && native && native.home) native.home(); };
+  // Resolves with whether the page is left for the terminal that was started.
   async function start(tool, dir, session, takeover, fork) {
     const payload = { action: 'start', tool, dir, history: false };
     if (session) Object.assign(payload, { session, takeover: !!takeover });
     if (fork) payload.fork = true;
     const result = await run(payload, '正在电脑上启动 ' + TOOLS[tool] + '…');
     if (result) open(result.terminal);
+    return !!result;
   }
   // A message for a running terminal without going into it: what the box of its page would send. The relay puts it
   // the way the program takes pasted text and adds Enter (the operation "say").
@@ -395,7 +399,7 @@
   // is said there while it is open, what the conversation asks is answered here, and what is written here is handed to
   // it where it is. (Taking it into a terminal is another thing: see ways.)
   async function takeOver(session) {
-    if (!usable()) return;
+    if (!usable()) return false;
     const canPeek = (data.device.features || []).includes('peek');
     let watch = 0;
     const choice = await openSheet((form, finish) => {
@@ -449,7 +453,6 @@
         history.replaceState(history.state, '', location.pathname + '?take=' + encodeURIComponent(session.id));
         location.href = 'files/?dir=' + encodeURIComponent(name);
       };
-      const samePath = (a, b) => String(a || '').replace(/[\\/]+$/, '').toLowerCase() === String(b || '').replace(/[\\/]+$/, '').toLowerCase();
       const outside = el('div', { className: 'reading offer', hidden: true }, el('span', { textContent: base(session.folder) }),
         el('button', { type: 'button', className: 'solid', onclick: async () => {
           if (!await run({ action: 'project_add', path: session.folder, name: '', create: false }, '正在添加…')) return;
@@ -674,86 +677,15 @@
       watch = setInterval(() => { if ($('sheet').open && (++ticks % 2 === 0 || Date.now() < quick)) show(); }, 500);
     }, true);
     clearInterval(watch);
-    if (choice && choice.handoff) views.together.handoff(choice.handoff);
-    else if (choice) into(choice.session, choice.value);
+    if (choice && choice.handoff) { await views.together.handoff(choice.handoff); return false; }
+    return choice ? into(choice.session, choice.value) : false;
   }
   // Into a terminal of the phone's: by taking the conversation from the program that has it, by a copy, or, for one
   // that nothing has open, simply by going on with it.
-  function into(session, how) { start(session.tool, session.dir, session.id, how === 'close', how === 'copy'); }
-  // ?new=1 comes from the app's workbench. Offer the desktop entry separately from shared terminals.
-  // Projects used last come first; each offers the tools the computer has.
-  async function startAnywhere() {
-    if (!usable()) return toast('电脑离线，暂时不能新建');
-    const tools = Object.keys(TOOLS).filter(t => (data.device.tools || []).includes(t));
-    const latest = name => Math.max(0, ...data.terminals.filter(t => t.dir === name).map(t => t.created || 0), ...(data.sessions || []).filter(s => s.dir === name).map(s => s.updated || 0));
-    const names = (data.device.workspaces || []).slice().sort((a, b) => latest(b) - latest(a));
-    const apps = Object.keys(APPS).filter(tool => (data.device.features || []).includes(tool + '-desktop-open'));
-    if (!names.length || (!tools.length && !apps.length)) return toast(names.length ? '电脑上没有可用的工具' : '请先添加一个项目');
-    const picked = await openSheet((form, finish) => {
-      form.append(el('h3', { textContent: '新建任务' }));
-      apps.forEach(tool => form.append(el('button', { type: 'button', className: 'choice', onclick: () => finish({ desktop: tool }) },
-        el('span', null, '在 ' + APPS[tool] + ' 桌面应用中打开', el('small', { textContent: '选择项目并预填新对话，在电脑上确认发送' })))));
-      if (!apps.length) form.append(el('p', { className: 'quiet', textContent: '桌面应用入口暂不可用：安装或更新 Codex、Claude 的 Windows 桌面应用后，重启 Remote AI。' }));
-      if (tools.length) form.append(el('p', { textContent: '共享终端 · 手机和电脑可以轮流输入' }));
-      const list = el('div', { className: 'anywhere' });
-      names.slice(0, 12).forEach(name => list.append(el('div', { className: 'row' }, el('b', { textContent: name }),
-        el('span', null, ...tools.map(tool => el('button', { type: 'button', className: 'tool ' + tool, ariaLabel: '在 ' + name + ' 新建 ' + TOOLS[tool], html: ICON[tool], onclick: () => finish({ tool, name }) }))))));
-      if (tools.length) form.append(list);
-    });
-    if (picked && picked.desktop) desktopDraft(names, picked.desktop);
-    else if (picked) start(picked.tool, picked.name);
-  }
-  async function desktopDraft(names, tool) {
-    const app = APPS[tool];
-    const entered = await openSheet((form, finish) => {
-      const folder = el('select', { id: 'desktop-project' }, ...names.map(name => el('option', { value: name, textContent: name })));
-      const draft = el('textarea', { id: 'desktop-draft', rows: 4, maxLength: 1000, placeholder: '可留空，或预填一段内容', autocapitalize: 'off', spellcheck: false });
-      const status = el('p', { role: 'status', 'aria-live': 'polite', className: 'quiet' });
-      let operation = null, came = null;
-      const button = el('button', { type: 'button', className: 'choice solid', textContent: '交给 ' + app + ' 桌面应用', onclick: async () => {
-        if (button.disabled) return;
-        if (came) return finish(came);
-        if (!operation) operation = { id: newId(), action: 'app_open', tool, dir: folder.value, draft: draft.value };
-        button.disabled = true; folder.disabled = true; draft.readOnly = true;
-        status.textContent = '正在交给电脑上的 ' + app + '…';
-        try {
-          let answer = await api('api/terminal', operation);
-          for (let n = 0; n < 60 && answer.state === 'queued' && status.isConnected && $('sheet').open; n++) {
-            await new Promise(resolve => setTimeout(resolve, 400));
-            answer = await api('api/terminal', operation);
-          }
-          if (answer.state === 'queued') throw new Error('暂未收到结果，请查询同一次操作，或先检查电脑上的应用。');
-          if (answer.error) { status.textContent = answer.error; button.textContent = '操作未确认'; return; }
-          const result = answer.result || {};
-          if (!['handed_off', 'unknown'].includes(result.status) || result.sent !== false) throw new Error('未收到可确认的桌面操作结果，请查询同一次操作。');
-          status.textContent = result.message || '请在电脑上检查 ' + app + '，内容尚未发送。';
-          button.textContent = result.status === 'handed_off' ? '已交给应用，尚未发送' : '结果未知，请检查电脑';
-          // There is a conversation once the draft was sent on the computer. The computer says which one came of
-          // this operation (`opened`): it is entered from here, without looking for it in the lists.
-          if (result.status === 'handed_off') {
-            const watch = setInterval(() => {
-              if (!status.isConnected || !$('sheet').open) return clearInterval(watch);
-              came = (data.sessions || []).find(s => s.opened === operation.id) || null;
-              if (!came) return;
-              clearInterval(watch);
-              status.textContent = '对话已经在电脑上开始。';
-              button.textContent = '进入这段对话'; button.disabled = false;
-            }, 1000);
-          }
-        } catch (error) {
-          status.textContent = error.message;
-          button.textContent = '查询本次操作结果'; button.disabled = false;
-        }
-      } });
-      form.append(el('h3', { textContent: app + ' 桌面应用' }),
-        el('p', { textContent: '将打开电脑上的应用，在这个文件夹里进入一段新对话。可能切换电脑当前显示的页面；草稿需要在电脑上确认发送。' }),
-        el('label', { htmlFor: folder.id, textContent: '项目文件夹' }), folder,
-        el('label', { htmlFor: draft.id, textContent: '新对话草稿（可不填）' }), draft, button, status);
-      // Dismissal disconnects this view; it does not cancel an operation already handed to the computer.
-      setTimeout(() => { const cancel = form.contains(folder) && form.querySelector('.cancel'); if (cancel) cancel.textContent = '返回'; }, 0);
-    });
-    if (entered && entered.id) takeOver(entered);
-  }
+  function into(session, how) { return start(session.tool, session.dir, session.id, how === 'close', how === 'copy'); }
+  // A new conversation is begun by begin.js: for one project on its page, for any of them from 任务 and from the
+  // app's own lists (?new=1).
+  const beginAnywhere = () => window.RemoteCliPage.begin.anywhere();
   // A project is made of a folder on the computer: one of those that already have conversations (each says by what
   // it is used: a desktop app, an editor, a terminal), found by searching when they are many, or one that is typed.
   const FEW = 6;
@@ -780,7 +712,11 @@
     });
     if (!answer) return;
     if (!answer.path) { toast('请填写文件夹路径'); return; }
-    if (await run({ action: 'project_add', path: answer.path, name: answer.name, create: false }, '正在添加…')) refresh();
+    if (!await run({ action: 'project_add', path: answer.path, name: answer.name, create: false }, '正在添加…')) return;
+    // the project that was added is entered: what it was added for (a new conversation, its files) is there
+    await refresh();
+    const made = (data.device.projects || []).find(p => samePath(p.path, answer.path));
+    if (made && !project) enter(made.name);
   }
 
   // ---- everything there is to work with, said one way
@@ -794,6 +730,7 @@
   const sourceOfKind = kind => !kind ? '' : kind === '终端' ? 'term' : 'app';
   const marks = () => (data.device.features || []).includes('marks');
   const base = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(path || '');
+  const samePath = (a, b) => String(a || '').replace(/[\\/]+$/, '').toLowerCase() === String(b || '').replace(/[\\/]+$/, '').toLowerCase();
   // where a conversation that a program has open runs: the desktop app or an editor ('app'), or a command line
   // (one that no program has open is told by what started it)
   // and one that a program has open by what the computer says uses it (a command line inside an editor's terminal
@@ -1078,7 +1015,7 @@
     $('home').dataset.tab = tab;
     // In the app the arrow on the first page leads to the workbench, where every computer is listed.
     $('back').hidden = !project && !(native && native.home);
-    $('back').setAttribute('aria-label', project ? '返回全部项目' : '返回工作台');
+    $('back').setAttribute('aria-label', project ? '返回全部项目' : '返回全部电脑');
     $('heading').textContent = project || TABS[tab];
     document.querySelector('#home .top').classList.toggle('large', !project);
     $('new-task').hidden = tab !== 'tasks'; $('settings').hidden = tab !== 'me';
@@ -1086,8 +1023,9 @@
     // conversations open on the computer are counted with the terminals, by how they stand
     const stands = (list, ...phases) => list.filter(x => x.live && phases.includes(x.phase)).length;
     const waiting = stands(everything, 'confirm'), busy = everything.filter(working).length, opened = everything.filter(x => x.live && !needsYou(x) && !working(x)).length;
-    $('device-text').textContent = !ready ? (device.online ? '已暂停访问' : '电脑离线')
-      : project || !lists ? '电脑在线' : [waiting ? waiting + ' 个等你确认' : '', busy ? busy + ' 个正在运行' : '', opened ? opened + ' 个已打开' : ''].filter(Boolean).join(' · ') || '电脑在线';
+    // (inside the app, which lists several computers, the line says first which one this is)
+    $('device-text').textContent = (computerName ? computerName + ' · ' : '') + (!ready ? (device.online ? '已暂停访问' : '电脑离线')
+      : project || !lists ? '电脑在线' : [waiting ? waiting + ' 个等你确认' : '', busy ? busy + ' 个正在运行' : '', opened ? opened + ' 个已打开' : ''].filter(Boolean).join(' · ') || '电脑在线');
     // what waits for an answer is counted on its tab, whichever tab is open
     $('tab-count').hidden = !waiting; $('tab-count').textContent = waiting > 9 ? '9+' : waiting;
     if (!lists) { if (views[tab]) views[tab].draw(); return; }
@@ -1163,14 +1101,7 @@
 
     const folder = (device.projects || []).find(p => p.name === project);
     $('project-path').textContent = folder ? '\u200e' + folder.path : '';      // read from the left although it is cut at the left
-    const tools = Object.keys(TOOLS).filter(t => (device.tools || []).includes(t));
-    const launch = $('launch');
-    if (launch.dataset.signature !== tools.join() + ready) {
-      launch.dataset.signature = tools.join() + ready;
-      launch.replaceChildren(...tools.map(tool => el('button', { type: 'button', disabled: !ready, onclick: () => start(tool, project) },
-        el('span', { className: 'tool ' + tool, html: ICON[tool] }), el('span', null, '新建 ' + TOOLS[tool], el('small', { textContent: ABOUT[tool] })))));
-      if (ready && !tools.length) launch.append(el('p', { textContent: '电脑上没有找到 claude、codex 或命令行终端。' }));
-    }
+    window.RemoteCliPage.begin.draw(project);
     const inside = everything.filter(x => x.project === project), tick = [stamp(1), ready];
     const own = inside.filter(working).sort(byOpen), confirms = inside.filter(needsYou).sort(byOpen);
     $('p-needs').hidden = !confirms.length;
@@ -1206,9 +1137,15 @@
 
   // ---- moving between the overview and one project; the phone's back key goes back to the overview
   // To another tab. A project in detail is left with its tab; pressing 项目 while in one leads back to the list.
-  function go(name) {
+  // Inside the app the tabs are the app's own, the same on every screen: each leads to its list over all the
+  // computers, and this page is one computer's part of the tab it was opened for. (An app of an earlier version
+  // has 协作 and 我的 only.)
+  const computerName = native && native.computer ? String(native.computer() || '') : '';
+  const appTabs = !native || !native.appPage ? [] : native.appTabs ? String(native.appTabs()).split(',') : ['together', 'me'];
+  // (`own`: this page's part of the tab is meant, whoever has the tabs)
+  function go(name, own) {
     if (!TABS[name]) return;
-    if ((name === 'together' || name === 'me') && native && native.appPage) { native.appPage(name); return; }
+    if (!own && appTabs.includes(name)) { native.appPage(name); return; }
     const left = project;
     if (left) { project = ''; cameFrom = 'projects'; if (history.state && history.state.project) history.back(); }
     if (name !== tab || left) scrollTo(0, 0);
@@ -1234,8 +1171,8 @@
     if (native && native.home) return native.home();
     project = ''; tab = cameFrom; cameFrom = 'projects'; history.replaceState(null, '', location.pathname); draw();
   });
-  $('new-task').addEventListener('click', () => startAnywhere());
-  $('first-task').addEventListener('click', () => startAnywhere());
+  $('new-task').addEventListener('click', () => beginAnywhere());
+  $('first-task').addEventListener('click', () => beginAnywhere());
   // While something is typed the tabs make room: the keyboard takes the foot of the screen.
   document.addEventListener('focusin', event => { if (event.target.matches && event.target.matches('#home input, #home textarea')) document.body.classList.add('typing'); });
   document.addEventListener('focusout', () => document.body.classList.remove('typing'));
@@ -1263,12 +1200,12 @@
       draw(); peeks();
       if (anew) {
         anew = false; history.replaceState(history.state, '', location.pathname + (project ? '?project=' + encodeURIComponent(project) : ''));
-        startAnywhere();
+        beginAnywhere().then(leave);
       }
       if (take) {
         const wanted = (data.sessions || []).find(s => s.id === take && !s.terminal);
         take = ''; history.replaceState(history.state, '', location.pathname + (project ? '?project=' + encodeURIComponent(project) : ''));
-        if (wanted && usable()) { if (wanted.live) takeOver(wanted); else start(wanted.tool, wanted.dir, wanted.id, false); }
+        if (wanted && usable()) (wanted.live ? takeOver(wanted) : start(wanted.tool, wanted.dir, wanted.id, false)).then(leave);
       }
     }
     catch (error) { if (!$('home').hidden) { $('device-text').textContent = error.message; $('dot').className = 'off'; } }
@@ -1280,7 +1217,7 @@
   // What the views of their own work with: the page's helpers, what the computer last said, and the ways into a
   // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
   window.RemoteCliPage = {
-    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open,
+    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, saved, keep,
     get data() { return data; },
     get tab() { return tab; },
     has: feature => !!data && (data.device.features || []).includes(feature),
