@@ -69,7 +69,8 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .card .text { flex: 1; min-width: 0; display: grid; gap: 3px; }
 .card b { font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .card .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: .8rem; line-height: 1.3; min-width: 0; }
-.card .meta span { white-space: nowrap; }
+.card .meta span { white-space: normal; overflow-wrap: anywhere; }
+.card .meta .pill, .card .meta .chip { white-space: nowrap; }
 .card .peek { color: var(--muted); font-size: .8rem; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .card .chev { color: var(--muted); opacity: .6; flex: none; }
 .card.add { border-style: dashed; background: transparent; }
@@ -98,7 +99,7 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 @keyframes pulse { 50% { opacity: .35; } }
 .card.confirm { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
 .card.done { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
-.chip { padding: 1px 8px; border-radius: 7px; background: var(--raised); color: var(--ink); font-size: .76rem; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
+.chip { padding: 2px 8px; border-radius: 7px; background: var(--raised); color: var(--ink); font-size: .76rem; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .count { display: inline-flex; align-items: center; gap: 4px; }
 .count i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
 
@@ -134,13 +135,6 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 /* the folder of a conversation that is open outside every project */
 .chip.apart { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
 #empty { color: var(--muted); margin-top: 30px; text-align: center; }
-
-/* A writer lock keeps a history record available, but is not proof of a visible window. */
-.held-sessions { margin-top: 22px; }
-.held-sessions summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 11px 2px; color: var(--muted); cursor: pointer; list-style-position: inside; }
-.held-sessions summary b { color: var(--ink); font-size: .92rem; }
-.held-sessions summary span { font-size: .8rem; text-align: right; }
-.held-sessions[open] summary { margin-bottom: 8px; }
 
 /* ---- sheet from the bottom, toast */
 dialog { width: 100%; max-width: 560px; margin: auto auto 0; padding: 0; border: 0; border-radius: 22px 22px 0 0; background: var(--panel); color: var(--ink); max-height: 86vh; }

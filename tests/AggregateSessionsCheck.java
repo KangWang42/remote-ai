@@ -26,19 +26,19 @@ public final class AggregateSessionsCheck {
         ));
         require(groups.size() == 3, "Empty and terminal-only projects must survive without duplicate project rows");
         AggregateSessions.Project group = groups.get(0);
-        require(group.active.size() == 2, "Shared/unknown locks and duplicate attached histories entered active count");
-        require(group.history.size() == 3, "Locked histories were lost");
+        require(group.active.size() == 4, "open and held conversations are available without duplicating attached sessions");
+        require(group.history.size() == 1, "only closed conversations enter history");
         require(group.ended.size() == 1 && "ended".equals(group.ended.get(0).kind(null)), "Closed terminals must remain in their own history section");
         require("等你确认".equals(group.active.get(0).label()), "Confirmation must sort before computer work");
-        require("被电脑上的应用占用".equals(group.history.get(0).label()), "Shared busy lock must not display running");
-        require("被电脑上的程序占用".equals(group.history.get(1).label()), "Legacy host must not imply computer CLI");
-        require("历史对话".equals(group.history.get(2).label()), "Ended history label");
+        require("被电脑上的应用占用".equals(group.active.get(2).label()), "shared lock must not display running");
+        require("被电脑上的程序占用".equals(group.active.get(3).label()), "legacy host must not imply CLI");
+        require("历史对话".equals(group.history.get(0).label()), "saved history label");
         require(groups.get(1).active.isEmpty(), "Empty configured project omitted or polluted");
         require("正在启动".equals(groups.get(2).active.get(0).label()), "Starting terminal must be listed");
 
         List<AggregateSessions.Project> other = AggregateSessions.projects(Collections.singletonList("同名项目"),
             Collections.singletonList(saved("同名项目", "other", "cli", true, "")));
-        require(other.get(0).active.size() == 1 && group.active.size() == 2, "Separate computers with the same project name must remain separate");
+        require(other.get(0).active.size() == 1 && group.active.size() == 4, "Separate computers with the same project name must remain separate");
         require(!AggregateSessions.signature(groups).equals(AggregateSessions.signature(other)), "Inventory changes must update render signature");
         List<AggregateSessions.Project> copied = AggregateSessions.projects(Arrays.asList("同名项目", "空项目", "同名项目"), Arrays.asList(
             saved("同名项目", "cli", "cli", true, ""), terminal("同名项目", "confirm", "running", "phone-session"),
@@ -60,7 +60,7 @@ public final class AggregateSessionsCheck {
         require(AggregateSessions.rank("confirm") < AggregateSessions.rank("done") && AggregateSessions.rank("done") < AggregateSessions.rank("busy")
             && AggregateSessions.rank("idle") < AggregateSessions.rank("pc-busy"), "Attention order must match the pages");
         int[] counts = AggregateSessions.counts(groups, null);
-        require(counts[0] == 1 && counts[1] == 0 && counts[2] == 2 && counts[3] == 3, "Counts must cover confirm, busy with starting, and all open tasks");
+        require(Arrays.equals(counts, new int[]{1, 2, 2, 5}), "confirmation, opened, running, total");
         List<AggregateSessions.Project> one = AggregateSessions.projects(Collections.singletonList("项目"), Collections.singletonList(finished));
         looked.clear();
         String unseen = AggregateSessions.signature(one, looked);
@@ -99,16 +99,15 @@ public final class AggregateSessionsCheck {
         AggregateSessions.Entry works = new AggregateSessions.Entry(false, "c", "桌面", "做", "codex", "", "", "busy", true, "shared", "", "");
         asks.reached = waits.reached = works.reached = true;
         List<AggregateSessions.Project> desk = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(works, held, waits, asks));
-        require(desk.get(0).active.size() == 3 && desk.get(0).history.size() == 1 && "a".equals(desk.get(0).active.get(0).id) && "b".equals(desk.get(0).active.get(1).id), "what asks comes first, then what waits for a message, then what works");
-        require(Arrays.equals(AggregateSessions.counts(desk, null), new int[]{1, 1, 1, 3}), "they are counted with the terminals: " + Arrays.toString(AggregateSessions.counts(desk, null)));
+        require(desk.get(0).active.size() == 4 && desk.get(0).history.isEmpty() && "a".equals(desk.get(0).active.get(0).id) && "b".equals(desk.get(0).active.get(1).id), "all open conversations remain in their project");
+        require(Arrays.equals(AggregateSessions.counts(desk, null), new int[]{1, 2, 1, 4}), "a retained lock is opened, not executing");
         require(AggregateSessions.rank("waiting") < AggregateSessions.rank("busy") && AggregateSessions.rank("stopped") > AggregateSessions.rank("idle"), "one that waits for a message stands before those at work, one that has stopped after those that wait for input");
-        // A conversation that a program holds without anybody being at it (a desktop app keeps what it has loaded): no task,
-        // whatever its tool says of it; it is listed with the saved ones of its project, and says how it stands.
+        // A retained conversation remains opened, even after it is no longer recently used.
         AggregateSessions.Entry kept = new AggregateSessions.Entry(false, "kept", "桌面", "桌面版加载过的", "claude", "", "", "idle", true, "cli", "", "");
         kept.now = false; kept.reached = true;
         require(!kept.running() && "held".equals(kept.kind(null)) && "电脑上闲置".equals(kept.label()), "held and not in use: " + kept.kind(null));
         List<AggregateSessions.Project> withKept = AggregateSessions.projects(Collections.singletonList("桌面"), Arrays.asList(works, kept));
-        require(withKept.get(0).active.size() == 1 && withKept.get(0).history.size() == 1 && AggregateSessions.counts(withKept, null)[3] == 1, "it is no task and is not counted");
+        require(withKept.get(0).active.size() == 2 && withKept.get(0).history.isEmpty() && Arrays.equals(AggregateSessions.counts(withKept, null), new int[]{0, 1, 1, 2}), "idle retained conversations count as opened");
 
         // A conversation that a program has open in a folder that is no project: it has no project, says its folder,
         // stands in a group without a name, and counts with the tasks.
@@ -154,19 +153,20 @@ public final class AggregateSessionsCheck {
         for (AggregateSessions.Entry entry : Arrays.asList(shell, gone, alone, past1, past2, past3, asks, waits, works, outside, held)) things.add(on.apply(entry));
         java.util.function.Function<List<AggregateSessions.Thing>, String> ids = list -> { StringBuilder all = new StringBuilder(); for (AggregateSessions.Thing thing : list) all.append(thing.entry.terminal ? thing.entry.shownTitle() : thing.entry.id).append(' '); return all.toString().trim(); };
         AggregateSessions.Board board = AggregateSessions.board(things, "", "", "");
-        require("a b".equals(ids.apply(board.needs)), "what asks, then what waits for a message: " + ids.apply(board.needs));
-        require("c past-2".equals(ids.apply(board.pinned)), "what is pinned, the open one first: " + ids.apply(board.pinned));
-        require("out 看日志".equals(ids.apply(board.active)), "what is at work, by how it stands: " + ids.apply(board.active));
-        // an ended terminal whose conversation is listed is not listed twice; what is hidden and what a program holds are left out
+        require("a".equals(ids.apply(board.needs)), "only confirmation requests enter needs");
+        require("past-2".equals(ids.apply(board.pinned)), "saved pinned records remain in pinned: " + ids.apply(board.pinned));
+        require("c out".equals(ids.apply(board.active)), "pinned running tasks remain in the running group");
+        require("b 看日志 desk".equals(ids.apply(board.opened)), "waiting input and retained locks are opened");
+        // an ended terminal whose conversation is listed is not listed twice; hidden history is left out
         require("past-1 只有画面的终端".equals(ids.apply(board.recent)) && !board.searched && board.found.isEmpty(), "what was used lately: " + ids.apply(board.recent));
         require("[claude, codex, shell]".equals(board.tools.toString()) && "[term, app]".equals(board.sources.toString()), board.tools + " " + board.sources);
         // narrowed by tool and by where a thing runs
         AggregateSessions.Board claudeOnly = AggregateSessions.board(things, "", "claude", "");
-        require("a b".equals(ids.apply(claudeOnly.needs)) && "past-2".equals(ids.apply(claudeOnly.pinned)) && claudeOnly.active.isEmpty() && "past-1".equals(ids.apply(claudeOnly.recent)), "one tool");
+        require("a".equals(ids.apply(claudeOnly.needs)) && "past-2".equals(ids.apply(claudeOnly.pinned)) && claudeOnly.active.isEmpty() && "b".equals(ids.apply(claudeOnly.opened)) && "past-1".equals(ids.apply(claudeOnly.recent)), "one tool");
         // in a terminal (one of the phone's, a command line on the computer), or in an app
         AggregateSessions.Board termOnly = AggregateSessions.board(things, "", "", "term"), appOnly = AggregateSessions.board(things, "", "", "app");
-        require(ids.apply(termOnly.active).contains("看日志") && !ids.apply(termOnly.active).contains("out") && termOnly.tools.size() == 3, "what runs in a terminal: " + ids.apply(termOnly.active));
-        require("out".equals(ids.apply(appOnly.active)) && !ids.apply(appOnly.recent).contains("past"), "what runs in an app: " + ids.apply(appOnly.active) + " | " + ids.apply(appOnly.recent));
+        require(termOnly.active.isEmpty() && "b 看日志".equals(ids.apply(termOnly.opened)) && termOnly.tools.size() == 3, "terminal waiting sessions are opened");
+        require("c out".equals(ids.apply(appOnly.active)) && "desk".equals(ids.apply(appOnly.opened)) && !ids.apply(appOnly.recent).contains("past"), "app filtering keeps both running and opened groups");
         // one that no program has open is told by what started it, where the computer says so
         AggregateSessions.Entry drawn = new AggregateSessions.Entry(false, "drawn", "web-shop", "桌面版里画的", "codex", "", "", "", false, "", "", ""), typed = new AggregateSessions.Entry(false, "typed", "web-shop", "终端里写的", "codex", "", "", "", false, "", "", "");
         drawn.kind = "Codex 桌面版"; typed.kind = "终端";
@@ -206,6 +206,23 @@ public final class AggregateSessionsCheck {
         require("out".equals(ids.apply(AggregateSessions.board(things, "未加入项目", "", "").found)) && AggregateSessions.board(things, "没有这样的", "", "").found.isEmpty(), "by what a card says; and nothing");
         require(AggregateSessions.board(things, "旧的", "claude", "").found.isEmpty(), "a search stays within what the filters leave");
         require("out".equals(outside.conversation()) && "past-1".equals(gone.conversation()) && shell.conversation().isEmpty(), "the conversation a mark is kept of");
+        // A single identity moves between groups; pinning must not change its state category.
+        for (String status : Arrays.asList("confirm", "busy", "waiting", "idle", "closed")) {
+            AggregateSessions.Entry moving = new AggregateSessions.Entry(false, "moving", "web-shop", "same conversation", "codex", "", "", status, !"closed".equals(status), "cli", "", "");
+            moving.reached = true; moving.pinned = true;
+            AggregateSessions.Board moved = AggregateSessions.board(Collections.singletonList(on.apply(moving)), "", "", "");
+            require(moved.needs.size() == ("confirm".equals(status) ? 1 : 0), "confirmation membership: " + status);
+            require(moved.active.size() == ("busy".equals(status) ? 1 : 0), "execution membership: " + status);
+            require(moved.opened.size() == ("waiting".equals(status) || "idle".equals(status) ? 1 : 0), "opened membership: " + status);
+            require(moved.pinned.size() == ("closed".equals(status) ? 1 : 0), "saved pin membership: " + status);
+        }
+        require(AggregateSessions.counts(one, looked)[1] == 1, "completed but still open terminal is counted as opened");
+        inEditor.canTakeover = true;
+        require(inEditor.canEnd(true) && !inEditor.canEnd(false), "legacy verified editor CLI can be ended when supported");
+        inEditor.endWay = "";
+        require(!inEditor.canEnd(true), "explicitly unavailable end overrides the legacy capability");
+        inEditor.endWay = "process"; inEditor.canTakeover = false;
+        require(inEditor.canEnd(true), "per-action capability permits ending from the card");
         System.out.println("Aggregate checks passed: computer isolation, active/history separation, recent ordering, locks, deduplication, stable refresh and exact terminal route.");
     }
 }

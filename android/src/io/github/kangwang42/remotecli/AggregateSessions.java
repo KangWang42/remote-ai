@@ -22,13 +22,14 @@ final class AggregateSessions {
          * is at work there like a terminal, and stands among the tasks by how it stands. canSay: a message can be left for it.
          */
         boolean reached, canSay, canTakeover;
+        String endWay;          // null for older computers without per-action capabilities
         boolean canEnd(boolean supported) {
-            return terminal ? "running".equals(state) : supported && live && canTakeover && attached.isEmpty();
+            return terminal ? running() : supported && live && attached.isEmpty() && (endWay == null ? canTakeover : "process".equals(endWay));
         }
         /**
          * Whether a conversation that a program on the computer holds is in use now (the computer says: at work, asking,
          * in a window of its own, or used a moment ago). A desktop app keeps every conversation it has loaded held; one
-         * that is held and not in use is no task. A computer that does not say takes every held one for one in use.
+         * that is held and not in use is opened but idle. A computer that does not say takes every held one for one in use.
          */
         boolean now = true;
         String origin = "";     // where a conversation on the computer runs, as the computer says it: "Codex 桌面版", "命令行", "VS Code"
@@ -73,6 +74,7 @@ final class AggregateSessions {
         boolean running() {
             return terminal ? "running".equals(state) || "starting".equals(state) : live && now && ("cli".equals(host) || reached);
         }
+        boolean open() { return terminal ? running() : live; }
         /**
          * A phone terminal is confirm, done, busy, starting, idle or ended; a saved conversation is pc-busy, pc-idle,
          * held (a program has it and nobody is at it), locked, remote, unknown or history, and one whose tool tells of it is confirm, waiting (it has stopped and
@@ -87,6 +89,7 @@ final class AggregateSessions {
                 if ("shared".equals(host)) return "locked";
                 if ("remote".equals(host)) return "remote";
                 if (!"cli".equals(host)) return "unknown";
+                if ("confirm".equals(status) || "waiting".equals(status)) return status;
                 return "busy".equals(status) ? "pc-busy" : "pc-idle";
             }
             if ("starting".equals(state)) return "starting";
@@ -138,14 +141,17 @@ final class AggregateSessions {
     static String sourceOfKind(String kind) { return kind == null || kind.isEmpty() ? "" : "终端".equals(kind) ? "term" : "app"; }
     /** By what a thing runs and where it is, in the words of a card: "手机终端 · thesis", "Codex 桌面版 · notes（未加入项目）". */
     static String where(Entry entry) {
+        String runs = location(entry);
+        String place = entry.place() + (entry.apart() ? "（未加入项目）" : "");
+        return runs.isEmpty() ? place : place.isEmpty() ? runs : runs + " · " + place;
+    }
+    static String location(Entry entry) {
         // a terminal of the phone's; the program that has a conversation open (and whether it is an editor's terminal);
         // for one that is only saved, by what it was started
-        String runs = entry.terminal ? (entry.running() ? "手机终端" : "")
+        return entry.terminal ? (entry.running() ? "手机终端" : "")
             : !entry.live ? entry.kind
             : "电脑独立终端".equals(entry.origin) ? ""
             : entry.origin + ("终端".equals(entry.kind) && !entry.origin.isEmpty() && !"命令行".equals(entry.origin) && !entry.origin.contains("桌面版") ? " 的终端" : "");
-        String place = entry.place() + (entry.apart() ? "（未加入项目）" : "");
-        return runs.isEmpty() ? place : place.isEmpty() ? runs : runs + " · " + place;
     }
 
     /** An entry on one of the computers, as the workbench lists it, and how it stands (kind). */
@@ -160,14 +166,15 @@ final class AggregateSessions {
                 + (entry.apart() ? "\n未加入项目" : "") + (entry.pinned ? "\n置顶" : "") + (entry.hidden ? "\n已隐藏" : "")).toLowerCase(java.util.Locale.ROOT);
         }
     }
-    static boolean needs(String kind) { return "confirm".equals(kind) || "done".equals(kind) || "waiting".equals(kind); }
+    static boolean needs(String kind) { return "confirm".equals(kind); }
+    static boolean working(String kind) { return "busy".equals(kind) || "starting".equals(kind) || "pc-busy".equals(kind); }
     /**
      * The workbench's lists, by what needs the owner: what waits for an answer, what is pinned, what is at work, what
-     * was used lately. With words to search for there is one list instead (found): everything that has all of them,
+     * was used lately. A conversation that is open but waiting for input belongs in opened; with words to search for there is one list instead (found): everything that has all of them,
      * what is hidden too. tool and source narrow every list ("" for any).
      */
     static final class Board {
-        final List<Thing> needs = new ArrayList<>(), pinned = new ArrayList<>(), active = new ArrayList<>(), recent = new ArrayList<>(), found = new ArrayList<>();
+        final List<Thing> needs = new ArrayList<>(), pinned = new ArrayList<>(), active = new ArrayList<>(), opened = new ArrayList<>(), recent = new ArrayList<>(), found = new ArrayList<>();
         boolean searched;
         final Set<String> tools = new java.util.LinkedHashSet<>(), sources = new java.util.LinkedHashSet<>();     // what there is to tell apart by, before narrowing
     }
@@ -193,21 +200,24 @@ final class AggregateSessions {
                 if (has) board.found.add(thing);
             }
             else if (thing.running() && needs(thing.kind)) board.needs.add(thing);
-            else if (entry.pinned && (thing.running() || past)) board.pinned.add(thing);
-            else if (thing.running()) board.active.add(thing);
+            else if (entry.open() && working(thing.kind)) board.active.add(thing);
+            else if (entry.open()) board.opened.add(thing);
+            else if (entry.pinned && past) board.pinned.add(thing);
             else if (past && !entry.hidden) board.recent.add(thing);
         }
         Comparator<Thing> standing = (a, b) -> rank(a.kind) != rank(b.kind) ? rank(a.kind) - rank(b.kind) : Long.compare(recent(b.entry), recent(a.entry));
         Comparator<Thing> lately = (a, b) -> Long.compare(recent(b.entry), recent(a.entry));
         // what is open comes before what is only saved
         Comparator<Thing> open = (a, b) -> a.running() != b.running() ? (a.running() ? -1 : 1) : a.running() ? standing.compare(a, b) : lately.compare(a, b);
-        Collections.sort(board.needs, standing); Collections.sort(board.active, standing);
+        Comparator<Thing> pinnedFirst = (a, b) -> a.entry.pinned != b.entry.pinned ? (a.entry.pinned ? -1 : 1) : standing.compare(a, b);
+        Collections.sort(board.needs, pinnedFirst); Collections.sort(board.active, pinnedFirst); Collections.sort(board.opened, pinnedFirst);
         Collections.sort(board.pinned, open); Collections.sort(board.found, open); Collections.sort(board.recent, lately);
         return board;
     }
 
     static final class Project {
         final String name;
+        // All open records; the view splits these into confirmation, execution and opened groups.
         final List<Entry> active = new ArrayList<>(), ended = new ArrayList<>(), history = new ArrayList<>();
         /** With which tools and where its folder is used: as the computer says of the folder, and by what is in it now. */
         final Set<String> tools = new HashSet<>(), sources = new HashSet<>();
@@ -237,30 +247,30 @@ final class AggregateSessions {
             if (!entry.terminal && (!entry.attached.isEmpty() || phoneSessions.contains(entry.tool + ":" + entry.id))) continue;
             Project group = groups.get(entry.project);
             if (entry.terminal && !entry.running()) group.ended.add(entry);
-            else if (entry.running()) group.active.add(entry); else group.history.add(entry);
+            else if (entry.open()) group.active.add(entry); else group.history.add(entry);
         }
         Project apart = new Project("");
         for (Entry entry : entries) {
             if (!entry.apart() || !entry.terminal && (!entry.live || !entry.attached.isEmpty() || phoneSessions.contains(entry.tool + ":" + entry.id))) continue;
-            (entry.running() ? apart.active : entry.terminal ? apart.ended : apart.history).add(entry);
+            (entry.open() ? apart.active : entry.terminal ? apart.ended : apart.history).add(entry);
         }
         if (!apart.active.isEmpty() || !apart.ended.isEmpty() || !apart.history.isEmpty()) groups.put("", apart);
         for (Project group : groups.values()) {
-            Collections.sort(group.active, Comparator.comparingInt(Entry::rank));
+            Collections.sort(group.active, (a, b) -> a.pinned != b.pinned ? (a.pinned ? -1 : 1) : Integer.compare(a.rank(), b.rank()));
             Collections.sort(group.ended, (a, b) -> Long.compare(recent(b), recent(a)));
             Collections.sort(group.history, (a, b) -> Long.compare(b.used, a.used));       // stable: without times the order stays as sent
         }
         return new ArrayList<>(groups.values());
     }
     static long recent(Entry entry) { return entry.used > 0 ? entry.used : entry.at; }
-    /** How many running tasks are confirm, done, busy (starting included) and open in all. */
+    /** How many open tasks need confirmation, are waiting, are executing, and are open in all. */
     static int[] counts(List<Project> projects, Map<String, Long> seen) {
         int[] counts = new int[4];
         for (Project project : projects) for (Entry entry : project.active) {
             String kind = entry.kind(seen);
             if ("confirm".equals(kind)) counts[0]++;
-            else if ("done".equals(kind) || "waiting".equals(kind)) counts[1]++;
-            else if ("busy".equals(kind) || "starting".equals(kind) || "pc-busy".equals(kind)) counts[2]++;
+            else if (working(kind)) counts[2]++;
+            else counts[1]++;
             counts[3]++;
         }
         return counts;
@@ -279,7 +289,7 @@ final class AggregateSessions {
                 for (Entry entry : entries) {
                     add(key, entry.id); add(key, entry.shownTitle()); add(key, entry.tool);
                     add(key, label(entry.kind(seen))); add(key, entry.host); add(key, entry.origin);
-                    add(key, entry.folder); key.append(entry.pinned ? 'p' : '-').append(entry.hidden ? 'h' : '-').append(entry.canTakeover ? 'e' : '-');
+                    add(key, entry.folder); add(key, entry.endWay == null ? "legacy" : entry.endWay); key.append(entry.pinned ? 'p' : '-').append(entry.hidden ? 'h' : '-').append(entry.canTakeover ? 'e' : '-');
                     if (entries == project.history || entries == project.ended) add(key, ago(recent(entry), System.currentTimeMillis()));
                 }
             }

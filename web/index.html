@@ -53,16 +53,20 @@
       <!-- by what needs you: what waits for an answer, what you pinned, what is at work, what was used lately -->
       <div id="sections">
         <section id="needs" hidden>
-          <div class="section-head"><h2>等你处理</h2><p id="needs-summary"></p></div>
+          <div class="section-head"><h2>等你确认</h2><p id="needs-summary"></p></div>
           <ul class="cards" id="needs-list"></ul>
         </section>
         <section id="pinned" hidden>
-          <div class="section-head"><h2>置顶</h2><p id="pinned-summary"></p></div>
+          <div class="section-head"><h2>置顶记录</h2><p id="pinned-summary"></p></div>
           <ul class="cards" id="pinned-list"></ul>
         </section>
         <section id="active" hidden>
-          <div class="section-head"><h2>进行中</h2><p id="active-summary"></p></div>
+          <div class="section-head"><h2>正在运行</h2><p id="active-summary"></p></div>
           <ul class="cards" id="active-list"></ul>
+        </section>
+        <section id="opened" hidden>
+          <div class="section-head"><h2>已打开</h2><p id="opened-summary"></p></div>
+          <ul class="cards" id="opened-list"></ul>
         </section>
         <section id="recent" hidden>
           <div class="section-head"><h2>最近</h2><p id="recent-summary"></p></div>
@@ -70,10 +74,6 @@
           <button type="button" id="more-recent" class="quiet wide" hidden>显示更多</button>
         </section>
         <p id="nothing" hidden>没有符合筛选的对话或终端。</p>
-        <details id="background" class="held-sessions" hidden>
-          <summary><b>电脑上闲置或被占用的对话</b><span id="background-summary"></span></summary>
-          <ul class="cards" id="background-list"></ul>
-        </details>
       </div>
       <section id="projects">
         <div class="section-head"><h2>项目</h2><p id="project-summary"></p></div>
@@ -85,9 +85,9 @@
     <div id="project" hidden>
       <button type="button" id="project-files" aria-label="浏览这个项目的文件"><span class="tool folder" id="project-files-icon"></span><span class="text"><b>文件</b><span id="project-path"></span></span><span class="chev" id="project-files-chev"></span></button>
       <div id="launch" aria-label="新建终端"></div>
-      <section id="p-active" hidden><div class="section-head" data-fold="active" role="button" tabindex="0" aria-expanded="false"><h2>进行中</h2><p></p></div><ul class="cards"></ul></section>
-      <section id="p-live" hidden><div class="section-head" data-fold="live" role="button" tabindex="0" aria-expanded="false"><h2>电脑上打开着</h2><p></p></div><ul class="cards"></ul></section>
-      <details id="p-background" class="held-sessions" hidden><summary><b>电脑上闲置或被占用的对话</b><span id="p-background-summary"></span></summary><ul class="cards"></ul></details>
+      <section id="p-needs" hidden><div class="section-head"><h2>等你确认</h2></div><ul class="cards"></ul></section>
+      <section id="p-active" hidden><div class="section-head" data-fold="active" role="button" tabindex="0" aria-expanded="false"><h2>正在运行</h2><p></p></div><ul class="cards"></ul></section>
+      <section id="p-live" hidden><div class="section-head" data-fold="live" role="button" tabindex="0" aria-expanded="false"><h2>已打开</h2><p></p></div><ul class="cards"></ul></section>
       <section id="p-history" hidden>
         <div class="section-head" data-fold="history" role="button" tabindex="0" aria-expanded="false"><h2>历史对话</h2><p id="history-count"></p></div>
         <input id="search" type="search" placeholder="搜索对话标题" aria-label="搜索历史对话" hidden>

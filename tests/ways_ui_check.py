@@ -47,6 +47,8 @@ def main():
                  ways={'say': '', 'stop': '', 'answer': '', 'end': ''}, why={'say': '暂时无法连接 Codex 原对话：应用连接尚未就绪、工作目录无法确认，或此版本尚未适配。请在电脑上打开这段对话后刷新；无需先添加项目', 'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
         ]
         asked, forwarded, opened, events, refuse = [], [], [], [], [False]
+        board_mode = [False]
+        board_terminals = []
         transcript = [{'role': 'user', 'text': '电脑上的第一句'}, {'role': 'assistant', 'text': '电脑上的回答。'}]
 
         def report():
@@ -69,7 +71,9 @@ def main():
                     return self.reply({'signed_in': True})
                 if self.path == '/api/terminal':
                     report()
-                    return self.reply(relay.overview())
+                    overview = relay.overview()
+                    if board_mode[0]: overview['terminals'] = board_terminals
+                    return self.reply(overview)
                 if self.path == '/favicon.ico':
                     self.send_response(204); self.end_headers(); return
                 super().do_GET()
@@ -98,6 +102,11 @@ def main():
                             ack = {'id': op['id'], 'result': {'status': 'accepted', 'sent': True, 'now': by == 'codex-desktop', 'way': by or 'hook', 'turn': 'turn-8'}}
                         elif op['action'] == 'session_stop':
                             ack = {'id': op['id'], 'result': {'status': 'asked', 'transport': 'hook'} if by == 'hook' else {'status': 'confirmed', 'turn': op.get('turn')}}
+                        elif op['action'] == 'session_end' and board_mode[0]:
+                            time.sleep(.3)
+                            one = next(s for s in sessions if s['id'] == payload['session'])
+                            one.update(live=False, status='idle')
+                            ack = {'id': op['id'], 'result': {}}
                         elif op['action'] in ('session_withdraw', 'session_release'):
                             # the computer keeps what waits: taken back it is gone, released it waits again
                             one = next(s for s in sessions if s['id'] == payload['session'])
@@ -172,6 +181,89 @@ def main():
 
             ask('Page.enable'); ask('Runtime.enable'); ask('Log.enable')
             ask('Emulation.setDeviceMetricsOverride', width=390, height=844, deviceScaleFactor=1, mobile=True)
+
+            # The overview and project detail use the same mutually exclusive state groups.
+            original = [dict(s) for s in sessions]
+            board_mode[0] = True
+            sessions[0].update(status='confirm')
+            sessions[1].update(origin='Positron', pinned=True)
+            sessions[2].update(status='waiting')
+            retained = dict(original[2], id='11111111-2222-3333-4444-555555555556', title='应用保留的闲置对话', now=False)
+            sessions.append(retained)
+            board_terminals[:] = [dict(id='a' * 32, tool='shell', title='等待输入的终端', dir=PROJECT,
+                                      state='running', phase='idle', created=now, phase_at=now, done=True),
+                                  dict(id='b' * 32, tool='codex', title='正在启动的终端', dir=PROJECT,
+                                      state='starting', phase='starting', created=now, phase_at=now)]
+            base = 'http://127.0.0.1:%d/' % port
+            names = lambda selector: value("Array.from(document.querySelectorAll(%s + ' .card b')).map(b => b.textContent)" % json.dumps(selector))
+
+            def overview():
+                value("history.replaceState(null, '')")
+                ask('Page.navigate', url=base)
+                until("document.querySelector('#opened-list .card') !== null")
+
+            overview()
+            assert names('#needs') == [sessions[0]['title']]
+            assert names('#active') == [sessions[1]['title'], '正在启动的终端']
+            assert set(names('#opened')) == {sessions[2]['title'], sessions[3]['title'], retained['title'], '等待输入的终端'}
+            assert names('#pinned') == [], 'a live pinned task stays in its state group'
+            assert value("document.querySelector('#project-list').textContent.includes('2 个正在运行')")
+            assert value("document.querySelector('#active .chip').textContent") == PROJECT
+            assert value("document.querySelector('#active').textContent.includes('Positron 的终端')")
+            assert value("document.querySelectorAll('.end-session').length") == 1, 'only the verified CLI can be ended'
+            geometries = []
+            for width in (320, 390, 430, 1440):
+                ask('Emulation.setDeviceMetricsOverride', width=width, height=844, deviceScaleFactor=1, mobile=width < 500)
+                geometry = value("({width:innerWidth, client:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth, body:document.body.scrollWidth})")
+                assert geometry['width'] == width and max(geometry['scroll'], geometry['body']) <= geometry['client'] + 1, geometry
+                # Login and signed-in content each own a heading/landmark; only one is visible at a time.
+                assert value("Array.from(document.querySelectorAll('h1')).filter(e => e.getClientRects().length).length") == 1
+                assert value("Array.from(document.querySelectorAll('main')).filter(e => e.getClientRects().length).length") == 1
+                assert value("new Set(Array.from(document.querySelectorAll('[id]')).map(e => e.id)).size === document.querySelectorAll('[id]').length")
+                geometries.append(geometry)
+                picture('board-%d.png' % width)
+            (out / 'board-layout.json').write_text(json.dumps(geometries, indent=2), encoding='utf-8')
+            ask('Emulation.setDeviceMetricsOverride', width=390, height=844, deviceScaleFactor=1, mobile=True)
+            value("document.getElementById('opened').scrollIntoView()")
+            picture('board-opened.png')
+            value("scrollTo(0, 0)")
+            value("document.querySelector('#project-list .card button.open').click()")
+            until("!document.getElementById('project').hidden")
+            for section in ('p-active', 'p-live'):
+                value("document.querySelector('#%s .section-head').click()" % section)
+            assert set(names('#p-active')) == {sessions[1]['title'], '正在启动的终端'}
+            assert set(names('#p-live')) == {sessions[2]['title'], retained['title'], '等待输入的终端'}
+            assert names('#p-needs') == [sessions[0]['title']]
+            assert value("Array.from(document.querySelectorAll('#project .card')).every(c => c.querySelector('.chip')?.textContent === %s)" % json.dumps(PROJECT))
+            picture('project-states.png')
+
+            # Live refresh moves the same session to opened and back without duplicating it.
+            sessions[1]['status'] = 'waiting'
+            until("Array.from(document.querySelectorAll('#p-live .card b')).some(b => b.textContent === '命令行里的 Codex')")
+            assert sessions[1]['title'] not in names('#p-active')
+            sessions[1]['status'] = 'busy'
+            until("Array.from(document.querySelectorAll('#p-active .card b')).some(b => b.textContent === '命令行里的 Codex')")
+            overview()
+            before = len(asked)
+            value("document.querySelector('.end-session').click()")
+            until("document.querySelector('#sheet[open] button.danger') !== null")
+            assert len(asked) == before
+            picture('card-end-confirm.png')
+            value("document.querySelector('#sheet button.cancel').click()")
+            until("!document.getElementById('sheet').open")
+            assert len(asked) == before, 'cancel never submits an end operation'
+            value("document.querySelector('.end-session').click()")
+            until("document.querySelector('#sheet[open] button.danger') !== null")
+            value("document.querySelector('#sheet button.danger').click()")
+            until("document.querySelector('.end-session')?.disabled === true")
+            value("document.querySelector('.end-session').click()")
+            until("document.querySelectorAll('.end-session').length === 0")
+            assert len(asked) == before + 1 and asked[-1]['action'] == 'end' and asked[-1]['session'] == CLI
+            assert sessions[1]['title'] not in names('#active') + names('#opened')
+            assert sessions[1]['title'] in names('#pinned'), 'closed pinned conversation is retained as a saved record'
+            sessions[:] = original
+            board_mode[0] = False
+            board_terminals.clear()
 
             # ---- Claude Code in its desktop app, at work
             window(CLAUDE)

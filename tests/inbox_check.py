@@ -181,7 +181,7 @@ def main():
         LISTS = """(() => {
           const names = id => Array.from(document.querySelectorAll('#' + id + '-list > .card')).map(c => c.querySelector('b').textContent);
           const out = {};
-          for (const id of ['needs', 'pinned', 'active', 'recent', 'background']) out[id] = document.getElementById('sections').hidden || document.getElementById(id).hidden ? null : names(id);
+          for (const id of ['needs', 'pinned', 'active', 'recent', 'opened']) out[id] = document.getElementById('sections').hidden || document.getElementById(id).hidden ? null : names(id);
           out.results = document.getElementById('results').hidden ? null : names('results');
           out.filters = document.getElementById('filters').hidden ? null : Array.from(document.querySelectorAll('#filters button')).map(b => (b.classList.contains('on') ? '*' : '') + b.textContent);
           out.projects = document.getElementById('projects').hidden ? null : Array.from(document.querySelectorAll('#project-list .card:not(.add) b')).map(b => b.textContent);
@@ -216,13 +216,12 @@ def main():
         says = lambda where, title: page_value("%s(%s, %s)" % (SAYS, json.dumps(where), json.dumps(title, ensure_ascii=False)))
         app, term, both, plain = says("#overview", "桌面版里闲置的对话"), says("#overview", "看日志"), says("#project-list", "web-shop"), says("#project-list", "thesis")
         report["where"] = {"app": app, "terminal": term, "project_both": both, "project_terminal": plain}
-        assert app[0][1] == "Claude 桌面版" and term[0][1].startswith("PowerShell · 手机终端"), report["where"]
+        assert app[0][1].startswith("Claude 桌面版 · ") and term[0][1].startswith("PowerShell · 手机终端"), report["where"]
         assert both[0][-1] == "终端 · 应用 · 6 段对话" and plain[0][-1] == "终端 · 4 段对话", report["where"]
         assert len({tuple(seen[1:]) for seen in (app, term, both, plain)}) == 1 and app[2] == "none", report["where"]
-        mine = (first["needs"] or []) + (first["active"] or [])
-        assert "部署到测试环境" in first["needs"] and "整理读书笔记" in first["active"] and "看日志" in mine and len(mine) == 3, first
+        assert first["needs"] == ["部署到测试环境"] and first["active"] == ["整理读书笔记"], first
         assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券"] and first["more"], first
-        assert first["background"] == ["桌面版里闲置的对话", "被占着的对话"] and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and "等你确认" in first["summary"], first
+        assert set(first["opened"]) == {"看日志", "桌面版里闲置的对话", "被占着的对话"} and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and "等你确认" in first["summary"], first
         assert first["filters"] == ["*全部", "Claude Code", "Codex", "PowerShell", "终端", "应用"], first
         # each card says where it is and by what it runs; the one outside every project says its folder, and that it is none
         outside, shell = about("整理读书笔记"), about("看日志")
@@ -239,9 +238,8 @@ def main():
         # it is not taken from the app, and the message is handed to it by a session of its own tool (here a stand-in)
         idle = listed(IDLE)
         assert (idle["live"], idle["now"], idle["activity"], idle["reach"], idle["wake"], idle["origin"]) == (True, False, "locked", ["say"], True, "Claude 桌面版"), idle
-        page_value("(() => { document.getElementById('background').open = true; return 1; })()")
         kept = about("桌面版里闲置的对话")
-        assert kept["list"] == "background-list" and kept["pill"] == "已停下" and kept["meta"][0] == "web-shop", kept
+        assert kept["list"] == "opened-list" and kept["pill"] == "电脑上闲置" and kept["meta"][0] == "web-shop", kept
         page_value("(() => { %s('桌面版里闲置的对话').querySelector('button.open').click(); return 1; })()" % CARD)
         # its window: what was said and a box to write in, filling the screen; nothing to choose, no lines of explanation
         WINDOW = "(() => { const s = document.getElementById('sheet'), w = s.querySelector('.write'); return s.open && w && !w.hidden ? { window: s.classList.contains('window'), tall: s.getBoundingClientRect().height / innerHeight," \
@@ -343,16 +341,16 @@ def main():
         # ---- told apart by tool, and by where a thing runs
         press("Claude Code")
         only = lists(lambda seen: seen["filters"][1] == "*Claude Code", "one tool")
-        assert only["needs"] is None and only["active"] is None and only["background"] == ["桌面版里闲置的对话"] and len(only["recent"]) == 2 and "画流程图" not in only["recent"] and not only["nothing"], only
+        assert only["needs"] is None and only["active"] is None and only["opened"] == ["桌面版里闲置的对话"] and len(only["recent"]) == 2 and "画流程图" not in only["recent"] and not only["nothing"], only
         # in an app: the conversation the desktop app holds, not the ones started in a terminal; and the project it is in
         press("应用")
         both = lists(lambda seen: "*应用" in seen["filters"] and seen["recent"] is None, "one tool, in an app")
-        assert both["background"] == ["桌面版里闲置的对话"] and both["needs"] is None and both["active"] is None and "web-shop" in both["projects"], both
+        assert both["opened"] == ["桌面版里闲置的对话"] and both["needs"] is None and both["active"] is None and "web-shop" in both["projects"], both
         # in a terminal: the phone's own, and what was started in one; the projects that are used so
         press("Claude Code")
         press("终端")
         term = lists(lambda seen: "*终端" in seen["filters"] and seen["filters"][1] == "Claude Code", "what runs in a terminal")
-        assert "看日志" in (term["needs"] or []) + (term["active"] or []) and "桌面版里闲置的对话" not in (term["background"] or []) and term["recent"] and term["projects"] == ["web-shop", "thesis"], term
+        assert "看日志" in (term["opened"] or []) and "桌面版里闲置的对话" not in (term["opened"] or []) and term["recent"] and term["projects"] == ["web-shop", "thesis"], term
         # a tool nothing of which is in an app: nothing, and no project
         press("PowerShell")
         press("应用")

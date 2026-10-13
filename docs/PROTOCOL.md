@@ -72,15 +72,19 @@ conversation (not `live` any more), so that the terminal keeps its name and mark
 there is no project: not a new terminal, and not a conversation the computer did not list there. Saved
 conversations of folders that are no projects, which nothing has open, are not listed. Once the folder is made a
 project (`project_add` with that path) the computer lists its conversations under that project.
-An idle conversation still held by an application remains listed outside projects too; `now` continues to determine
-whether it belongs in the active list. This does not expose closed history from unlisted folders.
+An idle conversation still held by an application remains listed outside projects too, in the opened group.
+This does not expose closed history from unlisted folders.
 
 `now` says of a `live` conversation whether it is in use: at work, asking or kept waiting for the phone; or in a
 window of its own (a command line, open for as long as its program runs); or used in the last ten minutes. A desktop
 app keeps every conversation it has loaded held by a process, shown or not, so `live` alone does not say that
 anybody is at it. One that is held and not in use has the `activity` `locked`: it is kept out of what is going on,
 and can still be looked at and taken on. A computer that does not send `now` is taken to mean that every held
-conversation is in use.
+conversation is in use. The phone uses distinct presentation groups: confirmation requests (`confirm`), executing
+tasks (`busy`, or a terminal in `starting`), and opened but waiting tasks. Every other live session, including a
+retained lock or `now: false` session, remains in opened with its actual status label. Closed records belong in
+recent/history. A live pinned session stays in its state group, sorted first; only closed pinned records use the
+separate pinned group. These presentation groups do not change `activity`, ownership or action capabilities.
 
 `pinned` and `hidden` are what the owner said of a conversation from a phone (see "A conversation that is open on
 the computer", the action `mark`). The computer keeps them, so every phone and every line shows the same; they are
