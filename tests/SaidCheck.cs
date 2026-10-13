@@ -55,6 +55,11 @@ public static class SaidCheck {
                 "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_success\",\"hookName\":\"Stop\",\"content\":\"\",\"stdout\":\"{}\"}}",
                 "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"Stop\",\"content\":[" + Quoted(Reach.FromPhone + ". It is the next message of the user of this conversation:\n\n作为上下文交来的\n第二行") + "]}}",
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"照做了。\"}]}}",
+                // handed over between two steps (Claude Code notes the hook by its event and the step's tool): the user's words too;
+                // what somebody else's hook added before a step is not
+                "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"PreToolUse:PowerShell\",\"hookEvent\":\"PreToolUse\",\"toolUseID\":\"toolu_1\",\"content\":[" + Quoted(Reach.BetweenSteps + "两步之间交来的") + "]}}",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"好，改了。\"}]}}",
+                "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"PreToolUse:Bash\",\"hookEvent\":\"PreToolUse\",\"content\":[\"lint first\n\nplease\"]}}",
                 "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"PostToolUse\",\"content\":[" + Quoted(Reach.FromPhone + ":\n\n别的钩子加的") + "]}}",
                 "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_additional_context\",\"hookName\":\"Stop\",\"content\":[\"The linter still fails.\\n\\nfix it\"]}}",
                 // written while the program went by its earlier name: read as its own as well
@@ -64,7 +69,7 @@ public static class SaidCheck {
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"收到。\"}]}}");
             // what the tools are told names the program as it is called now (tried with the real tools in these words)
             Require(Reach.FromPhone.Contains("Remote AI") && ClaudeRelay.Wake.StartsWith("Remote AI wake-up") && ClaudeRelay.Framed("x").Contains("Remote AI"), "the words the tools are told in");
-            Require(Shown(TerminalAgent.Said(phone, "claude")) == "user:在电脑上说的 | assistant:好的。 | user:把结论再写短一点\n\n分两段 | assistant:改短了。 | user:再加一个例子 | assistant:加了。 | user:作为上下文交来的\n第二行 | assistant:照做了。 | user:改名之前发的 | assistant:收到。", "what the phone said: " + Shown(TerminalAgent.Said(phone, "claude")));
+            Require(Shown(TerminalAgent.Said(phone, "claude")) == "user:在电脑上说的 | assistant:好的。 | user:把结论再写短一点\n\n分两段 | assistant:改短了。 | user:再加一个例子 | assistant:加了。 | user:作为上下文交来的\n第二行 | assistant:照做了。 | user:两步之间交来的 | assistant:好，改了。 | user:改名之前发的 | assistant:收到。", "what the phone said: " + Shown(TerminalAgent.Said(phone, "claude")));
             var messages = ((IEnumerable)result["messages"]).Cast<Dictionary<string, object>>().ToList();
             Require(messages.Count == 4, "claude count: " + Shown(result));
             Require(Shown(result).StartsWith("user:第一句 | assistant:我先看看登录的代码。 | tool:Bash：grep -rn login src | assistant:长长", StringComparison.Ordinal), "claude: " + Shown(result).Substring(0, 80));

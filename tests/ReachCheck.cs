@@ -238,6 +238,63 @@ public static class ReachCheck {
                 Require(Answer(Run("claude", Event("PreToolUse", Guid.NewGuid().ToString(), ",\"tool_name\":\"Read\"")), 3000, "a step of one unknown") == "", "nothing is said before a step of a conversation that is not known");
                 Answer(Run("claude", Event("Stop", halting)), 3000, "and it rests");
 
+                // ---- each message is an item of its own: two said while it works are handed over in order when it
+                // stops, each can be asked after by its number, and one can be taken back before that
+                string several = Guid.NewGuid().ToString(), m1 = Guid.NewGuid().ToString("N"), m2 = Guid.NewGuid().ToString("N"), m3 = Guid.NewGuid().ToString("N");
+                Answer(Run("codex", Event("UserPromptSubmit", several)), 3000, "at work");
+                Require(!reach.Say("codex", several, "第一条", m1) && !reach.Say("codex", several, "第二条", m2) && !reach.Say("codex", several, "第三条", m3), "three wait");
+                Require(String.Join(",", reach.Outbox.Of("codex", several).Select(item => item.Text)) == "第一条,第二条,第三条", "in the order they were said");
+                Require(reach.Outbox.Add(m1, "codex", several, "第一条").Id == m1 && reach.Outbox.Of("codex", several).Length == 3, "said again under its number, it is the same message");
+                Require(Refused(() => reach.Outbox.Add(m1, "codex", several, "别的话")).Contains("已被其它消息使用"), "a number is not used for other words");
+                Require(reach.Outbox.Withdraw(m2) && !reach.Outbox.Withdraw(m2) && reach.Outbox.Find(m2).State == Outbox.Withdrawn, "one is taken back, once");
+                string both = Answer(Run("codex", Event("Stop", several)), 3000, "stopped with two waiting");
+                Require(both.Contains("第一条\\n\\n第三条") && !both.Contains("第二条"), "the two that still waited, in order: " + both);
+                Require(reach.Outbox.Find(m1).State == Outbox.Handed && reach.Outbox.Find(m3).State == Outbox.Handed && !reach.Outbox.Withdraw(m1), "handed over: they cannot be taken back any more");
+
+                // ---- a conversation that is told to stop has what waited for it held, not handed to it when it next
+                // stops by itself; released, it waits again
+                string held = Guid.NewGuid().ToString(), h1 = Guid.NewGuid().ToString("N");
+                idle = 5;
+                Answer(Run("claude", Event("UserPromptSubmit", held)), 3000, "at work");
+                Answer(Run("claude", Event("PreToolUse", held, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "a step");
+                reach.Say("claude", held, "做完后再加一节", h1);
+                Require(reach.Stop("claude", held, session => 0) == 0 && reach.Outbox.Find(h1).State == Outbox.Paused, "told to stop: what waited is held");
+                Require(Answer(Run("claude", Event("PreToolUse", held, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "its next step").Contains("\"continue\":false"), "and it stops");
+                Answer(Run("claude", Event("UserPromptSubmit", held)), 3000, "its owner tells it something at the computer");
+                Require(Answer(Run("claude", Event("Stop", held)), 3000, "it stops by itself") == "" && reach.Outbox.Find(h1).State == Outbox.Paused, "what is held is not handed over by itself");
+                Require(reach.Outbox.Release("claude", held).Length == 1 && reach.Outbox.Find(h1).State == Outbox.Queued, "released, it waits again");
+                Answer(Run("claude", Event("UserPromptSubmit", held)), 3000, "at work again");
+                Require(Answer(Run("claude", Event("Stop", held)), 3000, "and is handed over at the next stop").Contains("做完后再加一节"), "handed over then");
+
+                // ---- a stop ends the command the step is running: the shells the conversation's process started since
+                // the step began, with what runs below them. What ran before, and what is no shell, is left alone.
+                string cutting = Guid.NewGuid().ToString();
+                Func<string, Process> start = ran => Process.Start(new ProcessStartInfo("cmd.exe", "/d /c " + ran) { UseShellExecute = false, CreateNoWindow = true });
+                using (var older = start("ping -n 30 127.0.0.1 >nul")) {
+                    Thread.Sleep(1500);
+                    Answer(Run("claude", Event("UserPromptSubmit", cutting)), 3000, "at work");
+                    Answer(Run("claude", Event("PreToolUse", cutting, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ping -n 30 127.0.0.1\"}")), 3000, "a long command begins");
+                    using (var command = start("ping -n 30 127.0.0.1 >nul"))
+                    using (var aside = Process.Start(new ProcessStartInfo("ping.exe", "-n 30 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })) {
+                        Require(Until(() => Running.Commands(Process.GetCurrentProcess().Id, DateTime.UtcNow.AddSeconds(-1.2)).Length >= 2, 4000), "the command and what it runs are found below this process");
+                        int ended = reach.Stop("claude", cutting, session => Process.GetCurrentProcess().Id);
+                        Require(ended >= 2 && command.WaitForExit(3000), "the command's shell and what ran in it are ended: " + ended);
+                        Require(!older.HasExited && !aside.HasExited, "what ran before the step, and what is no shell, goes on");
+                        aside.Kill();
+                    }
+                    older.Kill();
+                }
+                Require(Answer(Run("claude", Event("PreToolUse", cutting, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo next\"}")), 3000, "the next step comes at once").Contains("\"continue\":false"), "and there it stops");
+                // a step that was sent off to run beside the conversation is no command to end
+                Answer(Run("claude", Event("UserPromptSubmit", cutting)), 3000, "at work");
+                Answer(Run("claude", Event("PreToolUse", cutting, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm run dev\",\"run_in_background\":true}")), 3000, "a server is started beside it");
+                using (var server = start("ping -n 30 127.0.0.1 >nul")) {
+                    Thread.Sleep(300);
+                    Require(reach.Stop("claude", cutting, session => Process.GetCurrentProcess().Id) == 0 && !server.WaitForExit(600), "what runs beside the conversation is left running");
+                    Running.End(Process.GetCurrentProcess().Id, DateTime.UtcNow.AddSeconds(-5));
+                }
+                Answer(Run("claude", Event("Stop", cutting)), 3000, "rests");
+
                 // ---- where its owner switched that off, a request of Codex's is not kept: Codex asks its hooks before
                 // it shows its question, and kept it shows a running hook. It shows its own question at once then, and
                 // the phone is told that it asks, at the computer. Claude Code's is kept as ever: beside its own question.
@@ -290,22 +347,41 @@ public static class ReachCheck {
                 Answer(Run("claude", Event("UserPromptSubmit", desk)), 5000, "the desktop app's conversation");
                 Require(claude(desk) != null && claude(desk).Status == "busy", "a conversation of the desktop app is a person's");
                 Answer(Run("claude", Event("SessionEnd", desk)), 5000, "the desktop app's conversation ends");
+                // ---- what the phone says while Claude Code works is handed to it before its next step, where its
+                // version takes added context from a hook there; an earlier one is given it when it stops
+                string steered = Guid.NewGuid().ToString(), earlierOne = Guid.NewGuid().ToString();
+                idle = 5;       // (somebody is at the computer: a stop is not kept waiting)
+                File.WriteAllText(Path.Combine(notes, "sessions", "3.json"), "{\"pid\":3,\"sessionId\":\"" + steered + "\",\"kind\":\"interactive\",\"entrypoint\":\"cli\",\"version\":\"2.1.283\"}");
+                File.WriteAllText(Path.Combine(notes, "sessions", "4.json"), "{\"pid\":4,\"sessionId\":\"" + earlierOne + "\",\"kind\":\"interactive\",\"entrypoint\":\"cli\",\"version\":\"2.1.100\"}");
+                foreach (string each in new[] { steered, earlierOne }) {
+                    Answer(Run("claude", Event("UserPromptSubmit", each)), 3000, "at work");
+                    Require(Answer(Run("claude", Event("PreToolUse", each, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "a step, nothing said") == "", "nothing waits: nothing is said before a step");
+                    reach.Say("claude", each, "顺便把标题也改了");
+                }
+                string between = Answer(Run("claude", Event("PreToolUse", steered, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "its next step");
+                var handedOver = (Dictionary<string, object>)new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(between)["hookSpecificOutput"];
+                Require(Convert.ToString(handedOver["hookEventName"]) == "PreToolUse" && Convert.ToString(handedOver["additionalContext"]) == Reach.BetweenSteps + "顺便把标题也改了" && !between.Contains("continue"), "handed over between two steps: " + between);
+                Require(Answer(Run("claude", Event("PreToolUse", steered, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "the step after") == "" && Answer(Run("claude", Event("Stop", steered)), 3000, "its stop") == "", "once: neither at the step after nor at its stop");
+                Require(Answer(Run("claude", Event("PreToolUse", earlierOne, ",\"tool_name\":\"Read\",\"tool_input\":{}")), 3000, "an earlier Claude Code's step") == "", "an earlier version is not given it at a step");
+                Require(Answer(Run("claude", Event("Stop", earlierOne)), 3000, "but at its stop").Contains("顺便把标题也改了"), "it is given it when it stops");
                 Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null); idle = 0;
 
                 // ---- words left for a conversation that sits idle, also one that has told of nothing: its Stop hook gives
                 // them to it when it next stops, whoever is at the computer; what nothing comes for is taken back
                 string asleep = Guid.NewGuid().ToString();
-                reach.Leave("claude", asleep, "把结论再写短一点");
-                Require(claude(asleep) != null && claude(asleep).Status == "idle", "it is known as one that sits idle");
+                string left = Guid.NewGuid().ToString("N"), unfetched = Guid.NewGuid().ToString("N");
+                reach.Leave("claude", asleep, "把结论再写短一点", left);
+                Require(reach.Outbox.Find(left).State == Outbox.Queued, "it waits for the conversation under its number");
                 bool? came = null;
-                var waits = Task.Run(() => { came = reach.Taken("claude", asleep, 20); });
+                var waits = Task.Run(() => { came = reach.Taken(left, 20); });
                 var woke = Run("claude", Event("Stop", asleep, ",\"last_assistant_message\":\"…\""));
                 string given = Answer(woke, 5000, "the words left are given at the stop");
                 Require(given.Contains("\"decision\":\"block\"") && given.Contains(Reach.FromPhone) && given.Contains("把结论再写短一点"), "given as the user's words: " + given);
                 Require(waits.Wait(3000) && came == true, "and whoever left them is told at once that they were taken");
-                reach.Leave("claude", asleep, "没有人来取");
+                Require(reach.Outbox.Find(left).State == Outbox.Handed && reach.Outbox.Find(left).Text == "", "handed over, and its words are kept no longer");
+                reach.Leave("claude", asleep, "没有人来取", unfetched);
                 var began = DateTime.UtcNow;
-                Require(!reach.Taken("claude", asleep, 1) && (DateTime.UtcNow - began).TotalSeconds < 3, "what nothing comes for is taken back");
+                Require(!reach.Taken(unfetched, 1) && (DateTime.UtcNow - began).TotalSeconds < 3, "what nothing comes for is taken back");
                 Require(Answer(Run("claude", Event("Stop", asleep)), 5000, "nothing lies there any more") == "", "and is not given later");
                 Answer(Run("claude", Event("SessionEnd", asleep)), 5000, "ended");
 
@@ -317,6 +393,22 @@ public static class ReachCheck {
             }
             Require(Answer(Run("claude", Event("Stop", Guid.NewGuid().ToString())), 5000, "nobody listens") == "", "with nothing listening the hook ends at once and says nothing");
             Require(Answer(Run("codex", Request(Guid.NewGuid().ToString(), "git push", "")), 5000, "nobody listens to a request") == "", "a request too, when the program was never there");
+
+            // ---- what the phone said and a conversation has not taken yet is kept on disk, encrypted: the program
+            // starting again loses none of it, and what is settled keeps no words
+            string stored = Path.Combine(folder, "outbox"), surviving = Guid.NewGuid().ToString(), s1 = Guid.NewGuid().ToString("N"), s2 = Guid.NewGuid().ToString("N");
+            using (var earlier = new Reach(pipe, () => 5, null, null, new Outbox(stored))) {
+                Answer(Run("codex", Event("UserPromptSubmit", surviving)), 3000, "at work");
+                earlier.Say("codex", surviving, "重启之前说的第一句", s1); earlier.Say("codex", surviving, "重启之前说的第二句", s2);
+                Require(Directory.GetFiles(stored, "*.json").Length == 2 && !Directory.GetFiles(stored).Any(file => File.ReadAllText(file).Contains("重启之前") || File.ReadAllText(file).Contains("\\u91cd")), "kept in files, and not in plain words");
+            }
+            using (var later = new Reach(pipe, () => 5, null, null, new Outbox(stored))) {
+                Require(String.Join(",", later.Outbox.Of("codex", surviving).Select(item => item.Text)) == "重启之前说的第一句,重启之前说的第二句", "they are there again, in order");
+                string after = Answer(Run("codex", Event("Stop", surviving)), 3000, "the conversation stops after the program came back");
+                Require(after.Contains("重启之前说的第一句\\n\\n重启之前说的第二句"), "and is handed what waited: " + after);
+                Require(later.Outbox.Find(s1).State == Outbox.Handed && !Directory.GetFiles(stored).Any(file => File.ReadAllText(file).Contains("\"text\"")), "settled: its words are dropped from the file");
+            }
+            Require(new Outbox(stored).Find(s2).State == Outbox.Handed && new Outbox(stored).Of("codex", surviving).Length == 0, "how it ended is remembered");
 
             // ---- the program is started again while it keeps a request for the phone (an update, asked for from the
             // phone): the request is not lost to the tool's own question. Its hook waits and hands it over anew.

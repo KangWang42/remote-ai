@@ -293,8 +293,17 @@ REACH = ("say", "answer", "stop")
 WAYS = {"say": ("codex-desktop", "hook", "wake"), "stop": ("codex-desktop", "hook"), "answer": ("hook",), "end": ("process",)}
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_stop", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
+
+
+def _queued(session):
+    """What the phone said to a conversation and it has not taken yet, as the computer keeps it: each message with
+    its number, the beginning of its words, and whether it waits or is held since the conversation was told to stop."""
+    listed = session.get("queued")
+    return [{"id": item["id"], "text": item["text"][:200], "state": item["state"], "at": item["at"] if type(item.get("at")) in (int, float) else 0}
+            for item in (listed if isinstance(listed, list) else [])[:20]
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and _id.fullmatch(item["id"]) and isinstance(item.get("text"), str) and item.get("state") in ("queued", "paused")]
 
 
 def _reached(session):
@@ -306,7 +315,7 @@ def _reached(session):
     ways = {thing: ways[thing] if ways.get(thing) in allowed else "" for thing, allowed in WAYS.items()} if told else None
     why = {thing: text[:200] for thing, text in why.items() if thing in WAYS and isinstance(text, str) and text} if told and isinstance(why, dict) else {} if told else None
     if not isinstance(session.get("reach"), list):
-        return {"reach": None, "ask": None, "last": "", "wake": False, "ways": ways and dict(ways, say="", stop="", answer=""), "why": why}
+        return {"reach": None, "ask": None, "last": "", "wake": False, "ways": ways and dict(ways, say="", stop="", answer=""), "why": why, "queued": _queued(session)}
     ask = session.get("ask")
     ask = {"id": ask["id"], "text": ask["text"][:600]} if (session.get("status") == "confirm" and isinstance(ask, dict) and isinstance(ask.get("id"), str)
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
@@ -320,7 +329,7 @@ def _reached(session):
             "transport": "codex-desktop" if native else "hook" if hook else "", "turn": turn if native else "",
             "wake": session.get("wake") is True and "say" in session["reach"],
             # (a way is said only for what the list above lets through)
-            "ways": ways and {thing: way if thing not in REACH or thing in reach else "" for thing, way in ways.items()}, "why": why}
+            "ways": ways and {thing: way if thing not in REACH or thing in reach else "" for thing, way in ways.items()}, "why": why, "queued": _queued(session)}
 
 
 def _placed(session):
@@ -851,7 +860,12 @@ class Relay:
             more = {mark: payload[mark] for mark in MARKS if mark in payload}
             if not more or any(type(value) is not bool for value in more.values()):
                 raise RemoteError("标记无效")
-        elif action in ("delete", "end"):
+        elif action == "withdraw":
+            # one message that still waits for the conversation, by its number, is taken back
+            if not isinstance(payload.get("message"), str) or not _id.fullmatch(payload["message"]):
+                raise RemoteError("消息编号无效")
+            more = {"message": payload["message"]}
+        elif action in ("delete", "end", "release"):
             pass
         elif action == "read":
             # a page that follows a conversation says what it has: the computer answers {"same": true} to that
@@ -873,7 +887,8 @@ class Relay:
             if not self._view(now)["online"] or not self._device["enabled"]:
                 raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
             needed, without = {"read": ("peek", "电脑端版本不支持查看对话内容，请更新电脑端"), "mark": ("marks", "电脑端版本不支持置顶和隐藏对话，请更新电脑端"),
-                               "delete": ("delete", "电脑端版本不支持删除对话，请更新电脑端"), "end": ("end", "电脑端版本不支持在手机上结束电脑上的对话，请更新电脑端")}.get(
+                               "delete": ("delete", "电脑端版本不支持删除对话，请更新电脑端"), "end": ("end", "电脑端版本不支持在手机上结束电脑上的对话，请更新电脑端"),
+                               "withdraw": ("outbox", "电脑端版本不支持撤回消息，请更新电脑端"), "release": ("outbox", "电脑端版本不支持继续发送暂停的消息，请更新电脑端")}.get(
                 action, ("reach", "电脑端版本不支持在手机上处理电脑上的对话，请更新电脑端"))
             if needed not in self._device.get("features", []):
                 raise RemoteError(without)
@@ -899,6 +914,17 @@ class Relay:
                 if not saved.get("live"):
                     raise RemoteError("这段对话没有开着")
                 return self._held({"id": op_id, "action": "session_end", "session": session, "tool": saved["tool"], "dir": saved["dir"]}, now, wait)
+            if action in ("withdraw", "release"):
+                # The computer keeps what waits, and decides: only what it listed for this conversation is asked for.
+                waiting = saved.get("queued") or []
+                if action == "withdraw" and not any(item["id"] == more["message"] for item in waiting):
+                    raise RemoteError("这条消息已经交给对话，或已撤回")
+                if action == "release" and not any(item["state"] == "paused" for item in waiting):
+                    raise RemoteError("没有暂停的消息")
+                answer = self._held({"id": op_id, "action": "session_" + action, "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
+                # (the list here says so at once, and again with the computer's next report)
+                saved["queued"] = [dict(item, state="queued") if action == "release" else item for item in waiting if action == "release" or item["id"] != more["message"]]
+                return answer
             if action == "mark":
                 # the computer keeps it; the list here says so at once, and again with the computer's next report
                 answer = self._held({"id": op_id, "action": "session_mark", "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
@@ -989,6 +1015,8 @@ class Relay:
                      "live": s.get("live") is True, "status": s.get("status") if s.get("status") in ("idle", "busy", "confirm", "waiting") else "", **_reached(s),
                      "host": s.get("host") if s.get("host") in ("cli", "shared", "remote", "unknown") else "",
                      "origin": str(s.get("origin") or "")[:60],
+                     # the operation ("app_open") it came of, where it began in a desktop application opened for it from the phone
+                     "opened": s["opened"] if isinstance(s.get("opened"), str) and _id.fullmatch(s["opened"]) else "",
                      # by what it is used, in the computer's words: by the program that has it open, else by what started it
                      "kind": str(s.get("kind") or "")[:20],
                      "can_takeover": s.get("can_takeover") is True, "ownership_known": s.get("ownership_known") is True,
@@ -998,7 +1026,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "codex-desktop-control") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "codex-desktop-control") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))

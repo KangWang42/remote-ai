@@ -121,7 +121,7 @@ public sealed class TerminalAgent {
         dataDir = dataFolder ?? DefaultData;
         Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter(), new ClaudeDesktopAdapter());
         OpenDesktopConversation = desktopConversation ?? (() => CodexDesktopControl.Connect());
-        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal); Reach.Changed += Wake;
+        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += Wake; Reach.Outbox.Changed += Wake;
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
@@ -242,9 +242,62 @@ public sealed class TerminalAgent {
             // (only what is of use now: why it cannot be told or ended, why it cannot be stopped while it works, why it cannot be answered while it asks)
             why = s.Live ? ways.Why.Where(one => one.Key == "say" || one.Key == "end" || (one.Key == "stop" && ways.Status == "busy") || (one.Key == "answer" && asks)).ToDictionary(one => one.Key, one => one.Value) : null,
             transport = ways.Transport, turn = ways.Turn, wake = ways.Woken,
+            // the operation it came of, where it began in a desktop application that was opened for it from the phone
+            opened = s.Live ? Desktop.CameOf(s.Tool, s.Id, s.ControlFolder, s.Created, Ways.InApplication(s.Origin)) : "",
+            // what the phone said to it and it has not taken yet, each with its number: waiting, or held since it was told to stop
+            queued = Reach.Outbox.Of(s.Tool, s.Id).Select(item => new { id = item.Id, text = item.Text.Length > 200 ? item.Text.Substring(0, 199) + "…" : item.Text, state = item.State, at = Milliseconds(item.At) }).ToArray(),
             ask = asks ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
     }
     Ways WaysOf(SessionInfo s, Reach.Open known) { return Ways.Of(s, known, NativeState(s)); }
+    // How a message stands, for the phone: the same answer whatever carries it, and for one that is asked after again.
+    static Dictionary<string, object> Told(Outbox.Item item, string way) {
+        return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", item.State == Outbox.Handed }, { "way", way }, { "state", item.State }, { "message", item.Id } };
+    }
+    readonly Dictionary<string, object> awakening = new Dictionary<string, object>();      // one at a time for each conversation
+    readonly HashSet<string> retried = new HashSet<string>();                              // items this run has tried to hand over by itself
+    /// Hands what waits for a conversation that sits idle to it, by its tool's own way: it is woken where it is, and
+    /// stays where it is. Codex takes each message into its queue. Claude Code is only woken where it runs this
+    /// program's hooks: its own Stop hook then gives it the words as its user's; where its hooks do not come for
+    /// them, they are handed over as the message itself. Throws what the tool refuses, in words for the person.
+    void Awaken(string tool, string session) {
+        object one;
+        lock (awakening) { string key = tool + " " + session.ToLowerInvariant(); if (!awakening.TryGetValue(key, out one)) awakening[key] = one = new object(); }
+        lock (one) {
+            var waiting = Reach.Outbox.Of(tool, session).Where(item => item.State == Outbox.Queued).ToArray();
+            if (waiting.Length == 0) return;
+            string launcher = FindTool(tool), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
+            if (tool == "codex") {
+                foreach (var item in waiting) { CodexQueue.Send(launcher, session, item.Text); Reach.Outbox.Hand(item.Id); }
+                return;
+            }
+            // (the hooks are there once Claude Code has told something through them, or stand in its settings:
+            // a conversation opened before they did takes the words the other way, after the wait)
+            bool hooks = Reach.Heard("claude") || ReachHooks.Installed("claude");
+            if (hooks) ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Wake);
+            int patience = WakeSeconds;
+            foreach (var item in waiting) {
+                if (hooks ? Reach.Taken(item.Id, patience) : !Reach.Outbox.Hand(item.Id)) continue;
+                patience = 0;       // its hooks did not come: the rest is not waited for either
+                ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(item.Text));
+            }
+        }
+    }
+    /// What waited when this program stopped, or was released while nothing was at hand to carry it, is handed over
+    /// once the conversations have been looked at: each item is tried once by this, and stays for the phone to see
+    /// if that fails.
+    void Recover() {
+        foreach (string[] pending in Reach.Outbox.Pending()) {
+            string tool = pending[0], session = pending[1];
+            SessionInfo found; Outbox.Item[] waiting;
+            lock (work) {
+                found = sessions.FirstOrDefault(s => s.Tool == tool && s.Live && String.Equals(s.Id, session, StringComparison.OrdinalIgnoreCase));
+                waiting = Reach.Outbox.Of(tool, session).Where(item => item.State == Outbox.Queued && DateTime.UtcNow - item.At > TimeSpan.FromSeconds(WakeSeconds + 30) && !relaying.Contains(item.Id) && !retried.Contains(item.Id)).ToArray();
+                if (found == null || waiting.Length == 0 || WaysOf(found, Reach.Of(tool, found.Id)).Say != Ways.Wake) continue;
+                foreach (var item in waiting) retried.Add(item.Id);
+            }
+            try { Awaken(tool, found.Id); } catch (InvalidOperationException) { } catch (IOException) { } catch (System.ComponentModel.Win32Exception) { }
+        }
+    }
     CodexDesktopSessions.State NativeState(SessionInfo s) {
         var state = s.Live && s.Dir.Length > 0 && s.Tool == "codex" ? NativeDesktop.Get(s.Id) : null;
         return state != null && SamePath(state.Folder, s.ControlFolder) ? state : null;
@@ -527,7 +580,7 @@ public sealed class TerminalAgent {
         }
         // the ones a program has open and the ones their owner pinned are listed whatever their age
         sessions = Single(found).OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated).Take(200).ToList();
-        foreach (var s in sessions.Where(s => s.Tool == "codex")) { string root; s.ControlFolder = dirs.TryGetValue(s.Dir, out root) ? root : s.Folder; }
+        foreach (var s in sessions) { string root; s.ControlFolder = dirs.TryGetValue(s.Dir, out root) ? root : s.Folder; }       // the folder it is in: its project's, or the one it was found open in
         NativeDesktop.Refresh(sessions.Where(s => s.Live && s.Tool == "codex" && s.Origin == Ways.CodexDesktop).Select(s => s.Id));
         folders.End();
         candidates = Offer(dirs, false, 40);
@@ -777,10 +830,11 @@ public sealed class TerminalAgent {
             if (tool == "claude") {
                 var message = at(row, "message") as Dictionary<string, object>;
                 if (type == "attachment") {
-                    // What a Stop hook handed the conversation as added context: the phone's words, where they came that way.
+                    // What a hook handed the conversation as added context: the phone's words, where they came that
+                    // way, when it stopped or between two of its steps.
                     var attached = at(row, "attachment") as Dictionary<string, object>;
                     var handed = at(attached, "content") as IEnumerable;
-                    if (handed == null || at(attached, "content") is string || !"hook_additional_context".Equals(at(attached, "type")) || !"Stop".Equals(at(attached, "hookName"))) continue;
+                    if (handed == null || at(attached, "content") is string || !"hook_additional_context".Equals(at(attached, "type")) || !("Stop".Equals(at(attached, "hookName")) || Reach.Step.Equals(at(attached, "hookEvent")))) continue;
                     foreach (object one in handed) {
                         string context = one as string ?? ""; int from = context.IndexOf("\n\n", StringComparison.Ordinal);
                         if (from < 0 || context.IndexOf("from their phone", StringComparison.Ordinal) < 0 || !Reach.Names.Any(name => context.IndexOf(name, StringComparison.Ordinal) >= 0)) continue;
@@ -1204,13 +1258,18 @@ public sealed class TerminalAgent {
         bool nativeControl = Get(op, "transport") == Ways.App && (action == "session_say" || action == "session_stop");
         // Native requests keep their durable identity even when the current route becomes a hook.
         // Resolve that fallback inside Desktop.Run, after replay/query and before dispatch.
-        if (completed.ContainsKey(id) && action != "app_open" && !nativeControl) { reported.Remove(id); return; }
+        // (A message said again under its number is answered by how it stands now: the Outbox knows, also once the
+        // answer kept here has gone out and been dropped. While the answer is still kept, it is simply given again:
+        // the relay hands an operation over until its answer has arrived.)
+        Dictionary<string, object> kept;
+        bool saidBefore = action == "session_say" && Reach.Outbox.Find(id) != null && !(completed.TryGetValue(id, out kept) && kept.ContainsKey("result"));
+        if (completed.ContainsKey(id) && action != "app_open" && !nativeControl && !saidBefore) { reported.Remove(id); return; }
         if (relaying.Contains(id)) return;       // being handed over: answered when that is done
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
             bool desktop = action == "app_open";
-            bool peek = action == "session_read" || action == "session_say" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
+            bool peek = action == "session_read" || action == "session_say" || action == "session_withdraw" || action == "session_release" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
@@ -1257,7 +1316,7 @@ public sealed class TerminalAgent {
                                     var current = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Live && s.Dir == dir);
                                     if (current != null && SamePath(current.ControlFolder, root) && WaysOf(current, Reach.Of("codex", session)).Say == Ways.Hook) {
                                         ValidateDesktopProject(dir, root, server);
-                                        return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", Reach.Say("codex", session, text) }, { "way", Ways.Hook } };
+                                        return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", Reach.Say("codex", session, text, id) }, { "way", Ways.Hook }, { "state", Outbox.Queued }, { "message", id } };
                                     }
                                 }
                             }
@@ -1265,7 +1324,10 @@ public sealed class TerminalAgent {
                                 var state = control.Inspect(session);
                                 if (!SamePath(CodexDesktopControl.Folder(state), root)) throw new InvalidOperationException("桌面对话所在项目已变化");
                                 ValidateDesktopProject(dir, root, server);
-                                return action == "session_say" ? control.Send(id, text) : control.Interrupt(expectedTurn);
+                                if (action == "session_say") return control.Send(id, text);
+                                var stopped = control.Interrupt(expectedTurn);
+                                Reach.Outbox.Pause("codex", session);
+                                return stopped;
                             }
                         }, true, queryOnly);
                     } catch (Exception problem) { failed = problem is InvalidOperationException || problem is ArgumentException ? problem.Message : "桌面操作结果无法确认，请检查电脑上的应用"; }
@@ -1331,9 +1393,17 @@ public sealed class TerminalAgent {
             else if (peek) {
                 // a conversation a program on this computer has open: only one this computer listed, in a project or where it was found open
                 string session = Get(op, "session"), tool = Get(op, "tool");
-                if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && (s.Dir.Length == 0 ? s.Folder.Length > 0 : AllDirs(prefs).ContainsKey(s.Dir)))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+                // (what waits for a conversation can be taken back also once no program has it open any more)
+                if (action != "session_withdraw" && !sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && (s.Dir.Length == 0 ? s.Folder.Length > 0 : AllDirs(prefs).ContainsKey(s.Dir)))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 if (action == "session_say") {
                     var listed = sessions.First(s => s.Id == session && s.Tool == tool && s.Live);
+                    // Said before under this number (the answer was lost on its way, or this program started again):
+                    // how it stands is answered, and nothing is sent anew.
+                    var before = Reach.Outbox.Find(id);
+                    if (before != null) {
+                        if (before.Tool != tool || !String.Equals(before.Session, session, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("操作编号已被其它消息使用");
+                        result = Told(before, before.State == Outbox.Handed ? "" : Ways.Hook);
+                    } else {
                     // By the way that is there now (Ways.cs). The application's channel is asked for by name, with a
                     // receipt (above); here are the tool's hooks, and the tool's own way to one that sits idle.
                     var ways = WaysOf(listed, Reach.Of(tool, session));
@@ -1345,36 +1415,50 @@ public sealed class TerminalAgent {
                         string text = (Get(op, "text") ?? "").Trim();
                         if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字");
                         if (!relaying.Add(id)) return;
-                        string launcher = FindTool(tool), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
+                        Reach.Leave(tool, session, text, id);
                         Task.Run(() => {
                             string failed = "";
-                            try {
-                                if (tool == "codex") CodexQueue.Send(launcher, session, text);
-                                // (the hooks are there once Claude Code has told something through them, or stand in its settings:
-                                // a conversation opened before they did takes the words the other way, after the wait)
-                                else if (Reach.Heard("claude") || ReachHooks.Installed("claude")) {
-                                    // Claude Code runs this program's hooks: the words are left for the conversation's own
-                                    // Stop hook, which gives them to it as its user's, and the conversation is only woken.
-                                    // Where its hooks do not come for them, they are handed over as the message itself.
-                                    Reach.Leave(tool, session, text);
-                                    ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Wake);
-                                    if (!Reach.Taken(tool, session, WakeSeconds)) ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(text));
-                                }
-                                else ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(text));
-                            }
+                            try { Awaken(tool, session); }
                             catch (InvalidOperationException refused) { failed = refused.Message; }
                             catch (IOException) { failed = "消息没有送出：电脑上启动不了这个工具"; }
                             catch (System.ComponentModel.Win32Exception) { failed = "消息没有送出：电脑上启动不了这个工具"; }
+                            // what could not be handed over does not stay waiting (unless its hooks came for it meanwhile)
+                            if (failed.Length > 0 && !Reach.Outbox.Forget(id)) failed = "";
+                            var stands = Reach.Outbox.Find(id);
                             lock (work) {
                                 completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
-                                if (failed.Length == 0) completed[id]["result"] = new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", true }, { "woke", true }, { "way", Ways.Wake } };
+                                if (failed.Length == 0) { var answer = Told(stands ?? new Outbox.Item { Id = id, State = Outbox.Handed }, Ways.Wake); answer["woke"] = true; completed[id]["result"] = answer; }
                                 relaying.Remove(id); lastActivity = DateTime.UtcNow; soon = true; nextScan = DateTime.UtcNow.AddSeconds(1);
                             }
                             Wake();
                         });
                         return;
                     }
-                    result = new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", Reach.Say(tool, session, Get(op, "text")) }, { "way", Ways.Hook } };
+                    bool now = Reach.Say(tool, session, Get(op, "text"), id);
+                    result = Told(Reach.Outbox.Find(id), Ways.Hook); result["now"] = now;       // (one that waits for a message takes it within a moment)
+                    }
+                }
+                else if (action == "session_withdraw") {
+                    // a message that still waits, or is held, is taken back: it is not handed over any more
+                    var item = Reach.Outbox.Find(Get(op, "message"));
+                    if (item == null || item.Tool != tool || !String.Equals(item.Session, session, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("没有找到这条消息，请刷新后重试");
+                    if (!Reach.Outbox.Withdraw(item.Id)) throw new InvalidOperationException("这条消息已经交给对话，撤不回了");
+                    result = new Dictionary<string, object> { { "state", Outbox.Withdrawn }, { "message", item.Id } };
+                }
+                else if (action == "session_release") {
+                    // What was held when the conversation was told to stop is to go after all: it waits again, and is
+                    // handed over by the way that is there now. Where there is none, it stays held, with the reason.
+                    var listed = sessions.First(s => s.Id == session && s.Tool == tool && s.Live);
+                    var ways = WaysOf(listed, Reach.Of(tool, session));
+                    if (ways.Say.Length == 0) throw new InvalidOperationException(ways.Why["say"]);
+                    if (ways.Say == Ways.App) throw new InvalidOperationException("Codex 桌面版现在空闲：请把这几条消息撤回后直接发送");
+                    var released = Reach.Outbox.Release(tool, session);
+                    if (released.Length == 0) throw new InvalidOperationException("没有暂停的消息");
+                    if (ways.Say == Ways.Wake) {
+                        foreach (var item in released) retried.Add(item.Id);
+                        Task.Run(() => { try { Awaken(tool, session); } catch (InvalidOperationException) { } catch (IOException) { } catch (System.ComponentModel.Win32Exception) { } lock (work) { soon = true; nextScan = DateTime.UtcNow.AddSeconds(1); } Wake(); });
+                    }
+                    result = new Dictionary<string, object> { { "released", released.Length }, { "way", ways.Say } };
                 }
                 else { Reach.Answer(tool, session, Get(op, "ask"), Get(op, "allow") == "True"); result = new Dictionary<string, object>(); }
             }
@@ -1433,6 +1517,7 @@ public sealed class TerminalAgent {
         } catch (Exception ex) { error = ex is ArgumentException || ex is InvalidOperationException || ex is IOException ? ex.Message : "终端操作失败：" + ex.GetType().Name; }
         completed[id] = new Dictionary<string, object> { { "id", id }, { "error", error } };
         if (result != null && error.Length == 0) completed[id]["result"] = result;
+        reported.Remove(id);        // (answered anew, where it was asked again under its number: the answer is to go out again)
         lastActivity = DateTime.UtcNow; soon = true; if (action == "start" || action == "close") nextScan = DateTime.UtcNow.AddSeconds(1.5);
         if (action.StartsWith("project_", StringComparison.Ordinal)) nextScan = DateTime.MinValue;
     }
@@ -1453,7 +1538,7 @@ public sealed class TerminalAgent {
                 if (!enabled) { sessions = new List<SessionInfo>(); candidates = new List<Dictionary<string, object>>(); }
                 else if (Interlocked.CompareExchange(ref scanning, 1, 0) == 0) {
                     var running = terminals.Values.ToArray();
-                    var reading = Task.Run(() => { try { Scan(allowed, running); } catch { } finally { scanning = 0; Wake(); } });
+                    var reading = Task.Run(() => { try { Scan(allowed, running); Recover(); } catch { } finally { scanning = 0; Wake(); } });
                 }
             }
             if (DateTime.UtcNow - toolsAt > TimeSpan.FromSeconds(30)) { tools = new[] { "claude", "codex", "shell" }.Where(t => FindTool(t) != null).ToArray(); toolsAt = DateTime.UtcNow; }
@@ -1470,7 +1555,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end", "codex-desktop-control" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end", "outbox", "codex-desktop-control" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },

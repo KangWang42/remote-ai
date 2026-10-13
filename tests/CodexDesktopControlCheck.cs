@@ -89,12 +89,14 @@ public static class CodexDesktopControlCheck {
             "at work: said through its hooks, stopped by the application's channel: " + Json.Serialize(ways) + Json.Serialize(why));
         first["text"] = "test"; first["receipt"] = false;
         run(first);
-        Require(heard["codex " + Session].Queued == null && conversation.Sends == 1, "retry of an accepted native send must not enqueue again when busy");
+        Require(agent.Reach.Outbox.Of("codex", Session).Length == 0 && conversation.Sends == 1, "retry of an accepted native send must not enqueue again when busy");
         Dictionary<string, object> switched = null;
         foreach (bool named in new[] { true, false }) {
             var left = request(); if (!named) left.Remove("transport");
             var answer = Object(run(left)["result"]);
             Require((string)answer["status"] == "accepted" && true.Equals(answer["sent"]) && false.Equals(answer["now"]) && (string)answer["way"] == "hook" && conversation.Sends == 1, "left for it through its hooks, the channel not asked: " + Json.Serialize(answer));
+            // (each is an item of its own under its operation's number, waiting for the conversation)
+            Require(agent.Reach.Outbox.Find((string)left["id"]) != null && agent.Reach.Outbox.Find((string)left["id"]).State == Outbox.Queued && (string)answer["message"] == (string)left["id"], "it waits under its number");
             if (named) {
                 switched = left;
                 left["receipt"] = true;
@@ -117,7 +119,7 @@ public static class CodexDesktopControlCheck {
     sealed class Peer : Stream {
         readonly Queue<byte> received = new Queue<byte>();
         public readonly List<Dictionary<string, object>> Sent = new List<Dictionary<string, object>>();
-        public bool Busy, WrongOwner, WrongThread, WrongVersion, NativeError, Disconnect, BadReceipt, Stall;
+        public bool Busy, Asking, WrongOwner, WrongThread, WrongVersion, NativeError, Disconnect, BadReceipt, Stall;
         public int InvalidLength;
         public bool Closed;
         public void Frame(object value) { byte[] body = Encoding.UTF8.GetBytes(Json.Serialize(value)); foreach (byte b in BitConverter.GetBytes(body.Length).Concat(body)) received.Enqueue(b); }
@@ -133,16 +135,18 @@ public static class CodexDesktopControlCheck {
                 Frame(new { type = "broadcast", method = "thread-stream-state-changed", version = WrongVersion ? 12 : 11, sourceClientId = WrongOwner ? "wrong" : "owner", @params = new {
                     conversationId = Session, hostId = "local", change = new { type = "snapshot", revision = 1, conversationState = new {
                         id = WrongThread ? "other" : Session, hostId = "local", cwd = @"E:\中文项目", resumeState = "resumed",
-                        threadRuntimeStatus = new { type = Busy ? "active" : "idle" },
+                        threadRuntimeStatus = new { type = Busy ? "active" : "idle", activeFlags = new string[0] },
+                        requests = Asking ? new object[] { new { id = "r1", method = "item/commandExecution/requestApproval" } } : new object[0],
                         turnHistory = new { kind = "canonical", history = new { turns = new[] { new { turnId = "turn-1", status = Busy ? "inProgress" : "completed" } } } }
                     } }
                 } }); return;
             }
             if ((string)request["type"] != "request") return;
-            bool mutation = method == "thread-follower-start-turn" || method == "thread-follower-interrupt-turn";
+            bool mutation = method == "thread-follower-start-turn" || method == "thread-follower-steer-turn" || method == "thread-follower-interrupt-turn";
             if (mutation && Disconnect) return;
             object result = method == "initialize" ? (object)new { clientId = "client" } : method == "thread-owner-discovery" ? (object)new { supportsUntrustedAppInput = true } :
-                method == "thread-follower-start-turn" ? (object)new { result = new { turn = new { id = BadReceipt ? "" : "turn-2" } } } : (object)new { ok = true, interruptedTurnId = BadReceipt ? "other" : "turn-1" };
+                method == "thread-follower-start-turn" ? (object)new { result = new { turn = new { id = BadReceipt ? "" : "turn-2" } } } :
+                method == "thread-follower-steer-turn" ? (object)new { result = new { turnId = BadReceipt ? "" : "turn-1" } } : (object)new { ok = true, interruptedTurnId = BadReceipt ? "other" : "turn-1" };
             Frame(new { type = "response", requestId = "unrelated", method = "ignored" });
             Frame(new { type = "response", requestId = request["requestId"], method = method, handledByClientId = "owner", resultType = NativeError && mutation ? "error" : "success", result = result });
         }
@@ -172,9 +176,20 @@ public static class CodexDesktopControlCheck {
             Require(peer.Sent.Any(r => (string)r["type"] == "client-discovery-response"), "discovery must not stall other clients");
             Fails<InvalidOperationException>(() => control.Inspect(Session));
         }
+        // At work it takes a message into the turn that runs (as the real app does); not while it asks something itself.
         peer = new Peer { Busy = true };
         using (var control = new CodexDesktopControl(peer, 1000)) {
-            var state = control.Inspect(Session); Require(CodexDesktopControl.ActiveTurn(state) == "turn-1", "active canonical turn");
+            var state = control.Inspect(Session);
+            Require(CodexDesktopControl.TakesAtWork(state) && !CodexDesktopControl.Ready(state), "at work, and takes a message");
+            var steered = control.Send(new string('b', 32), "into the running turn");
+            var carried = peer.Sent.Single(r => r.ContainsKey("targetClientId"));
+            var given = (Dictionary<string, object>)carried["params"]; var restore = (Dictionary<string, object>)given["restoreMessage"];
+            Require((string)steered["status"] == "accepted" && (string)steered["turn"] == "turn-1" && (string)carried["method"] == "thread-follower-steer-turn" && Convert.ToInt32(carried["version"]) == 1, "by the application's message for a turn in progress, into that turn");
+            Require((string)restore["text"] == "into the running turn" && Json.Serialize(((Dictionary<string, object>)restore["context"])["workspaceRoots"]).Contains("中文项目") && (string)given["clientUserMessageId"] == new string('b', 32), "with the message as the application's own box would restore it: " + Json.Serialize(restore));
+        }
+        peer = new Peer { Busy = true, Asking = true };
+        using (var control = new CodexDesktopControl(peer, 1000)) {
+            var state = control.Inspect(Session); Require(CodexDesktopControl.ActiveTurn(state) == "turn-1" && !CodexDesktopControl.TakesAtWork(state), "active canonical turn; it asks, and takes no message meanwhile");
             state["threadGoal"] = new Dictionary<string, object> { { "status", "active" } };
             Require(CodexDesktopControl.ActiveTurn(state) == "", "do not advertise incomplete stop of active goal"); state.Remove("threadGoal");
             Fails<InvalidOperationException>(() => control.Send(new string('a', 32), "busy"));

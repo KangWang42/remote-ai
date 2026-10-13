@@ -87,6 +87,9 @@ public sealed class Reach : IDisposable {
         public bool Steps;                  // it is heard before each of its steps: it runs the hook for that (one opened
                                             // before the hook was there does not, until it is opened anew)
         internal bool StopAsked;
+        // The step it is at, as its hook told it: when it began, by which of the tool's own tools, and whether it was
+        // sent off to run beside the conversation (that is no command to end when the conversation is told to stop).
+        internal DateTime StepAt; internal string StepTool = ""; internal bool StepAside;
         /// It can be told to stop what it is at: it ends its turn before its next step, and stays open.
         public bool Stoppable { get { return Steps && Status == "busy"; } }
         /// Its tool is kept by a hook and shows nothing but that: a request that waits for the phone in place of the
@@ -94,7 +97,7 @@ public sealed class Reach : IDisposable {
         public bool Kept { get { return (Status == "confirm" && Answerable && !Beside) || (Status == "waiting" && Held); } }
         /// A message can be left for it here: it takes it now, or when it has done what it is doing.
         public bool Sayable { get { return Status == "busy" || Status == "confirm" || (Status == "waiting" && Held); } }
-        internal string Transcript = "", Queued, Message; internal bool? Verdict; internal DateTime Seen, AskedAt, Stopped; internal int Turn; internal long AskStamp;
+        internal string Transcript = ""; internal bool? Verdict; internal DateTime Seen, AskedAt, Stopped; internal int Turn; internal long AskStamp;
         internal Open Copy() { return (Open)MemberwiseClone(); }
     }
 
@@ -118,6 +121,8 @@ public sealed class Reach : IDisposable {
     /// Whether a tool has told of anything since this program started: its hooks do reach it.
     public bool Heard(string tool) { lock (gate) return heard.Contains(tool); }
     readonly string pipe; readonly Func<int> idle; readonly Func<Kept> kept; readonly Func<int, string, string, bool> own;
+    /// What the phone said and the conversations have not taken yet: one item for each message (Outbox.cs).
+    public readonly Outbox Outbox;
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint process);
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
     volatile bool closed;
@@ -127,8 +132,11 @@ public sealed class Reach : IDisposable {
 
     /// `keeps`: what a tool is kept for now, as its owner has it; asked at every request and every stop.
     /// `ownTerminal`: whether a hook (its process, its tool, its conversation) runs in one of this program's own terminals.
-    public Reach(string pipeName, Func<int> idleSeconds = null, Func<Kept> keeps = null, Func<int, string, string, bool> ownTerminal = null) {
-        pipe = pipeName; idle = idleSeconds ?? IdleSeconds; kept = keeps ?? (() => new Kept()); own = ownTerminal;
+    /// `outbox`: where what the phone said is kept until it is taken; in memory only where none is given.
+    public Reach(string pipeName, Func<int> idleSeconds = null, Func<Kept> keeps = null, Func<int, string, string, bool> ownTerminal = null, Outbox outbox = null) {
+        pipe = pipeName; idle = idleSeconds ?? IdleSeconds; kept = keeps ?? (() => new Kept()); own = ownTerminal; Outbox = outbox ?? new Outbox();
+        // (a hook that is kept waiting for a message looks for one when something is added)
+        Outbox.Changed += () => { lock (gate) Monitor.PulseAll(gate); };
         new Thread(Listen) { IsBackground = true, Name = "reach" }.Start();
         watch = new System.Threading.Timer(Rested, null, 1000, 1000);
     }
@@ -165,55 +173,57 @@ public sealed class Reach : IDisposable {
             return o.Copy();
         }
     }
+    /// The tools of Claude Code's that run a command in a shell: what such a step runs can be ended from outside.
+    static readonly string[] ShellTools = { "Bash", "PowerShell" };
     /// Asks a conversation at work to stop: it is told so before its next step. Says in words for the person why not.
-    public void Stop(string tool, string session) {
+    /// What the phone had said and it has not taken yet is held: its owner says afterwards whether it is still to go.
+    /// The command its step is running is ended, as Esc would end it at the computer, so that the next step, where
+    /// it stops, comes at once and not when the command has run out (Running.cs). Returns how many processes that
+    /// were; `runner` says which process has the conversation (Claude Code's own note of it, where none is given).
+    public int Stop(string tool, string session, Func<string, int> runner = null) {
+        DateTime since; bool command;
         lock (gate) {
             Open o;
             if (!open.TryGetValue(Key(tool, session), out o) || !o.Stoppable) throw new InvalidOperationException("这段对话现在没有在执行，或它是在可以停止之前打开的（重新打开后才行）");
             o.StopAsked = true;
+            since = o.StepAt; command = Array.IndexOf(ShellTools, o.StepTool) >= 0 && !o.StepAside;
         }
+        Outbox.Pause(tool, session);
+        if (!command || tool != "claude") return 0;
+        try { return Running.End((runner ?? ClaudeSessions.ProcessOf)(session), since); } catch (Exception) { return 0; }
     }
     /// The conversations whose tool a hook keeps right now, showing nothing but a running hook (Open.Kept).
     public Open[] KeptNow() { lock (gate) return open.Values.Where(o => o.Kept).Select(o => o.Copy()).ToArray(); }
-    /// A message from the phone for a conversation. Says in words for the person why it cannot be passed on.
-    /// Returns whether the tool takes it now (else when it has done what it is doing).
-    public bool Say(string tool, string session, string text) {
+    /// A message from the phone for a conversation, under the number of the operation that carries it. Says in
+    /// words for the person why it cannot be passed on. Returns whether the tool takes it now (else when it has done
+    /// what it is doing). It waits in the Outbox until the tool's hooks hand it over.
+    public bool Say(string tool, string session, string text, string id = null) {
         text = (text ?? "").Trim();
         if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字");
+        bool now;
         lock (gate) {
             Open o;
             if (!open.TryGetValue(Key(tool, session), out o)) throw new InvalidOperationException("电脑上的这段对话现在联系不上，请刷新后重试");
-            if (o.Status == "waiting" && o.Held) { o.Message = text; Monitor.PulseAll(gate); return true; }
-            if (o.Status == "busy" || o.Status == "confirm") { o.Queued = o.Queued == null ? text : o.Queued + "\n\n" + text; return false; }
-            throw new InvalidOperationException("这段对话已经在电脑上停下，等着在电脑上输入。它下次工作时发的消息，会在它做完后收到");
+            now = o.Status == "waiting" && o.Held;
+            if (!now && o.Status != "busy" && o.Status != "confirm") throw new InvalidOperationException("这段对话已经在电脑上停下，等着在电脑上输入。它下次工作时发的消息，会在它做完后收到");
         }
+        Outbox.Add(id ?? Guid.NewGuid().ToString("N"), tool, session, text);
+        return now;
     }
-    /// Leaves a message for a conversation to take when it next stops, whatever it is doing now, also one that has
-    /// told of nothing yet. (A conversation that sits idle is woken for it by other means: ClaudeRelay.)
-    public void Leave(string tool, string session, string text) {
-        lock (gate) {
-            Open o; string key = Key(tool, session);
-            if (!open.TryGetValue(key, out o)) open[key] = o = new Open { Tool = tool, Session = session, Seen = DateTime.UtcNow };
-            o.Queued = o.Queued == null ? text : o.Queued + "\n\n" + text;
-        }
-    }
-    /// Whether what was left has been taken: waits for that for up to `seconds`. What still lies there then is taken
-    /// back (false): the conversation's hooks did not come for it, and it is to be handed over another way.
-    public bool Taken(string tool, string session, int seconds) {
-        var until = DateTime.UtcNow.AddSeconds(seconds);
-        lock (gate) {
-            Open o;
-            for (;;) {
-                if (!open.TryGetValue(Key(tool, session), out o) || o.Queued == null) return true;
-                if (DateTime.UtcNow >= until) { o.Queued = null; return false; }
-                Monitor.Wait(gate, 250);
-            }
-        }
-    }
+    /// Leaves a message for a conversation to take when its hooks next run, whatever it is doing now, also one that
+    /// has told of nothing yet. (A conversation that sits idle is woken for it by other means: ClaudeRelay.)
+    public void Leave(string tool, string session, string text, string id = null) { Outbox.Add(id ?? Guid.NewGuid().ToString("N"), tool, session, text); }
+    /// Whether a message that was left has been taken by the conversation's hooks (or held, or taken back): waits
+    /// for that for up to `seconds`. False: it still waited, and is now this caller's to hand over another way.
+    public bool Taken(string id, int seconds) { return Outbox.Settled(id, seconds) || !Outbox.Hand(id); }
+    static string Joined(Outbox.Item[] items) { return String.Join("\n\n", items.Select(item => item.Text)); }
     /// What stands in front of a message that a hook hands to its tool as its user's words from the phone.
     // (How a tool takes a message hangs on its wording: these words were tried with the real tools, and a change
     // of them is tried again before it goes out.)
     public const string FromPhone = "Message from the user, sent from their phone through the Remote AI app";
+    /// What stands in front of the phone's words where they are handed to a tool between two of its steps. Read by
+    /// the model: changed only together with runs on the real tool.
+    public const string BetweenSteps = FromPhone + " while you are working on their earlier request. It is their newest message in this conversation: take it into account from here on.\n\n";
     /// The names by which what this program wrote into a conversation is known as its own: the one it has, and the
     /// one it had (conversations written then are still read).
     public static readonly string[] Names = { "Remote AI", "Remote CLI" };
@@ -324,7 +334,9 @@ public sealed class Reach : IDisposable {
             lock (gate) {
                 Open stepping;
                 if (!open.TryGetValue(Key(tool, session), out stepping)) return Nothing;
-                stepping.Seen = DateTime.UtcNow;
+                stepping.Seen = stepping.StepAt = DateTime.UtcNow; stepping.StepTool = Text(hooked, "tool_name");
+                object given; hooked.TryGetValue("tool_input", out given);
+                stepping.StepAside = Text(given as Dictionary<string, object>, "run_in_background") == "True";
                 news = !stepping.Steps || stepping.Status == "idle" || stepping.Status == "waiting";
                 stepping.Steps = true;
                 if (stepping.Status == "idle" || stepping.Status == "waiting") { stepping.Status = "busy"; stepping.Held = false; }
@@ -334,7 +346,15 @@ public sealed class Reach : IDisposable {
                 if (stop) { stepping.Stopped = DateTime.UtcNow; stepping.Status = idle() >= Unattended ? "waiting" : "idle"; stepping.Held = false; }
             }
             if (news || stop) Tell();
-            return stop ? new[] { json.Serialize(new Dictionary<string, object> { { "continue", false }, { "stopReason", StoppedFromPhone } }), "0" } : Nothing;
+            if (stop) return new[] { json.Serialize(new Dictionary<string, object> { { "continue", false }, { "stopReason", StoppedFromPhone } }), "0" };
+            // What the phone said while it works is handed to it here, between two of its steps: it need not wait
+            // until the whole turn is over. (Only a Claude Code that is known to take added context from a hook;
+            // an earlier one is given the words when it stops, as before.)
+            Version runs;
+            if (!Outbox.Waiting(tool, session) || !System.Version.TryParse(ClaudeSessions.Version(session), out runs) || runs < ContextAtStop) return Nothing;
+            var said = Outbox.Hand(tool, session);
+            if (said.Length == 0) return Nothing;
+            return new[] { json.Serialize(new Dictionary<string, object> { { "hookSpecificOutput", new Dictionary<string, object> { { "hookEventName", Step }, { "additionalContext", BetweenSteps + Joined(said) } } } }), "0" };
         }
         if (Scripted(tool, hooked)) return Nothing;
         Open o; bool first;
@@ -416,11 +436,12 @@ public sealed class Reach : IDisposable {
         string message = null; var began = DateTime.UtcNow; int turn, wait = kept().AtStop; bool held = false;
         lock (gate) {
             o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = o.Held = o.StopAsked = false; turn = o.Turn;
-            if (o.Queued != null) { message = o.Queued; o.Queued = null; Monitor.PulseAll(gate); }
+            var waited = Outbox.Hand(tool, o.Session);
+            if (waited.Length > 0) { message = Joined(waited); Monitor.PulseAll(gate); }
             else if (!mine && idle() >= Unattended) {
                 // nobody is at the computer: it is the phone's turn. The hook is kept only where its owner chose a
                 // time for that; else the tool stops as it would without this program.
-                o.Status = "waiting"; o.Message = null; o.Stopped = began; o.Held = held = wait > 0;
+                o.Status = "waiting"; o.Stopped = began; o.Held = held = wait > 0;
                 Monitor.PulseAll(gate);
             } else o.Status = "idle";
         }
@@ -430,7 +451,8 @@ public sealed class Reach : IDisposable {
                 bool let = false;
                 lock (gate) {
                     while (o.Status == "waiting" && o.Held && o.Turn == turn) {
-                        if (o.Message != null) { message = o.Message; o.Message = null; break; }
+                        var said = Outbox.Hand(tool, o.Session);
+                        if (said.Length > 0) { message = Joined(said); break; }
                         if (gone() || idle() < Unattended) { o.Status = "idle"; o.Held = false; break; }
                         // its time is over: the tool stops, and it is the phone's turn still
                         if (DateTime.UtcNow - began > TimeSpan.FromSeconds(wait)) { o.Held = false; let = true; break; }

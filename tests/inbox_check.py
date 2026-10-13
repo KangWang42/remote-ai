@@ -313,21 +313,29 @@ def main():
         answers = {}
         saying = threading.Thread(target=lambda: answers.update(got=call("/api/conversation", {"id": new_id(), "session": IDLE, "action": "say", "text": "再加一个例子"})))
         saying.start()
-        woke = until(lambda: (data / "relay" / "remote-cli-phone" / "stand-in-run.json").is_file() and json.loads((data / "relay" / "remote-cli-phone" / "stand-in-run.json").read_text(encoding="utf-8")), 30, "the conversation is woken")
+        def noted():
+            # (the stand-in writes its note while this looks: a note that is not whole yet is looked at again)
+            try:
+                return json.loads((data / "relay" / "remote-cli-phone" / "stand-in-run.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+        woke = until(noted, 30, "the conversation is woken")
         assert "Remote AI wake-up" in woke["given"] and "再加一个例子" not in woke["given"] and saying.is_alive(), woke["given"]
         stopped = hook("Stop", IDLE, shop, tool="claude", last_assistant_message="…", stop_hook_active=False)
         given = json.loads(stopped.communicate(timeout=10)[0].decode("utf-8"))
         handed = given["hookSpecificOutput"]["additionalContext"]
         assert "decision" not in given and given["hookSpecificOutput"]["hookEventName"] == "Stop" and handed.endswith("\n\n再加一个例子") and "from their phone" in handed, given
         saying.join(30)
-        assert answers.get("got") == {"status": "accepted", "sent": True, "now": True, "woke": True, "way": "wake"}, answers
+        woken = answers.get("got") or {}
+        assert {key: woken.get(key) for key in ("status", "sent", "now", "woke", "way", "state")} == {"status": "accepted", "sent": True, "now": True, "woke": True, "way": "wake", "state": "handed"}, answers
 
         # ---- and so is a Codex conversation that a program holds idle: through Codex's own queue, as what its user says
         # next, whatever signs the message holds
         held = listed(HELD)
         assert (held["live"], held["reach"], held["wake"], held["activity"]) == (True, ["say"], True, "locked"), held
         words = '把 "结论" 再写短一点 & 100% 保留 <原样>\n第二行 \\ 结尾\\'
-        assert call("/api/conversation", {"id": new_id(), "session": HELD, "action": "say", "text": words}) == {"status": "accepted", "sent": True, "now": True, "woke": True, "way": "wake"}
+        queued = call("/api/conversation", {"id": new_id(), "session": HELD, "action": "say", "text": words})
+        assert {key: queued.get(key) for key in ("status", "sent", "now", "woke", "way", "state")} == {"status": "accepted", "sent": True, "now": True, "woke": True, "way": "wake", "state": "handed"}, queued
         assert homes.queued.read_text(encoding="utf-8") == HELD + "\n" + words, homes.queued.read_text(encoding="utf-8")
         # one that asks is answered first, and one that is at work is left its message as before: neither is woken
         assert (listed(ASKING)["wake"], listed(WORKING)["wake"]) == (False, False)

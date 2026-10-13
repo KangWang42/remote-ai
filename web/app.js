@@ -190,7 +190,7 @@
     read: '当前只能查看记录，原应用尚未提供手机控制',
     saved: '已结束 · 已保存的对话记录保留'
   };
-  const deliveryText = result => result.status === 'unknown' ? '发送结果未知，请检查原对话' : result.now === false ? '已排队，等待当前任务结束' : result.now === true ? '工具已接收，等待对话更新' : '已提交，等待对话更新';
+  const deliveryText = result => result.status === 'unknown' ? '发送结果未知，请检查原对话' : result.now === false ? '已排队，它做完手头这一步后收到' : result.now === true ? '工具已接收，等待对话更新' : '已提交，等待对话更新';
   const desktopPending = new Map();
   // A native request can be accepted by the computer and then lose its HTTP response. Keep the
   // optimistic row in session storage so a refresh can still query the same operation instead of
@@ -489,17 +489,49 @@
       const savePending = () => saveDesktopPending(pendingScope, pending);
       const same = (messages, text) => messages.filter(m => m.role === 'user' && String(m.text || '').trim() === text).length;
       let record = [];
+      // What the phone said and the conversation has not taken yet stands under what was said, message by message,
+      // as the computer keeps it (`queued`): waiting, or held since the conversation was told to stop. Each can be
+      // taken back; what is held can be sent after all. What this page sent itself is shown with its whole words;
+      // what it finds waiting after it was opened anew, with the beginning the computer gives.
+      const withdraw = async id => {
+        try {
+          await api('api/conversation', { id: newId(), session: session.id, action: 'withdraw', message: id });
+          const mine = pending.findIndex(p => p.payload.id === id);
+          if (mine >= 0) { phoneTexts.delete(pending[mine].text); pending.splice(mine, 1); savePending(); }
+          toast('已撤回');
+        } catch (error) { toast(error.message); }
+        await refresh(); shown = ''; show();
+      };
+      const release = async () => {
+        try { await api('api/conversation', { id: newId(), session: session.id, action: 'release' }); toast('已继续发送'); }
+        catch (error) { toast(error.message); }
+        await refresh(); shown = ''; show();
+      };
+      const QUEUED = { queued: '排队中 · 它做完手头这一步后收到', paused: '已暂停 · 对话被停止时还没有发出' };
       function waiting() {
-        said.querySelectorAll('.turn.mine').forEach(node => node.remove());
+        said.querySelectorAll('.turn.mine, .held').forEach(node => node.remove());
+        const kept = now().queued || [], shownIds = new Set();
+        const line = (text, id, label, going) => {
+          const state = kept.find(item => item.id === id);
+          const row = el('div', { className: 'turn user mine' + (going ? ' going' : '') }, el('div', { className: 'plain', textContent: text }),
+            el('small', { className: 'phone-delivery', textContent: state ? QUEUED[state.state] : label }));
+          if (state) row.append(el('button', { type: 'button', textContent: '撤回', onclick: event => { event.currentTarget.disabled = true; withdraw(id); } }));
+          return row;
+        };
         pending.forEach(p => {
-          const row = el('div', { className: 'turn user mine' + (p.sent || p.uncertain ? '' : ' going') }, el('div', { className: 'plain', textContent: p.text }),
-            el('small', { className: 'phone-delivery', textContent: p.delivery || '手机消息 · 正在送达' }));
+          shownIds.add(p.payload.id);
+          if (kept.some(item => item.id === p.payload.id)) p.waited = true;
+          // (one that waited and waits no more has been handed to the conversation: its record says so soon)
+          const row = line(p.text, p.payload.id, p.waited ? '已交给对话' : p.delivery || '手机消息 · 正在送达', !(p.sent || p.uncertain));
           if (p.payload.transport === APP && p.uncertain) row.append(el('button', { type: 'button', textContent: '查询发送结果', onclick: async event => {
             event.currentTarget.disabled = true;
             try { await deliver(p, true); } finally { waiting(); refresh(); }
           } }));
           said.append(row);
         });
+        kept.filter(item => !shownIds.has(item.id)).forEach(item => said.append(line(item.text, item.id, '', false)));
+        const held = kept.filter(item => item.state === 'paused').length;
+        if (held) said.append(el('div', { className: 'held' }, el('button', { type: 'button', className: 'solid', textContent: held > 1 ? '继续发送这 ' + held + ' 条' : '继续发送', onclick: event => { event.currentTarget.disabled = true; release(); } })));
       }
       // Hands a message to the computer, which answers the same for every way: accepted, and whether the tool has
       // it now or takes it when it has done what it is at. The application's channel keeps a receipt that can be
@@ -576,7 +608,7 @@
         control.className = 'control-mode ' + mode;
         // (where it can only be read, the computer's own words why it cannot be told anything)
         control.textContent = mode === 'read' ? whyNot(current, 'say', controlCopy.read) : controlCopy[mode] + (mode === 'shared' && current.can_takeover === true ? ' 需要完整终端时，可选择“接管”。' : '');
-        const signature = JSON.stringify([current.live, current.status, current.reach, current.ways, current.why, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, current.transport, current.turn]);
+        const signature = JSON.stringify([current.live, current.status, current.reach, current.ways, current.why, current.queued, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, current.transport, current.turn]);
         follow(listed);
         // the line of how it stands: its clock goes on between the computer's words
         const kind = !current.live ? 'stopped' : phase || 'stopped';
@@ -592,6 +624,7 @@
         goOn.hidden = !(can(current, 'say') && !current.ask && (kind === 'stopped' || kind === 'waiting') && record.length > 0);
         if (signature === shown) return;
         shown = signature;
+        waiting();
         head.textContent = whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));      // (how it stands is said in the line above the box)
         // what it asks is answered here, under what was said
         asks.textContent = '';
@@ -651,13 +684,14 @@
   }
   async function desktopDraft(names, tool) {
     const app = APPS[tool];
-    await openSheet(form => {
+    const entered = await openSheet((form, finish) => {
       const folder = el('select', { id: 'desktop-project' }, ...names.map(name => el('option', { value: name, textContent: name })));
       const draft = el('textarea', { id: 'desktop-draft', rows: 4, maxLength: 1000, placeholder: '可留空，或预填一段内容', autocapitalize: 'off', spellcheck: false });
       const status = el('p', { role: 'status', 'aria-live': 'polite', className: 'quiet' });
-      let operation = null;
+      let operation = null, came = null;
       const button = el('button', { type: 'button', className: 'choice solid', textContent: '交给 ' + app + ' 桌面应用', onclick: async () => {
         if (button.disabled) return;
+        if (came) return finish(came);
         if (!operation) operation = { id: newId(), action: 'app_open', tool, dir: folder.value, draft: draft.value };
         button.disabled = true; folder.disabled = true; draft.readOnly = true;
         status.textContent = '正在交给电脑上的 ' + app + '…';
@@ -673,6 +707,18 @@
           if (!['handed_off', 'unknown'].includes(result.status) || result.sent !== false) throw new Error('未收到可确认的桌面操作结果，请查询同一次操作。');
           status.textContent = result.message || '请在电脑上检查 ' + app + '，内容尚未发送。';
           button.textContent = result.status === 'handed_off' ? '已交给应用，尚未发送' : '结果未知，请检查电脑';
+          // There is a conversation once the draft was sent on the computer. The computer says which one came of
+          // this operation (`opened`): it is entered from here, without looking for it in the lists.
+          if (result.status === 'handed_off') {
+            const watch = setInterval(() => {
+              if (!status.isConnected || !$('sheet').open) return clearInterval(watch);
+              came = (data.sessions || []).find(s => s.opened === operation.id) || null;
+              if (!came) return;
+              clearInterval(watch);
+              status.textContent = '对话已经在电脑上开始。';
+              button.textContent = '进入这段对话'; button.disabled = false;
+            }, 1000);
+          }
         } catch (error) {
           status.textContent = error.message;
           button.textContent = '查询本次操作结果'; button.disabled = false;
@@ -685,6 +731,7 @@
       // Dismissal disconnects this view; it does not cancel an operation already handed to the computer.
       setTimeout(() => { const cancel = form.contains(folder) && form.querySelector('.cancel'); if (cancel) cancel.textContent = '返回'; }, 0);
     });
+    if (entered && entered.id) takeOver(entered);
   }
   // A project is made of a folder on the computer: one of those that already have conversations (each says by what
   // it is used: a desktop app, an editor, a terminal), found by searching when they are many, or one that is typed.

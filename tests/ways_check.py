@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 with tempfile.TemporaryDirectory(prefix='remote-ai-ways-') as folder:
     exe = Path(folder) / 'check.exe'
-    sources = ['CodexSessions', 'Reach', 'Marks', 'ClaudeRelay', 'Folders', 'Removal', 'CodexQueue', 'DesktopAdapters', 'Ways', 'CodexDesktopControl', 'RemoteCliAgent']
+    sources = ['CodexSessions', 'Reach', 'Outbox', 'Running', 'Marks', 'ClaudeRelay', 'Folders', 'Removal', 'CodexQueue', 'DesktopAdapters', 'Ways', 'CodexDesktopControl', 'RemoteCliAgent']
     subprocess.run([str(compiler), '/nologo', '/target:exe', '/platform:x64', '/codepage:65001',
                     '/reference:System.Management.dll', '/reference:System.Net.Http.dll', '/reference:System.Web.Extensions.dll',
                     '/reference:System.Web.dll', '/reference:System.Security.dll', '/main:WaysCheck', '/out:' + str(exe),

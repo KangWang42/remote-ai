@@ -149,6 +149,29 @@ public sealed class DesktopOperations {
         directory = Path.Combine(dataDir, "desktop-operations");
         this.adapters = adapters.ToDictionary(a => a.Tool, StringComparer.Ordinal);
     }
+    // What was opened from the phone and has no conversation yet: looked for among the conversations for a while.
+    // (Under a lock of their own: `gate` is held for as long as an operation runs, which may wait for the agent,
+    // and the agent asks here while it lists its conversations.)
+    sealed class Opening { public string Id, Tool, Folder, Session = ""; public DateTime At; }
+    readonly List<Opening> openings = new List<Opening>();
+    public static readonly TimeSpan Looked = TimeSpan.FromMinutes(30);
+    static string Plain(string folder) { try { return Path.GetFullPath(folder).TrimEnd('\\', '/'); } catch (Exception) { return folder ?? ""; } }
+    /// The operation a conversation came of, "" for any other: the first one that began in the folder an
+    /// application was opened for from the phone, in that application, after it was opened. The draft is sent on
+    /// the computer, and only then is there a conversation: this is how the phone learns which one it is.
+    public string CameOf(string tool, string session, string folder, DateTime created, bool inApplication) {
+        lock (openings) {
+            openings.RemoveAll(o => o.Session.Length == 0 && DateTime.UtcNow - o.At > Looked);
+            var known = openings.FirstOrDefault(o => o.Tool == tool && String.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase));
+            if (known != null) return known.Id;
+            if (!inApplication) return "";
+            var found = openings.Where(o => o.Session.Length == 0 && o.Tool == tool && created.ToUniversalTime() >= o.At.AddSeconds(-5) && String.Equals(o.Folder, Plain(folder), StringComparison.OrdinalIgnoreCase)).OrderBy(o => o.At).FirstOrDefault();
+            if (found == null) return "";
+            found.Session = session;
+            if (openings.Count > 60) openings.RemoveRange(0, openings.Count - 60);
+            return found.Id;
+        }
+    }
     public bool Available(string tool) { IDesktopAdapter adapter; return adapters.TryGetValue(tool ?? "", out adapter) && adapter.Available; }
     /// The tools whose application can be opened from the phone here.
     public string[] Tools { get { return adapters.Values.Where(a => a.Available).Select(a => a.Tool).ToArray(); } }
@@ -163,7 +186,9 @@ public sealed class DesktopOperations {
         if (!adapters.TryGetValue(tool ?? "", out adapter)) throw new InvalidOperationException("这个桌面应用暂不支持从手机打开项目和草稿");
         return Run(id, new[] { tool, folder, draft ?? "" }, () => {
             if (!adapter.Available) throw new InvalidOperationException("桌面应用入口不可用，请在电脑上安装或更新应用后重启 Remote AI");
-            return adapter.Open(folder, draft);
+            var opened = adapter.Open(folder, draft);
+            lock (openings) openings.Add(new Opening { Id = id, Tool = tool, Folder = Plain(folder), At = DateTime.UtcNow });
+            return opened;
         }, false);
     }
     public Dictionary<string, object> Run(string id, string[] identity, Func<Dictionary<string, object>> action, bool control = true, bool queryOnly = false) {

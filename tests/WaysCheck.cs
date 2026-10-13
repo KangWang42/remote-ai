@@ -11,7 +11,7 @@ public static class WaysCheck {
         return new TerminalAgent.SessionInfo { Id = Guid.NewGuid().ToString(), Tool = tool, Dir = "demo", Title = "t", Origin = origin, Live = true, Now = true, Wakes = wakes, CanTakeover = ends, TakeoverReason = reason, Status = "idle" };
     }
     static Reach.Open Hooked(string status, bool steps = false, bool held = false, bool answerable = true) { return new Reach.Open { Status = status, Steps = steps, Held = held, Answerable = answerable }; }
-    static CodexDesktopSessions.State Channel(bool ready, bool busy, string turn) { return new CodexDesktopSessions.State { Folder = "x", Ready = ready, Busy = busy, Turn = turn, At = DateTime.UtcNow }; }
+    static CodexDesktopSessions.State Channel(bool ready, bool busy, string turn, bool takes = false) { return new CodexDesktopSessions.State { Folder = "x", Ready = ready, Busy = busy, Takes = takes, Turn = turn, At = DateTime.UtcNow }; }
     static void Is(string what, Ways ways, string say, string stop, string answer, string end, string status, string reach, string transport) {
         string got = String.Join(" ", ways.Say, ways.Stop, ways.Answer, ways.End, ways.Status, ways.Reach == null ? "null" : String.Join(",", ways.Reach), ways.Transport);
         string wanted = String.Join(" ", say, stop, answer, end, status, reach, transport);
@@ -44,6 +44,9 @@ public static class WaysCheck {
 
         // ---- Codex's desktop app with its own channel: the channel first, its hooks while it works
         Is("codex app ready", Ways.Of(In("codex", D, true, false), Hooked("idle"), Channel(true, false, "")), A, "", "", "", "waiting", "say", A);
+        // (at work it takes a message into the turn that runs; not while it waits for an answer to a question of its own)
+        Is("codex app at work, taking messages", Ways.Of(In("codex", D, true, false), Hooked("busy"), Channel(false, true, "turn-1", takes: true)), A, A, "", "", "busy", "say,stop", A);
+        Is("codex app at work, taking messages, its hooks silent", Ways.Of(In("codex", D, true, false), null, Channel(false, true, "turn-1", takes: true)), A, A, "", "", "busy", "say,stop", A);
         Is("codex app at work, heard by its hooks", Ways.Of(In("codex", D, true, false), Hooked("busy"), Channel(false, true, "turn-1")), H, A, "", "", "busy", "say,stop", A);
         Is("codex app at work, its hooks silent", Ways.Of(In("codex", D, true, false), null, Channel(false, true, "turn-1")), "", A, "", "", "busy", "stop", A);
         Is("codex app at work on a goal", Ways.Of(In("codex", D, true, false), Hooked("busy"), Channel(false, true, "")), H, "", "", "", "busy", "say", A);

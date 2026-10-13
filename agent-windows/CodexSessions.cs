@@ -106,6 +106,9 @@ public sealed class ClaudeSessions {
     public static string Entry(string session) { return Noted(session, "entrypoint"); }
     /// The version of the Claude Code that runs a session, as it notes it ("2.1.283"); "" when it has no note.
     public static string Version(string session) { return Noted(session, "version"); }
+    /// The process that has a session, as Claude Code notes it; 0 when it has no note. It is the one that starts
+    /// the commands of the session's steps.
+    public static int ProcessOf(string session) { int pid; return Int32.TryParse(Noted(session, "pid"), out pid) ? pid : 0; }
     static string Noted(string session, string what) {
         try {
             foreach (string file in Directory.GetFiles(Path.Combine(Home, "sessions"), "*.json")) {

@@ -145,14 +145,30 @@ def main():
         assert verdict["hookSpecificOutput"]["decision"]["behavior"] == "allow", verdict
         until(lambda: listed()["status"] == "busy" and listed()["ask"] is None, 10, "it works again")
         # ---- a message left while it works reaches it when it stops; then it waits, and one is taken at once
-        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "say", "text": "然后把说明文档也更新"}) == {"status": "accepted", "sent": True, "now": False, "way": "hook"}
+        # (each message is kept under its operation's number until the tool has it: listed for the phone, answered
+        # by how it stands when it is said again, and taken back while it still waits)
+        first, second = new_id(), new_id()
+        assert call("/api/conversation", {"id": first, "session": SESSION, "action": "say", "text": "然后把说明文档也更新"}) == {"status": "accepted", "sent": True, "now": False, "way": "hook", "state": "queued", "message": first}
+        assert call("/api/conversation", {"id": second, "session": SESSION, "action": "say", "text": "这一句不要了"})["state"] == "queued"
+        both = until(lambda: (lambda s: s["queued"] if len(s["queued"]) == 2 else None)(listed()), 10, "the two that wait are listed")
+        assert [(m["id"], m["text"], m["state"]) for m in both] == [(first, "然后把说明文档也更新", "queued"), (second, "这一句不要了", "queued")], both
+        assert call("/api/conversation", {"id": first, "session": SESSION, "action": "say", "text": "然后把说明文档也更新"})["state"] == "queued" and len(listed()["queued"]) == 2, "said again under its number, nothing is added"
+        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "withdraw", "message": second}) == {"state": "withdrawn", "message": second}
+        until(lambda: [m["id"] for m in listed()["queued"]] == [first], 10, "one was taken back")
+        report["waiting_for_it"] = listed()["queued"]
         went = json.loads(said(hook("Stop", last_assistant_message="优惠券已经加上了。", stop_hook_active=False)))
-        assert went["decision"] == "block" and "然后把说明文档也更新" in went["reason"], went
+        assert went["decision"] == "block" and "然后把说明文档也更新" in went["reason"] and "这一句不要了" not in went["reason"], went
+        until(lambda: listed()["queued"] == [], 10, "nothing waits any more")
+        after = call("/api/conversation", {"id": first, "session": SESSION, "action": "say", "text": "然后把说明文档也更新"})
+        assert (after["state"], after["now"], after["message"]) == ("handed", True, first), after          # asked after once it was handed over: not sent again
+        refused = call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "withdraw", "message": first}, expect=400)
+        assert "已经交给对话" in refused["error"], refused
         stopping = hook("Stop", last_assistant_message="文档也更新了。", stop_hook_active=True)
         waiting = until(lambda: (lambda s: s if s["status"] == "waiting" else None)(listed()), 10, "it has stopped and waits for the phone")
         assert waiting["last"] == "文档也更新了。" and waiting["reach"] == ["say"] and stopping.poll() is None, waiting
         report["listed_while_it_waits"] = {key: waiting[key] for key in ("status", "reach", "last", "activity", "host")}
-        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "say", "text": "再跑一遍测试"}) == {"status": "accepted", "sent": True, "now": True, "way": "hook"}
+        taken = call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "say", "text": "再跑一遍测试"})
+        assert {key: taken[key] for key in ("status", "sent", "now", "way")} == {"status": "accepted", "sent": True, "now": True, "way": "hook"}, taken
         went = json.loads(said(stopping))
         assert went["decision"] == "block" and "再跑一遍测试" in went["reason"], went
         until(lambda: listed()["status"] == "busy", 10, "it works on")
@@ -198,7 +214,8 @@ def main():
         # its tool tells of it: it is told from the phone like any other
         assert said(hook("UserPromptSubmit", OUTSIDE, prompt="整理提纲")) == ""
         until(lambda: (lambda s: s if s["status"] == "busy" and s["reach"] == ["say"] else None)(listed(OUTSIDE)), 10, "the one outside works")
-        assert call("/api/conversation", {"id": new_id(), "session": OUTSIDE, "action": "say", "text": "再加一节小结"}) == {"status": "accepted", "sent": True, "now": False, "way": "hook"}
+        left = call("/api/conversation", {"id": new_id(), "session": OUTSIDE, "action": "say", "text": "再加一节小结"})
+        assert {key: left[key] for key in ("status", "sent", "now", "way", "state")} == {"status": "accepted", "sent": True, "now": False, "way": "hook", "state": "queued"}, left
         went = json.loads(said(hook("Stop", OUTSIDE, last_assistant_message="提纲写好了。", stop_hook_active=False)))
         assert went["decision"] == "block" and "再加一节小结" in went["reason"], went
         # a terminal of the phone's takes it on like any other, by closing what has it open or by a copy: without either it is refused, as one in a project is

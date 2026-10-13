@@ -481,6 +481,11 @@ the user sends it on the computer. There is no returned conversation ID or autom
 `status: "unknown", sent: false` means an earlier attempt may have reached the app and is not replayed.
 An error or timeout must not be displayed as successful creation or proof that nothing happened.
 
+The draft is sent on the computer, and only then is there a conversation. The computer tells the phone which
+one it is: a live conversation carries `opened`, the `id` of the `app_open` operation it came of, where it is
+the first that began in that folder, in that application, after the application was opened for it (looked
+for during 30 minutes; kept in memory only). The page that handed the draft over offers to enter it.
+
 Each application is opened by a link of its own scheme, the entry it has for that itself
 (`LinkedDesktopApp` in `DesktopAdapters.cs`; one class per application says where it is installed, what its
 link is and how the link is given). Claude's is `claude://code/new?folder=...&q=...`: a new conversation of
@@ -526,8 +531,10 @@ what is its own:
 
 One place on the computer decides this (`Ways.cs`), for the list the phone is shown and for carrying out what
 it asks, the same for every tool. For each thing the best way that is there is used, and the next where it is
-not: Codex's desktop app takes no message through its channel while it works, so what is said then is left for
-the conversation through its hooks, as for any other conversation at work. A live conversation is listed with
+not: Codex's desktop app takes a message through its channel while it is ready and while it works (it goes
+into the turn that runs), but not while it waits for an answer to a question of its own; what is said then is
+left for the conversation through its hooks, as for any other conversation at work. A live conversation is
+listed with
 
 ```json
 "ways": {"say": "hook", "stop": "codex-desktop", "answer": "", "end": ""},
@@ -549,9 +556,9 @@ answered in one shape, whatever carried it: `{"status": "accepted", "sent": true
 A request submitted with `transport: "codex-desktop"` retains its durable operation identity even if
 its first dispatch selects a hook because the conversation became busy. Receipt lookup and payload
 fingerprint checks precede route selection; retries never enqueue again or become a new native turn.
-The accepted hook receipt confirms admission to the in-memory hook queue, not consumption or durable
-delivery across an agent restart. Hook/wake requests submitted without native transport do not yet
-have this durable receipt contract.
+The accepted hook receipt confirms admission to the computer's outbox (see "Messages that wait"), which is
+kept on disk: the message is handed over after an agent restart too, and the same `id` is answered by how
+it stands.
 
 The embedded reader stores native send recovery records in session storage, scoped by relay path,
 computer instance, tool and session. Reopening after a reload restores records less than 24 hours old;
@@ -570,13 +577,56 @@ program stay. The answer to the request is `{"status": "asked", "transport": "ho
 offers it (`stop` in `reach`) only while it is at work and has been heard before a step, which one opened
 before that hook was in its settings is not.
 
+The step need not run out first. Where it runs a command in a shell (Claude Code's `Bash` or `PowerShell`
+tool, not one sent off with `run_in_background`), the computer ends that command as Esc would at the
+keyboard: the shells that the conversation's own process started since the step began, with what runs below
+them (`Running.cs`; the process is the one Claude Code notes for the session). Claude Code notes the step as
+failed and comes to its next one, where it is stopped: 4.9 s from the request with a 90 s command running, on
+Claude Code 2.1.283. What Claude Code started before the step, and what is no shell, is left alone. While it
+only writes text there is no step and no hook: it stops when it next takes one, or not before its turn is over.
+
+### Messages that wait
+
+What the phone says to a conversation that cannot take it at once is kept by the computer, one item for each
+message under the `id` of the request that carried it (`Outbox.cs`): in a file of its own, the words
+encrypted for the Windows account and dropped as soon as the item is settled. A computer that keeps them
+advertises `outbox`. Every `say` answers with `state` and `message` (the item's number) beside `status`,
+`sent`, `now` and `way`; a `say` repeated under the same `id` is answered by how the item stands and sends
+nothing again, also after the computer's program started anew. A number used for other words is refused.
+
+| `state` | meaning |
+| --- | --- |
+| `queued` | it waits: the tool's hooks hand it over when they next run, or the conversation is woken for it |
+| `paused` | its conversation was told to stop before it was handed over: it waits for its owner |
+| `handed` | the tool has it |
+| `withdrawn` | its owner took it back |
+
+A conversation is listed with `queued`: the items that wait or are held, in the order they were said,
+`[{"id", "text" (200 characters at most), "state", "at"}]`. `POST /api/conversation` with
+`"action": "withdraw", "message": <id>` takes one back while it is `queued` or `paused` (answer
+`{"state": "withdrawn", "message": <id>}`; refused once it was handed over). `"action": "release"` lets
+what is `paused` wait again; the computer hands it over by the way that is there then (it wakes an idle
+conversation for it), and answers `{"released": <count>, "way": ...}`. The computer is asked with
+`session_withdraw` and `session_release`.
+
+Where they are handed over: at the conversation's stop, joined in order, as before. Claude Code (2.1.283 or
+later) is given them earlier, before its next step, as added context of its `PreToolUse` hook, so that what
+is said while it works need not wait until its turn is over. Any stop (`hook` or `codex-desktop`) turns
+what is `queued` for that conversation into `paused`. What still waits for an idle conversation when the
+computer's program starts again is handed over by it once it has looked at the conversations (one try for
+each item; after that it stays listed for its owner).
+
 ## Codex desktop conversation control (Windows)
 
 `codex-desktop-control` identifies the Windows agent's native-control protocol support. A session advertises
 `transport: "codex-desktop"` only after a fresh owner discovery and snapshot from the supported application,
-with its working directory matching a Remote AI project. `reach` contains `say` while ready (by the channel)
-and while it works where its hooks tell of it (left for it through them, `ways.say: "hook"`), and `stop` when
-one active turn is identified. `turn` names that execution. Cached capabilities expire after 15 seconds;
+with its working directory matching a Remote AI project. `reach` contains `say` while ready and while it
+works (both by the channel: `thread-follower-start-turn` to one that is ready; to one at work the
+application's own message for a turn in progress, `thread-follower-steer-turn` version 1, with the words and
+the message as its box would restore it, `{"text", "context": {"workspaceRoots", "commentAttachments",
+"collaborationMode"}}`; its answer names the running turn), and `stop` when one active turn is identified. While the
+conversation shows a request of its own (`requests` in its state, or flags on its runtime status) the channel
+takes no message, and `say` goes by the hooks where they tell of it (`ways.say: "hook"`). `turn` names that execution. Cached capabilities expire after 15 seconds;
 every mutation opens a fresh connection and checks ownership and the project again. Expired or incompatible
 connections do not fall back to a second backend or Codex queue. What they fall back on is the tool's hooks, which
 run in the application's own process: a message left for a conversation at work is handed to it when it stops.

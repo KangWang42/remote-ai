@@ -9,7 +9,8 @@ namespace RemoteCli {
 ///
 /// A conversation has up to three ways in. For each thing that can be done the best one that is there is used, and
 /// the next one where it is not:
-///   App    the application's own channel (Codex's desktop app: CodexDesktopControl)
+///   App    the application's own channel (Codex's desktop app: CodexDesktopControl); it takes a message while
+///          the conversation works too, into the turn that runs
 ///   Hook   the tool's hooks (Reach): what is said is left for a conversation at work and handed to it when it
 ///          stops, a request is answered, Claude Code is told to stop before its next step
 ///   Wake   the tool's own way to a conversation that sits idle: Claude Code's messages between conversations (its
@@ -20,7 +21,9 @@ namespace RemoteCli {
 /// A tool or a channel that is added gets its lines in `Of`; nothing else decides any of this.
 public sealed class Ways {
     public const string App = "codex-desktop", Hook = "hook", Wake = "wake", Process = "process";
-    public const string CodexDesktop = "Codex 桌面版";      // by what a conversation of Codex's desktop app is told (SessionInfo.Origin)
+    public const string CodexDesktop = "Codex 桌面版", ClaudeDesktop = "Claude 桌面版";      // by what a conversation of a desktop app is told (SessionInfo.Origin)
+    /// Whether a conversation runs in a desktop application, as its origin says.
+    public static bool InApplication(string origin) { return origin == CodexDesktop || origin == ClaudeDesktop; }
     public static readonly string[] Things = { "say", "stop", "answer", "end" };
 
     /// The way used for each thing, "" where there is none.
@@ -59,7 +62,7 @@ public sealed class Ways {
         ways.Told = known != null || channel != null || (s.Wakes && !desktop);
 
         // ---- saying something to it
-        if (channel != null && channel.Ready && !asks) ways.Say = App;
+        if (channel != null && (channel.Ready || channel.Takes) && !asks) ways.Say = App;
         else if (known != null && known.Sayable) ways.Say = Hook;
         // (never Codex's queue for its desktop app: the queue is another program's, which would write to a conversation the app has)
         else if (s.Wakes && !desktop && !asks) ways.Say = Wake;

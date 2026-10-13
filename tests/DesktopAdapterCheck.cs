@@ -100,6 +100,27 @@ public static class DesktopAdapterCheck {
         lock (Field(agent, "work")) Require(other.Calls == 1 && app.Calls == 1 && done[new string('2', 32)].ContainsKey("result"), "Claude's application is opened by its own adapter");
         var unknown = op('3', "demo"); unknown["tool"] = "gemini"; run(unknown);
         Require(Convert.ToString(done[new string('3', 32)]["error"]).Contains("暂不支持") && other.Calls == 1 && app.Calls == 1, "a tool without an adapter is refused");
+        // The conversation that comes of a project opened from the phone: the first that begins in that folder, in
+        // that application, after it was opened. Not one that was there before, in another folder, of another tool,
+        // or in a terminal; and each operation has one conversation, each conversation one operation.
+        var came = new DesktopOperations(Path.Combine(root, "came"), new App());
+        string opening = new string('9', 32), second = new string('8', 32), s1 = Guid.NewGuid().ToString(), s2 = Guid.NewGuid().ToString(), s3 = Guid.NewGuid().ToString();
+        var before = DateTime.UtcNow.AddMinutes(-3);
+        came.Open(opening, "codex", folder, "");
+        Require(came.CameOf("codex", s1, folder, before, true) == "" && came.CameOf("claude", s1, folder, DateTime.UtcNow, true) == "" && came.CameOf("codex", s1, root, DateTime.UtcNow, true) == "" && came.CameOf("codex", s1, folder, DateTime.UtcNow, false) == "", "none that was there before, of another tool, in another folder, or in a terminal");
+        Require(came.CameOf("codex", s2, folder + "\\", DateTime.UtcNow, true) == opening && came.CameOf("codex", s2, folder, DateTime.UtcNow, true) == opening, "the one that began there after it was opened, and it stays that one");
+        Require(came.CameOf("codex", s3, folder, DateTime.UtcNow, true) == "", "a later one in the same folder came of nothing");
+        came.Open(second, "codex", folder, "");
+        Require(came.CameOf("codex", s2, folder, DateTime.UtcNow, true) == opening && came.CameOf("codex", s3, folder, DateTime.UtcNow.AddSeconds(1), true) == second, "each operation has its own");
+        // Asking which operation a conversation came of never waits for an operation that runs: the agent asks while
+        // it lists its conversations, and an operation may be waiting for the agent meanwhile.
+        var slow = new App(); slow.Release.Reset();
+        var busy = new DesktopOperations(Path.Combine(root, "busy"), slow);
+        var running = Task.Run(() => busy.Open(new string('7', 32), "codex", folder, ""));
+        Require(slow.Entered.WaitOne(2000), "an operation runs");
+        var asking = Task.Run(() => busy.CameOf("codex", s1, folder, DateTime.UtcNow, true));
+        Require(asking.Wait(1000) && asking.Result == "", "answered while an operation runs");
+        slow.Release.Set(); running.Wait(4000);
         Console.WriteLine("desktop adapter: URL isolation, durable replay, crash/failure, permissions and nonblocking dispatch passed");
         Console.WriteLine("installed Codex desktop entry available: " + new CodexDesktopAdapter().Available + ", Claude: " + new ClaudeDesktopAdapter().Available);
         CodexDesktopControlCheck.Run(Path.Combine(root, "native"));

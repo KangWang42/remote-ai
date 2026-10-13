@@ -88,6 +88,42 @@ class TerminalRelayTests(unittest.TestCase):
         earlier = self.relay.overview(now=1002)["sessions"][0]
         self.assertEqual((earlier["ways"], earlier["why"], earlier["transport"], earlier["reach"]), (None, None, "codex-desktop", ["say", "stop"]))
 
+    def test_what_waits_for_a_conversation_is_listed_taken_back_and_released(self):
+        import threading
+        sid = "11111111-2222-3333-4444-555555555555"
+        info = dict(self.info, features=["peek", "reach", "outbox"])
+        waiting = [{"id": "a" * 32, "text": "第一条" + "长" * 300, "state": "queued", "at": 5}, {"id": "b" * 32, "text": "第二条", "state": "paused", "at": 6},
+                   {"id": "bad id", "text": "x", "state": "queued"}, {"id": "c" * 32, "text": "已经交给它的", "state": "handed"}]
+        session = {"id": sid, "tool": "claude", "dir": "demo", "title": "正在做的", "updated": 1, "live": True, "status": "busy", "reach": ["say"], "queued": waiting}
+        self.relay.agent({"info": info, "sessions": [session]}, now=1001)
+        shown = self.relay.overview(now=1001)["sessions"][0]["queued"]
+        self.assertEqual([(m["id"][0], len(m["text"]), m["state"], m["at"]) for m in shown], [("a", 200, "queued", 5), ("b", 3, "paused", 6)])
+        with self.assertRaisesRegex(RemoteError, "消息编号无效"):
+            self.relay.conversation({"id": "1" * 32, "session": sid, "action": "withdraw", "message": "nope"}, now=1001, wait=0)
+        with self.assertRaisesRegex(RemoteError, "已经交给对话"):
+            self.relay.conversation({"id": "2" * 32, "session": sid, "action": "withdraw", "message": "c" * 32}, now=1001, wait=0)
+
+        def carried(payload, answer):
+            got = {}
+            asking = threading.Thread(target=lambda: got.update(value=self.relay.conversation(payload, now=1001, wait=5)))
+            asking.start()
+            asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+            self.relay.agent({"info": info, "acks": [{"id": payload["id"], "error": "", "result": answer}]}, now=1002)
+            asking.join(5)
+            return [{k: v for k, v in o.items() if k not in ("at", "terminal")} for o in asked], got.get("value")
+
+        asked, got = carried({"id": "3" * 32, "session": sid, "action": "withdraw", "message": "a" * 32}, {"state": "withdrawn", "message": "a" * 32})
+        self.assertEqual(asked, [{"id": "3" * 32, "action": "session_withdraw", "session": sid, "tool": "claude", "dir": "demo", "message": "a" * 32}])
+        self.assertEqual((got, [m["id"][0] for m in self.relay.overview(now=1002)["sessions"][0]["queued"]]), ({"state": "withdrawn", "message": "a" * 32}, ["b"]))
+        asked, got = carried({"id": "4" * 32, "session": sid, "action": "release"}, {"released": 1, "way": "wake"})
+        self.assertEqual((asked[0]["action"], got, self.relay.overview(now=1002)["sessions"][0]["queued"][0]["state"]), ("session_release", {"released": 1, "way": "wake"}, "queued"))
+        with self.assertRaisesRegex(RemoteError, "没有暂停的消息"):
+            self.relay.conversation({"id": "5" * 32, "session": sid, "action": "release"}, now=1003, wait=0)
+        # a computer that keeps no such list is not asked
+        self.relay.agent({"info": dict(info, features=["peek", "reach"]), "sessions": [session]}, now=1004)
+        with self.assertRaisesRegex(RemoteError, "不支持撤回"):
+            self.relay.conversation({"id": "6" * 32, "session": sid, "action": "withdraw", "message": "b" * 32}, now=1004, wait=0)
+
     def test_desktop_timeout_never_claims_not_executed(self):
         self.info["features"] = ["codex-desktop-open"]
         self.relay.agent({"info": self.info}, now=1001)

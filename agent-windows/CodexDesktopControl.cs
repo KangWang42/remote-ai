@@ -114,6 +114,17 @@ public sealed class CodexDesktopControl : IDesktopConversation {
     public static string Folder(Dictionary<string, object> state) { return Text(state, "cwd"); }
     public static bool Busy(Dictionary<string, object> state) { return Text(Obj(state, "threadRuntimeStatus"), "type") == "active"; }
     public static bool Ready(Dictionary<string, object> state) { return Text(state, "resumeState") == "resumed" && Text(Obj(state, "threadRuntimeStatus"), "type") == "idle"; }
+    /// It is at work and takes a message all the same: the application has a message of its own for that
+    /// (`thread-follower-steer-turn`), which puts the words into the turn that runs, where the model has them
+    /// from its next step on (run on Codex Windows 26.1007.2314.0: the turn notes a steering message as accepted).
+    /// Not while it waits for an answer to a question of its own (an approval): what is said then is not the
+    /// answer it waits for.
+    public static bool TakesAtWork(Dictionary<string, object> state) {
+        var runtime = Obj(state, "threadRuntimeStatus"); object flags, requests;
+        if (Text(state, "resumeState") != "resumed" || Text(runtime, "type") != "active") return false;
+        if (runtime.TryGetValue("activeFlags", out flags) && flags is System.Collections.IEnumerable && !(flags is string) && ((System.Collections.IEnumerable)flags).Cast<object>().Any()) return false;
+        return !(state.TryGetValue("requests", out requests) && requests is System.Collections.IEnumerable && !(requests is string) && ((System.Collections.IEnumerable)requests).Cast<object>().Any());
+    }
     public static string ActiveTurn(Dictionary<string, object> state) {
         if (state == null) return "";
         // The versioned expected-turn endpoint bypasses goal pausing. Do not advertise an incomplete stop for an active goal.
@@ -135,12 +146,27 @@ public sealed class CodexDesktopControl : IDesktopConversation {
         if (!System.Text.RegularExpressions.Regex.IsMatch(operationId ?? "", @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
         if (snapshot == null) throw new InvalidOperationException("先确认桌面对话归属");
         if (String.IsNullOrWhiteSpace(text) || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字");
-        if (!Ready(snapshot)) throw new InvalidOperationException("Codex 尚未就绪，请等待当前执行或确认完成后发送");
-        var result = Obj(Request("thread-follower-start-turn", 2, new { conversationId = session, turnStart = new {
-            request = new { threadId = session, input = new[] { new { type = "text", text = text, text_elements = new object[0] } }, clientUserMessageId = operationId },
-            context = new { inheritThreadSettings = true }
-        } }, owner), "result");
-        string turn = Text(Obj(Obj(result, "result"), "turn"), "id");
+        if (!Ready(snapshot) && !TakesAtWork(snapshot)) throw new InvalidOperationException("Codex 尚未就绪，请等待电脑上的确认完成后发送");
+        var input = new[] { new { type = "text", text = text, text_elements = new object[0] } };
+        string turn;
+        if (Ready(snapshot)) {
+            var result = Obj(Request("thread-follower-start-turn", 2, new { conversationId = session, turnStart = new {
+                request = new { threadId = session, input = input, clientUserMessageId = operationId },
+                context = new { inheritThreadSettings = true }
+            } }, owner), "result");
+            turn = Text(Obj(Obj(result, "result"), "turn"), "id");
+        } else {
+            // Into the turn that runs. The application wants, beside the words, the message as its own box would
+            // restore it if the turn ended first: its text, the folder it works in and the mode it is in. (A turn
+            // started the ordinary way is taken into the running turn as well, but leaves an entry pending in
+            // the application's state that never resolves: seen on the real application, and so not done.)
+            object mode; snapshot.TryGetValue("latestCollaborationMode", out mode);
+            var restore = new Dictionary<string, object> { { "text", text }, { "context", new Dictionary<string, object> {
+                { "workspaceRoots", new[] { Folder(snapshot) } }, { "commentAttachments", new object[0] }, { "collaborationMode", mode } } } };
+            var result = Obj(Request("thread-follower-steer-turn", 1, new Dictionary<string, object> { { "conversationId", session }, { "input", input }, { "restoreMessage", restore },
+                { "attachments", new object[0] }, { "clientUserMessageId", operationId } }, owner), "result");
+            turn = Text(Obj(result, "result"), "turnId");
+        }
         if (turn.Length == 0) throw new IOException("Codex 发送回执无法确认");
         return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "session", session }, { "turn", turn }, { "operation", operationId }, { "now", true }, { "transport", "codex-desktop" } };
     }
@@ -155,7 +181,7 @@ public sealed class CodexDesktopControl : IDesktopConversation {
 
 // Only short capability summaries survive a probe. Prompts, settings and history stay off the relay.
 public sealed class CodexDesktopSessions {
-    public sealed class State { public string Folder, Turn; public bool Ready, Busy; public DateTime At; }
+    public sealed class State { public string Folder, Turn; public bool Ready, Busy, Takes; public DateTime At; }       // Takes: at work, and takes a message (TakesAtWork)
     readonly object gate = new object();
     readonly Dictionary<string, State> states = new Dictionary<string, State>();
     bool refreshing;
@@ -167,7 +193,7 @@ public sealed class CodexDesktopSessions {
             try {
                 Parallel.ForEach(wanted, new ParallelOptions { MaxDegreeOfParallelism = 2 }, id => {
                     State state = null;
-                    try { using (var control = CodexDesktopControl.Connect()) { var value = control.Inspect(id); state = new State { Folder = CodexDesktopControl.Folder(value), Ready = CodexDesktopControl.Ready(value), Busy = CodexDesktopControl.Busy(value), Turn = CodexDesktopControl.ActiveTurn(value), At = DateTime.UtcNow }; } }
+                    try { using (var control = CodexDesktopControl.Connect()) { var value = control.Inspect(id); state = new State { Folder = CodexDesktopControl.Folder(value), Ready = CodexDesktopControl.Ready(value), Busy = CodexDesktopControl.Busy(value), Takes = CodexDesktopControl.TakesAtWork(value), Turn = CodexDesktopControl.ActiveTurn(value), At = DateTime.UtcNow }; } }
                     catch (Exception) { /* No capability is inferred from an unavailable or incompatible endpoint. */ }
                     lock (gate) { if (state == null) states.Remove(id); else states[id] = state; }
                 });

@@ -29,7 +29,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='remote-ai-ways-ui-') as temporary:
         relay = Relay(str(Path(temporary) / 'relay.json'))
         info = {'instance': 'c' * 32, 'enabled': True, 'tools': ['claude', 'codex'], 'workspaces': [PROJECT],
-                'features': ['peek', 'reach', 'end', 'codex-desktop-control', 'codex-desktop-open', 'claude-desktop-open']}
+                'features': ['peek', 'reach', 'end', 'outbox', 'codex-desktop-control', 'codex-desktop-open', 'claude-desktop-open']}
         now = int(time.time() * 1000)
         usual = dict(dir=PROJECT, updated=now, live=True, host='shared', status='busy')
         sessions = [
@@ -97,6 +97,11 @@ def main():
                             ack = {'id': op['id'], 'result': {'status': 'accepted', 'sent': True, 'now': False, 'way': 'hook'}}
                         elif op['action'] == 'session_stop':
                             ack = {'id': op['id'], 'result': {'status': 'asked', 'transport': 'hook'} if by == 'hook' else {'status': 'confirmed', 'turn': op.get('turn')}}
+                        elif op['action'] in ('session_withdraw', 'session_release'):
+                            # the computer keeps what waits: taken back it is gone, released it waits again
+                            one = next(s for s in sessions if s['id'] == payload['session'])
+                            one['queued'] = [dict(m, state='queued') if op['action'] == 'session_release' else m for m in one.get('queued', []) if m['id'] != op.get('message')]
+                            ack = {'id': op['id'], 'result': {'state': 'withdrawn'} if op['action'] == 'session_withdraw' else {'released': 1, 'way': 'wake'}}
                         else:
                             ack = {'id': op['id'], 'result': {}}
                         relay.agent({'info': info, 'acks': [ack]})
@@ -172,7 +177,7 @@ def main():
             assert shown('停止回答') and not shown('结束') and not value("document.querySelector('#sheet .write').hidden"), 'at work: it can be told and stopped; its application closes it'
             picture('claude-at-work.png')
             write('做完这一步后看这里')
-            until("document.querySelector('#sheet .said').textContent.includes('已排队，等待当前任务结束')", 'what was said is left for it')
+            until("document.querySelector('#sheet .said').textContent.includes('已排队，它做完手头这一步后收到')", 'what was said is left for it')
             assert asked[-1] == {'id': asked[-1]['id'], 'session': CLAUDE, 'action': 'say', 'text': '做完这一步后看这里'}, asked[-1]
             assert not value("document.querySelector('#sheet .said').textContent.includes('查询发送结果')"), 'nothing is asked after: its hooks have said that they took it'
             value(button('停止回答') + '.click()')
@@ -185,6 +190,24 @@ def main():
             until("document.querySelector('#sheet .write textarea').value === '这一句送不出去'", 'what was not sent is in the box again')
             assert not value("Array.from(document.querySelectorAll('#sheet .said .turn.mine')).some(row => row.textContent.includes('这一句送不出去'))"), 'and does not stand as sent'
             refuse[0] = False
+
+            # ---- what the phone said and the conversation has not taken yet is shown message by message, as the computer
+            # keeps it, also to a page that was opened anew: one waits, one is held since a stop. Each can be taken
+            # back, and what is held can be sent after all.
+            sessions[0]['queued'] = [{'id': 'a' * 32, 'text': '排着队的一句', 'state': 'queued', 'at': now}, {'id': 'b' * 32, 'text': '停止时还没发出的一句', 'state': 'paused', 'at': now}]
+            window(CLAUDE)
+            rows = "Array.from(document.querySelectorAll('#sheet .said .turn.mine')).map(row => row.querySelector('.plain').textContent + ' / ' + row.querySelector('small').textContent + ' / ' + Array.from(row.querySelectorAll('button')).map(b => b.textContent).join(','))"
+            until("document.querySelectorAll('#sheet .said .turn.mine').length === 2", 'the two that wait are shown')
+            assert value(rows) == ['排着队的一句 / 排队中 · 它做完手头这一步后收到 / 撤回', '停止时还没发出的一句 / 已暂停 · 对话被停止时还没有发出 / 撤回'], value(rows)
+            assert value("document.querySelector('#sheet .said .held button').textContent") == '继续发送'
+            picture('waiting-messages.png')
+            value("document.querySelector('#sheet .said .turn.mine button').click()")
+            until("document.querySelectorAll('#sheet .said .turn.mine').length === 1", 'taken back: it stands there no more')
+            assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': CLAUDE, 'action': 'withdraw', 'message': 'a' * 32}, asked[-1]
+            value("document.querySelector('#sheet .said .held button').click()")
+            until("!document.querySelector('#sheet .said .held') && document.querySelector('#sheet .said .turn.mine small').textContent.startsWith('排队中')", 'released: it waits again')
+            assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': CLAUDE, 'action': 'release'}, asked[-1]
+            sessions[0]['queued'] = []
 
             # ---- Codex's command line, at work: the same line and the same buttons; stopping says why, and offers to end it
             window(CLI)
@@ -206,7 +229,7 @@ def main():
             window(APP)
             assert shown('停止回答') and not shown('结束')
             write('桌面版执行时的留言')
-            until("document.querySelector('#sheet .said').textContent.includes('已排队，等待当前任务结束')")
+            until("document.querySelector('#sheet .said').textContent.includes('已排队，它做完手头这一步后收到')")
             assert 'transport' not in asked[-1] and asked[-1]['action'] == 'say', asked[-1]
             value(button('停止回答') + '.click()')
             until(toast + ".includes('已停止本次回答')", 'stopped by the application')
@@ -243,6 +266,16 @@ def main():
             until("document.querySelector('#sheet button.solid').textContent === '已交给应用，尚未发送'")
             assert {k: v for k, v in opened[-1].items() if k != 'id'} == {'action': 'app_open', 'tool': 'claude', 'dir': PROJECT, 'draft': '先看一下 README'}, opened[-1]
             picture('claude-draft.png')
+            # The draft is sent on the computer, and only then is there a conversation: the computer says which one
+            # came of this operation, and it is entered from here.
+            fresh = '11111111-2222-3333-4444-555555555559'
+            sessions.append(dict(usual, id=fresh, tool='claude', title='从手机新建的对话', origin='Claude 桌面版', kind='Claude 桌面版', reach=['say'], transport='', can_takeover=False, opened=opened[-1]['id'],
+                                 ways={'say': 'hook', 'stop': '', 'answer': '', 'end': ''}, why={}))
+            until("document.querySelector('#sheet button.solid').textContent === '进入这段对话'", 'the conversation that came of it is offered')
+            assert value("document.querySelector('#sheet-form [role=status]').textContent") == '对话已经在电脑上开始。'
+            picture('claude-came.png')
+            value("document.querySelector('#sheet button.solid').click()")
+            until("document.querySelector('#sheet .state') && document.querySelector('#sheet h3').textContent === '从手机新建的对话'", 'and entered: its window')
             info['features'] = ['peek', 'reach', 'codex-desktop-open']
             ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
             until("document.querySelector('#sheet[open] h3')?.textContent === '新建任务'")

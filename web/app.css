@@ -217,6 +217,10 @@ dialog.window .confirm .answers .no { color: var(--bad); }
 #sheet-form .said .turn.user { align-self: flex-end; max-width: 88%; padding: 8px 12px; border-radius: 14px 14px 4px 14px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
 #sheet-form .said .plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 #sheet-form .said .turn.going { opacity: .55; }
+/* what waits for the conversation can be taken back, row by row; what was held at a stop is sent after all by one press */
+#sheet-form .said .turn.mine button { justify-self: end; min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font-size: .78rem; }
+#sheet-form .said .held { align-self: flex-end; }
+#sheet-form .said .held button { min-height: 34px; padding: 0 14px; border-radius: 10px; font-size: .86rem; }
 #sheet-form .said .turn.thought .plain { color: var(--muted); font-size: .92em; }
 #sheet-form .said .md { overflow-wrap: anywhere; min-width: 0; }
 #sheet-form .said .md > :first-child { margin-top: 0; }

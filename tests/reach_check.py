@@ -14,5 +14,5 @@ with tempfile.TemporaryDirectory(prefix="remote-cli-reach-") as folder:
     exe = Path(folder) / "check.exe"
     subprocess.run([str(compiler), "/nologo", "/target:exe", "/platform:x64", "/codepage:65001",
                     "/reference:System.Management.dll", "/reference:System.Web.Extensions.dll", "/main:ReachCheck", "/out:" + str(exe),
-                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "tests/ReachCheck.cs")], check=True)
+                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "agent-windows/Outbox.cs"), str(ROOT / "agent-windows/Running.cs"), str(ROOT / "tests/ReachCheck.cs")], check=True)
     subprocess.run([str(exe), str(ROOT / "agent-windows/bin/RemoteCliAgent.exe")], check=True, timeout=120)
