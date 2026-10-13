@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Remote AI 怎样工作</title>
+<link rel="stylesheet" href="figure.css">
+<style>
+  .flow { display: grid; grid-template-columns: 1fr 96px 0.86fr 96px 1fr; align-items: stretch; }
+  .side { padding: 22px 22px 20px; border: 1px solid var(--line); border-radius: 18px; background: var(--soft); }
+  .side h3 { margin: 0 0 4px; font-size: 20px; }
+  .side p { margin: 0 0 14px; color: var(--muted); font-size: 14.5px; line-height: 1.55; }
+  .box { margin-top: 10px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; font-size: 15.5px; line-height: 1.5; }
+  .box b { display: block; }
+  .box span { color: var(--muted); font-size: 13.5px; }
+  .box.own { border-color: var(--accent); background: var(--accent-soft); }
+  .box.own b { color: #1d4fb3; }
+  .link { display: grid; align-content: center; justify-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .link svg { width: 84px; height: 22px; }
+  .routes { display: grid; align-content: center; gap: 10px; padding: 18px 14px; border: 1px dashed #b9c2cf; border-radius: 18px; }
+  .routes h3 { margin: 0 0 2px; font-size: 16px; text-align: center; color: var(--muted); font-weight: 600; }
+  .route { padding: 9px 12px; border-radius: 10px; background: var(--soft); font-size: 15px; text-align: center; }
+  .route span { display: block; color: var(--muted); font-size: 12.5px; }
+  .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
+  .fact { padding: 14px 16px; border-left: 4px solid var(--accent); background: var(--soft); border-radius: 0 12px 12px 0; }
+  .fact b { display: block; font-size: 16.5px; }
+  .fact span { display: block; margin-top: 4px; color: var(--muted); font-size: 14.5px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<main data-width="1200">
+  <div class="sheet">
+    <h2>任务在电脑上运行，手机只是另一块屏幕</h2>
+    <p class="lead">电脑端发现电脑上正在用的 Claude Code、Codex 对话和终端，经一条连接线路交给手机上的 App。</p>
+    <div class="flow">
+      <div class="side">
+        <h3>你的电脑</h3>
+        <p>工具、模型账号和项目文件都在这里</p>
+        <div class="box"><b>Claude Code · Codex</b><span>开在桌面应用、编辑器或命令行里</span></div>
+        <div class="box"><b>终端</b><span>命令行，以及从手机新建的 Claude Code、Codex</span></div>
+        <div class="box own"><b>Remote AI 电脑端</b><span>发现对话，转交消息、确认和停止</span></div>
+      </div>
+      <div class="link">
+        <svg viewBox="0 0 84 22" fill="none" stroke="#8a94a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h76M12 4 4 11l8 7M72 4l8 7-8 7"/></svg>
+      </div>
+      <div class="routes">
+        <h3>连接线路，四选一</h3>
+        <div class="route">局域网<span>同一网络，直接连接</span></div>
+        <div class="route">公网隧道<span>临时 HTTPS 地址，无需服务器</span></div>
+        <div class="route">公共中转<span>固定地址，现成线路</span></div>
+        <div class="route">我的中转<span>固定地址，自己的服务器</span></div>
+      </div>
+      <div class="link">
+        <svg viewBox="0 0 84 22" fill="none" stroke="#8a94a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h76M12 4 4 11l8 7M72 4l8 7-8 7"/></svg>
+      </div>
+      <div class="side">
+        <h3>你的手机</h3>
+        <p>Android App，扫电脑端的二维码配对</p>
+        <div class="box"><b>工作台</b><span>等你确认、正在运行、已打开的对话</span></div>
+        <div class="box"><b>对话窗口</b><span>看过程，发消息，回答确认，停止回答</span></div>
+        <div class="box"><b>终端与文件</b><span>完整终端；只读查看项目文件</span></div>
+        <div class="box"><b>任务提醒</b><span>有任务等待确认或完成时通知</span></div>
+      </div>
+    </div>
+    <div class="facts">
+      <div class="fact"><b>手机断线不影响任务</b><span>断网、锁屏或退出 App，电脑上的任务照常运行，重新连接后接着看。</span></div>
+      <div class="fact"><b>对话留在原来的应用里</b><span>电脑上问一句，手机上接着问一句，不必在两边来回交接。</span></div>
+      <div class="fact"><b>不提供也不托管模型账号</b><span>用的是电脑上已经装好、登录好的 Claude Code 和 Codex。</span></div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

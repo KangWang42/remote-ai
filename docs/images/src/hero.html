@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Remote AI：手机上的三个页面</title>
+<link rel="stylesheet" href="figure.css">
+<style>
+  main { padding: 24px 20px 28px; }
+  .row { display: flex; justify-content: center; align-items: flex-end; gap: 44px; }
+  figure { margin: 0; display: grid; justify-items: center; gap: 18px; }
+  figure.mid { margin-bottom: 26px; }
+  figcaption { padding: 9px 18px; border-radius: 999px; background: #fff; border: 1px solid var(--line); font-size: 17px; white-space: nowrap; box-shadow: 0 4px 12px rgba(18, 24, 36, .08); }
+  figcaption b { margin-right: 8px; }
+  figcaption span { color: var(--muted); }
+  .phone img { height: 700px; object-fit: cover; object-position: top; }
+</style>
+</head>
+<body>
+<main data-width="1440">
+  <div class="row">
+    <figure>
+      <div class="phone"><img src="../overview.png" alt=""></div>
+      <figcaption><b>工作台</b><span>哪些在等你，哪些在运行</span></figcaption>
+    </figure>
+    <figure class="mid">
+      <div class="phone"><img src="../look.png" alt="" style="object-position: bottom"></div>
+      <figcaption><b>对话窗口</b><span>看过程、发消息、停止</span></figcaption>
+    </figure>
+    <figure>
+      <div class="phone"><img src="../terminal.png" alt="" style="object-position: top"></div>
+      <figcaption><b>终端</b><span>电脑上真实的终端画面</span></figcaption>
+    </figure>
+  </div>
+</main>
+</body>
+</html>

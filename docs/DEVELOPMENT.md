@@ -17,7 +17,7 @@
 | `relay/` | 中转：`server.py`（登录、HTTP，以及公共中转里每台电脑各自的空间）、`relay.py`（终端状态与输出的转发：一台电脑一个 `Relay` 对象）。只用 Python 标准库；`install.sh` 把它装成服务器上的系统服务 |
 | `android/` | 安卓 App：`MainActivity`（各界面之间的跳转、扫码回调、语音识别）、`Workbench`（工作台）、`Kit`（配色和界面部件）、`AggregateSessions`（任务分组与排序，不依赖 Android，可单独检查） |
 | `web/` | App 里一台电脑的列表页和终端页（xterm.js），由中转提供、嵌在 App 内显示；随电脑端一起更新 |
-| `tools/` | `package_windows.py`（安装程序）、`window_pictures.py`（文档里的电脑端截图）、`relay_list.py`（生成公共中转清单里不以明文出现的条目） |
+| `tools/` | `package_windows.py`（安装程序）、`window_pictures.py`（文档里的电脑端截图）、`readme_pictures.py`（README 里的手机页面截图和带说明的图：用真实页面和编造的示例对话截图，再把 `docs/images/src/` 里的各页画成图）、`relay_list.py`（生成公共中转清单里不以明文出现的条目） |
 | `docs/PROTOCOL.md` | 三方之间的接口，想写别的客户端或别的系统的电脑端看这里 |
 
 电脑和手机都只向中转发起请求，电脑不需要公网地址或端口映射。

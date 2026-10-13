@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>四种连接方式</title>
+<link rel="stylesheet" href="figure.css">
+<style>
+  .ways { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .way { padding: 20px 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--soft); }
+  .way h3 { margin: 0 0 2px; font-size: 19px; }
+  .way p { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.6; }
+  .path { display: flex; align-items: center; gap: 10px; margin: 14px 0 12px; }
+  .node { flex: none; display: grid; justify-items: center; gap: 4px; width: 92px; font-size: 13px; color: var(--muted); }
+  .node svg { width: 38px; height: 38px; stroke: var(--ink); fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .node.mid svg { stroke: var(--accent); }
+  .wire { flex: 1; height: 0; border-top: 2px solid #9aa4b2; }
+  .wire.far { border-top-style: dashed; }
+</style>
+</head>
+<body>
+<main data-width="1200">
+  <div class="sheet">
+    <div class="ways">
+      <div class="way">
+        <h3>局域网</h3>
+        <div class="path">
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="11" y="4" width="18" height="32" rx="4"/><path d="M18 31h4"/></svg>手机</div>
+          <div class="wire"></div>
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="4" y="7" width="32" height="21" rx="3"/><path d="M14 34h12M20 28v6"/></svg>电脑</div>
+        </div>
+        <p>手机和电脑在同一个可信网络里，直接连接，延迟最低。</p>
+      </div>
+      <div class="way">
+        <h3>公网隧道</h3>
+        <div class="path">
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="11" y="4" width="18" height="32" rx="4"/><path d="M18 31h4"/></svg>手机</div>
+          <div class="wire far"></div>
+          <div class="node mid"><svg viewBox="0 0 40 40"><path d="M11 29h18a7 7 0 0 0 1-13.9A10 10 0 0 0 10.5 17 6 6 0 0 0 11 29z"/></svg>HTTPS 隧道</div>
+          <div class="wire far"></div>
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="4" y="7" width="32" height="21" rx="3"/><path d="M14 34h12M20 28v6"/></svg>电脑</div>
+        </div>
+        <p>在外面用，又没有服务器：电脑端开一条隧道，得到临时地址，无需注册账号。</p>
+      </div>
+      <div class="way">
+        <h3>公共中转</h3>
+        <div class="path">
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="11" y="4" width="18" height="32" rx="4"/><path d="M18 31h4"/></svg>手机</div>
+          <div class="wire far"></div>
+          <div class="node mid"><svg viewBox="0 0 40 40"><rect x="7" y="6" width="26" height="11" rx="3"/><rect x="7" y="23" width="26" height="11" rx="3"/><path d="M12 11.5h3M12 28.5h3"/></svg>公共中转</div>
+          <div class="wire far"></div>
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="4" y="7" width="32" height="21" rx="3"/><path d="M14 34h12M20 28v6"/></svg>电脑</div>
+        </div>
+        <p>想要固定地址：选一条现成的线路。内容经过这台中转服务器传输。</p>
+      </div>
+      <div class="way">
+        <h3>我的中转</h3>
+        <div class="path">
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="11" y="4" width="18" height="32" rx="4"/><path d="M18 31h4"/></svg>手机</div>
+          <div class="wire far"></div>
+          <div class="node mid"><svg viewBox="0 0 40 40"><rect x="7" y="6" width="26" height="11" rx="3"/><rect x="7" y="23" width="26" height="11" rx="3"/><path d="M12 11.5h3M12 28.5h3"/></svg>你的服务器</div>
+          <div class="wire far"></div>
+          <div class="node"><svg viewBox="0 0 40 40"><rect x="4" y="7" width="32" height="21" rx="3"/><path d="M14 34h12M20 28v6"/></svg>电脑</div>
+        </div>
+        <p>固定地址，数据只经过自己的服务器：部署中转后添加，可以保存多条线路。</p>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

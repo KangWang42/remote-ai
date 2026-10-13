@@ -1,0 +1,24 @@
+/* The look the explained figures of the README share. Each figure is a page of its own beside this file,
+   drawn into ../<name>.png by tools/readme_pictures.py at twice its laid-out size. */
+:root { --ink: #1f2328; --muted: #5d6673; --line: #d5dae2; --card: #ffffff; --soft: #f3f5f8; --accent: #2f6fe4; --accent-soft: #e6eefc; --warm: #b4690e; --ok: #2e7d4f; --bad: #c0392b; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+main { display: block; }
+.sheet { margin: 0; padding: 36px 40px; background: var(--card); border: 1px solid var(--line); border-radius: 22px; }
+h2 { margin: 0 0 6px; font-size: 26px; font-weight: 700; letter-spacing: .01em; }
+.lead { margin: 0 0 26px; color: var(--muted); font-size: 16px; line-height: 1.6; }
+
+/* a phone with a page of the app in it */
+.phone { flex: none; width: 410px; padding: 10px; border-radius: 48px; background: #14171c; box-shadow: 0 0 0 1.5px rgba(140, 150, 165, .55), 0 16px 38px rgba(18, 24, 36, .24); }
+.phone img { display: block; width: 390px; border-radius: 38px; }
+.shot { position: relative; }
+
+/* numbered marks on a picture, and the list that says what each is */
+.mark { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 16px/30px "Segoe UI", system-ui, sans-serif; text-align: center; box-shadow: 0 0 0 4px rgba(255, 255, 255, .92), 0 4px 10px rgba(18, 24, 36, .28); }
+.notes { display: grid; gap: 18px; align-content: center; margin: 0; padding: 0; list-style: none; }
+.notes li { display: grid; grid-template-columns: 34px 1fr; gap: 14px; align-items: start; }
+.notes .n { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 16px/30px "Segoe UI", system-ui, sans-serif; text-align: center; }
+.notes b { display: block; font-size: 19px; line-height: 1.5; }
+.notes span { display: block; margin-top: 3px; color: var(--muted); font-size: 15.5px; line-height: 1.65; }
+.guide { display: flex; gap: 52px; align-items: center; }
