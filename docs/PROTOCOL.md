@@ -778,3 +778,9 @@ file rather than the file written again), `sessions.json` (hashes of sign-in tok
 `password.txt`, all in its data folder with owner-only permissions where the system supports them. It writes
 no terminal input or output to any log. A relay for everyone keeps the same files once per space, in
 `spaces/<id>/`, with `space.json` (the hash of the space's password and when it was made) instead of a password.
+
+## App-wide navigation and optional Windows tools
+
+Android opens its aggregate workbench even with one saved computer. Its native `AppPages` reads `stats`, `chains` and `schedules` from each computer’s existing `/api/work`, with that computer’s cookie only. Failures remain local to each computer; partial totals state their coverage and sum per-computer active time. Collaboration remains scoped to one computer. `RemoteCliNative.appPage(home|together|me)` returns to the app-wide section; `?tab=together&newchain=1` opens that computer’s existing creation form. Older native clients retain the embedded tab behavior. No new relay operation is introduced.
+
+Windows offers optional Claude Code and Codex CLI installation on first visible startup, and from settings. Only locally accepted, selected tools are installed. It downloads the official Windows PowerShell installers from `https://claude.ai/install.ps1` and `https://chatgpt.com/codex/install.ps1` (redirecting to `downloads.claude.ai` and `releases.openai.com`, respectively), then executes a saved script without elevation. There is no remote install API. Installed tools are detected again; native executables must pass `--version`. Logs are in the computer data folder’s `tool-install` directory. Official instructions: <https://code.claude.com/docs/en/setup> and <https://learn.chatgpt.com/docs/codex/cli>.

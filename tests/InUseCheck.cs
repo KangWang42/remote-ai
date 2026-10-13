@@ -11,6 +11,15 @@ public static class InUseCheck {
         DateTime now = new DateTime(2026, 10, 11, 12, 0, 0, DateTimeKind.Utc);
         long hoursAgo = Ms(now.AddHours(-3)), justNow = Ms(now.AddMinutes(-TerminalAgent.RecentMinutes + 1)), longer = Ms(now.AddMinutes(-TerminalAgent.RecentMinutes - 1));
         Func<string, Reach.Open> told = status => new Reach.Open { Status = status };
+        // A held conversation outside the phone's projects remains in the desktop activity list even when idle.
+        string activityData = Path.Combine(Path.GetTempPath(), "remote-ai-activity-" + Guid.NewGuid().ToString("N"));
+        var activityAgent = new TerminalAgent(activityData);
+        var idle = new TerminalAgent.SessionInfo { Id = Guid.NewGuid().ToString(), Tool = "codex", Dir = "", Folder = @"C:\unregistered", Title = "Idle desktop conversation", Live = true, Now = false, Status = "busy", Created = now };
+        var busy = new TerminalAgent.SessionInfo { Id = Guid.NewGuid().ToString(), Tool = "claude", Dir = "registered", Title = "Working", Live = true, Now = true, Status = "busy", Created = now };
+        var closed = new TerminalAgent.SessionInfo { Id = Guid.NewGuid().ToString(), Tool = "codex", Dir = "registered", Title = "Closed", Live = false, Created = now };
+        typeof(TerminalAgent).GetField("sessions", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).SetValue(activityAgent, new List<TerminalAgent.SessionInfo> { idle, busy, closed });
+        var rows = activityAgent.Running();
+        Require(rows.Count == 2 && rows[0][4] == idle.Title && rows[0][1] == "unregistered" && rows[0][2] == "idle" && rows[1][2] == "busy", "idle and unregistered stay visible; stale busy status and closed history do not count as running");
         // a command line is open for as long as its program runs, however long nothing was said in it
         Require(TerminalAgent.InUse("cli", "命令行", "idle", null, hoursAgo, now), "a window of its own");
         Require(TerminalAgent.InUse("cli", "VS Code", "", null, hoursAgo, now), "a terminal of an editor");

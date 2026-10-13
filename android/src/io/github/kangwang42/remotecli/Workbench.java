@@ -166,20 +166,6 @@ final class Workbench {
             draw();
         }
         page.addView(kit.text("凭地址和密码即可操作这台电脑上的终端，请妥善保管。", 12.5f, kit.MUTED), kit.below(22));
-        TextView version = kit.text("版本 " + activity.versionName() + " · 检查更新", 13, kit.ACCENT);
-        version.setMinHeight(kit.dp(44)); version.setGravity(Gravity.CENTER_VERTICAL);
-        kit.press(version, activity::checkUpdate);
-        page.addView(version);
-        TextView looks = kit.text(activity.autoUpdate() ? "自动检查更新：已开启" : "自动检查更新：未开启 · 点这里开启", 13, kit.ACCENT);
-        looks.setMinHeight(kit.dp(44)); looks.setGravity(Gravity.CENTER_VERTICAL);
-        kit.press(looks, activity::toggleAutoUpdate);
-        page.addView(looks);
-        if (list.length() > 0) {
-            TextView remind = kit.text(activity.watching() ? "任务提醒：已开启 · 离开 App 后，有任务等你确认或完成时通知你" : "任务提醒：未开启 · 点这里开启", 13, kit.ACCENT);
-            remind.setMinHeight(kit.dp(44)); remind.setGravity(Gravity.CENTER_VERTICAL);
-            kit.press(remind, activity::toggleWatch);
-            page.addView(remind);
-        }
         activity.message = kit.text("", 13, kit.MUTED);
         page.addView(activity.message);
         return page;
@@ -775,7 +761,7 @@ final class Workbench {
             activity.runOnUiThread(() -> { ending.remove(key); if (!message.isEmpty()) android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show(); redraw(); refresh(); });
         });
     }
-    private JSONObject post(String address, String cookie, JSONObject payload) throws Exception { return post(address, cookie, payload, 8000); }
+    JSONObject post(String address, String cookie, JSONObject payload) throws Exception { return post(address, cookie, payload, 8000); }
     /** patience: how long the answer is waited for, in milliseconds. */
     private JSONObject post(String address, String cookie, JSONObject payload, int patience) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
@@ -843,7 +829,7 @@ final class Workbench {
         if (on && !folded) {
             List<AggregateSessions.Project> order = new ArrayList<>(), named = new ArrayList<>();
             // what is open outside every project is in the lists above; with a filter chosen, the projects of that tool or kind
-            for (AggregateSessions.Project project : snapshot.projects) if (!project.name.isEmpty() && project.passes(tool, source)) named.add(project);
+            for (AggregateSessions.Project project : snapshot.projects) if (project.passes(tool, source)) named.add(project);
             for (AggregateSessions.Project project : named) if (!project.active.isEmpty()) order.add(project);
             int busy = order.size();
             for (AggregateSessions.Project project : named) if (project.active.isEmpty() && !project.ended.isEmpty()) order.add(project);
@@ -913,7 +899,7 @@ final class Workbench {
         row.addView(kit.icon(R.drawable.ic_folder, open ? kit.ACCENT : kit.MUTED, 20));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(12), 0, kit.dp(8), 0);
-        texts.addView(kit.title(project.name, 15, kit.INK, open));
+        texts.addView(kit.title(project.name.isEmpty() ? "未加入项目的对话" : project.name, 15, kit.INK, open));
         // Counts wrap under the title so mixed states cannot squeeze the project name off a phone screen.
         int[] counts = { need, work, opened };
         String[] says = { " 个等你确认", " 个正在运行", " 个已打开" };
@@ -930,7 +916,7 @@ final class Workbench {
         chevron.setRotation(open ? 90 : 0);
         row.addView(chevron);
         kit.press(row, () -> { if (!unfolded.remove(key)) unfolded.add(key); drawComputer(computer); });
-        row.setOnLongClickListener(v -> { manageProject(url, project); return true; });
+        if (!project.name.isEmpty()) row.setOnLongClickListener(v -> { manageProject(url, project); return true; });
         if (!open) return row;
         LinearLayout box = kit.column();
         box.addView(row);
@@ -953,7 +939,7 @@ final class Workbench {
         if (historyShown > 0) inside.addView(note("保存的对话"));
         for (int i = 0; i < historyShown; i++) inside.addView(talkRow(url, saved.get(i), saved.get(i).kind(looked)));
         int rest = saved.size() - historyShown, hiddenEnded = project.ended.size() - endedShown;
-        String more = rest + hiddenEnded > 0 ? "新建终端 · 查看更多记录" : "新建终端 · 进入项目";
+        String more = project.name.isEmpty() ? "查看这台电脑的全部对话" : rest + hiddenEnded > 0 ? "新建终端 · 查看更多记录" : "新建终端 · 进入项目";
         TextView enter = kit.bold(more, 13.5f, kit.ACCENT);
         enter.setGravity(Gravity.CENTER_VERTICAL); enter.setMinHeight(kit.dp(46)); enter.setPadding(kit.dp(8), 0, kit.dp(8), 0);
         kit.press(enter, () -> activity.open(url, "", project.name));

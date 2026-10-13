@@ -853,9 +853,9 @@ public sealed class TerminalAgent {
         if (server != Origin) { if (Origin.Length > 0) Reset(); Origin = server; }       // another relay: sign in there at once
         return prefs;
     }
-    static string FindTool(string name) {
+    internal static string FindTool(string name) {
         if (name == "shell") return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-        foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';').Concat(new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm") }))
+        foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';').Concat(new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "OpenAI", "Codex", "bin") }))
             foreach (string ext in new[] { ".exe", ".cmd" }) { try { string path = Path.Combine(folder.Trim(), name + ext); if (File.Exists(path)) return path; } catch { } }
         return null;
     }
@@ -1372,9 +1372,8 @@ public sealed class TerminalAgent {
             lock (work) {
                 var active = terminals.Values.Where(t => t.Pty != null && !t.Pty.Closed).ToArray();
                 var list = active.Select(t => new[] { t.Tool, t.Dir.Length > 0 ? t.Dir : Path.GetFileName(t.Folder), t.Status ?? "", t.Started.ToString("o"), sessions.Where(s => s.Id == t.Session).Select(s => s.Title).FirstOrDefault() ?? "", "手机 Remote AI", "phone", t.Id }).ToList();
-                // Of the conversations the computer's own programs hold, the ones in use now (InUse): a writer lock or
-                // a process kept by a desktop app is no sign that anybody is at the conversation.
-                list.AddRange(sessions.Where(s => s.Live && s.Now && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), (Reach.Of(s.Tool, s.Id) ?? new Reach.Open { Status = s.Status }).Status, s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
+                // Held but idle conversations remain visible without being counted as executing.
+                list.AddRange(sessions.Where(s => s.Live && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), s.Now ? (Reach.Of(s.Tool, s.Id) ?? new Reach.Open { Status = s.Status }).Status : "idle", s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
                 return list;
             }
         } catch (InvalidOperationException) { return null; }      // the list changed while it was read: the caller keeps what it showed

@@ -22,7 +22,7 @@ namespace RemoteCli {
 /// The program on the computer: a small window and a tray icon around the relay, the optional tunnel and the
 /// terminal agent. Everything it starts ends when it exits.
 public sealed partial class App : Form {
-    const string Version = "1.6.0";
+    const string Version = "1.6.1";
     // cloudflared pinned to one release, checked against the sha256 Cloudflare publishes
     // for the artifact (the digest field of the release API, cross-checked 2026-10-12).
     const string TunnelDownload = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-windows-amd64.exe";
@@ -97,7 +97,7 @@ public sealed partial class App : Form {
         try { config = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(ConfigFile, Encoding.UTF8)); } catch { config = null; }
         if (config == null) config = new Dictionary<string, object>();
         foreach (var item in new Dictionary<string, object> { { "Mode", "lan" }, { "Port", 8722 }, { "Server", "" }, { "OwnServer", "" }, { "RemoteEnabled", true },
-                 { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", true } })
+            { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", true }, { "ToolInstallSuggested", "" } })
             if (!config.ContainsKey(item.Key) || config[item.Key] == null) config[item.Key] = item.Value;
         if (Array.IndexOf(new[] { "lan", "cloud", "own", "public" }, Mode) < 0) config["Mode"] = "lan";
         try { password = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(PasswordFile), null, DataProtectionScope.CurrentUser)); } catch { password = ""; }
@@ -183,11 +183,7 @@ public sealed partial class App : Form {
     static readonly string LanOnly = (Environment.GetEnvironmentVariable("REMOTECLI_LAN") ?? "").Trim();
     static string LanAddress() {
         if (LanOnly.Length > 0) return LanOnly;
-        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-                 .OrderByDescending(n => n.GetIPProperties().GatewayAddresses.Any(g => g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any))))
-            foreach (var ip in nic.GetIPProperties().UnicastAddresses)
-                if (ip.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip.Address) && !ip.Address.ToString().StartsWith("169.254.")) return ip.Address.ToString();
-        return "";
+        return LanNetwork.Address();
     }
 
     void Say(string text, bool problem = false) {
@@ -304,7 +300,7 @@ public sealed partial class App : Form {
                 string ip = LanAddress();
                 if (ip.Length == 0) { Say("未找到局域网地址，请先连接 Wi-Fi 或网线", true); return; }
                 ShowAddress("http://" + ip + ":" + port);
-                Say("局域网直连已就绪。手机连同一个 Wi-Fi，用 App 扫码");
+                Say("局域网直连已就绪，用 App 扫码。连接失败可点“连接诊断”");
                 return;
             }
             if (!File.Exists(TunnelFile)) { Say("尚未下载隧道程序，请点下方的“下载隧道程序”", true); return; }
@@ -548,7 +544,7 @@ public sealed partial class App : Form {
         Relay relay = tab >= 2 ? Showing() : null;
         bool inUse = RelayMode && !relayTab;
         modeAbout.ForeColor = tab >= 2 && relayNote.Length > 0 ? (relayTrouble ? Theme.Bad : Theme.Busy) : Theme.Muted;
-        modeAbout.Text = tab == 0 ? "手机和电脑连同一个 Wi-Fi 时用，速度最快。第一次使用时 Windows 防火墙会询问，请选“允许”。"
+        modeAbout.Text = tab == 0 ? "需手机与电脑能够互通。校园网可能隔离设备，代理和防火墙也可能影响；连接失败可点“连接诊断”。"
             : tab == 1 ? "不需要服务器和账号，手机在任何网络都能连。更新程序后地址不变；退出程序或重启电脑后地址会变，手机需要重新扫码。"
             : relayNote.Length > 0 ? relayNote
             : tab == 2 ? (relay == null ? "暂时没有可用的公共中转。可以使用公网隧道，或在“我的中转”中添加自己的中转。"
@@ -659,7 +655,7 @@ public sealed partial class App : Form {
             return new Row { Glyph = Theme.IconTerminal, Title = (r[4].Length > 0 ? r[4] : tool) + " · " + r[1], About = (r[5].Length > 0 ? r[5] + " · " : "") + tool + (r[6] == "phone" ? " · 双击在电脑上打开 · " + Since(started.ToUniversalTime()) : ""), Value = r,
                              Tag = tag, TagColour = r[2] == "confirm" ? Theme.Bad : r[2] == "busy" ? Theme.Busy : Theme.Good };
         }));
-        activityNote.Text = running.Count == 0 ? "" : phones + " 个共用终端 · " + own + " 段电脑上的对话。只列正在执行或正开着的；桌面应用里闲置的对话不算。";
+        activityNote.Text = running.Count == 0 ? "还没有检测到打开的终端或对话。" : phones + " 个共用终端 · " + own + " 段电脑上的对话。包含闲置和未加入项目的已打开对话。";
     }
     // One line, in the lower place; with a tool connected two, the tools under the phone's access.
     void ShowSide() {
@@ -803,6 +799,13 @@ public sealed partial class App : Form {
         Place(way, passwordField, 20, 260, 256, 34); passwordBox.ReadOnly = true; passwordBox.Font = new Font("Consolas", 10f);
         Action(way, "复制", Theme.IconCopy, ButtonKind.Normal, 284, 260, 80, 34, (s, e) => { if (Hidden) Toast("公共中转的地址和密码不显示，请用手机扫码连接"); else Copy(passwordBox.Text, "密码"); });
         Action(connect, "重新连接", Theme.IconRefresh, ButtonKind.Normal, 28, 456, 116, 34, (s, e) => Again());
+        Action(connect, "连接诊断", Theme.IconPulse, ButtonKind.Normal, 290, 456, 124, 34, async (s, e) => {
+            var button = (Control)s; button.Enabled = false;
+            bool lan = Mode == "lan"; int checkedPort = Port;
+            try { string result = await Task.Run(() => LanNetwork.Diagnose(lan, checkedPort, LanAddress())); MessageBox.Show(this, result, "局域网连接诊断", MessageBoxButtons.OK, MessageBoxIcon.Information); }
+            catch (Exception error) { Toast("诊断失败：" + error.Message); }
+            finally { button.Enabled = true; }
+        });
         // A relay decides its password itself: this button is for the program's own relay, on the local network and through the tunnel.
         changePassword = Action(connect, "换一个密码", Theme.IconLock, ButtonKind.Ghost, 152, 456, 124, 34, (s, e) => {
             if (Held()) return;
@@ -940,6 +943,7 @@ public sealed partial class App : Form {
         for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 41, 648, 41);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 552, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
         Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 552, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-ai") { UseShellExecute = true }); } catch (Exception) { } });
+        Action(settings, "安装终端工具", Theme.IconTerminal, ButtonKind.Normal, 310, 552, 150, 36, (s, e) => ToolInstaller.Show(this, dataDir));
         Action(settings, "退出 Remote AI", Theme.IconPower, ButtonKind.Danger, 530, 552, 150, 36, (s, e) => Quit());
 
         // ---- toast, tray, timers
@@ -1018,6 +1022,11 @@ public sealed partial class App : Form {
             updateTimer.Start(); quietTimer.Start();
             Task.Run(async () => { await Connect(); await agent.Run(); });
             activityTimer.Start();
+            if (!offstage && !Environment.GetCommandLineArgs().Contains("--hidden") && String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTECLI_DATA")) && Convert.ToString(config["ToolInstallSuggested"]).Length == 0) {
+                Keep("ToolInstallSuggested", true);
+                if (TerminalAgent.FindTool("claude") == null || TerminalAgent.FindTool("codex") == null)
+                    BeginInvoke(new Action(() => ToolInstaller.Show(this, dataDir)));
+            }
             CheckForUpdate(false);
         };
     }

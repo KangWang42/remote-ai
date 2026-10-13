@@ -81,3 +81,7 @@ python tests\setup_check.py dist\RemoteCli-Setup-x.y.z.exe      # 安装程序�
 python tests\pages_check.py <chrome.exe> <输出文件夹>     # 用本机的中转和电脑端截取列表页和终端页；对话是编造的（tests\made_up.py），不会把本机真实的对话画进图里
 java -cp .cache\zxing-core-3.5.3.jar tests\QrDecodeCheck.java <二维码.png> <内容>   # 手机端的二维码识别
 ```
+
+本轮相关模块：Android `AppPages.java` 提供全局协作和统计；Windows `LanNetwork.cs` 选择局域网地址并诊断监听状态，`ToolInstaller.cs` 处理用户接受后的可选安装。
+
+新增检查：`python tests/lan_tools_check.py` 验证校园网地址、代理虚拟地址、端口诊断和跳过安装，运行时不安装工具。`tests/in_use_check.py` 同时核对闲置未归项目的对话仍出现在电脑活动列表，且不误算为执行中。

@@ -358,6 +358,9 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .fields { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; }
 .field { display: flex; align-items: center; gap: 12px; min-height: 50px; padding: 0 6px 0 14px; }
 .field + .field { border-top: 1px solid var(--line); }
+.field.chain-instructions { flex-direction: column; align-items: stretch; padding: 8px 0 0; gap: 8px; }
+.field.chain-instructions textarea { width: 100%; margin: 0; }
+.field.chain-rounds { flex-wrap: wrap; padding-block: 8px; }
 #sheet-form .field > span:first-child { flex: none; margin: 0; color: var(--ink); font-size: .92rem; }
 #sheet-form .field select, #sheet-form .field input { flex: 1; min-width: 0; min-height: 48px; padding: 0 8px; border: 0; border-radius: 0; background: transparent; color: var(--muted); text-align: right; text-align-last: right; }
 #sheet-form .field .seg, #sheet-form .field .flip { margin-left: auto; margin-right: 8px; }

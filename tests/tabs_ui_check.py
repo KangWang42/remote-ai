@@ -166,7 +166,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         until("document.querySelector('#me .at').textContent !== %s && document.querySelectorAll('#me .day')[3].getAttribute('aria-pressed') === 'true'" % json.dumps(before), "the day that was pressed")
 
         # ---- every tab at three widths: nothing wider than the screen, the tabs at its foot, nothing left under them
-        for width in (320, 390, 430):
+        for width in (320, 390, 430, 1440):
             for name, ready in (("tasks", listed), ("projects", "document.querySelectorAll('#project-list .card').length === 4"),
                                 ("together", "document.querySelectorAll('#chains .card').length >= 2"), ("me", "document.querySelectorAll('#me .day').length === 7")):
                 browser.open(played.origin + "/?tab=" + name, ready, "%s at %d" % (name, width), **phone(width))
@@ -182,6 +182,17 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
                 assert seen["foot"] == 0 and seen["last"] <= seen["top"] and min(seen["buttons"]) >= 48, (name, width, seen)
                 if width == 320:
                     browser.picture(out / ("narrow-%s.png" % name))
+
+        # Native global collaboration opens the form directly; instructions and choices fit even at 320 px.
+        for width in (320, 390, 430, 1440):
+            browser.open(played.origin + '/?tab=together&newchain=1', sheet + " && !!document.getElementById('chain-text')", 'direct new chain', **phone(width))
+            until("document.getElementById('sheet').open", 'chain opened')
+            assert '保存不会立即发送' in value("document.getElementById('sheet-form').textContent")
+            geometry = value("(() => { const f=document.getElementById('sheet-form'); return { width: innerWidth, client: f.clientWidth, scroll:f.scrollWidth, missing:[...f.querySelectorAll('input,select,textarea')].filter(n=>!n.labels.length).length }; })()")
+            assert geometry['width'] == width and geometry['scroll'] <= geometry['client'] and geometry['missing'] == 0, geometry
+            time.sleep(.3)
+            browser.picture(out / ('chain-' + str(width) + '.png'))
+            press('取消')
 
         # ---- a computer of an earlier version: said on both tabs, and the lists do not pretend to be empty
         played.info["features"] = [feature for feature in played.info["features"] if feature != "work"]

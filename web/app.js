@@ -1208,6 +1208,7 @@
   // To another tab. A project in detail is left with its tab; pressing 项目 while in one leads back to the list.
   function go(name) {
     if (!TABS[name]) return;
+    if ((name === 'together' || name === 'me') && native && native.appPage) { native.appPage(name); return; }
     const left = project;
     if (left) { project = ''; cameFrom = 'projects'; if (history.state && history.state.project) history.back(); }
     if (name !== tab || left) scrollTo(0, 0);
@@ -1306,6 +1307,7 @@
       // ?project=<name> opens one project directly, for a link or a picture of that page.
       project = history.state && history.state.project || new URLSearchParams(location.search).get('project') || '';
       if (project) tab = 'projects';
+      else { const requested = new URLSearchParams(location.search).get('tab'); if (['tasks', 'projects', 'together', 'me'].includes(requested)) tab = requested; }
       $('home').hidden = false; $('tabs').hidden = false;
       refresh();
     } catch (error) { showLogin(); $('login-error').textContent = '连不上服务，请检查地址'; }

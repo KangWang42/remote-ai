@@ -155,13 +155,15 @@
     const open = conversations().filter(c => c.open);
     // one that is set stays in the choice, also when its conversation is not open now
     const offered = side => { const id = known ? known[side] : ''; return !id || open.some(c => c.id === id) ? open : open.concat(conversations().filter(c => c.id === id)); };
-    if (!known && open.length < 2) return toast('需要两段开着的对话');
+    if (!known && open.length < 2) return toast('先在这台电脑上打开两段 Claude Code 或 Codex 对话，再回来添加接力');
     let rounds = known ? known.rounds : 1;
     const result = await openSheet((form, finish) => {
       const first = chooser('chain-from', offered('from'), known ? known.from : ''), then = chooser('chain-to', offered('to'), known ? known.to : '');
       const text = el('textarea', { id: 'chain-text', rows: 3, maxLength: 1000, placeholder: '要接手的对话做什么', ariaLabel: '要接手的对话做什么', autocapitalize: 'off', spellcheck: false, value: known ? known.text : '' });
-      form.append(el('h3', { textContent: known ? '接力' : '添加接力' }), fields(field('这段停下后', first), field('交给', then)), text,
-        fields(el('div', { className: 'field' }, el('span', { textContent: '次数' }), seg('次数', MOST_ROUNDS.map(n => [n, String(n)]), rounds, value => { rounds = value; }))),
+      const instructions = field('3. 让接手对话做什么', text); instructions.classList.add('chain-instructions');
+      form.append(el('h3', { textContent: known ? '接力' : '添加接力' }), el('p', { className: 'hint', textContent: '来源对话下一次完成一轮后，将最后的回答和下面的要求发给接手对话。保存不会立即发送；电脑端须保持运行并开启状态同步。' }), fields(field('1. 来源对话', first), field('2. 接手对话', then)), instructions,
+        fields(el('div', { className: 'field chain-rounds' }, el('span', { textContent: '最多自动转交几次' }), seg('次数', MOST_ROUNDS.map(n => [n, String(n)]), rounds, value => { rounds = value; }))),
+        el('p', { className: 'hint', textContent: '默认 1 次：来源完成一轮后转交一次。每次触发都会消耗一次额度，发送失败也会记录并消耗；这不是让 AI 立即连续执行多轮。修改保存会重新开始计数。' }),
         ...asker('保存', '正在保存…', async refuse => {
           if (!first.value || !then.value) refuse('请选择两段对话');
           if (first.value === then.value) refuse('不能接力给同一段对话');
@@ -261,7 +263,7 @@
     parts.notice = el('section', { className: 'notice plain', hidden: true });
     parts.chains = el('ul', { className: 'cards' }); parts.schedules = el('ul', { className: 'cards' });
     parts.chainCount = el('p'); parts.scheduleCount = el('p');
-    parts.passing = el('section', { id: 'chains' }, el('div', { className: 'section-head' }, el('h2', { textContent: '接力' }), parts.chainCount), parts.chains);
+    parts.passing = el('section', { id: 'chains' }, el('div', { className: 'section-head' }, el('h2', { textContent: '接力' }), parts.chainCount), el('p', { className: 'hint', textContent: '让一段对话完成后自动交给另一段。例如 Claude Code 写实现，Codex 审查。先打开两段对话，再点“添加接力”选择来源、接手对话和要求。仅限同一台电脑。' }), parts.chains);
     parts.lists = el('div', null, parts.passing,
       el('section', { id: 'schedules' }, el('div', { className: 'section-head' }, el('h2', { textContent: '定时提问' }), parts.scheduleCount), parts.schedules));
     box.append(el('div', { className: 'acts' }, act('handoff', '交接对话', HAND, () => handoff()), act('ask-many', '同时提问', MANY, () => askMany())), parts.notice, parts.lists);
@@ -289,5 +291,9 @@
     parts.scheduleCount.textContent = schedules.length ? schedules.length + ' 个' : '';
   }
 
-  page.view('together', { open: () => load(), draw, handoff });
+  let createOnOpen = new URLSearchParams(location.search).get('newchain') === '1';
+  page.view('together', { open: () => {
+    load();
+    if (createOnOpen) { createOnOpen = false; editChain(); }
+  }, draw, handoff });
 })();

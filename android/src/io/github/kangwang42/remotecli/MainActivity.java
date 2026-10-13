@@ -82,6 +82,8 @@ public final class MainActivity extends Activity {
     final ExecutorService net = Executors.newFixedThreadPool(3);
     private Kit kit;
     private Workbench bench;
+    private AppPages appPages;
+    private String appTab = "home";
     private FrameLayout root;
     private WebView web;
     private EditText nameBox, addressBox, passwordBox;
@@ -89,7 +91,7 @@ public final class MainActivity extends Activity {
     private Scanner scanner;
     private String screen = "";                 // "home", "add", "scan" or "web"
     private final Runnable watch = this::checkConnection;
-    private boolean fromHome, foreground, checkingConnection;
+    private boolean foreground, checkingConnection;
     private String currentOrigin = "";
     private String movedFrom = "", movedTo = "";       // a computer that is turning to another line: where it was, and where its page was sent
     private ConnectionHealth connectionHealth = new ConnectionHealth();
@@ -141,15 +143,13 @@ public final class MainActivity extends Activity {
         }
         kit = new Kit(this);
         bench = new Workbench(this, kit);
+        appPages = new AppPages(this, kit, bench);
         repaint();
         root = new FrameLayout(this);
         setContentView(root);
         bars(kit.BG);
         if (!linked(getIntent())) {
-            // One computer opens at once; with several, the workbench shows all of them first.
-            JSONArray list = computers();
-            if (list.length() == 1) open(list.optJSONObject(0).optString("url"), "");
-            else home("");
+            home("");
         }
         updater.checkIfDue();
     }
@@ -191,16 +191,43 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(content, new ViewGroup.LayoutParams(-1, -2));
-        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        if ("home".equals(name) || "together".equals(name) || "me".equals(name)) {
+            LinearLayout shell = kit.column();
+            shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+            LinearLayout tabs = kit.row();
+            tabs.setBackgroundColor(kit.PANEL);
+            String[] keys = {"home", "together", "me"}, labels = {"任务", "协作", "我的"};
+            for (int i = 0; i < keys.length; i++) {
+                final String key = keys[i];
+                TextView tab = kit.bold(labels[i], 15, key.equals(name) ? kit.ACCENT : kit.MUTED);
+                tab.setGravity(Gravity.CENTER); tab.setMinHeight(kit.dp(56)); tab.setSelected(key.equals(name));
+                tab.setContentDescription(labels[i] + (key.equals(name) ? "，已选中" : ""));
+                kit.press(tab, () -> appPage(key));
+                tabs.addView(tab, new LinearLayout.LayoutParams(0, -2, 1));
+            }
+            shell.addView(tabs);
+            root.addView(shell, new FrameLayout.LayoutParams(-1, -1));
+        } else root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
         screen = name;
     }
 
     // ---- the workbench: every computer and what is going on on each
     void home(String problem) {
         repaint();
+        if (problem.isEmpty() && !"home".equals(appTab)) { appPage(appTab); return; }
+        appTab = "home";
         show(bench.build(problem), "home");
         bench.refresh();
     }
+    void appPage(String tab) {
+        appTab = tab;
+        if ("home".equals(tab)) { home(""); return; }
+        repaint();
+        show(appPages.build(tab), tab);
+        appPages.refresh(tab);
+    }
+    void computerPage(String url, String tab) { openPage(url, "", "/?tab=" + tab); }
+    void newChain(String url) { openPage(url, "", "/?tab=together&newchain=1"); }
     boolean autoUpdate() { return updater != null && updater.automatic(); }
     void toggleAutoUpdate() { if (updater == null) return; updater.automatic(!updater.automatic()); home(""); }
     void checkUpdate() { message.setTextColor(kit.MUTED); message.setText("正在检查新版本…"); updater.check(true); }
@@ -354,8 +381,6 @@ public final class MainActivity extends Activity {
     private void openPage(String address, String password, String path) {
         ticker.removeCallbacks(watch);
         bench.stop();
-        // Back leads to the workbench when the user came from one of the app's own screens.
-        if (!"web".equals(screen)) fromHome = !screen.isEmpty();
         currentOrigin = address;
         connectionHealth = new ConnectionHealth();
         prefs.edit().putString("server", address).apply();
@@ -545,6 +570,9 @@ public final class MainActivity extends Activity {
         }
         /** Back to the workbench. disconnect is the name older pages call. */
         @JavascriptInterface public void home() { runOnUiThread(() -> MainActivity.this.home("")); }
+        @JavascriptInterface public void appPage(String tab) {
+            if ("home".equals(tab) || "together".equals(tab) || "me".equals(tab)) runOnUiThread(() -> MainActivity.this.appPage(tab));
+        }
         @JavascriptInterface public void disconnect() { home(); }
         /** The terminal page reports the finished work it has shown, so the workbench stops listing it as new. */
         @JavascriptInterface public void seen(String terminal, String at) {
@@ -572,11 +600,11 @@ public final class MainActivity extends Activity {
     @Override public void onBackPressed() {
         if ("scan".equals(screen) || "add".equals(screen)) { endScan(); home(""); return; }
         if (web != null && web.canGoBack()) { web.goBack(); return; }
-        // From a computer's first page, back leads to the workbench unless the app opened straight into its only computer.
-        if (web != null && (fromHome || computers().length() > 1)) { home(""); return; }
+        if (web != null) { home(""); return; }
+        if ("together".equals(screen) || "me".equals(screen)) { appPage("home"); return; }
         super.onBackPressed();
     }
     @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0 && !isFinishing()) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
-    @Override protected void onResume() { super.onResume(); foreground = true; Watcher.stop(this); if (web != null) { web.onResume(); ticker.post(watch); } if ("home".equals(screen)) bench.refresh(); if (updater != null) updater.checkIfDue(); }
+    @Override protected void onResume() { super.onResume(); foreground = true; Watcher.stop(this); if (web != null) { web.onResume(); ticker.post(watch); } if ("home".equals(screen)) bench.refresh(); else if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if (updater != null) updater.checkIfDue(); }
     @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { web.destroy(); web = null; } super.onDestroy(); }
 }
