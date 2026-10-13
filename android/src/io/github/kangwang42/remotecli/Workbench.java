@@ -840,9 +840,9 @@ final class Workbench {
             for (int i = 0; i < shown; i++) { card.addView(rule()); card.addView(projectRow(computer, order.get(i), looked)); }
             if (order.isEmpty()) { card.addView(rule()); card.addView(note(tool.isEmpty() && source.isEmpty() ? "还没有项目。在电脑端的“项目”页添加文件夹。" : "没有符合筛选的项目。")); }
             else {
-                // A terminal is started from here without walking to a project first.
+                // The embedded task picker offers shared terminals and available desktop application entries.
                 card.addView(rule());
-                TextView fresh = kit.bold("＋ 新建终端", 13.5f, kit.ACCENT);
+                TextView fresh = kit.bold("＋ 新建任务", 13.5f, kit.ACCENT);
                 fresh.setGravity(Gravity.CENTER); fresh.setMinHeight(kit.dp(46));
                 kit.press(fresh, () -> activity.startNew(url));
                 card.addView(fresh);

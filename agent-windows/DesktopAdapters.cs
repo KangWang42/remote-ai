@@ -1,0 +1,126 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Web.Script.Serialization;
+using Microsoft.Win32;
+
+namespace RemoteCli {
+// Each adapter talks to the application itself, never a new CLI/app-server.
+public interface IDesktopAdapter {
+    string Tool { get; }
+    bool Available { get; }
+    Dictionary<string, object> Open(string folder, string draft);
+}
+
+public sealed class CodexDesktopAdapter : IDesktopAdapter {
+    public string Tool { get { return "codex"; } }
+    public bool Available { get { return executable != null && File.Exists(executable); } }
+    readonly string executable;
+    public CodexDesktopAdapter() { executable = Locate(); }
+
+    static string Locate() {
+        // Installed desktop package, not the CLI on PATH. Read only package names and locations.
+        try {
+            using (var packages = Registry.CurrentUser.OpenSubKey(@"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages")) {
+                if (packages == null) return null;
+                foreach (var name in packages.GetSubKeyNames().OrderByDescending(n => n, StringComparer.Ordinal)) {
+                    var match = Regex.Match(name, @"\AOpenAI\.Codex_(\d+\.\d+\.\d+\.\d+)_x64__2p2nqsd0c76g0\z");
+                    Version version;
+                    if (!match.Success || !Version.TryParse(match.Groups[1].Value, out version) || version < new Version(26, 1007, 2314, 0)) continue;
+                    using (var package = packages.OpenSubKey(name)) {
+                        string root = Convert.ToString(package.GetValue("PackageRootFolder"));
+                        if (String.IsNullOrEmpty(root)) continue;
+                        string path = Path.Combine(root, "app", "ChatGPT.exe");
+                        if (File.Exists(path)) return path;
+                    }
+                }
+            }
+        } catch (System.Security.SecurityException) { } catch (UnauthorizedAccessException) { } catch (IOException) { }
+        return null;
+    }
+
+    public static string Link(string folder, string draft) {
+        if (String.IsNullOrWhiteSpace(folder) || !Path.IsPathRooted(folder) || folder.Any(c => Char.IsControl(c))) throw new ArgumentException("项目文件夹无效");
+        draft = draft ?? "";
+        if (draft.Length > 1000 || draft.Any(c => Char.IsControl(c) && c != '\n' && c != '\r' && c != '\t')) throw new ArgumentException("草稿需在 1000 字以内，且不能含控制字符");
+        string link = "codex://threads/new?path=" + Uri.EscapeDataString(Path.GetFullPath(folder));
+        if (draft.Length > 0) link += "&prompt=" + Uri.EscapeDataString(draft);
+        if (link.Length > 16000) throw new ArgumentException("项目路径和草稿过长，请缩短后重试");
+        return link;
+    }
+
+    public Dictionary<string, object> Open(string folder, string draft) {
+        if (!Available) throw new InvalidOperationException("未找到支持此入口的 Codex Windows 桌面应用，请安装或更新桌面应用后重启 Remote AI");
+        string link = Link(folder, draft);
+        if (!Directory.Exists(folder)) throw new InvalidOperationException("项目文件夹已不存在");
+        // The app's single-instance dispatcher handles project selection/creation and a new composer.
+        // There is no keyboard injection, automatic send or second app-server.
+        using (var process = Process.Start(new ProcessStartInfo(executable, CodexQueue.Quoted(link)) { UseShellExecute = false, WorkingDirectory = folder })) { }
+        return new Dictionary<string, object> {
+            { "status", "handed_off" }, { "tool", Tool }, { "sent", false },
+            { "message", "已交给 Codex 桌面应用。请在电脑上确认项目和草稿，内容尚未发送。" }
+        };
+    }
+}
+
+// Reserve before opening the UI. A crash between dispatch and receipt is unknown, never replayed.
+// Store only fingerprints and receipts, never drafts or project paths.
+public sealed class DesktopOperations {
+    readonly string directory;
+    readonly Dictionary<string, IDesktopAdapter> adapters;
+    readonly object gate = new object();
+    readonly JavaScriptSerializer json = new JavaScriptSerializer();
+    public DesktopOperations(string dataDir, params IDesktopAdapter[] adapters) {
+        directory = Path.Combine(dataDir, "desktop-operations");
+        this.adapters = adapters.ToDictionary(a => a.Tool, StringComparer.Ordinal);
+    }
+    public bool Available(string tool) { IDesktopAdapter adapter; return adapters.TryGetValue(tool, out adapter) && adapter.Available; }
+    public Dictionary<string, object> Open(string id, string tool, string folder, string draft) {
+        if (!Regex.IsMatch(id ?? "", @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
+        IDesktopAdapter adapter;
+        if (!adapters.TryGetValue(tool ?? "", out adapter)) throw new InvalidOperationException("这个桌面应用暂不支持从手机打开项目和草稿");
+        lock (gate) {
+            string fingerprint;
+            using (var hash = SHA256.Create()) fingerprint = Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(json.Serialize(new[] { tool, folder, draft ?? "" }))));
+            Directory.CreateDirectory(directory);
+            string file = Path.Combine(directory, id + ".json");
+            if (File.Exists(file)) return Read(file, fingerprint);
+            if (!adapter.Available) throw new InvalidOperationException("桌面应用入口不可用，请在电脑上安装或更新应用后重启 Remote AI");
+            var receipt = new Dictionary<string, object> { { "fingerprint", fingerprint }, { "result", new Dictionary<string, object> {
+                { "status", "unknown" }, { "sent", false }, { "message", "上次操作的结果未知，未重复打开。请先检查电脑上的应用。" }
+            } } };
+            try {
+                using (var stream = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                    var bytes = Encoding.UTF8.GetBytes(json.Serialize(receipt)); stream.Write(bytes, 0, bytes.Length); stream.Flush(true);
+                }
+            } catch (IOException) { if (File.Exists(file)) return Read(file, fingerprint); throw; }
+            try { receipt["result"] = adapter.Open(folder, draft); }
+            catch (Exception error) {
+                receipt["error"] = error is ArgumentException || error is InvalidOperationException ? error.Message : "无法打开桌面应用，请在电脑上检查应用状态";
+            }
+            string temporary = file + ".tmp";
+            try {
+                using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None)) {
+                    var bytes = Encoding.UTF8.GetBytes(json.Serialize(receipt)); stream.Write(bytes, 0, bytes.Length); stream.Flush(true);
+                }
+                File.Replace(temporary, file, null);
+            } catch (IOException) { return Read(file, fingerprint); }
+            return Read(file, fingerprint);
+        }
+    }
+    Dictionary<string, object> Read(string file, string fingerprint) {
+        Dictionary<string, object> receipt;
+        try { receipt = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8)); }
+        catch (Exception) { throw new InvalidOperationException("上次操作记录无法读取，未重复打开。请先检查电脑上的应用"); }
+        if (receipt == null || !receipt.ContainsKey("fingerprint") || Convert.ToString(receipt["fingerprint"]) != fingerprint) throw new InvalidOperationException("操作编号已被其它操作使用");
+        if (receipt.ContainsKey("error")) throw new InvalidOperationException(Convert.ToString(receipt["error"]));
+        if (!receipt.ContainsKey("result") || !(receipt["result"] is Dictionary<string, object>)) throw new InvalidOperationException("操作结果无法确认，未重复打开");
+        return (Dictionary<string, object>)receipt["result"];
+    }
+}
+}

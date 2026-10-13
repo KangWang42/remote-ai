@@ -119,6 +119,7 @@ public sealed class TerminalAgent {
     readonly string dataDir;
     public TerminalAgent(string dataFolder = null) {
         dataDir = dataFolder ?? DefaultData;
+        Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter());
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal); Reach.Changed += Wake;
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
@@ -147,6 +148,7 @@ public sealed class TerminalAgent {
     /// terminals, so it answers at once and does what takes time elsewhere.
     public Func<Dictionary<string, object>, Dictionary<string, object>> Computer;
     static readonly string[] ComputerActions = { "settings_read", "settings_change", "line_switch", "line_take", "line_keep" };
+    readonly DesktopOperations Desktop;
     /// Whether the relay has been given the answer to this operation.
     public bool Reported(string id) { lock (work) return reported.Contains(id); }
     /// Whether nothing has been typed or printed for a while and no tool says it is working: a moment to restart in.
@@ -1178,19 +1180,40 @@ public sealed class TerminalAgent {
     }
     void Execute(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string id = Get(op, "id"), terminal = Get(op, "terminal"), action = Get(op, "action");
-        if (completed.ContainsKey(id)) { reported.Remove(id); return; }
+        if (completed.ContainsKey(id) && action != "app_open") { reported.Remove(id); return; }
         if (relaying.Contains(id)) return;       // being handed over: answered when that is done
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
+            bool desktop = action == "app_open";
             bool peek = action == "session_read" || action == "session_say" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0;
-            if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
+            if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
             if (Get(prefs, "RemoteEnabled") != "True") throw new InvalidOperationException("电脑远控已关闭");
             if (project) ChangeProjects(op, prefs, action);
             else if (update) { if (UpdateRequested == null) throw new InvalidOperationException("这台电脑运行的是不带自动更新的后台程序"); UpdateRequested(); }
             else if (computer) { if (Computer == null) throw new InvalidOperationException("这台电脑运行的后台程序没有可在手机上更改的设置"); result = Computer(op); }
+            else if (desktop) {
+                string tool = Get(op, "tool"), folder, draft = Get(op, "draft");
+                if (tool != "codex" || !Desktop.Available(tool)) throw new InvalidOperationException("这台电脑暂不支持此桌面应用入口");
+                if (!AllDirs(prefs).TryGetValue(Get(op, "dir"), out folder) || !Directory.Exists(folder)) throw new ArgumentException("项目文件夹未获允许或已不存在");
+                CodexDesktopAdapter.Link(folder, draft); // validate before reserving the operation
+                if (relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
+                relaying.Add(id);
+                Task.Run(() => {
+                    string failed = ""; Dictionary<string, object> answer = null;
+                    try { answer = Desktop.Open(id, tool, folder, draft); }
+                    catch (Exception problem) { failed = problem is InvalidOperationException || problem is ArgumentException ? problem.Message : "桌面操作结果无法确认，请检查电脑上的应用"; }
+                    lock (work) {
+                        completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
+                        if (answer != null) completed[id]["result"] = answer;
+                        relaying.Remove(id); reported.Remove(id); soon = true;
+                    }
+                    Wake();
+                });
+                return;
+            }
             else if (action == "session_read") result = ReadConversation(op, prefs);
             else if (action == "session_mark") {
                 // pinned or hidden, or no longer: of a conversation this computer listed
@@ -1368,7 +1391,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end" }.Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end" }.Concat(Desktop.Available("codex") ? new[] { "codex-desktop-open" } : new string[0]).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },

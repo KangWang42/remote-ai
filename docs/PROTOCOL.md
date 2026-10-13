@@ -442,6 +442,58 @@ without padding. It keeps an address out of plain sight in a public file and is 
 writes and reads it. It asks for a space once and keeps what it was given; when the relay no longer has the space, it asks
 again.
 
+## Desktop application adapter (Windows)
+
+An agent advertises `codex-desktop-open` only when it finds the current user's installed
+`OpenAI.Codex` Windows x64 package (26.1007.2314.0 or later) and its desktop executable.
+Installing/updating the desktop app requires restarting Remote AI to discover its new path.
+This capability means opening a project/composer, not RPC control of running turns.
+It does not depend on a Codex CLI installation. Claude, Linux and older agents do not advertise it.
+
+Use the existing authenticated `POST /api/terminal` operation queue:
+
+```json
+{"id":"0123456789abcdef0123456789abcdef","action":"app_open","tool":"codex","dir":"demo","draft":"Optional unsent text"}
+```
+
+Only these fields are allowed. `dir` is an existing Remote AI project name, not a caller-provided path.
+Both relay and computer validate it; the computer resolves its allowed absolute directory and verifies
+that it still exists. `draft` defaults to empty, accepts line breaks and tabs and is limited to 1000
+UTF-16 code units. Remote control must be enabled. No terminal is created (`terminal` is empty).
+
+The queued operation eventually returns `state: "done"` with a `result`:
+
+```json
+{"status":"handed_off","tool":"codex","sent":false,"message":"已交给 Codex 桌面应用。请在电脑上确认项目和草稿，内容尚未发送。"}
+```
+
+`handed_off` means the desktop executable accepted the launch request, not that the application
+confirmed a project/thread was created. It may change the visible page/focus. The text is only prefilled;
+the user sends it on the computer. There is no returned conversation ID or automatic inference.
+`status: "unknown", sent: false` means an earlier attempt may have reached the app and is not replayed.
+An error or timeout must not be displayed as successful creation or proof that nothing happened.
+
+The adapter invokes the installed desktop executable with a single quoted, percent-encoded
+`codex://threads/new?path=...&prompt=...` argument. This route and its project-selection/creation behavior
+were inspected in Codex Windows 26.1007.2314.0 (`bootstrap` and `main` packaged modules). This is a desktop
+entry point, not an app-server API. The app handles its existing-instance dispatch. The adapter never
+starts a separate app-server, edits the app database, removes locks or sends keyboard input.
+Future desktop versions may change this entry point; launch success alone is deliberately not a native
+UI completion check. Unsupported operations (list/rename projects, send/interrupt/close) are not advertised.
+
+Repeat the identical payload and `id` to query; using the same ID with different parameters is rejected.
+The relay retains answers in its existing 10-minute operation cache. The computer reserves each operation
+on disk before dispatch, then atomically replaces the reservation with its receipt. After a crash or lost
+response it returns the receipt or `unknown` without dispatching again, including across relay restarts.
+Records live in the computer data directory at `desktop-operations/<id>.json` and contain only a request
+fingerprint and outcome, not the path or draft. They are retained with the computer's data; deleting them
+removes replay protection for those IDs. A corrupt record fails closed. The phone disables duplicate clicks
+and queries the same operation after a network failure; leaving the form does not cancel dispatch.
+
+Checks: `tests/desktop_adapter_check.py` (isolated adapter/journal and real agent dispatch),
+`relay/test_relay.py` (capability, validation, replay and timeout), `tests/desktop_ui_check.py` (real embedded
+page and relay, simulated app receipts). The tests do not create real desktop conversations.
+
 ## Storage
 
 The relay keeps `terminals.json` (the list of terminals), `terminals-output/<terminal>.jsonl` (the recent output of

@@ -153,6 +153,8 @@ dialog[open] { animation: rise .18s ease-out; }
 #sheet-form > p { color: var(--muted); font-size: .9rem; }
 #sheet-form label { font-size: .82rem; color: var(--muted); margin-bottom: -4px; }
 #sheet-form input { background: var(--bg); }
+#desktop-project { width: 100%; min-height: 48px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: inherit; font: inherit; }
+#desktop-project:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* a message for a conversation that is open on the computer, written under what was said there */
 #sheet-form .write { display: flex; gap: 8px; align-items: flex-end; }
 #sheet-form .write textarea { flex: 1; min-width: 0; min-height: 46px; }

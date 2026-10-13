@@ -521,22 +521,64 @@
   // Into a terminal of the phone's: by taking the conversation from the program that has it, by a copy, or, for one
   // that nothing has open, simply by going on with it.
   function into(session, how) { start(session.tool, session.dir, session.id, how === 'close', how === 'copy'); }
-  // ?new=1 comes from the app's workbench: a terminal is started without walking to a project first. The projects
-  // used last come first; each offers the tools the computer has.
+  // ?new=1 comes from the app's workbench. Offer the desktop entry separately from shared terminals.
+  // Projects used last come first; each offers the tools the computer has.
   async function startAnywhere() {
     if (!usable()) return toast('电脑离线，暂时不能新建');
     const tools = Object.keys(TOOLS).filter(t => (data.device.tools || []).includes(t));
     const latest = name => Math.max(0, ...data.terminals.filter(t => t.dir === name).map(t => t.created || 0), ...(data.sessions || []).filter(s => s.dir === name).map(s => s.updated || 0));
     const names = (data.device.workspaces || []).slice().sort((a, b) => latest(b) - latest(a));
-    if (!names.length || !tools.length) return toast(names.length ? '电脑上没有可用的工具' : '请先添加一个项目');
+    const desktop = (data.device.features || []).includes('codex-desktop-open');
+    if (!names.length || (!tools.length && !desktop)) return toast(names.length ? '电脑上没有可用的工具' : '请先添加一个项目');
     const picked = await openSheet((form, finish) => {
-      form.append(el('h3', { textContent: '新建终端' }));
+      form.append(el('h3', { textContent: '新建任务' }));
+      if (desktop) form.append(el('button', { type: 'button', className: 'choice', onclick: () => finish({ desktop: true }) },
+        el('span', null, '在 Codex 桌面应用中打开', el('small', { textContent: '选择项目并预填新对话，在电脑上确认发送' }))));
+      else form.append(el('p', { className: 'quiet', textContent: '桌面应用入口暂不可用；支持的 Codex Windows 桌面应用安装后，需重启 Remote AI。Claude 桌面应用暂不支持。' }));
+      if (tools.length) form.append(el('p', { textContent: '共享终端 · 手机和电脑可以轮流输入' }));
       const list = el('div', { className: 'anywhere' });
       names.slice(0, 12).forEach(name => list.append(el('div', { className: 'row' }, el('b', { textContent: name }),
         el('span', null, ...tools.map(tool => el('button', { type: 'button', className: 'tool ' + tool, ariaLabel: '在 ' + name + ' 新建 ' + TOOLS[tool], html: ICON[tool], onclick: () => finish({ tool, name }) }))))));
-      form.append(list);
+      if (tools.length) form.append(list);
     });
-    if (picked) start(picked.tool, picked.name);
+    if (picked && picked.desktop) desktopDraft(names);
+    else if (picked) start(picked.tool, picked.name);
+  }
+  async function desktopDraft(names) {
+    await openSheet(form => {
+      const folder = el('select', { id: 'desktop-project' }, ...names.map(name => el('option', { value: name, textContent: name })));
+      const draft = el('textarea', { id: 'desktop-draft', rows: 4, maxLength: 1000, placeholder: '可留空，或预填一段内容', autocapitalize: 'off', spellcheck: false });
+      const status = el('p', { role: 'status', 'aria-live': 'polite', className: 'quiet' });
+      let operation = null;
+      const button = el('button', { type: 'button', className: 'choice solid', textContent: '交给 Codex 桌面应用', onclick: async () => {
+        if (button.disabled) return;
+        if (!operation) operation = { id: newId(), action: 'app_open', tool: 'codex', dir: folder.value, draft: draft.value };
+        button.disabled = true; folder.disabled = true; draft.readOnly = true;
+        status.textContent = '正在交给电脑上的 Codex…';
+        try {
+          let answer = await api('api/terminal', operation);
+          for (let n = 0; n < 60 && answer.state === 'queued' && status.isConnected && $('sheet').open; n++) {
+            await new Promise(resolve => setTimeout(resolve, 400));
+            answer = await api('api/terminal', operation);
+          }
+          if (answer.state === 'queued') throw new Error('暂未收到结果，请查询同一次操作，或先检查电脑上的应用。');
+          if (answer.error) { status.textContent = answer.error; button.textContent = '操作未确认'; return; }
+          const result = answer.result || {};
+          if (!['handed_off', 'unknown'].includes(result.status) || result.sent !== false) throw new Error('未收到可确认的桌面操作结果，请查询同一次操作。');
+          status.textContent = result.message || '请在电脑上检查 Codex，内容尚未发送。';
+          button.textContent = result.status === 'handed_off' ? '已交给应用，尚未发送' : '结果未知，请检查电脑';
+        } catch (error) {
+          status.textContent = error.message;
+          button.textContent = '查询本次操作结果'; button.disabled = false;
+        }
+      } });
+      form.append(el('h3', { textContent: 'Codex 桌面应用' }),
+        el('p', { textContent: '将打开电脑上的应用，选中或建立该文件夹对应的项目，并进入新对话。可能切换电脑当前显示的页面；草稿需要在电脑上确认发送。' }),
+        el('label', { htmlFor: folder.id, textContent: '项目文件夹' }), folder,
+        el('label', { htmlFor: draft.id, textContent: '新对话草稿（可不填）' }), draft, button, status);
+      // Dismissal disconnects this view; it does not cancel an operation already handed to the computer.
+      setTimeout(() => { const cancel = form.contains(folder) && form.querySelector('.cancel'); if (cancel) cancel.textContent = '返回'; }, 0);
+    });
   }
   // A project is made of a folder on the computer: one of those that already have conversations (each says by what
   // it is used: a desktop app, an editor, a terminal), found by searching when they are many, or one that is typed.

@@ -64,6 +64,7 @@ _terminal = re.compile(r"^[a-f0-9]{32}$")
 _session = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 _word = re.compile(r"^[a-z0-9_]{1,40}$")
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
+DESKTOP_ACTIONS = ("app_open",)
 UPDATE_ACTION = "update"      # the program on the computer looks for a newer version of itself and installs it
 MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 8, 12, 2_000_000, 300_000
 LABELS = {"claude": "Claude Code", "codex": "Codex", "shell": "PowerShell"}
@@ -287,7 +288,7 @@ COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_tak
 REACH = ("say", "answer")
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -504,7 +505,7 @@ class Relay:
 
     def _expire(self, now):
         for op in [o for o in self._pending.queued.values() if now - o["at"] > OP_SECONDS]:
-            op.update(state="error", error="电脑未及时接收，操作没有执行，请重试")
+            op.update(state="error", error="桌面操作结果未知，请先检查电脑上的应用" if op["payload"]["action"] in DESKTOP_ACTIONS else "电脑未及时接收，操作没有执行，请重试")
             del self._pending.queued[op["id"]]
             term = self._kept["threads"].get(op["terminal"]) if self._kept else None
             if term:
@@ -619,7 +620,7 @@ class Relay:
             if old:
                 if old.get("asked", old["payload"]) != payload:
                     raise RemoteError("操作编号已被其它操作使用")
-                return {k: old[k] for k in ("id", "terminal", "state", "error")}
+                return {k: old[k] for k in ("id", "terminal", "state", "error", "result") if k in old}
             state = self._state()
             if not self._view(now)["online"] or not self._device["enabled"]:
                 raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
@@ -628,6 +629,17 @@ class Relay:
                 terminal = ""
                 if "update" not in self._device.get("features", []):
                     raise RemoteError("电脑端版本不支持从手机更新，请先在电脑上更新一次")
+            elif action in DESKTOP_ACTIONS:
+                terminal = ""
+                if payload.get("tool") != "codex" or "codex-desktop-open" not in self._device.get("features", []):
+                    raise RemoteError("这台电脑暂不支持此桌面应用入口")
+                if payload.get("dir") not in self._device["workspaces"]:
+                    raise RemoteError("电脑没有报告这个项目")
+                draft = payload.get("draft", "")
+                if not isinstance(draft, str) or len(draft.encode("utf-16-le", errors="surrogatepass")) > 2000 or any(ord(c) < 32 and c not in "\n\r\t" for c in draft):
+                    raise RemoteError("草稿需在 1000 字以内，且不能含控制字符")
+                if set(payload) - {"id", "action", "tool", "dir", "draft"}:
+                    raise RemoteError("桌面操作参数无效")
             elif action in PROJECT_ACTIONS:
                 # The computer keeps the list of project folders and checks the folder itself; this only refuses malformed requests.
                 terminal = ""
@@ -948,7 +960,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end")],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "codex-desktop-open")],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))

@@ -31,6 +31,36 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertFalse(ops[0]["history"])
         self.assertEqual(self.relay.overview(result["terminal"], now=1003)["terminal"]["session"], "")
 
+    def test_desktop_handoff_is_capability_gated_and_replays_its_receipt(self):
+        op = {"id": "a" * 32, "action": "app_open", "tool": "codex", "dir": "demo", "draft": "草稿"}
+        with self.assertRaises(RemoteError):
+            self.relay.command(op, now=1001)
+        self.info["features"] = ["codex-desktop-open"]
+        self.relay.agent({"info": self.info}, now=1002)
+        for change in ({"tool": "claude"}, {"dir": "missing"}, {"path": "C:/private"}, {"draft": "x" * 1001}, {"draft": "\0"}, {"draft": "😀" * 501}, {"draft": []}):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(op, **change), now=1003)
+        queued = self.relay.command(op, now=1003)
+        self.assertEqual(queued["terminal"], "")
+        self.assertEqual(self.relay.overview(now=1003)["terminals"], [])
+        receipt = {"status": "handed_off", "sent": False, "message": "尚未发送"}
+        self.relay.agent({"info": self.info, "acks": [{"id": op["id"], "result": receipt}]}, now=1004)
+        for _ in range(3):
+            answer = self.relay.command(op, now=1005)
+            self.assertEqual(answer["state"], "done")
+            self.assertEqual(answer["result"], receipt)
+        self.assertEqual(len(self.relay._pending.queued), 0)
+        with self.assertRaises(RemoteError):
+            self.relay.command(dict(op, draft="changed"), now=1005)
+
+    def test_desktop_timeout_never_claims_not_executed(self):
+        self.info["features"] = ["codex-desktop-open"]
+        self.relay.agent({"info": self.info}, now=1001)
+        op = {"id": "a" * 32, "action": "app_open", "tool": "codex", "dir": "demo"}
+        self.relay.command(op, now=1002)
+        reply = self.relay.command(op, now=1002 + tr.OP_SECONDS + 1)
+        self.assertIn("结果未知", reply["error"])
+
     def test_live_original_requires_explicit_takeover(self):
         sid = "12345678-1234-1234-1234-123456789abc"
         for tool in ("claude", "codex"):
