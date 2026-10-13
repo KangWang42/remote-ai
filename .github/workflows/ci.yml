@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "tools/**", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "tools/**", "tests/tunnel_download_check.py", ".github/workflows/ci.yml"]
   pull_request:
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "tools/**", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "tools/**", "tests/tunnel_download_check.py", ".github/workflows/ci.yml"]
   workflow_dispatch:
 
 jobs:
@@ -23,6 +23,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: relay unit tests
         run: python -m unittest discover -s relay -p "test_*.py"
+      - name: tunnel download integrity
+        run: python tests/tunnel_download_check.py
       - name: build the Rust agent
         run: |
           cargo build --release --manifest-path agent-rust/Cargo.toml

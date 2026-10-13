@@ -23,7 +23,11 @@ namespace RemoteCli {
 /// terminal agent. Everything it starts ends when it exits.
 public sealed partial class App : Form {
     const string Version = "1.5.12";
-    const string TunnelDownload = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe";
+    // cloudflared pinned to one release, checked against the sha256 Cloudflare publishes
+    // for the artifact (the digest field of the release API, cross-checked 2026-10-12).
+    const string TunnelDownload = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-windows-amd64.exe";
+    const long TunnelBytes = 55365048;
+    const string TunnelSha256 = "86aee4017b26625cee8484c113558f48effa4cd47f7aa05fcf425604e5d2b23c";
     readonly string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     readonly string dataDir = TerminalAgent.DefaultData;
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
@@ -358,7 +362,15 @@ public sealed partial class App : Form {
                 client.DownloadProgressChanged += (s, p) => progress(p.ProgressPercentage);
                 await client.DownloadFileTaskAsync(new Uri(TunnelDownload), TunnelFile + ".part");
             }
-            if (new FileInfo(TunnelFile + ".part").Length < 10 * 1024 * 1024) throw new IOException("下载的文件不完整");
+            var part = new FileInfo(TunnelFile + ".part");
+            if (part.Length != TunnelBytes) throw new IOException("cloudflared 大小不符，已阻止安装未经验证的程序。");
+            string hex;
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var stream = part.OpenRead()) {
+                hex = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+            }
+            if (!string.Equals(hex, TunnelSha256, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("cloudflared 校验不符，已阻止安装未经验证的程序。请检查网络环境后重试。");
             File.Move(TunnelFile + ".part", TunnelFile);
         } catch (Exception) {
             try { File.Delete(TunnelFile + ".part"); } catch { }

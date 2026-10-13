@@ -12,6 +12,8 @@ curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/agent-lin
 
 这一行会：下载程序放到 `~/.local/share/remote-cli-agent`，生成一个密码，把中转、电脑端和公网隧道注册成用户服务并启动，最后在终端里显示地址、密码和二维码。手机 App 点“扫码添加电脑”扫它即可。项目文件夹可以连上后在手机里添加。
 
+需要下载隧道程序时，安装脚本使用固定的 cloudflared 2026.10.0，并校验对应架构的 SHA-256；校验失败会删除临时文件并停止安装。已安装的 cloudflared 继续使用，不会自动替换。
+
 要加参数时写在 `bash -s --` 后面，例如指定两个项目文件夹和手机上显示的名称：
 
 ```bash

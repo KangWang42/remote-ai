@@ -66,6 +66,7 @@ python tests\session_copies_check.py                      # 同一段对话只�
 python tests\said_check.py                                # 手机上看到的对话内容：问了什么、答了什么、做了什么，用虚构的对话文件
 python tests\look_check.py                                # 先看对话再接手、票据登录、手机和电脑共用一个终端；真实的中转和电脑端
 python tests\tunnel_check.py --local                      # 直连回显延迟
+python tests\tunnel_download_check.py --bash <bash路径>    # 四种 Linux 架构及 Windows 下载校验：正确文件通过、损坏文件拒绝、临时文件清理；Windows 上需 Git Bash
 python tests\tunnel_check.py <cloudflared.exe> --protocol http2  # 公网回显延迟
 python tests\tunnel_keep_check.py <cloudflared.exe>       # 程序结束后再启动，公网地址不变
 python tests\smooth_check.py                           # 历史很长时按键回显和连续输出的间隔
