@@ -384,8 +384,9 @@ the same folder. A locked source cannot be resumed concurrently; choose fork or 
 → `{"operations": [{"id", "terminal", "action", ...}], "output_ack": {"<terminal>": 13}, "titles": {"<terminal>": "<name the owner gave>"}}`
 
 The computer keeps each piece of output until `output_ack` covers its `seq`, and reports each finished
-operation in `acks` until the relay stops sending it. It checks every operation itself: the folder must be
-one of its projects, a conversation must exist on disk. The relay only refuses malformed requests.
+operation in `acks` until the relay stops sending it. It checks every operation itself: new tasks and file
+operations require a project; control of an already open conversation uses its verified owner and discovered
+working directory, including folders outside the project list. A conversation must exist on disk.
 
 `POST /api/terminal/agent/pull` `{"instance": "...", "wait": 12}` is held by the relay until an operation is
 waiting and returns it at once, so a key press does not wait for the next report.
@@ -537,7 +538,7 @@ what is its own:
 
 | way | name | what it does | where |
 | --- | --- | --- | --- |
-| the application's own channel | `codex-desktop` | `say` while it is ready, `stop` of the one turn that is named | Codex's Windows desktop app, a version the computer knows, a conversation of a project |
+| the application's own channel | `codex-desktop` | `say` while ready or working, `stop` of the one turn that is named | Codex's Windows desktop app, a supported version, a verified open conversation |
 | the tool's hooks | `hook` | `answer` to a request for permission; `say` left for a conversation at work, handed over when it stops; `stop` before its next step | Claude Code and Codex in any program, for the hooks they run |
 | the tool's own way to a conversation that sits idle | `wake` | `say`: the conversation is woken where it is | Claude Code by its messages between conversations (the desktop app's conversations too); Codex's command line by `codex queue`, never the desktop app's |
 | closing its program | `process` | `end` | where the computer knows for certain which program has it (`can_takeover`) |
@@ -633,7 +634,8 @@ each item; after that it stays listed for its owner).
 
 `codex-desktop-control` identifies the Windows agent's native-control protocol support. A session advertises
 `transport: "codex-desktop"` only after a fresh owner discovery and snapshot from the supported application,
-with its working directory matching a Remote AI project. `reach` contains `say` while ready and while it
+with its working directory matching the folder discovered by the computer (whether or not it is a Remote AI
+project). `reach` contains `say` while ready and while it
 works (both by the channel: `thread-follower-start-turn` to one that is ready; to one at work the
 application's own message for a turn in progress, `thread-follower-steer-turn` version 1, with the words and
 the message as its box would restore it, `{"text", "context": {"workspaceRoots", "commentAttachments",
@@ -668,8 +670,10 @@ retry uses the same payload and ID plus `receipt: true`. This is strictly a quer
 executes an operation, even if the relay lost the original request. Queries may run while the conversation
 is busy or its native connection is unavailable. The computer still requires remote control and a verified live
 conversation. Project membership is required for file operations and new tasks, but not for an already open
-conversation. Pending messages remain in memory when the reader is closed and reopened within the same page;
-a full page reload does not restore them. Journal files contain fingerprints and results, not prompts.
+conversation. Native pending operations are kept in the current tab's session storage for up to one day,
+including their payload for receipt queries after a reload; closing the tab or recreating the App page can
+discard them. The computer's native journal contains fingerprints and results, not prompts. Hook-queued
+messages are persisted separately on the computer until handed over, withdrawn or released after a stop.
 
 Implementation: `CodexDesktopControl.cs` uses the installed package's `codex-ipc` named pipe, verifies the
 server process and package path, and exchanges length-prefixed UTF-8 JSON (4-byte little-endian size,
