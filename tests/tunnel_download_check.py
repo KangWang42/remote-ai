@@ -29,7 +29,7 @@ def linux_checks(folder, bash):
         (folder / kind).write_bytes(data)
         hashes[kind] = hashlib.sha256(data).hexdigest()
     script = folder / "linux.sh"
-    script.write_text(
+    script.write_bytes((
         "set -euo pipefail\n"
         "share=$PWD/work\ntunnel_url=fixture-\n"
         "command() { if [ \"$*\" = '-v cloudflared' ]; then return 1; fi; builtin command \"$@\"; }\n"
@@ -38,7 +38,7 @@ def linux_checks(folder, bash):
         "download() { [ \"$1\" = \"fixture-$KIND\" ]; cp \"$KIND\" \"$2\"; "
         "if [ \"$BAD\" = 1 ]; then printf X | dd of=\"$2\" bs=1 seek=5 conv=notrunc 2>/dev/null; fi; }\n"
         + "".join('cf_sha256_%s="%s"\n' % item for item in hashes.items())
-        + "tunnel_program() {" + method + "\ntunnel_program\n", encoding="utf-8", newline="\n")
+        + "tunnel_program() {" + method + "\ntunnel_program\n").encode("utf-8"))
     for arch, kind in (("x86_64", "amd64"), ("aarch64", "arm64"), ("armv7l", "arm"), ("i686", "386")):
         for bad in (False, True):
             target = folder / "work/bin/cloudflared"
