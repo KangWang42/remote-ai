@@ -81,27 +81,35 @@ public sealed class DesktopOperations {
     }
     public bool Available(string tool) { IDesktopAdapter adapter; return adapters.TryGetValue(tool, out adapter) && adapter.Available; }
     public Dictionary<string, object> Open(string id, string tool, string folder, string draft) {
-        if (!Regex.IsMatch(id ?? "", @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
         IDesktopAdapter adapter;
         if (!adapters.TryGetValue(tool ?? "", out adapter)) throw new InvalidOperationException("这个桌面应用暂不支持从手机打开项目和草稿");
+        return Run(id, new[] { tool, folder, draft ?? "" }, () => {
+            if (!adapter.Available) throw new InvalidOperationException("桌面应用入口不可用，请在电脑上安装或更新应用后重启 Remote AI");
+            return adapter.Open(folder, draft);
+        }, false);
+    }
+    public Dictionary<string, object> Run(string id, string[] identity, Func<Dictionary<string, object>> action, bool control = true, bool queryOnly = false) {
+        if (!Regex.IsMatch(id ?? "", @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
         lock (gate) {
             string fingerprint;
-            using (var hash = SHA256.Create()) fingerprint = Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(json.Serialize(new[] { tool, folder, draft ?? "" }))));
+            using (var hash = SHA256.Create()) fingerprint = Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(json.Serialize(identity))));
             Directory.CreateDirectory(directory);
             string file = Path.Combine(directory, id + ".json");
             if (File.Exists(file)) return Read(file, fingerprint);
-            if (!adapter.Available) throw new InvalidOperationException("桌面应用入口不可用，请在电脑上安装或更新应用后重启 Remote AI");
+            if (queryOnly) return new Dictionary<string, object> { { "status", "unknown" }, { "sent", null }, { "message", "电脑没有本次操作的回执，请先检查原对话。" } };
             var receipt = new Dictionary<string, object> { { "fingerprint", fingerprint }, { "result", new Dictionary<string, object> {
-                { "status", "unknown" }, { "sent", false }, { "message", "上次操作的结果未知，未重复打开。请先检查电脑上的应用。" }
+                { "status", "unknown" }, { "sent", control ? (object)null : false }, { "message", "上次操作的结果未知，未重复执行。请先检查电脑上的应用。" }
             } } };
             try {
                 using (var stream = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                     var bytes = Encoding.UTF8.GetBytes(json.Serialize(receipt)); stream.Write(bytes, 0, bytes.Length); stream.Flush(true);
                 }
             } catch (IOException) { if (File.Exists(file)) return Read(file, fingerprint); throw; }
-            try { receipt["result"] = adapter.Open(folder, draft); }
+            try { receipt["result"] = action(); }
             catch (Exception error) {
-                receipt["error"] = error is ArgumentException || error is InvalidOperationException ? error.Message : "无法打开桌面应用，请在电脑上检查应用状态";
+                // A transport failure after dispatch can have succeeded. Its reservation remains unknown.
+                if (!control || error is ArgumentException || error is InvalidOperationException)
+                    receipt["error"] = error is ArgumentException || error is InvalidOperationException ? error.Message : "无法打开桌面应用，请在电脑上检查应用状态";
             }
             string temporary = file + ".tmp";
             try {

@@ -76,5 +76,6 @@ public static class DesktopAdapterCheck {
         lock (Field(agent, "work")) Require(done.ContainsKey(new string('f', 32)) && done[new string('f', 32)].ContainsKey("result"), "async receipt completed");
         Console.WriteLine("desktop adapter: URL isolation, durable replay, crash/failure, permissions and nonblocking dispatch passed");
         Console.WriteLine("installed Codex desktop entry available: " + new CodexDesktopAdapter().Available);
+        CodexDesktopControlCheck.Run(Path.Combine(root, "native"));
     }
 }

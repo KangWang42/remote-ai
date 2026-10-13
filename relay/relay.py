@@ -285,10 +285,10 @@ WAKE_SECONDS = 85       # a message that is handed to a conversation where it si
 # What the program on the computer is asked about itself: a few of its settings, and the line it is reached by.
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
-REACH = ("say", "answer")
+REACH = ("say", "answer", "stop")
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_stop", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -301,7 +301,10 @@ def _reached(session):
     ask = {"id": ask["id"], "text": ask["text"][:600]} if (session.get("status") == "confirm" and isinstance(ask, dict) and isinstance(ask.get("id"), str)
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
     # wake: it sits idle, and a message is handed to it where it is (that takes some seconds), instead of being left for its next stop
-    return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask)], "ask": ask, "last": str(session.get("last") or "")[:300],
+    native = session.get("tool") == "codex" and session.get("transport") == "codex-desktop" and session.get("live") is True
+    turn = session.get("turn") if isinstance(session.get("turn"), str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", session["turn"]) else ""
+    return {"reach": [way for way in REACH if way in session["reach"] and (way != "answer" or ask) and (way != "stop" or native and turn)], "ask": ask, "last": str(session.get("last") or "")[:300],
+            "transport": "codex-desktop" if native else "", "turn": turn if native else "",
             "wake": session.get("wake") is True and "say" in session["reach"]}
 
 
@@ -819,6 +822,10 @@ class Relay:
             if not isinstance(payload.get("text"), str) or not 0 < len(payload["text"].strip()) <= 8000:
                 raise RemoteError("消息需为 1 至 8000 字")
             more = {"text": payload["text"]}
+        elif action == "stop":
+            if not isinstance(payload.get("turn"), str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", payload["turn"]):
+                raise RemoteError("执行轮次无效，请刷新后重试")
+            more = {"turn": payload["turn"]}
         elif action == "answer":
             if not isinstance(payload.get("ask"), str) or not _ask.fullmatch(payload["ask"]) or type(payload.get("allow")) is not bool:
                 raise RemoteError("回答无效")
@@ -835,6 +842,13 @@ class Relay:
                 more = {"since": payload["since"]}
         else:
             raise RemoteError("不支持此操作")
+        native = payload.get("transport") == "codex-desktop" and action in ("say", "stop")
+        if "receipt" in payload and type(payload["receipt"]) is not bool:
+            raise RemoteError("回执查询无效")
+        if action == "stop" and not native:
+            raise RemoteError("此对话没有可用的原应用停止接口")
+        if native:
+            more.update(transport="codex-desktop", receipt=payload.get("receipt") is True)
         with self._changed:
             self._expire(now)
             if op_id in self._pending:
@@ -849,6 +863,11 @@ class Relay:
             saved = next((s for s in self._sessions if s["id"] == session), None)
             if not saved:
                 raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
+            if native:
+                if saved["tool"] != "codex" or "codex-desktop-control" not in self._device.get("features", []):
+                    raise RemoteError("电脑端没有可用的 Codex 原应用控制接口")
+                if not more["receipt"] and saved.get("transport") != "codex-desktop":
+                    raise RemoteError("原应用连接已变化，请刷新后重试")
             if action == "delete":
                 # A saved conversation is put away by the computer (nothing is destroyed: its tool's archive, or the
                 # recycle bin). Not one a program has open, nor one a terminal here runs. It leaves the list at once.
@@ -869,7 +888,7 @@ class Relay:
                 saved.update(more)
                 return answer
             if action != "read":
-                if action not in (saved.get("reach") or []):
+                if not (native and more["receipt"]) and action not in (saved.get("reach") or []):
                     raise RemoteError("这个确认请求已经处理过了，或只能在电脑上回答" if action == "answer" else "这段对话现在不能从手机发消息，请刷新后重试")
                 if action == "answer" and saved["ask"]["id"] != more["ask"]:
                     raise RemoteError("这个确认请求已经处理过了")
@@ -960,7 +979,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "codex-desktop-open")],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "codex-desktop-open", "codex-desktop-control")],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))

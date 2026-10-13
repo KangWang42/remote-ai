@@ -8,9 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 with tempfile.TemporaryDirectory(prefix='remote-ai-adapter-') as folder:
     exe = Path(folder) / 'check.exe'
-    sources = ['CodexSessions', 'Reach', 'Marks', 'ClaudeRelay', 'Folders', 'Removal', 'CodexQueue', 'DesktopAdapters', 'RemoteCliAgent']
+    sources = ['CodexSessions', 'Reach', 'Marks', 'ClaudeRelay', 'Folders', 'Removal', 'CodexQueue', 'DesktopAdapters', 'CodexDesktopControl', 'RemoteCliAgent']
     subprocess.run([str(compiler), '/nologo', '/target:exe', '/platform:x64', '/codepage:65001',
                     '/reference:System.Management.dll', '/reference:System.Net.Http.dll', '/reference:System.Web.Extensions.dll',
                     '/reference:System.Web.dll', '/reference:System.Security.dll', '/main:DesktopAdapterCheck', '/out:' + str(exe),
-                    *[str(ROOT / 'agent-windows' / (name + '.cs')) for name in sources], str(ROOT / 'tests/DesktopAdapterCheck.cs')], check=True)
+                    *[str(ROOT / 'agent-windows' / (name + '.cs')) for name in sources], str(ROOT / 'tests/DesktopAdapterCheck.cs'), str(ROOT / 'tests/CodexDesktopControlCheck.cs')], check=True)
     subprocess.run([str(exe), folder], check=True, timeout=30)

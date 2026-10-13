@@ -479,7 +479,8 @@ were inspected in Codex Windows 26.1007.2314.0 (`bootstrap` and `main` packaged 
 entry point, not an app-server API. The app handles its existing-instance dispatch. The adapter never
 starts a separate app-server, edits the app database, removes locks or sends keyboard input.
 Future desktop versions may change this entry point; launch success alone is deliberately not a native
-UI completion check. Unsupported operations (list/rename projects, send/interrupt/close) are not advertised.
+UI completion check. This entry does not provide list/rename projects or close. Existing-conversation control
+uses the separate capability below.
 
 Repeat the identical payload and `id` to query; using the same ID with different parameters is rejected.
 The relay retains answers in its existing 10-minute operation cache. The computer reserves each operation
@@ -493,6 +494,60 @@ and queries the same operation after a network failure; leaving the form does no
 Checks: `tests/desktop_adapter_check.py` (isolated adapter/journal and real agent dispatch),
 `relay/test_relay.py` (capability, validation, replay and timeout), `tests/desktop_ui_check.py` (real embedded
 page and relay, simulated app receipts). The tests do not create real desktop conversations.
+
+## Codex desktop conversation control (Windows)
+
+`codex-desktop-control` identifies the Windows agent's native-control protocol support. A session advertises
+`transport: "codex-desktop"` only after a fresh owner discovery and snapshot from the supported application,
+with its working directory matching a Remote AI project. `reach` contains `say` while ready, and `stop` when
+one active turn is identified. `turn` names that execution. Cached capabilities expire after 15 seconds;
+every mutation opens a fresh connection and checks ownership and the project again. Expired or incompatible
+connections do not fall back to a second backend or Codex queue.
+
+The embedded reader sends `POST /api/conversation`:
+
+```json
+{"id":"0123456789abcdef0123456789abcdef","session":"11111111-2222-3333-4444-555555555555","action":"say","text":"下一句","transport":"codex-desktop"}
+```
+
+For `action: "stop"`, replace `text` with `turn` from the latest session report. The relay forwards
+`session_say` / `session_stop` with the tool and project from its saved session, never a caller-supplied
+filesystem path. Stop interrupts that turn, not the application process. Desktop goal tasks are excluded
+from stop because this interface's expected-turn variant does not pause the goal. Hooks that already
+provide a permission request continue to use `session_answer`; native approvals are not implemented.
+
+Responses are `status: "accepted", sent: true, turn: ...` for an acknowledged native start and
+`status: "confirmed", turn: ...` for an acknowledged interrupt. These are execution receipts, not completed
+AI answers. A native error, malformed reply, timeout or disconnect after possible dispatch yields
+`status: "unknown", sent: null`. Unknown means the action may have occurred.
+
+The computer journals a fingerprint of action/tool/session/project/text/expected turn before dispatch.
+An identical ID returns its persisted outcome across restarts; changed content is rejected. The phone's
+retry uses the same payload and ID plus `receipt: true`. This is strictly a query: a missing receipt never
+executes an operation, even if the relay lost the original request. Queries may run while the conversation
+is busy or its native connection is unavailable. The computer still requires remote control and project
+access. Pending messages remain in memory when the reader is closed and reopened within the same page;
+a full page reload does not restore them. Journal files contain fingerprints and results, not prompts.
+
+Implementation: `CodexDesktopControl.cs` uses the installed package's `codex-ipc` named pipe, verifies the
+server process and package path, and exchanges length-prefixed UTF-8 JSON (4-byte little-endian size,
+16 MiB maximum). The inspected package is **26.1007.2314.0**; other versions fail closed. This private
+desktop protocol is distinct from app-server JSON-RPC and is not a public compatibility guarantee.
+Handshake and `thread-owner-discovery` version 1 identify the owner. Snapshot broadcasts are version 11;
+start uses `thread-follower-start-turn` version 2 with inherited thread settings, and interrupt uses
+version 4 with `expectedTurnId`. No app database, writer lock, hidden security setting or keyboard input
+is modified. The adapter does not expose the snapshot's settings or full history to the relay.
+
+Claude Windows 2.31226.1.0 contains internal session-management tools, but this adapter has no supported
+external transport for them. Claude desktop idle sessions therefore do not use the Haiku courier as a
+native-control fallback. Existing CLI courier and desktop hook paths retain their own semantics.
+Neither app currently has a confirmed create-project/create-and-send/close-conversation adapter here.
+
+Validation: `tests/desktop_adapter_check.py` covers framed native transport, ownership/version checks,
+permission revocation, exact-turn stop, unknown outcomes and restart replay. `relay/test_relay.py` covers
+capabilities and receipt-only routing. `tests/desktop_ui_check.py` uses the real embedded page and relay
+with simulated app receipts, including busy drafts, lost-response queries and stop without leaving the
+reader. Those fixture checks do not substitute for real desktop send/interrupt acceptance.
 
 ## Storage
 

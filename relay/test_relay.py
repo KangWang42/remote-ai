@@ -572,6 +572,56 @@ class TerminalRelayTests(unittest.TestCase):
         waiting.join(5)
         self.assertEqual(answers["got"], {})
 
+    def test_native_desktop_control_preserves_target_and_queries_while_busy(self):
+        import threading
+        sid = "11111111-2222-3333-4444-555555555555"
+        info = dict(self.info, features=["peek", "reach", "codex-desktop-control"])
+        session = dict(id=sid, tool="codex", dir="demo", title="原应用对话", updated=1, live=True,
+                       status="waiting", reach=["say"], transport="codex-desktop", turn="")
+        self.relay.agent({"info": info, "sessions": [session]}, now=1001)
+        payload = dict(id="c" * 32, session=sid, action="say", text="中文", transport="codex-desktop")
+
+        def roundtrip(request, result):
+            answers = {}
+            thread = threading.Thread(target=lambda: answers.update(got=self.relay.conversation(request, now=1002, wait=5)))
+            thread.start()
+            ops = self.relay.pull({"instance": info["instance"], "wait": 3})["operations"]
+            self.assertEqual(len(ops), 1)
+            self.relay.agent({"info": info, "acks": [{"id": request["id"], "result": result}]}, now=1003)
+            thread.join(5)
+            self.assertEqual(answers["got"], result)
+            return ops[0]
+
+        op = roundtrip(payload, {"status": "accepted", "turn": "turn-1", "sent": True})
+        self.assertEqual((op["action"], op["transport"], op["text"], op["receipt"]), ("session_say", "codex-desktop", "中文", False))
+        session.update(status="busy", reach=["stop"], turn="turn-1")
+        self.relay.agent({"info": info, "sessions": [session]}, now=1003)
+        with self.assertRaises(RemoteError):
+            self.relay.conversation(dict(payload, id="d" * 32), now=1003, wait=0)
+        op = roundtrip(dict(payload, receipt=True), {"status": "accepted", "turn": "turn-1", "sent": True})
+        self.assertTrue(op["receipt"])
+        stop = dict(id="e" * 32, session=sid, action="stop", transport="codex-desktop", turn="turn-1")
+        op = roundtrip(stop, {"status": "confirmed", "turn": "turn-1"})
+        self.assertEqual((op["action"], op["turn"]), ("session_stop", "turn-1"))
+        for invalid in [dict(stop, transport=""), dict(stop, turn=""), dict(stop, receipt="true")]:
+            with self.assertRaises(RemoteError):
+                self.relay.conversation(invalid, now=1004, wait=0)
+        session.update(transport="", reach=[], turn="")
+        self.relay.agent({"info": info, "sessions": [session]}, now=1004)
+        op = roundtrip(dict(stop, receipt=True), {"status": "unknown", "sent": None})
+        self.assertTrue(op["receipt"])
+        info["features"].remove("codex-desktop-control")
+        self.relay.agent({"info": info}, now=1004)
+        with self.assertRaises(RemoteError):
+            self.relay.conversation(dict(stop, receipt=True), now=1004, wait=0)
+
+    def test_native_stop_capability_requires_matching_application(self):
+        from relay import _reached
+        base = dict(live=True, tool="codex", reach=["stop"], transport="codex-desktop", turn="turn-1")
+        self.assertEqual(_reached(base)["reach"], ["stop"])
+        for change in [dict(live=False), dict(tool="claude"), dict(transport="other"), dict(turn="../bad")]:
+            self.assertEqual(_reached(dict(base, **change))["reach"], [])
+
     def test_a_conversation_that_sits_idle_is_told_where_it_is_and_the_answer_is_waited_for(self):
         import threading
         sid, other = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"

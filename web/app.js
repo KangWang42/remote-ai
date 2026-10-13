@@ -173,14 +173,15 @@
   // Reading a transcript alone does not imply that the original application accepts remote input.
   const controlMode = session => {
     if (!session || !session.live) return 'saved';
-    return can(session, 'say') || can(session, 'answer') ? 'shared' : 'read';
+    return session.transport === 'codex-desktop' || can(session, 'say') || can(session, 'answer') ? 'shared' : 'read';
   };
   const controlCopy = {
     shared: '连接电脑上的原对话 · 返回不结束任务',
     read: '当前只能查看记录，原应用尚未提供手机控制',
     saved: '已结束 · 已保存的对话记录保留'
   };
-  const deliveryText = result => result.now === false ? '已排队，等待当前任务结束' : result.now === true ? '工具已接收，等待对话更新' : '已提交，等待对话更新';
+  const deliveryText = result => result.status === 'unknown' ? '发送结果未知，请检查原对话' : result.now === false ? '已排队，等待当前任务结束' : result.now === true ? '工具已接收，等待对话更新' : '已提交，等待对话更新';
+  const desktopPending = new Map();
 
   // Sends one operation and waits until the computer has carried it out. One at a time: what is asked for while
   // another is still being carried out waits for it, and is then done. (It was dropped without a word before, which
@@ -233,6 +234,7 @@
   // The same for a conversation that is open on the computer: this is shared collaboration. The message is delivered
   // to the program that owns the conversation and the window stays there; it is never presented as a hand-off.
   async function tell(s) {
+    if (s.transport === 'codex-desktop') return takeOver(s);
     if (!usable()) return toast('电脑离线，暂时不能发送');
     const text = await openSheet((form, finish) => {
       const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '发送消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
@@ -343,6 +345,22 @@
       const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
       const control = el('div', { className: 'control-mode', role: 'status' });
       const phoneTexts = new Set();
+      const native = () => now().transport === 'codex-desktop';
+      let stopAttempt = null;
+      const stopping = el('button', { type: 'button', className: 'end', textContent: '停止回答', hidden: true, onclick: async () => {
+        if (stopping.disabled || !usable()) return;
+        const current = now();
+        if (!stopAttempt && (!can(current, 'stop') || !current.turn)) return;
+        const query = !!stopAttempt;
+        if (!stopAttempt) stopAttempt = { id: newId(), session: current.id, action: 'stop', turn: current.turn, transport: 'codex-desktop' };
+        stopping.disabled = true;
+        try {
+          const result = await api('api/conversation', { ...stopAttempt, receipt: query });
+          if (result.status === 'confirmed') { toast(result.goal_pause_error ? '本次回答已停止，但目标未暂停，请在电脑上检查' : '已停止本次回答，可以继续对话'); stopAttempt = null; }
+          else toast('停止结果未知，请检查电脑上的原对话');
+        } catch (error) { toast(error.message); }
+        stopping.disabled = false; stopping.textContent = stopAttempt ? '查询停止结果' : '停止回答'; refresh(); show();
+      } });
       // How it stands, in one line above the box, as a terminal says it at its foot: at work and for how long, asking,
       // waiting for what its user says, or stopped and since when. Beside it, the way to end it on the computer.
       const standing = el('span', { className: 'standing' }), clock = el('span', { className: 'clock' });
@@ -353,7 +371,7 @@
         try { await api('api/conversation', { id: newId(), session: current.id, action: 'end' }); toast('已结束电脑上的这段对话'); finish(null); refresh(); }
         catch (error) { toast(error.message); }
       } });
-      const state = el('div', { className: 'state' }, el('span', { className: 'dot' }), standing, clock, ending);
+      const state = el('div', { className: 'state' }, el('span', { className: 'dot' }), standing, clock, stopping, ending);
       // back to what was said last, for someone who has gone up to read
       const latest = el('button', { type: 'button', className: 'latest', hidden: true, ariaLabel: '回到最新', textContent: '回到最新 ↓', onclick: () => { said.scrollTo({ top: said.scrollHeight, behavior: 'smooth' }); } });
       const atEnd = () => said.scrollHeight - said.scrollTop - said.clientHeight < 60;
@@ -414,14 +432,29 @@
       // it has (`since`): the computer gives it anew only when it changed, with how it stands. So what is said on
       // the computer is here within a moment, whatever the lists know. (A computer of an earlier version gives no
       // such word; it is asked when the lists say that the conversation changed.)
-      let stamp = '', seen = '', read = false, reading = false, stands = null, quick = 0, asked = 0, changed = 0, sawBusy = 0;
-      const pending = [];        // what was written here and is on its way: shown at once, until the conversation's own record has it
+      let stamp = '', seen = '', read = false, reading = false, sending = false, stands = null, quick = 0, asked = 0, changed = 0, sawBusy = 0;
+      const pending = desktopPending.get(session.id) || [];
+      desktopPending.set(session.id, pending);
       const same = (messages, text) => messages.filter(m => m.role === 'user' && String(m.text || '').trim() === text).length;
       let record = [];
       function waiting() {
         said.querySelectorAll('.turn.mine').forEach(node => node.remove());
-        pending.forEach(p => said.append(el('div', { className: 'turn user mine' + (p.sent ? '' : ' going') }, el('div', { className: 'plain', textContent: p.text }),
-          el('small', { className: 'phone-delivery', textContent: p.delivery || '手机消息 · 正在送达' }))));
+        pending.forEach(p => {
+          const row = el('div', { className: 'turn user mine' + (p.sent || p.uncertain ? '' : ' going') }, el('div', { className: 'plain', textContent: p.text }),
+            el('small', { className: 'phone-delivery', textContent: p.delivery || '手机消息 · 正在送达' }));
+          if (p.payload && p.uncertain) row.append(el('button', { type: 'button', textContent: '查询发送结果', onclick: async event => {
+            event.currentTarget.disabled = true;
+            try { await deliver(p, true); } finally { waiting(); refresh(); }
+          } }));
+          said.append(row);
+        });
+      }
+      async function deliver(mine, query = false) {
+        try {
+          const result = await api('api/conversation', { ...mine.payload, receipt: query });
+          mine.uncertain = result.status !== 'accepted' || result.sent !== true; mine.sent = !mine.uncertain;
+          mine.settledAt = Date.now(); mine.delivery = deliveryText(result);
+        } catch (error) { mine.uncertain = true; mine.delivery = '发送结果未确认，请查询本次结果'; toast(error.message); }
       }
       async function follow(current) {
         const listed = [current.updated, current.status, current.last || ''].join('\n');
@@ -437,7 +470,7 @@
             // A different message typed at the computer is not an acknowledgement of a phone message.
             // Leave a confirmed phone turn visible briefly so its delivery state is readable before the transcript
             // replaces the optimistic row. A subsequent poll removes it once the persisted record is stable.
-            for (let i = pending.length - 1; i >= 0; i--) if (same(record, pending[i].text) > pending[i].before && (!pending[i].settledAt || Date.now() - pending[i].settledAt > 1200)) pending.splice(i, 1);
+            for (let i = pending.length - 1; i >= 0; i--) if (!pending[i].uncertain && same(record, pending[i].text) > pending[i].before && (!pending[i].settledAt || Date.now() - pending[i].settledAt > 1200)) pending.splice(i, 1);
             const end = !read || atEnd(), was = said.scrollTop;
             const fresh = el('div');
             if (got.more) fresh.append(el('p', { className: 'earlier', textContent: '更早的内容在电脑上' }));
@@ -460,13 +493,14 @@
         if (!text) return box.focus();
         // what is written stands in the window at once, as what the user said, while it is on its way
         const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false };
+        if (native()) mine.payload = { id: newId(), session: session.id, action: 'say', text, transport: 'codex-desktop' };
         pending.push(mine); box.value = ''; box.style.height = 'auto';
         phoneTexts.add(text);
         waiting(); said.scrollTop = said.scrollHeight;
-        send.disabled = true; quick = Date.now() + 45000;
-        try { const result = await api('api/conversation', { id: newId(), session: session.id, action: 'say', text }); mine.sent = true; mine.settledAt = Date.now(); mine.delivery = deliveryText(result); phoneTexts.add(text); }
+        sending = true; send.disabled = true; quick = Date.now() + 45000;
+        try { if (mine.payload) await deliver(mine); else { const result = await api('api/conversation', { id: newId(), session: session.id, action: 'say', text }); mine.sent = true; mine.settledAt = Date.now(); mine.delivery = deliveryText(result); phoneTexts.add(text); } }
         catch (error) { phoneTexts.delete(text); mine.delivery = '发送未确认，请先查看电脑对话再重试'; if (!box.value) box.value = text; toast(error.message); }
-        send.disabled = false; waiting(); refresh(); seen = ''; show();
+        sending = false; send.disabled = false; waiting(); refresh(); seen = ''; shown = ''; show();
       } });
       // a conversation that has stopped is most often told to go on: one press, beside what is typed
       const goOn = el('button', { type: 'button', className: 'go', textContent: '继续', hidden: true, onclick: () => { if (!box.value.trim()) { box.value = '继续'; send.click(); } else box.focus(); } });
@@ -474,11 +508,11 @@
       let shown = '';
       function show() {
         // how it stands is what the computer said of it last: with the conversation itself, or in the lists
-        const listed = now(), current = stands === null || listed.ask ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
+        const listed = now(), current = stands === null || listed.ask || listed.transport === 'codex-desktop' ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
         const mode = controlMode(current);
         control.className = 'control-mode ' + mode;
         control.textContent = controlCopy[mode] + (mode === 'shared' && current.can_takeover === true ? ' 需要完整终端时，可选择“接管”。' : '');
-        const signature = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir]);
+        const signature = JSON.stringify([current.live, current.status, current.reach, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, current.transport, current.turn]);
         follow(listed);
         // the line of how it stands: its clock goes on between the computer's words
         const kind = !current.live ? 'stopped' : phase || 'stopped';
@@ -489,6 +523,7 @@
         standing.textContent = !current.live ? '已在电脑上关闭' : PHASE[kind][0];
         clock.textContent = !from ? '' : kind === 'busy' ? lasted(Date.now() - from) : ago(from);
         ending.hidden = !canEnd(current);
+        stopping.hidden = !stopAttempt && !can(current, 'stop');
         goOn.hidden = !(can(current, 'say') && !current.ask && (kind === 'stopped' || kind === 'waiting') && record.length > 0);
         if (signature === shown) return;
         shown = signature;
@@ -502,7 +537,8 @@
           asks.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: current.ask.text }), answers)));
         }
         const sayable = can(current, 'say') && !current.ask;
-        write.hidden = !sayable;
+        write.hidden = !sayable && !native();
+        if (native()) { send.disabled = sending || !sayable; box.placeholder = sayable ? '发消息' : '可以先写下一句，等待当前回答结束'; }
         below.textContent = '';
         // where it cannot be told anything from here, it can still be taken into a terminal: the one thing left to do
         if (!sayable && !current.ask) {

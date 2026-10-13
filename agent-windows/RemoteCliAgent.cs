@@ -117,9 +117,10 @@ public sealed class PseudoTerminal : IDisposable {
 public sealed class TerminalAgent {
     string Origin = "";
     readonly string dataDir;
-    public TerminalAgent(string dataFolder = null) {
+    public TerminalAgent(string dataFolder = null, Func<IDesktopConversation> desktopConversation = null) {
         dataDir = dataFolder ?? DefaultData;
         Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter());
+        OpenDesktopConversation = desktopConversation ?? (() => CodexDesktopControl.Connect());
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal); Reach.Changed += Wake;
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
@@ -149,6 +150,8 @@ public sealed class TerminalAgent {
     public Func<Dictionary<string, object>, Dictionary<string, object>> Computer;
     static readonly string[] ComputerActions = { "settings_read", "settings_change", "line_switch", "line_take", "line_keep" };
     readonly DesktopOperations Desktop;
+    readonly Func<IDesktopConversation> OpenDesktopConversation;
+    readonly CodexDesktopSessions NativeDesktop = new CodexDesktopSessions();
     /// Whether the relay has been given the answer to this operation.
     public bool Reported(string id) { lock (work) return reported.Contains(id); }
     /// Whether nothing has been typed or printed for a while and no tool says it is working: a moment to restart in.
@@ -221,7 +224,7 @@ public sealed class TerminalAgent {
     // can be made a project from there.
     // Live: a program on this computer holds it. Now: it is in use (InUse); only then is it something that is going on.
     // Wakes: a message for it can be handed to it where it is even while it sits idle (ClaudeRelay, CodexQueue).
-    public sealed class SessionInfo { public bool Now, Wakes; public string Kind = ""; public string Id, Tool, Dir, Folder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    public sealed class SessionInfo { public bool Now, Wakes; public string Kind = ""; public string Id, Tool, Dir, Folder = "", ControlFolder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
     /// the tools' settings; whether or not it has, this listens for them.
     public readonly Reach Reach;
@@ -230,16 +233,34 @@ public sealed class TerminalAgent {
     // A conversation as the phone is told of it: what the scan found, and where a hook has told more, how it stands
     // now, what it asks, what it last said, and what the phone can do to it ("say", "answer").
     object Listed(SessionInfo s) {
+        var native = NativeState(s);
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
         string status = known != null ? known.Status : s.Status;
         // A message reaches it through its hooks while it is at work or kept waiting; one that sits idle is woken by
         // a message handed to it by its tool's own means: as Claude Code's sessions hand each other messages, or
         // through Codex's queue. Either way it stays where it is.
         bool hooked = known != null && known.Sayable, wake = s.Live && s.Wakes && !hooked && !(known != null && known.Status == "confirm");
-        return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, kind = s.Kind, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = s.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
-            reach = known == null && !wake ? null : new[] { hooked || wake ? "say" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
+        if (s.Origin == "Codex 桌面版") { hooked = false; wake = false; }
+        if (s.Origin == "Claude 桌面版") wake = false;
+        if (native != null) { status = known != null && known.Status == "confirm" ? "confirm" : native.Busy ? "busy" : native.Ready ? "waiting" : "confirm"; hooked = false; wake = false; }
+        return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, kind = s.Kind, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = native != null ? native.Busy || status == "confirm" : s.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
+            reach = native != null ? new[] { native.Ready && status != "confirm" ? "say" : null, native.Turn.Length > 0 ? "stop" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray() : known == null && !wake ? null : new[] { hooked || wake ? "say" : null, known != null && known.Status == "confirm" && known.Answerable ? "answer" : null }.Where(way => way != null).ToArray(),
+            transport = native != null ? "codex-desktop" : "", turn = native != null ? native.Turn : "",
             wake = wake,
             ask = known != null && known.Status == "confirm" ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
+    }
+    CodexDesktopSessions.State NativeState(SessionInfo s) {
+        var state = s.Live && s.Dir.Length > 0 && s.Tool == "codex" ? NativeDesktop.Get(s.Id) : null;
+        return state != null && SamePath(state.Folder, s.ControlFolder) ? state : null;
+    }
+    void ValidateDesktopProject(string dir, string root, string server) {
+        lock (work) {
+            // Read settings without Preferences' connection-reset side effects on this worker.
+            var fresh = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dataDir, "config.json"), Encoding.UTF8));
+            string allowed;
+            if (Get(fresh, "RemoteEnabled") != "True" || Get(fresh, "Server") != server || !AllDirs(fresh).TryGetValue(dir, out allowed) || !SamePath(allowed, root))
+                throw new InvalidOperationException("电脑远控或项目权限已变化");
+        }
     }
     sealed class TitleCache { public long Stamp, Length; public string Title, Same, Kind; }
     readonly Dictionary<string, string> codexFiles = new Dictionary<string, string>();       // a Codex conversation -> its file
@@ -510,6 +531,8 @@ public sealed class TerminalAgent {
         }
         // the ones a program has open and the ones their owner pinned are listed whatever their age
         sessions = Single(found).OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated).Take(200).ToList();
+        foreach (var s in sessions.Where(s => s.Tool == "codex")) { string root; s.ControlFolder = dirs.TryGetValue(s.Dir, out root) ? root : s.Folder; }
+        NativeDesktop.Refresh(sessions.Where(s => s.Live && s.Tool == "codex" && s.Origin == "Codex 桌面版").Select(s => s.Id));
         folders.End();
         candidates = Offer(dirs, false, 40);
         // (what the folders are used by is read with the folders, and forgotten with them)
@@ -937,6 +960,8 @@ public sealed class TerminalAgent {
             var known = Reach.Of(tool, session);
             var result = since.Length > 0 && since == stamp ? new Dictionary<string, object> { { "same", true } } : Said(file, tool);
             result["stamp"] = stamp; result["title"] = saved.Title; result["status"] = known != null ? known.Status : saved.Status;
+            var native = NativeState(saved);
+            if (native != null) result["status"] = native.Busy ? "busy" : native.Ready ? "waiting" : "confirm";
             return result;
         }
         catch (IOException) { throw new ArgumentException("读不到这个对话的内容"); }
@@ -1180,13 +1205,14 @@ public sealed class TerminalAgent {
     }
     void Execute(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string id = Get(op, "id"), terminal = Get(op, "terminal"), action = Get(op, "action");
-        if (completed.ContainsKey(id) && action != "app_open") { reported.Remove(id); return; }
+        bool nativeControl = Get(op, "transport") == "codex-desktop" && (action == "session_say" || action == "session_stop");
+        if (completed.ContainsKey(id) && action != "app_open" && !nativeControl) { reported.Remove(id); return; }
         if (relaying.Contains(id)) return;       // being handed over: answered when that is done
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
             bool desktop = action == "app_open";
-            bool peek = action == "session_read" || action == "session_say" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
+            bool peek = action == "session_read" || action == "session_say" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
@@ -1214,6 +1240,38 @@ public sealed class TerminalAgent {
                 });
                 return;
             }
+            else if (nativeControl) {
+                string session = Get(op, "session"), dir = Get(op, "dir"), text = Get(op, "text"), expectedTurn = Get(op, "turn"), root;
+                var saved = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Dir == dir);
+                if (Get(op, "tool") != "codex" || saved == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话");
+                if (!AllDirs(prefs).TryGetValue(dir, out root) || !SamePath(root, saved.ControlFolder)) throw new ArgumentException("请先将对话所在文件夹添加为允许远控的项目");
+                if (relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
+                bool queryOnly = Get(op, "receipt") == "True";
+                string server = Get(prefs, "Server");
+                relaying.Add(id);
+                Task.Run(() => {
+                    string failed = ""; Dictionary<string, object> answer = null;
+                    try {
+                        answer = Desktop.Run(id, new[] { action, "codex", session, dir, text, expectedTurn }, () => {
+                            ValidateDesktopProject(dir, root, server);
+                            using (var control = OpenDesktopConversation()) {
+                                var state = control.Inspect(session);
+                                if (!SamePath(CodexDesktopControl.Folder(state), root)) throw new InvalidOperationException("桌面对话所在项目已变化");
+                                ValidateDesktopProject(dir, root, server);
+                                return action == "session_say" ? control.Send(id, text) : control.Interrupt(expectedTurn);
+                            }
+                        }, true, queryOnly);
+                    } catch (Exception problem) { failed = problem is InvalidOperationException || problem is ArgumentException ? problem.Message : "桌面操作结果无法确认，请检查电脑上的应用"; }
+                    lock (work) {
+                        completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
+                        if (answer != null) completed[id]["result"] = answer;
+                        relaying.Remove(id); reported.Remove(id); soon = true; nextScan = DateTime.MinValue;
+                    }
+                    Wake();
+                });
+                return;
+            }
+            else if (action == "session_stop") throw new InvalidOperationException("此对话没有可用的原应用停止接口");
             else if (action == "session_read") result = ReadConversation(op, prefs);
             else if (action == "session_mark") {
                 // pinned or hidden, or no longer: of a conversation this computer listed
@@ -1259,7 +1317,9 @@ public sealed class TerminalAgent {
                 if (!sessions.Any(s => s.Id == session && s.Tool == tool && s.Live && (s.Dir.Length == 0 ? s.Folder.Length > 0 : AllDirs(prefs).ContainsKey(s.Dir)))) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 if (action == "session_say") {
                     var listed = sessions.First(s => s.Id == session && s.Tool == tool && s.Live);
+                    if (listed.Origin == "Codex 桌面版") throw new InvalidOperationException("请通过原应用控制连接发送，或等待桌面连接恢复");
                     var told = Reach.Of(tool, session);
+                    if (listed.Origin == "Claude 桌面版" && !(told != null && told.Sayable)) throw new InvalidOperationException("Claude 桌面原对话当前未提供消息接收接口，请在电脑应用中继续");
                     if (listed.Wakes && !(told != null && (told.Sayable || told.Status == "confirm"))) {
                         // It sits idle: the message is handed to it where it is. That takes some seconds, so it is done
                         // beside the terminals' work, and the operation is answered when it has been taken or has failed.
@@ -1391,7 +1451,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end" }.Concat(Desktop.Available("codex") ? new[] { "codex-desktop-open" } : new string[0]).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end", "codex-desktop-control" }.Concat(Desktop.Available("codex") ? new[] { "codex-desktop-open" } : new string[0]).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },

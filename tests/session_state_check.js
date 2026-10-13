@@ -42,7 +42,7 @@ assert.match(app, /m\.detail \? el\('code', \{ className: 'ran', textContent: m\
 
 // The window says in one line how the conversation stands and for how long, offers to end it on the computer where
 // the computer can, and has a way back to what was said last.
-assert.match(app, /const state = el\('div', \{ className: 'state' \}, el\('span', \{ className: 'dot' \}\), standing, clock, ending\);/);
+assert.match(app, /const state = el\('div', \{ className: 'state' \}, el\('span', \{ className: 'dot' \}\), standing, clock, stopping, ending\);/);
 assert.match(app, /const canEnd = s => s\.live && s\.can_takeover === true && \(data\.device\.features \|\| \[\]\)\.includes\('end'\);/, 'ending is offered where the computer says it can end it');
 assert.match(app, /action: 'end' \}\); toast\('已结束电脑上的这段对话'\); finish\(null\); refresh\(\);/);
 assert.match(app, /className: 'latest', hidden: true, ariaLabel: '回到最新'/);
