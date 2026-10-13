@@ -172,6 +172,7 @@ def pages(chrome, out, folder, first, addresses, config):
         ask("Page.navigate", url=addresses[0] + "/")
         until(lambda: value("!!document.getElementById('settings') && !document.getElementById('home').hidden"), "the list", 20)
         assert value("!document.getElementById('more') && !document.getElementById('look')")
+        press("document.querySelector('#tabs button[data-tab=\"me\"]')")       # (the way to the settings is on the tab of the owner)
         press("document.getElementById('settings')")
         until(lambda: (value("location.pathname") or "").endswith("/computer/") and value("document.querySelectorAll('#lines li').length") == 3
               and value("document.querySelectorAll('#settings .pick, #settings .flip').length") == 5, "the page of settings", 20)

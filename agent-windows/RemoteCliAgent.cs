@@ -122,6 +122,10 @@ public sealed class TerminalAgent {
         Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter(), new ClaudeDesktopAdapter());
         OpenDesktopConversation = desktopConversation ?? (() => CodexDesktopControl.Connect());
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += Wake; Reach.Outbox.Changed += Wake;
+        Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
+        Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
+        Chains = new Chains(Path.Combine(dataDir, "chains.json"));
+        Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
@@ -297,6 +301,158 @@ public sealed class TerminalAgent {
             }
             try { Awaken(tool, found.Id); } catch (InvalidOperationException) { } catch (IOException) { } catch (System.ComponentModel.Win32Exception) { }
         }
+    }
+    // ---- the owner's work: in numbers, asked at a set time, handed from one conversation to another
+    /// How the work with the tools went, by day, tool, project and hour (Stats.cs).
+    public readonly Stats Stats;
+    /// The questions set to be asked at a time (Schedules.cs).
+    public readonly Schedules Schedules;
+    /// What is passed on from one conversation to another when the first has stopped (Chains.cs).
+    public readonly Chains Chains;
+    readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
+    static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_chains", "work_chain_set", "work_chain_remove" };
+    /// One rule runs: the last answer of the conversation that stopped goes to the other one, with its owner's words.
+    void Pass(Chains.Item rule, Dictionary<string, object> prefs) {
+        bool ok = false; string note;
+        try {
+            var from = sessions.FirstOrDefault(s => s.Tool == rule.FromTool && s.Id == rule.From);
+            var to = Taking(rule.ToTool, rule.To);
+            if (from == null) note = "没有找到做完的那段对话";
+            else if (to == null) note = "接手的对话没有在电脑上开着";
+            else {
+                var read = ReadConversation(new Dictionary<string, object> { { "session", from.Id }, { "tool", from.Tool }, { "dir", from.Dir } }, prefs);
+                string last = ((System.Collections.IEnumerable)read["messages"]).Cast<Dictionary<string, object>>().Where(m => Convert.ToString(m["role"]) == "assistant").Select(m => Convert.ToString(m["text"])).LastOrDefault() ?? "";
+                if (last.Length > 3000) last = last.Substring(0, 3000) + "…";
+                note = Tell(to, "【对话接力】另一段对话（" + Label(from.Tool) + "，“" + from.Title + "”）刚做完一步。" + (last.Length > 0 ? "它最后的回答：\n\n" + last + "\n\n" : "\n\n") + "我的要求：\n" + rule.Text, prefs, out ok);
+            }
+        } catch (Exception problem) { note = problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "没有发出"; }
+        Chains.Done(rule.Id, ok, note);
+    }
+    static string Label(string tool) { return tool == "claude" ? "Claude Code" : "Codex"; }
+    // The name a folder goes by in the numbers: its project's where it is one (or lies in one), else its own.
+    string NamedFolder(string folder, Dictionary<string, string> dirs) {
+        if (String.IsNullOrEmpty(folder)) return "";
+        string plain = folder.TrimEnd('\\', '/');
+        var within = dirs.Where(d => SamePath(d.Value, plain) || plain.StartsWith(d.Value.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase)).OrderByDescending(d => d.Value.Length).FirstOrDefault();
+        if (within.Key != null) return within.Key;
+        try { return Path.GetFileName(plain); } catch (ArgumentException) { return ""; }
+    }
+    // The terminal of the phone's that runs a conversation now, or null.
+    LiveTerminal OwnTerminal(string tool, string session) {
+        return terminals.Values.FirstOrDefault(t => !t.Pty.Closed && t.Tool == tool && String.Equals(t.Session, session, StringComparison.OrdinalIgnoreCase));
+    }
+    /// A conversation that something can be said to: one this computer lists that a program has open, or that runs
+    /// in one of the phone's own terminals. Null where there is none.
+    SessionInfo Taking(string tool, string session) {
+        return sessions.FirstOrDefault(s => s.Tool == tool && s.Id == session && (s.Live || OwnTerminal(tool, session) != null));
+    }
+    /// Says something to a conversation, as the phone would. One that runs in a terminal of the phone's is told
+    /// there, the way its page sends a message: the words as pasted text, then Enter. One that a program on this
+    /// computer has open is told by the way that is there now (Ways). Returns in words how it went; `ok` false
+    /// where it could not be said.
+    string Tell(SessionInfo to, string text, Dictionary<string, object> prefs, out bool ok) {
+        LiveTerminal own = OwnTerminal(to.Tool, to.Id);
+        if (own != null) {
+            // Enter would say yes to a question it waits on: that is answered where the question is read
+            var asks = Reach.Of(to.Tool, to.Id);
+            if (asks != null && asks.Status == "confirm") { ok = false; return "这个终端正在等待确认，没有发出"; }
+            own.Pty.Write("\u001b[200~" + text.Replace("\r\n", "\n").Replace('\r', '\n').Trim() + "\u001b[201~\r");
+            lastInput = DateTime.UtcNow;
+            ok = true;
+            return "已发到手机终端";
+        }
+        string id = Guid.NewGuid().ToString("N");
+        var ways = WaysOf(to, Reach.Of(to.Tool, to.Id));
+        var op = new Dictionary<string, object> { { "id", id }, { "action", "session_say" }, { "tool", to.Tool }, { "session", to.Id }, { "dir", to.Dir }, { "text", text },
+            { "at", (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds } };
+        if (ways.Say == Ways.App) op["transport"] = Ways.App;
+        Execute(op, prefs);
+        Dictionary<string, object> done;
+        if (completed.TryGetValue(id, out done)) {
+            string error = Get(done, "error");
+            completed.Remove(id); reported.Remove(id);         // (asked here, not by a relay: there is nobody to report it to)
+            ok = error.Length == 0;
+            return ok ? "已交给对话" : error;
+        }
+        ok = true;      // on its way: an idle conversation is being woken for it, or the application's channel has it
+        return "正在送达";
+    }
+    /// What a conversation is handed over with: what its owner asked first and last, what the tool answered last and
+    /// did last, taken from its record. Written as its owner's own words to the conversation that takes over.
+    static string Brief(SessionInfo from, Dictionary<string, object> read, string note) {
+        var said = ((System.Collections.IEnumerable)read["messages"]).Cast<Dictionary<string, object>>().ToList();
+        Func<string, int, string> cut = (text, most) => { text = (text ?? "").Trim(); return text.Length <= most ? text : text.Substring(0, most) + "…"; };
+        var asked = said.Where(m => Convert.ToString(m["role"]) == "user").Select(m => Convert.ToString(m["text"])).ToList();
+        string answered = said.Where(m => Convert.ToString(m["role"]) == "assistant").Select(m => Convert.ToString(m["text"])).LastOrDefault() ?? "";
+        var steps = said.Where(m => Convert.ToString(m["role"]) == "tool").Select(m => Convert.ToString(m["text"])).ToList();
+        var brief = new StringBuilder("【对话交接】下面是我在另一段对话里的进展（" + Label(from.Tool) + "，“" + from.Title + "”" + (from.Dir.Length > 0 ? "，项目 " + from.Dir : "") + "），请接着处理。\n");
+        if (asked.Count > 0) brief.Append("\n我最初的要求：\n" + cut(asked[0], 800) + "\n");
+        if (asked.Count > 1) brief.Append("\n我最近的要求：\n" + cut(asked[asked.Count - 1], 800) + "\n");
+        if (answered.Length > 0) brief.Append("\n它最后的回答：\n" + cut(answered, 2000) + "\n");
+        if (steps.Count > 0) brief.Append("\n它最近做的操作：\n" + String.Join("\n", steps.Skip(Math.Max(0, steps.Count - 8)).Select(step => "- " + cut(step, 160))) + "\n");
+        if (!String.IsNullOrWhiteSpace(note)) brief.Append("\n我的补充：\n" + cut(note, 1000) + "\n");
+        return brief.ToString().TrimEnd();
+    }
+    DateTime nextAsking = DateTime.MinValue;
+    /// Asks what is due (called with `work` held, as often as the agent looks around).
+    void Ask(Dictionary<string, object> prefs) {
+        // what follows on a conversation that has just stopped is started at once
+        string[][] stopped;
+        lock (rested) { stopped = rested.ToArray(); rested.Clear(); }
+        if (Get(prefs, "RemoteEnabled") == "True") foreach (var one in stopped) foreach (var rule in Chains.After(one[0], one[1])) Pass(rule, prefs);
+        if (DateTime.UtcNow < nextAsking) return;
+        nextAsking = DateTime.UtcNow.AddSeconds(15);
+        if (Get(prefs, "RemoteEnabled") != "True") return;
+        foreach (var due in Schedules.Due(DateTime.Now)) {
+            bool ok = false; string note;
+            var to = Taking(due.Tool, due.Session);
+            if (to == null) note = "这段对话没有在电脑上开着";
+            else { try { note = Tell(to, due.Text, prefs, out ok); } catch (Exception problem) { note = problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "没有发出"; } }
+            Schedules.Done(due.Id, ok, note, DateTime.Now);
+        }
+    }
+    Dictionary<string, object> Work(string action, Dictionary<string, object> op, Dictionary<string, object> prefs) {
+        if (action == "work_schedules") return new Dictionary<string, object> { { "schedules", Schedules.All().Select(Schedules.Shown).ToArray() } };
+        if (action == "work_schedule_set") {
+            // for a conversation this computer lists: its title is kept with it, to name it by later
+            var item = (op.ContainsKey("item") ? op["item"] : null) as Dictionary<string, object>;
+            if (item == null) throw new ArgumentException("定时提问无效");
+            var of = sessions.FirstOrDefault(s => s.Tool == Get(item, "tool") && s.Id == Get(item, "session"));
+            if (of == null) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+            item["title"] = of.Title;
+            return new Dictionary<string, object> { { "schedule", Schedules.Shown(Schedules.Set(item, DateTime.Now)) } };
+        }
+        if (action == "work_schedule_remove") {
+            if (!Schedules.Remove(Get(op, "schedule"))) throw new ArgumentException("没有找到这个定时提问");
+            return new Dictionary<string, object>();
+        }
+        if (action == "work_chains") return new Dictionary<string, object> { { "chains", Chains.All().Select(Chains.Shown).ToArray() } };
+        if (action == "work_chain_set") {
+            var item = (op.ContainsKey("item") ? op["item"] : null) as Dictionary<string, object>;
+            if (item == null) throw new ArgumentException("接力无效");
+            var first = sessions.FirstOrDefault(s => s.Tool == Get(item, "from_tool") && s.Id == Get(item, "from"));
+            var then = sessions.FirstOrDefault(s => s.Tool == Get(item, "to_tool") && s.Id == Get(item, "to"));
+            if (first == null || then == null) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+            item["from_title"] = first.Title; item["to_title"] = then.Title;
+            return new Dictionary<string, object> { { "chain", Chains.Shown(Chains.Set(item)) } };
+        }
+        if (action == "work_chain_remove") {
+            if (!Chains.Remove(Get(op, "chain"))) throw new ArgumentException("没有找到这条接力");
+            return new Dictionary<string, object>();
+        }
+        if (action == "work_handoff") {
+            var from = sessions.FirstOrDefault(s => s.Tool == Get(op, "from_tool") && s.Id == Get(op, "from"));
+            var to = Taking(Get(op, "to_tool"), Get(op, "to"));
+            if (from == null) throw new ArgumentException("电脑上没有找到要交接的对话，请刷新后重试");
+            if (to == null) throw new InvalidOperationException("接手的对话没有在电脑上开着");
+            if (from.Tool == to.Tool && from.Id == to.Id) throw new ArgumentException("不能交接给同一段对话");
+            var read = ReadConversation(new Dictionary<string, object> { { "session", from.Id }, { "tool", from.Tool }, { "dir", from.Dir } }, prefs);
+            string brief = Brief(from, read, Get(op, "note"));
+            bool ok; string note = Tell(to, brief, prefs, out ok);
+            if (!ok) throw new InvalidOperationException(note);
+            return new Dictionary<string, object> { { "status", "accepted" }, { "note", note }, { "length", brief.Length } };
+        }
+        throw new ArgumentException("不支持此操作");
     }
     CodexDesktopSessions.State NativeState(SessionInfo s) {
         var state = s.Live && !String.IsNullOrEmpty(s.ControlFolder) && s.Tool == "codex" ? NativeDesktop.Get(s.Id) : null;
@@ -1293,12 +1449,31 @@ public sealed class TerminalAgent {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read", update = action == "update";
             bool desktop = action == "app_open";
             bool peek = action == "session_read" || action == "session_say" || action == "session_withdraw" || action == "session_release" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
-            bool computer = Array.IndexOf(ComputerActions, action) >= 0;
-            if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
+            bool computer = Array.IndexOf(ComputerActions, action) >= 0, ownWork = Array.IndexOf(WorkActions, action) >= 0;
+            if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !ownWork && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
             if (Get(prefs, "RemoteEnabled") != "True") throw new InvalidOperationException("电脑远控已关闭");
             if (project) ChangeProjects(op, prefs, action);
             else if (update) { if (UpdateRequested == null) throw new InvalidOperationException("这台电脑运行的是不带自动更新的后台程序"); UpdateRequested(); }
+            else if (action == "work_stats") {
+                // read from the tools' records beside the terminals' work: the first reading of many records takes a while
+                int days; if (!Int32.TryParse(Get(op, "days"), out days)) days = 14;
+                var dirs = AllDirs(prefs);
+                if (relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
+                relaying.Add(id);
+                Task.Run(() => {
+                    string failed = ""; Dictionary<string, object> answer = null;
+                    try { answer = Stats.Read(days, folder => NamedFolder(folder, dirs)); } catch (Exception) { failed = "统计没有读出来，请稍后再试"; }
+                    lock (work) {
+                        completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
+                        if (answer != null) completed[id]["result"] = answer;
+                        relaying.Remove(id); reported.Remove(id); soon = true;
+                    }
+                    Wake();
+                });
+                return;
+            }
+            else if (ownWork) result = Work(action, op, prefs);
             else if (computer) { if (Computer == null) throw new InvalidOperationException("这台电脑运行的后台程序没有可在手机上更改的设置"); result = Computer(op); }
             else if (desktop) {
                 string tool = Get(op, "tool"), folder, draft = Get(op, "draft");
@@ -1551,6 +1726,7 @@ public sealed class TerminalAgent {
         lock (work) {
             if (returning != null) { var back = returning; returning = null; foreach (var kept in back) { try { Return(kept, prefs); } catch { } } nextScan = DateTime.UtcNow.AddSeconds(3); }
             bool enabled = Get(prefs, "RemoteEnabled") == "True";
+            try { Ask(prefs); } catch (Exception) { }       // what was set to be asked at this time
             if (!enabled) foreach (var t in terminals.Values.Where(t => !t.Pty.Closed)) t.Pty.Dispose();
             List<Dictionary<string, object>> output;
             var allowed = AllDirs(prefs);
@@ -1578,7 +1754,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end", "outbox", "codex-desktop-control" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "codex-desktop-control" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },

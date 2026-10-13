@@ -1,6 +1,7 @@
-/* The list pages: everything on the computer at a glance, by what needs you (what waits for an answer, what is pinned,
-   what is at work, what was used lately), found by one search and told apart by tool and by where it runs; and one
-   project in detail. */
+/* The list pages, under four tabs at the foot. 任务: everything on the computer at a glance, by what needs you (what
+   waits for an answer, what is pinned, what is at work, what was used lately), found by one search and told apart by
+   tool and by where it runs. 项目: the projects, and one project in detail. 协作 and 我的 are views of their own
+   (together.js, me.js), which this page gives what it has (window.RemoteCliPage). */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -21,6 +22,15 @@
     try { localStorage.setItem('rcli-' + key, value); } catch (error) { /* private window */ }
   };
   let data = null, project = '', timer = 0, shown = 2, endedShown = 8, toastTimer = 0;
+  // The tabs at the foot. The one last used is kept while the app is open (a terminal's page leads back to it);
+  // ?tab=<name> opens one by a link. A project in detail belongs to 项目: `project` is set only there.
+  const TABS = { tasks: '任务', projects: '项目', together: '协作', me: '我的' };
+  let tab = 'tasks';
+  try { tab = sessionStorage.getItem('rcli-tab') || tab; } catch (error) { /* no storage */ }
+  tab = new URLSearchParams(location.search).get('tab') || tab;
+  if (!TABS[tab]) tab = 'tasks';
+  // The views of 协作 and 我的, by the name of their tab: each draws itself into its own part of the page.
+  const views = {};
   // Project detail starts as a compact index. Each long section opens only when the user asks for it.
   const projectFolds = { active: false, live: false, history: false };
   // The first list is asked for while the sign-in is still being checked: over a tunnel each answer takes a
@@ -33,6 +43,10 @@
     back: svg('<path d="M15 5l-7 7 7 7"/>'),
     // a wheel with eight teeth: the ring of teeth is one circle drawn in dashes
     gear: svg('<circle cx="12" cy="12" r="2.8"/><circle cx="12" cy="12" r="6.3"/><circle cx="12" cy="12" r="8.4" stroke-width="2.4" stroke-linecap="butt" stroke-dasharray="2.64 3.957"/>'),
+    // the tabs: what waits (a tray), the projects (a folder), conversations passing work on, the owner
+    tasks: svg('<path d="M4 13.5l2.2-7.1A2 2 0 0 1 8.1 5h7.8a2 2 0 0 1 1.9 1.4l2.2 7.1v3.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M4 13.5h4.3a1 1 0 0 1 .9.6 3.1 3.1 0 0 0 5.6 0 1 1 0 0 1 .9-.6H20"/>', 24),
+    together: svg('<circle cx="6.5" cy="6.8" r="2.9"/><circle cx="17.5" cy="17.2" r="2.9"/><path d="M12 6.8h3a2.5 2.5 0 0 1 2.5 2.5v2.2M12 17.2H9a2.5 2.5 0 0 1-2.5-2.5v-2.2"/><path d="M15.4 9.6l2.1 2.1 2.1-2.1M8.600 14.4l-2.1-2.1-2.1 2.1"/>', 24),
+    me: svg('<circle cx="12" cy="8.300" r="3.8"/><path d="M4.6 20a7.4 7.4 0 0 1 14.8 0"/>', 24),
     chev: svg('<path d="M9 6l6 6-6 6"/>', 18), stop: svg('<rect x="6" y="6" width="12" height="12" rx="3.2" fill="currentColor" stroke="none"/>', 18), plus: svg('<path d="M12 5v14M5 12h14"/>', 20),
     folder: svg('<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
     claude: svg('<path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6L6 18"/>'), codex: svg('<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>'),
@@ -82,7 +96,11 @@
     if (native) native.chrome(skin.t.background);
   }
   paint();
-  $('back').innerHTML = ICON.back; $('settings').innerHTML = ICON.gear;
+  $('back').innerHTML = ICON.back; $('settings').innerHTML = ICON.gear; $('new-task').innerHTML = svg('<path d="M12 5v14M5 12h14"/>', 24);
+  document.querySelectorAll('#tabs button').forEach(button => {
+    button.querySelector('.glyph').innerHTML = button.dataset.tab === 'projects' ? svg(ICON.folder.replace(/^<svg[^>]*>|<\/svg>$/g, ''), 24) : ICON[button.dataset.tab];
+    button.addEventListener('click', () => go(button.dataset.tab));
+  });
   // Everything that is set, for this computer and for these pages, is on one page: the line, the program on the
   // computer, the look, the app, signing out.
   $('settings').addEventListener('click', () => { location.href = 'computer/'; });
@@ -138,7 +156,7 @@
   }
   function showLogin() {
     clearTimeout(timer);
-    $('home').hidden = true; $('login').hidden = false;
+    $('home').hidden = true; $('tabs').hidden = true; $('login').hidden = false;
     $('password').focus();
   }
   $('login-form').addEventListener('submit', async event => {
@@ -147,7 +165,7 @@
     try {
       await api('api/login', { password: $('password').value });
       $('password').value = '';
-      $('login').hidden = true; $('home').hidden = false;
+      $('login').hidden = true; $('home').hidden = false; $('tabs').hidden = false;
       refresh();
     } catch (error) { $('login-error').textContent = error.message; }
   });
@@ -470,6 +488,8 @@
           if (!usable()) return toast('电脑离线，暂时不能接到手机');
           outside.hidden = format.hidden = true; taking.hidden = !taking.hidden;
         } }),
+        // handing it over to another conversation: the window is left for the sheet that asks to which
+        el('button', { type: 'button', className: 'icon hand', ariaLabel: '交接给另一段对话', html: ICON.together, hidden: !(views.together && views.together.handoff && (data.device.features || []).includes('work')), onclick: () => finish({ handoff: now() }) }),
         el('button', { type: 'button', className: 'icon files', ariaLabel: '查看项目文件', html: ICON.folder, hidden: !(session.dir || session.folder) || !(data.device.features || []).includes('files'), onclick: () => {
           if (!usable()) return toast('电脑离线，暂时无法查看文件');
           const current = now();
@@ -654,7 +674,8 @@
       watch = setInterval(() => { if ($('sheet').open && (++ticks % 2 === 0 || Date.now() < quick)) show(); }, 500);
     }, true);
     clearInterval(watch);
-    if (choice) into(choice.session, choice.value);
+    if (choice && choice.handoff) views.together.handoff(choice.handoff);
+    else if (choice) into(choice.session, choice.value);
   }
   // Into a terminal of the phone's: by taking the conversation from the program that has it, by a copy, or, for one
   // that nothing has open, simply by going on with it.
@@ -864,6 +885,7 @@
     if (s && !x.t && s.live) ways(s).forEach(way => choices.push(way));
     const folder = x.apart ? (x.t ? x.t.folder : s.folder) || '' : '';
     if (folder && usable()) choices.push({ label: '把 ' + base(folder) + ' 加为项目', value: 'add' });
+    if (s && views.together && views.together.handoff && usable() && (data.device.features || []).includes('work')) choices.push({ label: '交接给另一段对话', value: 'handoff' });
     if (!project && x.project) choices.push({ label: '进入项目 ' + x.project, value: 'enter' });
     if (x.t && x.live) choices.push({ label: '结束终端', value: 'end', kind: 'danger' });
     // a saved conversation of a project that nothing has open can be put away (the computer keeps it recoverable)
@@ -874,6 +896,7 @@
     else if (choice === 'hide') mark(s, s.hidden ? { hidden: false } : { hidden: true, pinned: false });
     else if (choice === 'add') addFolder(folder);
     else if (choice === 'enter') enter(x.project);
+    else if (choice === 'handoff') views.together.handoff(s);
     else if (choice === 'end') endTerminal(x.t);
     else if (choice === 'finish') endConversation(s);
     else if (choice === 'close' || choice === 'copy') into(s, choice);
@@ -1049,24 +1072,34 @@
     if (!ready) offline.replaceChildren(el('b', { textContent: device.online ? '电脑端暂停了手机访问' : '电脑离线' }),
       el('span', { textContent: device.online ? '在电脑上的 Remote AI“设置”里打开“允许手机访问”。' : '请确认电脑已开机且 Remote AI 正在运行。使用公网隧道时，退出程序或重启电脑后地址会变更，需要重新扫码。' }));
     if (project && !names.includes(project)) { project = ''; }
-    const everything = things(), mine = everything.filter(x => x.live);
-    $('overview').hidden = !!project; $('project').hidden = !project;
+    const everything = things(), mine = everything.filter(x => x.live), lists = tab === 'tasks' || tab === 'projects';
+    $('overview').hidden = !!project || !lists; $('project').hidden = !project;
+    $('together').hidden = tab !== 'together'; $('me').hidden = tab !== 'me';
+    $('home').dataset.tab = tab;
     // In the app the arrow on the first page leads to the workbench, where every computer is listed.
     $('back').hidden = !project && !(native && native.home);
     $('back').setAttribute('aria-label', project ? '返回全部项目' : '返回工作台');
-    $('heading').textContent = project || 'Remote AI';
+    $('heading').textContent = project || TABS[tab];
+    document.querySelector('#home .top').classList.toggle('large', !project);
+    $('new-task').hidden = tab !== 'tasks'; $('settings').hidden = tab !== 'me';
+    document.querySelectorAll('#tabs button').forEach(button => { if (button.dataset.tab === tab) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
     // conversations open on the computer are counted with the terminals, by how they stand
     const stands = (list, ...phases) => list.filter(x => x.live && phases.includes(x.phase)).length;
     const waiting = stands(everything, 'confirm'), busy = everything.filter(working).length, opened = everything.filter(x => x.live && !needsYou(x) && !working(x)).length;
     $('device-text').textContent = !ready ? (device.online ? '已暂停访问' : '电脑离线')
-      : project ? '电脑在线' : [waiting ? waiting + ' 个等你确认' : '', busy ? busy + ' 个正在运行' : '', opened ? opened + ' 个已打开' : ''].filter(Boolean).join(' · ') || '电脑在线';
+      : project || !lists ? '电脑在线' : [waiting ? waiting + ' 个等你确认' : '', busy ? busy + ' 个正在运行' : '', opened ? opened + ' 个已打开' : ''].filter(Boolean).join(' · ') || '电脑在线';
+    // what waits for an answer is counted on its tab, whichever tab is open
+    $('tab-count').hidden = !waiting; $('tab-count').textContent = waiting > 9 ? '9+' : waiting;
+    if (!lists) { if (views[tab]) views[tab].draw(); return; }
 
     if (!project) {
-      const all = everything.filter(pass), asked = $('query').value.trim().toLowerCase().split(/\s+/).filter(Boolean), searching = asked.length > 0, tick = [stamp(1), ready];
-      $('find').hidden = !everything.length;
+      const all = everything.filter(pass), asked = $('query').value.trim().toLowerCase().split(/\s+/).filter(Boolean), searching = asked.length > 0, tick = [stamp(1), ready], tasks = tab === 'tasks';
+      $('find').hidden = tasks ? !everything.length : names.length < 2;
+      $('query').placeholder = tasks ? '搜索对话、终端和项目' : '搜索项目';
       drawFilters(everything);
-      $('results').hidden = !searching; $('sections').hidden = searching;
-      if (searching) {
+      $('results').hidden = !searching || !tasks; $('sections').hidden = searching || !tasks;
+      $('tasks-empty').hidden = everything.length > 0; $('first-task').hidden = !ready;
+      if (!tasks) { /* the projects only */ } else if (searching) {
         // everything is looked through, what is hidden too; what is open comes first
         const found = all.filter(x => !x.twice && asked.every(word => wordsOf(x).includes(word))).sort((a, b) => (b.live - a.live) || (b.pinned - a.pinned) || (a.live ? byRank(a, b) : byTime(a, b)));
         show($('results-list'), found.slice(0, resultsShown), tick);
@@ -1120,7 +1153,9 @@
       });
       const cardsP = list.map(x => x.card);
       if (ready && !searching) cardsP.push(el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', onclick: addProject, html: ICON.plus + '<span>添加项目</span>' })));
+      // 项目 lists them; 任务 shows the ones a search names, under what it found (app.css, by `data-finding`)
       $('projects').hidden = searching && !list.length;
+      $('home').dataset.finding = searching ? 'yes' : 'no';
       fill($('project-list'), cardsP, JSON.stringify([list.map(x => x.sign), ready, searching]));
       $('project-summary').textContent = searching || filter.tool || filter.source ? list.length + ' 个' : names.length ? names.length + ' 个' : '还没有项目';
       return;
@@ -1170,14 +1205,39 @@
   }
 
   // ---- moving between the overview and one project; the phone's back key goes back to the overview
-  function enter(name) { project = name; shown = 2; endedShown = 8; hiddenShown = false; Object.keys(projectFolds).forEach(key => { projectFolds[key] = false; }); $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
-  window.addEventListener('popstate', event => { project = event.state && event.state.project || ''; if (data) draw(); });
+  // To another tab. A project in detail is left with its tab; pressing 项目 while in one leads back to the list.
+  function go(name) {
+    if (!TABS[name]) return;
+    const left = project;
+    if (left) { project = ''; cameFrom = 'projects'; if (history.state && history.state.project) history.back(); }
+    if (name !== tab || left) scrollTo(0, 0);
+    tab = name;
+    try { sessionStorage.setItem('rcli-tab', tab); } catch (error) { /* no storage */ }
+    if ($('query').value && name !== 'tasks' && name !== 'projects') $('query').value = '';
+    if (!data) return;
+    if (views[tab] && views[tab].open) views[tab].open();
+    draw();
+  }
+  // A project is entered from the list of projects, or from a card on 任务: the way back leads to where one came from.
+  let cameFrom = 'projects';
+  function enter(name) { cameFrom = tab; tab = 'projects'; project = name; shown = 2; endedShown = 8; hiddenShown = false; Object.keys(projectFolds).forEach(key => { projectFolds[key] = false; }); $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
+  window.addEventListener('popstate', event => {
+    const left = project;
+    project = event.state && event.state.project || '';
+    if (project) tab = 'projects'; else if (left && tab === 'projects') { tab = cameFrom; cameFrom = 'projects'; }
+    if (data) draw();
+  });
   // A project opened by a link (the workbench does that) has no overview behind it in the history.
   $('back').addEventListener('click', () => {
     if (project && history.state && history.state.project) return history.back();
     if (native && native.home) return native.home();
-    project = ''; history.replaceState(null, '', location.pathname); draw();
+    project = ''; tab = cameFrom; cameFrom = 'projects'; history.replaceState(null, '', location.pathname); draw();
   });
+  $('new-task').addEventListener('click', () => startAnywhere());
+  $('first-task').addEventListener('click', () => startAnywhere());
+  // While something is typed the tabs make room: the keyboard takes the foot of the screen.
+  document.addEventListener('focusin', event => { if (event.target.matches && event.target.matches('#home input, #home textarea')) document.body.classList.add('typing'); });
+  document.addEventListener('focusout', () => document.body.classList.remove('typing'));
   $('search').addEventListener('input', () => { shown = 2; draw(); });
   $('more-history').addEventListener('click', () => { shown += 30; draw(); });
   $('more-ended').addEventListener('click', () => { endedShown += 30; draw(); });
@@ -1193,10 +1253,12 @@
 
   async function refresh() {
     clearTimeout(timer);
+    const first = !data;
     try {
       const asked = early; early = null;
       data = (asked && await asked) || await api('api/terminal');
       if (data.device.shell) TOOLS.shell = data.device.shell;
+      if (first && views[tab] && views[tab].open) views[tab].open();
       draw(); peeks();
       if (anew) {
         anew = false; history.replaceState(history.state, '', location.pathname + (project ? '?project=' + encodeURIComponent(project) : ''));
@@ -1213,6 +1275,17 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('home').hidden) refresh(); });
   window.addEventListener('pageshow', event => { if (event.persisted && !$('home').hidden) refresh(); });      // back from a terminal
+
+  // What the views of their own work with: the page's helpers, what the computer last said, and the ways into a
+  // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
+  window.RemoteCliPage = {
+    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open,
+    get data() { return data; },
+    get tab() { return tab; },
+    has: feature => !!data && (data.device.features || []).includes(feature),
+    refresh: () => refresh(),
+    view(name, made) { views[name] = made; if (data) { if (tab === name && made.open) made.open(); draw(); } }
+  };
 
   (async () => {
     try {
@@ -1232,7 +1305,8 @@
       if (/^[a-f0-9]{32}$/.test(wanted)) return location.replace('terminal/?id=' + wanted);
       // ?project=<name> opens one project directly, for a link or a picture of that page.
       project = history.state && history.state.project || new URLSearchParams(location.search).get('project') || '';
-      $('home').hidden = false;
+      if (project) tab = 'projects';
+      $('home').hidden = false; $('tabs').hidden = false;
       refresh();
     } catch (error) { showLogin(); $('login-error').textContent = '连不上服务，请检查地址'; }
   })();

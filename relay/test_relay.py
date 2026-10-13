@@ -124,6 +124,64 @@ class TerminalRelayTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteError, "不支持撤回"):
             self.relay.conversation({"id": "6" * 32, "session": sid, "action": "withdraw", "message": "b" * 32}, now=1004, wait=0)
 
+    def test_the_owners_work_is_asked_of_the_computer(self):
+        import threading
+        a, b = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"
+        sessions = [{"id": a, "tool": "claude", "dir": "demo", "title": "甲", "updated": 1, "live": True}, {"id": b, "tool": "codex", "dir": "demo", "title": "乙", "updated": 1, "live": False}]
+        self.relay.agent({"info": dict(self.info, features=["peek"]), "sessions": sessions}, now=1001)
+        with self.assertRaisesRegex(RemoteError, "不支持这项功能"):
+            self.relay.work({"id": "1" * 32, "action": "stats"}, now=1001, wait=0)
+        info = dict(self.info, features=["peek", "work"])
+        self.relay.agent({"info": info, "sessions": sessions}, now=1002)
+        item = {"id": "c" * 32, "session": a, "tool": "codex", "text": "进展如何？", "kind": "daily", "time": "09:30"}
+        for wrong, said in (({"action": "nope"}, "不支持"), ({"action": "stats", "days": 0}, "天数"), ({"action": "schedule_set", "item": dict(item, session="x")}, "没有找到"),
+                            ({"action": "schedule_set", "item": dict(item, text=" ")}, "1 至 2000"), ({"action": "schedule_set", "item": dict(item, time="9:30")}, "时间无效"),
+                            ({"action": "schedule_set", "item": dict(item, kind="every")}, "时间无效"), ({"action": "schedule_remove", "schedule": "x"}, "无效"),
+                            ({"action": "handoff", "from": a, "to": a}, "同一段"), ({"action": "handoff", "from": a, "to": b}, "没有在电脑上开着"), ({"action": "handoff", "from": a, "to": "zz"}, "没有找到")):
+            with self.assertRaisesRegex(RemoteError, said):
+                self.relay.work(dict({"id": "2" * 32}, **wrong), now=1002, wait=0)
+
+        def carried(payload, answer):
+            got = {}
+            asking = threading.Thread(target=lambda: got.update(value=self.relay.work(payload, now=1002, wait=5)))
+            asking.start()
+            asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+            self.relay.agent({"info": info, "acks": [{"id": payload["id"], "error": "", "result": answer}]}, now=1003)
+            asking.join(5)
+            return {k: v for k, v in asked[0].items() if k not in ("at", "terminal")}, got.get("value")
+
+        asked, got = carried({"id": "3" * 32, "action": "stats", "days": 7}, {"ready": True, "days": []})
+        self.assertEqual((asked, got), ({"id": "3" * 32, "action": "work_stats", "days": 7}, {"ready": True, "days": []}))
+        asked, got = carried({"id": "4" * 32, "action": "schedule_set", "item": item}, {"schedule": {"id": "c" * 32}})
+        # the tool is the computer's word for that conversation, not the phone's
+        self.assertEqual(asked["item"], {"id": "c" * 32, "session": a, "tool": "claude", "text": "进展如何？", "kind": "daily", "on": True, "at": 0, "minutes": 0, "time": "09:30"})
+        asked, got = carried({"id": "5" * 32, "action": "handoff", "from": b, "to": a, "note": "接着做"}, {"status": "accepted"})
+        self.assertEqual(asked, {"id": "5" * 32, "action": "work_handoff", "from": b, "from_tool": "codex", "to": a, "to_tool": "claude", "note": "接着做"})
+
+        # passing on when a conversation stops is a feature of its own: the tools' hooks tell of the stop
+        rule = {"id": "d" * 32, "from": a, "to": b, "text": "审查上面的改动", "rounds": 3, "from_tool": "codex"}
+        with self.assertRaisesRegex(RemoteError, "不支持接力"):
+            self.relay.work({"id": "6" * 32, "action": "chain_set", "item": rule}, now=1002, wait=0)
+        info = dict(self.info, features=["peek", "work", "chains"])
+        self.relay.agent({"info": info, "sessions": sessions}, now=1002)
+        for wrong, said in (({"action": "chain_set", "item": dict(rule, to=a)}, "同一段"), ({"action": "chain_set", "item": dict(rule, to="zz")}, "没有找到"), ({"action": "chain_set", "item": dict(rule, text="")}, "1 至 1000"),
+                            ({"action": "chain_set", "item": dict(rule, rounds=11)}, "1 到 10"), ({"action": "chain_set", "item": dict(rule, rounds=True)}, "1 到 10"), ({"action": "chain_remove", "chain": "x"}, "无效")):
+            with self.assertRaisesRegex(RemoteError, said):
+                self.relay.work(dict({"id": "7" * 32}, **wrong), now=1002, wait=0)
+        asked, got = carried({"id": "8" * 32, "action": "chain_set", "item": rule}, {"chain": {"id": "d" * 32}})
+        self.assertEqual(asked["item"], {"id": "d" * 32, "from": a, "from_tool": "claude", "to": b, "to_tool": "codex", "text": "审查上面的改动", "rounds": 3})
+        asked, got = carried({"id": "9" * 32, "action": "chain_remove", "chain": "d" * 32}, {})
+        self.assertEqual((asked["action"], asked["chain"]), ("work_chain_remove", "d" * 32))
+        asked, got = carried({"id": "a" * 32, "action": "chains"}, {"chains": []})
+        self.assertEqual((asked, got), ({"id": "a" * 32, "action": "work_chains"}, {"chains": []}))
+        # a conversation that runs in one of the phone's own terminals takes over too, though no program on the computer has it
+        started = self.relay.command({"id": "b" * 32, "action": "start", "tool": "codex", "dir": "demo", "session": b}, now=1002)
+        with self.assertRaisesRegex(RemoteError, "没有在电脑上开着"):       # (not yet: the terminal is still being started)
+            self.relay.work({"id": "e" * 32, "action": "handoff", "from": a, "to": b}, now=1002, wait=0)
+        self.relay.agent({"info": info, "acks": [{"id": "b" * 32}], "terminals": [{"id": started["terminal"], "state": "running", "session": b}]}, now=1003)
+        asked, got = carried({"id": "c" * 32, "action": "handoff", "from": a, "to": b}, {"status": "accepted"})
+        self.assertEqual((asked["to"], asked["to_tool"]), (b, "codex"))
+
     def test_desktop_timeout_never_claims_not_executed(self):
         self.info["features"] = ["codex-desktop-open"]
         self.relay.agent({"info": self.info}, now=1001)

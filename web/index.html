@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="app.css">
   <script defer src="terminal/skins.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="together.js"></script>
+  <script defer src="me.js"></script>
 </head>
 <body>
   <main id="login" hidden>
@@ -26,19 +28,20 @@
   </main>
 
   <main id="home" hidden>
-    <header class="top">
+    <header class="top large">
       <button type="button" class="icon" id="back" aria-label="返回全部项目" hidden></button>
       <div class="who">
-        <h1 id="heading">Remote AI</h1>
+        <h1 id="heading">任务</h1>
         <p id="device" role="status" aria-live="polite"><span id="dot" aria-hidden="true"></span><span id="device-text">正在连接…</span></p>
       </div>
-      <button type="button" class="icon" id="settings" aria-label="设置"></button>
+      <button type="button" class="icon" id="new-task" aria-label="新建任务" hidden></button>
+      <button type="button" class="icon" id="settings" aria-label="设置" hidden></button>
     </header>
 
     <div id="loading" aria-hidden="true"><i></i><i></i><i></i></div>
     <section id="offline" class="notice" hidden></section>
 
-    <!-- every project at a glance -->
+    <!-- what there is to work with (任务), and the projects it is in (项目): one search and one row of filters for both -->
     <div id="overview" hidden>
       <!-- one search over every terminal and conversation, and what to tell them apart by -->
       <div id="find" hidden>
@@ -74,6 +77,7 @@
           <button type="button" id="more-recent" class="quiet wide" hidden>显示更多</button>
         </section>
         <p id="nothing" hidden>没有符合筛选的对话或终端。</p>
+        <div id="tasks-empty" class="blank" hidden><p>还没有对话或终端</p><button type="button" class="solid" id="first-task">新建任务</button></div>
       </div>
       <section id="projects">
         <div class="section-head"><h2>项目</h2><p id="project-summary"></p></div>
@@ -98,7 +102,18 @@
       <section id="p-ended" hidden><div class="section-head"><h2>历史终端</h2></div><ul class="cards"></ul><button type="button" id="more-ended" class="quiet wide" hidden>显示更多终端</button></section>
       <p id="empty" hidden>这个项目还没有对话。用上面的按钮新建一个终端。</p>
     </div>
+
+    <!-- conversations working together (together.js), and the owner's work in numbers (me.js) -->
+    <div id="together" hidden></div>
+    <div id="me" hidden></div>
   </main>
+
+  <nav id="tabs" aria-label="栏目" hidden><div class="inner">
+    <button type="button" data-tab="tasks"><span class="glyph"></span><span>任务</span><i id="tab-count" hidden></i></button>
+    <button type="button" data-tab="projects"><span class="glyph"></span><span>项目</span></button>
+    <button type="button" data-tab="together"><span class="glyph"></span><span>协作</span></button>
+    <button type="button" data-tab="me"><span class="glyph"></span><span>我的</span></button>
+  </div></nav>
 
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="sheet"><form method="dialog" id="sheet-form"></form></dialog>

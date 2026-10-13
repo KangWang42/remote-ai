@@ -5,26 +5,6 @@
 #state.busy b::before { content: ""; display: inline-block; width: .8em; height: .8em; margin-right: .5em; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; vertical-align: -.08em; animation: turn .8s linear infinite; }
 @keyframes turn { to { transform: rotate(360deg); } }
 
-/* ---- a group of rows under its title */
-.group-title { margin: 26px 4px 8px; font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
-.group { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
-.group > li + li { border-top: 1px solid var(--line); }
-.group.pad { display: grid; gap: 10px; padding: 14px; }
-.group.pad .label { margin: 4px 0 -4px; font-size: .82rem; color: var(--muted); }
-.group.last { margin-top: 26px; }
-.group-note { margin: 0; padding: 14px 16px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); font-size: .88rem; }
-.row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; width: 100%; min-height: 58px; padding: 10px 14px; text-align: left; }
-button.row:active { background: var(--raised); }
-button.row:disabled { opacity: 1; cursor: default; }
-.row .text { flex: 1 1 10rem; min-width: 0; display: grid; gap: 2px; }
-.row .text b { font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .text small { color: var(--muted); font-size: .8rem; line-height: 1.4; }
-.row .value { flex: none; color: var(--muted); font-size: .86rem; }
-.row .act { flex: none; color: var(--accent); font-size: .9rem; font-weight: 600; }
-.row.danger .text b { color: var(--bad); }
-.row .tool { width: 36px; height: 36px; border-radius: 11px; }
-.row .chev { flex: none; display: grid; color: var(--muted); opacity: .6; }
-.row .chev svg { width: 18px; height: 18px; }
 #sheet-form .tick { margin-left: auto; flex: none; font-style: normal; font-size: .8rem; font-weight: 600; color: var(--good); }
 
 /* ---- lines: the one in use is marked; while a line is being changed the others wait */

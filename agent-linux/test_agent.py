@@ -48,6 +48,10 @@ def request(method, url, payload=None, token=None, timeout=10):
         return error.code, json.loads(error.read().decode("utf-8") or "{}")
 
 
+def stat_mode(path):
+    return os.stat(path).st_mode & 0o777
+
+
 def prompted(text):
     """A shell prompt has arrived: `$` for a person, `#` for root."""
     return "$" in plain(text) or "#" in plain(text)
@@ -499,6 +503,123 @@ class Pure(unittest.TestCase):
         for folder, said in ((apart, True), ("/", False), ("relative/x", False), ("/tmp", False), ("/var/tmp/x", False), ("/tmpfiles", True), ("", False), (None, False), ("/a\nb", False)):
             self.assertEqual(agent.elsewhere(folder), said, folder)
 
+    def test_the_owners_work_in_numbers(self):
+        import datetime
+        home = tempfile.mkdtemp()
+        claude, codex = os.path.join(home, "claude"), os.path.join(home, "codex")
+        today = datetime.datetime.combine(datetime.date.today(), datetime.time())
+        utc = lambda local: datetime.datetime.fromtimestamp(local.timestamp(), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        later = lambda start, seconds: utc(start + datetime.timedelta(seconds=seconds))
+        row = lambda **fields: json.dumps(fields, separators=(",", ":"))
+        # Claude Code: two prompts yesterday in one conversation. The first is answered after 4 s and worked on for
+        # 90 s (a step and what it gave back belong to the turn); its answer is noted in two rows and counted once.
+        a = today - datetime.timedelta(days=1) + datetime.timedelta(hours=9)
+        usage = {"input_tokens": 100, "cache_creation_input_tokens": 30, "cache_read_input_tokens": 70, "output_tokens": 40}
+        os.makedirs(os.path.join(claude, "projects", "-work-shop"))
+        with open(os.path.join(claude, "projects", "-work-shop", "11111111-2222-3333-4444-555555555555.jsonl"), "w", encoding="utf-8") as stream:
+            stream.write("\n".join([
+                row(type="user", isSidechain=False, cwd="/work/shop", message={"role": "user", "content": "fix it"}, timestamp=utc(a)),
+                row(type="assistant", isSidechain=False, message={"id": "msg_one", "role": "assistant", "content": [{"type": "text", "text": "looking"}], "usage": usage}, timestamp=later(a, 4)),
+                row(type="assistant", isSidechain=False, message={"id": "msg_one", "role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}], "usage": usage}, timestamp=later(a, 5)),
+                row(type="user", isSidechain=False, message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}, timestamp=later(a, 60)),
+                row(type="assistant", isSidechain=False, message={"id": "msg_two", "role": "assistant", "content": [{"type": "text", "text": "done"}],
+                                                                  "usage": {"input_tokens": 10, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 200, "output_tokens": 5}}, timestamp=later(a, 90)),
+                row(type="user", isMeta=True, message={"role": "user", "content": "a note of its own"}, timestamp=later(a, 95)),
+                row(type="user", isSidechain=True, message={"role": "user", "content": "a helper's"}, timestamp=later(a, 96)),
+                row(type="user", isSidechain=False, message={"role": "user", "content": "and the tests"}, timestamp=later(a, 7200)),
+                row(type="assistant", isSidechain=False, message={"id": "msg_three", "role": "assistant", "content": [{"type": "text", "text": "ok"}],
+                                                                  "usage": {"input_tokens": 1, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 2}}, timestamp=later(a, 7210)),
+            ]) + "\n")
+        # Codex: one turn today, 30 s long, first answered after 3 s, two requests with their tokens
+        b = today + datetime.timedelta(hours=8)
+        os.makedirs(os.path.join(codex, "sessions", "2026", "10", "13"))
+        count = lambda given, cached, written: {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 9000, "output_tokens": 900},
+                                                "last_token_usage": {"input_tokens": given, "cached_input_tokens": cached, "output_tokens": written, "total_tokens": given + written}, "model_context_window": 1}}
+        with open(os.path.join(codex, "sessions", "2026", "10", "13", "rollout-2026-10-13T08-00-00-66666666-7777-8888-9999-000000000000.jsonl"), "w", encoding="utf-8") as stream:
+            stream.write("\n".join([
+                row(timestamp=utc(b), type="session_meta", payload={"id": "66666666-7777-8888-9999-000000000000", "cwd": "/notes/thesis"}),
+                row(timestamp=later(b, 1), type="event_msg", payload={"type": "task_started", "turn_id": "t", "started_at": 1}),
+                row(timestamp=later(b, 4), type="response_item", payload={"type": "reasoning"}),
+                row(timestamp=later(b, 9), type="event_msg", payload=count(1000, 600, 50)),
+                row(timestamp=later(b, 20), type="event_msg", payload=count(2000, 1500, 70)),
+                row(timestamp=later(b, 31), type="event_msg", payload={"type": "task_complete", "turn_id": "t", "started_at": 1, "duration_ms": 30000}),
+            ]) + "\n")
+        stats = agent.Stats(lambda: claude, lambda: codex)
+        named = lambda folder: "web-shop" if folder.endswith("shop") else os.path.basename(folder)
+        read = stats.read(7, named)
+        days = read["days"]
+        self.assertEqual((len(days), days[6]["date"], [d["prompts"] for d in days[:5]]), (7, datetime.date.today().isoformat(), [0] * 5))
+        self.assertEqual({k: days[5][k] for k in ("prompts", "sessions", "active", "in", "out", "cached", "wait")},
+                         {"prompts": 2, "sessions": 1, "active": 100, "in": 111, "out": 47, "cached": 300, "wait": 7.0})
+        self.assertEqual({k: days[6][k] for k in ("prompts", "active", "in", "out", "cached", "wait")},
+                         {"prompts": 1, "active": 30, "in": 900, "out": 120, "cached": 2100, "wait": 3.0})
+        self.assertEqual({t["name"]: (t["prompts"], t["tokens"]) for t in read["tools"]}, {"claude": (2, 158), "codex": (1, 1020)})
+        self.assertEqual([(x["name"], x["prompts"], x["active"]) for x in read["projects"]], [("web-shop", 2, 100), ("thesis", 1, 30)])
+        self.assertEqual((read["hours"][9], read["hours"][11], read["hours"][8], sum(read["hours"])), (1, 1, 1, 3))
+        self.assertEqual([d["prompts"] for d in stats.read(1, named)["days"]], [1])
+
+    def test_questions_asked_at_a_time_and_a_conversation_handed_over(self):
+        import datetime
+        data = tempfile.mkdtemp()
+        path = os.path.join(data, "schedules.json")
+        kept = agent.Schedules(path)
+        now = datetime.datetime.combine(datetime.date.today(), datetime.time(10)).timestamp()
+        session = "11111111-2222-3333-4444-555555555555"
+        item = lambda key, kind, **more: dict({"id": key * 32, "tool": "claude", "session": session, "title": "甲", "text": "进展如何？", "kind": kind,
+                                               "time": "09:30", "minutes": 30, "at": int((now + 1200) * 1000)}, **more)
+        self.assertEqual(kept.set(item("a", "daily"), now)["next"], int((now - 1800 + 86400) * 1000))     # past that today, so tomorrow
+        self.assertEqual((kept.set(item("b", "every"), now)["next"], kept.set(item("c", "once"), now)["next"]), (int((now + 1800) * 1000), int((now + 1200) * 1000)))
+        for wrong, why in ((item("d", "once", at=int((now - 60) * 1000)), "现在之后"), (item("d", "every", minutes=2), "5 分钟"), (item("d", "daily", text=" "), "1 至 2000"),
+                           (item("d", "daily", time="9:30"), "09:30"), (item("d", "weekly"), "重复方式")):
+            with self.assertRaisesRegex(agent.OpError, why):
+                kept.set(wrong, now)
+        self.assertEqual((len(kept.all()), kept.due(now + 600)), (3, []))
+        self.assertEqual([one["id"][0] for one in kept.due(now + 1500)], ["c"])        # the single one: asked once, then off
+        kept.done("c" * 32, False, "这段对话没有在手机打开的终端里运行", now + 1500)
+        again = {one["id"][0]: one for one in agent.Schedules(path).all()}             # kept in the data folder, read anew
+        self.assertEqual((again["c"]["on"], again["c"]["next"], again["c"]["runs"], again["c"]["last"]["ok"]), (False, 0, 1, False))
+        self.assertEqual([one["id"][0] for one in kept.due(now + 1900)], ["b"])
+        self.assertEqual(agent.Schedules(path).all()[1]["next"], int((now + 1900 + 1800) * 1000))
+        self.assertEqual(stat_mode(path), 0o600)
+        self.assertTrue(kept.remove("a" * 32) and not kept.remove("a" * 32))
+
+        # what is said to a conversation is typed into the terminal of the phone's that runs it
+        class Typed:
+            closed, tool = False, "claude"
+
+            def __init__(self):
+                self.got, self.session = [], session.upper()
+
+            def write(self, text):
+                self.got.append(text)
+
+        one = agent.Agent(data, "p")
+        one.schedules = kept
+        other = "66666666-7777-8888-9999-000000000000"
+        one.sessions.found = [{"id": session, "tool": "claude", "dir": "项目", "title": "甲", "live": True}, {"id": other, "tool": "codex", "dir": "", "title": "乙", "live": False}]
+        one.sessions.read = lambda *asked: {"messages": [{"role": "user", "text": "先做第一步"}, {"role": "tool", "text": "Bash：运行测试"}, {"role": "assistant", "text": "第一步做完了"},
+                                                          {"role": "user", "text": "再做第二步"}, {"role": "assistant", "text": "第二步也做完了"}]}
+        with self.assertRaisesRegex(agent.OpError, "手机打开的终端"):
+            one.owner_work("work_handoff", {"from": session, "from_tool": "claude", "to": other, "to_tool": "codex", "note": ""}, {})
+        typed = one.terminals["t"] = Typed()
+        answer = one.owner_work("work_handoff", {"from": other, "from_tool": "codex", "to": session, "to_tool": "claude", "note": "看一下边界情况"}, {})
+        self.assertEqual((answer["status"], answer["note"]), ("accepted", "已发到手机终端"))
+        said = typed.got[0]
+        self.assertTrue(said.startswith("\x1b[200~【对话交接】下面是我在另一段对话里的进展（Codex，“乙”），请接着处理。") and said.endswith("\x1b[201~\r"), said)
+        for part in ("我最初的要求：\n先做第一步", "我最近的要求：\n再做第二步", "它最后的回答：\n第二步也做完了", "它最近做的操作：\n- Bash：运行测试", "我的补充：\n看一下边界情况"):
+            self.assertIn(part, said)
+        with self.assertRaisesRegex(agent.OpError, "同一段"):
+            one.owner_work("work_handoff", {"from": session, "from_tool": "claude", "to": session, "to_tool": "claude"}, {})
+        # a question that is due is typed there too, and how it went is kept
+        shown = one.owner_work("work_schedule_set", {"item": item("e", "every", title="")}, {})["schedule"]
+        self.assertEqual((shown["title"], shown["on"], shown["last"]), ("甲", True, None))
+        one.ask(time.time() + 1801)
+        self.assertEqual(typed.got[1], "\x1b[200~进展如何？\x1b[201~\r")
+        asked = next(s for s in one.owner_work("work_schedules", {}, {})["schedules"] if s["id"] == "e" * 32)
+        self.assertEqual((asked["runs"], asked["last"]["ok"], asked["last"]["note"]), (1, True, "已发到手机终端"))
+        with self.assertRaisesRegex(agent.OpError, "没有找到"):
+            one.owner_work("work_schedule_set", {"item": item("f", "daily", session="99999999-7777-8888-9999-000000000000")}, {})
+
     def test_qr_code(self):
         text = "remotecli://connect?u=https%3A%2F%2Fa-b-c-d.trycloudflare.com&p=3AasQ_tDwOpmumz1aqxb6znL&n=ubuntu"
         code = agent.qr_code(text)
@@ -698,6 +819,15 @@ class EndToEnd(unittest.TestCase):
                   lambda v: "改名" in v["device"]["workspaces"] and "新增" not in v["device"]["workspaces"])
         self.op({"action": "project_remove", "name": "改名"})
         self.poll(lambda: self.overview(), lambda v: "改名" not in v["device"]["workspaces"])
+
+        # 6. the owner's work in numbers, asked for as the phone's page asks: the last seven days, today the last
+        self.assertIn("work", self.overview()["device"]["features"])
+        status, numbers = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "stats", "days": 7}, token=self.token, timeout=40)
+        self.assertEqual((status, numbers.get("ready"), len(numbers.get("days", [])), len(numbers.get("hours", []))), (200, True, 7, 24), numbers)
+        self.assertEqual(numbers["days"][-1]["date"], time.strftime("%Y-%m-%d"))
+        # and passing on when a conversation stops is not offered here: this program has no hooks of the tools
+        status, refused = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "chains"}, token=self.token)
+        self.assertEqual((status, "不支持接力" in refused.get("error", "")), (400, True), refused)
 
         # 6. a folder that is not a project never becomes a terminal: the relay refuses it
         # at the door (the agent checks again itself, but this request cannot even reach it)

@@ -59,6 +59,8 @@ python tests\offered_check.py [输出文件夹]                # 电脑端窗口
 python tests\side_status_check.py                         # 电脑端窗口左下角：手机访问状态下面列出已连接的工具（Claude Code、Codex），只列状态良好的；工具的配置用临时文件夹代替，并核对本机真实配置没有变化；先运行 tools\package_windows.py
 python tests\own_mode_check.py                            # “我的中转”页签：点开不断线，检查不通过不切换也不保存并说明原因，通过才保存并切换，之后记得它；先运行 tools\package_windows.py
 python tests\public_mode_check.py                         # “公共中转”页签：不用配置就列出，选中后自动申请自己的空间，不显示地址和密码；空间被清理后重新申请；电脑端在空间里开终端，别的空间看不到
+python tests\work_check.py                                # 工作统计、定时提问和接力：用编造的 Claude Code 与 Codex 记录逐项核对提问数、工作时长、首次响应和 token，按工具、项目、时段的汇总；定时提问的三种重复方式、到期只问一次、重启后仍在；接力按次数触发
+python tests\tabs_ui_check.py <chrome.exe> <输出文件夹>     # 手机页面底部的四个栏目：各显示自己的内容，320、390、430 三种宽度下没有内容被底栏挡住；在“协作”里添加、修改、删除接力和定时提问，交接对话，同时提问；“我的”里的统计切换时间范围和指标；较早版本的电脑端给出说明。真实页面和真实中转，电脑由 tools\readme_pictures.py 里的替身扮演
 python tests\notice_check.py                              # 钩子把工具留给手机时电脑屏幕右下角的说明：Codex 的确认请求、等手机消息的停止；没有留住时不显示
 python tests\reach_check.py                               # 电脑上开着的对话：工具的钩子报告的事件由谁回答、何时交给手机，手机的消息怎样送达，以及写入工具配置的条目（用虚构的事件和临时文件夹；先构建电脑端）
 python tests\reach_e2e_check.py [chrome.exe [输出文件夹]]  # 同一件事经真实的中转、电脑端和钩子程序走一遍：列表、确认、发消息，以及列表页上的卡片（虚构的 Codex 目录和事件）；对话的置顶和隐藏由电脑端记住；未加入项目的对话被列出、查看、发消息，文件夹加为项目后归入该项目

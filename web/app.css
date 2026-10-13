@@ -5,8 +5,10 @@
 html { font-size: 15.5px; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 main { max-width: 720px; margin: 0 auto; padding: calc(10px + env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom)); }
+/* the list page ends above its tabs */
+#home { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
 h1, h2, h3, p { margin: 0; }
-button, input { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; touch-action: manipulation; border: 0; background: none; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:disabled { opacity: .45; cursor: default; }
@@ -32,6 +34,10 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 4px; margin: 0 -16px; padding: 8px 10px 10px 16px; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 .top .who { flex: 1; min-width: 0; }
 .top h1 { font-size: 1.35rem; font-weight: 700; line-height: 1.25; letter-spacing: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+/* the name of a tab stands large, as the first thing on its page */
+.top.large { padding-top: 12px; }
+.top.large h1 { font-size: 1.9rem; font-weight: 800; line-height: 1.2; letter-spacing: -.01em; }
+.top.large #device { margin-top: 3px; }
 #device { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .83rem; line-height: 1.4; }
 #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 #dot.on { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 24%, transparent); }
@@ -39,6 +45,7 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .icon { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; color: var(--muted); flex: none; }
 .icon:active { background: var(--raised); color: var(--ink); }
 #back { margin-left: -10px; }
+#new-task { color: var(--accent); }
 
 /* ---- loading, notices */
 #loading { display: grid; gap: 10px; margin-top: 18px; }
@@ -54,10 +61,13 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .section-head h2 { font-size: .95rem; font-weight: 700; }
 .section-head p { color: var(--muted); font-size: .8rem; text-align: right; }
 .section-head[data-fold] { cursor: pointer; user-select: none; }
+.section-head[data-fold] h2 { margin-right: auto; }
 .section-head[data-fold]::after { content: "⌄"; color: var(--muted); font-size: 1.1rem; line-height: 1; transition: transform .15s ease; }
 .section-head[data-fold].folded::after { transform: rotate(-90deg); }
 .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .card { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
+/* what lies on the page is lifted off it a little */
+#home .card:not(.add), .tile, .panel, #home .group, .acts button, #launch button, #project-files { box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 6px 18px -10px rgb(0 0 0 / .12); }
 .card > button.open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; text-align: left; min-height: 64px; }
 .card > button.open:active { background: var(--raised); }
 /* ending a terminal: a quiet disc beside the card's text, with room around it for a thumb */
@@ -81,7 +91,7 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .tool.claude { --tint: #d98a5f; }
 .tool.codex { --tint: var(--accent); }
 .tool.shell { --tint: var(--good); }
-.tool.folder { --tint: var(--muted); }
+.tool.folder, .tool.plain { --tint: var(--muted); }
 
 /* what a task is doing: one colour each */
 .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px 2px 8px; border-radius: 999px; font-size: .76rem; font-weight: 600; line-height: 1.5; white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
@@ -127,6 +137,11 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .filters button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .filters i { flex: none; width: 1px; margin: 7px 2px; background: var(--line); }
 #nothing { color: var(--muted); margin-top: 26px; text-align: center; }
+/* on 任务 the projects are listed only where a search names them */
+#home[data-tab="tasks"][data-finding="no"] #projects { display: none; }
+/* under its own tab the list of projects needs no second heading */
+#home[data-tab="projects"] #projects .section-head { display: none; }
+#home[data-tab="projects"] #projects { margin-top: 16px; }
 .hint { color: var(--muted); font-size: .8rem; text-align: center; margin-top: 22px; }
 /* a held press on a card asks what to do with it: its text is not picked up as a selection instead */
 .card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -146,9 +161,9 @@ dialog[open] { animation: rise .18s ease-out; }
 #sheet-form h3 { font-size: 1.1rem; }
 #sheet-form > p { color: var(--muted); font-size: .9rem; }
 #sheet-form label { font-size: .82rem; color: var(--muted); margin-bottom: -4px; }
-#sheet-form input { background: var(--bg); }
-#desktop-project { width: 100%; min-height: 48px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: inherit; font: inherit; }
-#desktop-project:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#sheet-form input, #sheet-form select { background: var(--bg); }
+#sheet-form select { width: 100%; min-height: 48px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; }
+#sheet-form select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* a message for a conversation that is open on the computer, written under what was said there */
 #sheet-form .write { display: flex; gap: 8px; align-items: flex-end; }
 #sheet-form .write textarea { flex: 1; min-width: 0; min-height: 46px; }
@@ -160,9 +175,10 @@ dialog.window { max-width: none; width: 100%; height: 100%; max-height: none; ma
 dialog.window #sheet-form { height: 100%; max-height: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-auto-rows: auto; gap: 8px; padding: calc(8px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
 dialog.window #sheet-form::before { display: none; }
 dialog.window .bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
-dialog.window .bar .type, dialog.window .bar .files, dialog.window .bar .take { flex: none; min-width: 44px; min-height: 44px; border-radius: 12px; color: var(--muted); font-weight: 600; font-size: .95rem; }
-dialog.window .bar .files[hidden], dialog.window .bar .take[hidden] { display: none; }
-dialog.window .bar .files svg, dialog.window .bar .take svg { width: 21px; height: 21px; }
+dialog.window .bar .type, dialog.window .bar .files, dialog.window .bar .take, dialog.window .bar .hand { flex: none; min-width: 44px; min-height: 44px; border-radius: 12px; color: var(--muted); font-weight: 600; font-size: .95rem; }
+dialog.window .bar .files[hidden], dialog.window .bar .take[hidden], dialog.window .bar .hand[hidden] { display: none; }
+dialog.window .bar .files svg, dialog.window .bar .take svg, dialog.window .bar .hand svg { width: 21px; height: 21px; }
+dialog.window .bar { gap: 2px; }
 dialog.window .reading { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 12px; margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); font-size: .86rem; color: var(--muted); }
 dialog.window .reading[hidden] { display: none; }
 dialog.window .reading > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -286,3 +302,120 @@ dialog.window .confirm .answers .no { color: var(--bad); }
 #sheet-form .anywhere .row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 #sheet-form .anywhere .row span { display: flex; gap: 6px; flex: none; }
 #sheet-form .anywhere .row button.tool { width: 42px; height: 42px; border-radius: 12px; }
+
+/* ---- a group of rows under its title */
+.group-title { margin: 26px 4px 8px; font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.group { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
+.group > li + li { border-top: 1px solid var(--line); }
+.group.pad { display: grid; gap: 10px; padding: 14px; }
+.group.pad .label { margin: 4px 0 -4px; font-size: .82rem; color: var(--muted); }
+.group.last { margin-top: 26px; }
+.group-note { margin: 0; padding: 14px 16px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); font-size: .88rem; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; width: 100%; min-height: 58px; padding: 10px 14px; text-align: left; }
+button.row:active { background: var(--raised); }
+button.row:disabled { opacity: 1; cursor: default; }
+.row .text { flex: 1 1 10rem; min-width: 0; display: grid; gap: 2px; }
+.row .text b { font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .text small { color: var(--muted); font-size: .8rem; line-height: 1.4; }
+.row .value { flex: none; color: var(--muted); font-size: .86rem; }
+.row .act { flex: none; color: var(--accent); font-size: .9rem; font-weight: 600; }
+.row.danger .text b { color: var(--bad); }
+.row .tool { width: 36px; height: 36px; border-radius: 11px; }
+.row .chev { flex: none; display: grid; color: var(--muted); opacity: .6; }
+.row .chev svg { width: 18px; height: 18px; }
+
+/* ---- the tabs at the foot: where one is, and the way to the other three */
+#tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; padding: 5px max(10px, env(safe-area-inset-right)) calc(5px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); border-top: 1px solid color-mix(in srgb, var(--line) 75%, transparent); background: color-mix(in srgb, var(--bg) 84%, transparent); backdrop-filter: saturate(1.5) blur(18px); -webkit-backdrop-filter: saturate(1.5) blur(18px); }
+#tabs .inner { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 560px; margin: 0 auto; }
+#tabs button { position: relative; display: grid; justify-items: center; align-content: center; gap: 1px; min-height: 52px; border-radius: 14px; color: var(--muted); font-size: .7rem; font-weight: 600; line-height: 1.3; }
+#tabs button:active { background: var(--raised); }
+#tabs button[aria-current="page"] { color: var(--accent); }
+#tabs button[aria-current="page"] svg { stroke-width: 2.25; }
+/* how many wait for an answer, on the tab they are on */
+#tab-count { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--bad); color: #fff; font-size: .66rem; font-style: normal; font-weight: 700; line-height: 17px; text-align: center; }
+/* while something is typed the keyboard has the foot of the screen */
+body.typing #tabs { display: none; }
+/* what is said for a moment stands above the tabs, not on them */
+#tabs:not([hidden]) ~ #toast { bottom: calc(84px + env(safe-area-inset-bottom)); }
+body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { #tabs { background: var(--bg); } }
+
+/* ---- a page with nothing on it yet, and what to do first */
+.blank { display: grid; justify-items: center; gap: 14px; margin-top: 56px; color: var(--muted); }
+.blank .solid { padding: 0 22px; }
+.notice.plain { border-color: var(--line); background: var(--panel); }
+.skeleton { display: grid; gap: 10px; margin-top: 26px; }
+.skeleton i { display: block; height: 84px; border-radius: 18px; background: linear-gradient(100deg, var(--panel) 40%, var(--raised) 50%, var(--panel) 60%); background-size: 200% 100%; animation: shine 1.3s linear infinite; }
+.skeleton i:first-child { height: 176px; }
+
+/* ---- 协作: the two things done at once, and the cards of what is kept */
+.acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.acts button { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); font-weight: 600; line-height: 1.3; text-align: left; }
+.acts button:active { background: var(--raised); }
+.acts .tool { --tint: var(--accent); }
+.card .meta .failed, #sheet-form .failed { color: var(--bad); }
+/* in a sheet: rows of what is chosen, a few choices side by side, a list to tick, and what the computer refused */
+.fields { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; }
+.field { display: flex; align-items: center; gap: 12px; min-height: 50px; padding: 0 6px 0 14px; }
+.field + .field { border-top: 1px solid var(--line); }
+#sheet-form .field > span:first-child { flex: none; margin: 0; color: var(--ink); font-size: .92rem; }
+#sheet-form .field select, #sheet-form .field input { flex: 1; min-width: 0; min-height: 48px; padding: 0 8px; border: 0; border-radius: 0; background: transparent; color: var(--muted); text-align: right; text-align-last: right; }
+#sheet-form .field .seg, #sheet-form .field .flip { margin-left: auto; margin-right: 8px; }
+.seg { display: inline-flex; flex: none; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); }
+.seg button { min-width: 40px; min-height: 34px; padding: 0 11px; border-radius: 8px; color: var(--muted); font-size: .86rem; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.flip { flex: none; position: relative; width: 52px; height: 30px; border-radius: 15px; border: 1px solid var(--line); background: var(--raised); transition: background .15s; }
+.flip::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.flip[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.flip[aria-checked="true"]::after { transform: translateX(22px); background: var(--on-accent); }
+.checks { display: grid; max-height: 40vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+#sheet-form .check { display: flex; align-items: center; gap: 12px; min-height: 56px; margin: 0; padding: 8px 14px; color: var(--ink); font-size: 1rem; }
+.check + .check { border-top: 1px solid var(--line); }
+#sheet-form .check input { flex: none; width: 22px; min-height: 22px; height: 22px; padding: 0; accent-color: var(--accent); }
+.check .text { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.check b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check small { color: var(--muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check em { flex: none; max-width: 45%; color: var(--muted); font-size: .8rem; font-style: normal; text-align: right; }
+.check em.ok { color: var(--good); font-weight: 600; }
+#sheet-form .problem { color: var(--bad); font-size: .88rem; }
+
+/* ---- 我的: figures in tiles, the days as bars, shares as lines */
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.tile { display: grid; gap: 2px; min-width: 0; padding: 14px 16px 13px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+.tile > span, .sums span { color: var(--muted); font-size: .8rem; }
+.tile b { font-size: 1.75rem; font-weight: 700; line-height: 1.25; letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile b small, .sums b small { font-size: .5em; font-weight: 600; letter-spacing: 0; color: var(--muted); }
+.tile b.none, .sums b.none { font-size: 1.15rem; line-height: 1.9; color: var(--muted); }
+.tile > small { min-height: 1.4em; color: var(--muted); font-size: .76rem; }
+.panel { margin: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+.panel + .panel { margin-top: 8px; }
+.panel.none { color: var(--muted); text-align: center; }
+.section-head .seg { margin: -6px 0; }
+.sums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 10px; }
+.sums div { display: grid; gap: 1px; min-width: 0; }
+.sums b { font-size: 1.2rem; font-weight: 700; line-height: 1.35; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sums b small { font-size: .62em; }
+.chart-head { display: grid; gap: 12px; margin-bottom: 14px; }
+.chart-head .seg { display: flex; }
+.chart-head .seg button { flex: 1; }
+.chart .at { font-weight: 600; font-variant-numeric: tabular-nums; }
+.bars { display: flex; align-items: flex-end; gap: 8px; height: 132px; }
+.bars.many { gap: 3px; }
+.bars.hours { gap: 3px; height: 72px; }
+.bars .day { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; padding: 0; }
+.bars .day i, .bars.hours i { display: block; flex: 1; min-height: 3px; border-radius: 6px 6px 2px 2px; background: color-mix(in srgb, var(--accent) 34%, var(--panel)); }
+.bars.many .day i, .bars.hours i { border-radius: 3px 3px 1px 1px; }
+.bars .day[aria-pressed="true"] i { background: var(--accent); }
+.axis { display: flex; gap: 8px; margin-top: 7px; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.axis span { flex: 1; min-width: 0; text-align: center; }
+.axis.few { justify-content: space-between; }
+.axis.few span { flex: none; }
+.shares { list-style: none; display: grid; gap: 14px; }
+.shares .line { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.shares b { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shares span { flex: none; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.track { height: 6px; margin-top: 7px; border-radius: 3px; background: var(--raised); overflow: hidden; }
+.track i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+#me .hint { margin-top: 18px; }
+#computer .row .text { flex: none; }
+#computer .row .value { flex: 1; min-width: 0; text-align: right; }

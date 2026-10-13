@@ -43,7 +43,7 @@ def main():
             homes.codex_saved(typed, uuid(2), "终端里的笔记", 2, originator="codex-tui", source="cli")
             homes.claude_saved(both, uuid(3), "终端里开的", 3, entry="cli")
             homes.codex_saved(both, uuid(4), "桌面版里接着做的", 4, originator="Codex Desktop", source="vscode")
-            homes.codex_saved(desk, uuid(5), "桌面版里的笔记", 5, originator="codex-tui", source="vscode")      # the app says "vscode" of itself
+            homes.codex_saved(desk, uuid(5), "桌面版里的笔记", 5, originator="Codex Desktop", source="vscode")      # the app says "vscode" of itself, and names itself
             homes.claude_saved(drawn, uuid(6), "桌面版里的草稿", 6, entry="claude-desktop-3p")
             homes.codex_saved(edited, uuid(7), "编辑器里的", 7, originator="codex_vscode", source="vscode")
             # an earlier Codex wrote its instructions before the folder: it is found all the same

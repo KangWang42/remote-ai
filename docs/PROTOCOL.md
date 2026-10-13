@@ -102,7 +102,8 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek` and `settings`. These are forwarded
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work` and `chains`
+(the last two: "The owner's work", below). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 An agent verifies Codex's actual writer lock and process ownership before advertising takeover, then checks
 again before terminating the selected independent CLI. Shared app servers and phone descendants are protected.
@@ -366,6 +367,76 @@ Inside the app the page calls `RemoteCliNative.moved(address, ticket, key)` inst
 `RemoteCliNative.kept()` after `line_keep` was answered: the app opens the page at the new address, and lists the
 computer under that address once the line is kept. While a line is being changed from the phone, it is not changed
 at the computer.
+
+### The owner's work
+
+`POST /api/work` `{"id": "<16 to 32 hex digits>", "action": "..."}` is held like `/api/files` and needs the `work`
+capability, which the Windows program and the Linux agent have. The three actions that begin with `chain` need
+`chains` besides, which only the Windows program has: they depend on the tools' hooks. The computer keeps and does
+all of it; the relay checks the shape of the question, passes it on as the operation `work_<action>` and keeps
+nothing.
+
+| `action` | Fields | Answer |
+| --- | --- | --- |
+| `stats` | `days` (1 to 90, 14 without it) | the numbers of the last `days` days, below |
+| `schedules` | none | `{"schedules": [...]}`: the questions set to be asked at a time |
+| `schedule_set` | `item`: `id` (16 to 32 hex digits; a known one is set anew), `session`, `text` (1 to 2,000 characters), `kind`, and for `once` `at` (milliseconds since 1970, later than now, within a year), for `daily` `time` (`"09:30"`, the computer's own time), for `every` `minutes` (5 to 10,080); optional `on` | `{"schedule": {...}}` |
+| `schedule_remove` | `schedule`: its `id` | `{}` |
+| `chains` | none | `{"chains": [...]}`: what is passed on when a conversation stops |
+| `chain_set` | `item`: `id`, `from`, `to` (two different conversations the computer lists), `text` (1 to 1,000 characters), `rounds` (1 to 10) | `{"chain": {...}}` |
+| `chain_remove` | `chain`: its `id` | `{}` |
+| `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
+
+The tool of each conversation named is the one the computer listed it with, whatever the phone says. A conversation
+counts as open when a program on the computer has it (`live`) or one of the phone's own terminals runs it.
+
+**The numbers** (`stats`) are read from the tools' own records on the computer (Claude Code's
+`projects/*/*.jsonl`, Codex's `sessions/**/rollout-*.jsonl`), each record anew only when it has changed. Nothing that
+was said leaves the computer: numbers, dates, and the names of folders.
+
+```json
+{"ready": true,
+ "days": [{"date": "2026-10-13", "prompts": 11, "sessions": 3, "active": 2280, "in": 51200, "out": 23900, "cached": 1100000, "wait": 2.6}],
+ "tools": [{"name": "claude", "prompts": 58, "active": 18000, "tokens": 310000}],
+ "projects": [{"name": "web-shop", "prompts": 45, "active": 13920, "tokens": 250000}],
+ "hours": [0, 0, 0, 0, 0, 0, 0, 0, 3, 9, 12, 8, 4, 6, 14, 9, 7, 5, 2, 1, 0, 0, 0, 0], "wait": 3.4, "updated": 1791892800000}
+```
+
+- `days`: one for each day, today the last, by the computer's own calendar. `prompts`: what the owner asked (not
+  what a tool gave back, not a helper's own conversation). `sessions`: the conversations something was asked in.
+  `active`: seconds the tools worked on it, from each prompt to the last thing of its turn, a turn counted for
+  three hours at most (Codex notes the length of each turn itself). `in`, `out`, `cached`: tokens the tools note
+  for their answers: fresh input, output, and input read from or written to the cache. `wait`: the middle value of
+  the seconds from a prompt to the first thing that came back (null on a day with none; an answer later than ten
+  minutes is not counted).
+- `tools`, `projects`: the same summed over the whole span, the most worked on first (at most four and six). A
+  project goes by its name where the conversation's folder is one or lies in one, else by the folder's own name.
+- `hours`: prompts by the hour of the day, over the whole span. `wait`: the middle value over the whole span.
+
+**A question asked at a time** as it is answered: what was set, with `tool`, `title` (the conversation's, as it was
+then), `next` (milliseconds; 0 when nothing is due), `runs`, and `last` (`{"at", "ok", "note"}`, or null), the note
+in words for the person ("已交给对话", or why not). `kind` is `once`, `daily` or `every`. The computer looks every
+15 seconds for what is due, moves each on to its next time before it asks (a single one is switched off), and asks
+only while remote access is allowed. At most 30 are kept.
+
+**What is passed on** (`chains`) as it is answered: `from`, `to`, their tools and titles, `text`, `rounds`, `left`
+(how often it may still run), `runs`, and `last`. When the conversation `from` has done what it was at and stopped
+by itself (its tool's Stop hook says so; not when it was told to stop, and not while a message of the phone's waits
+for it), every rule that begins there and has runs left runs once: `left` goes down by one, and `to` is told what
+`from` said last (at most 3,000 characters) and the rule's words. Setting a rule again gives it its rounds anew. Two
+rules, one each way, let two conversations go back and forth until their rounds are used up. At most 20 are kept.
+
+**A conversation handed over** (`handoff`): the computer reads `from` as the conversation's window does and writes
+`to` one message, in its owner's words: what was asked first and last (800 characters each), what was answered
+last (2,000), the last eight steps (160 each), and the note.
+
+**How a conversation is told** any of this: one that runs in a terminal of the phone's has it typed there, as the
+operation `say` puts a message (pasted text, then Enter; not while its tool says that it asks a question). Any
+other is told by the way that is there now, as the action `say` of `/api/conversation` is ("The ways into a
+conversation", below). The Linux agent knows the first way only.
+
+The computer keeps the questions and rules in `schedules.json` and `chains.json` of its data folder; the Windows
+program encrypts their words for the Windows account.
 
 ## Computer
 

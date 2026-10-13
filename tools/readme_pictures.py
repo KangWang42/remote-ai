@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "relay"))
 sys.path.insert(0, str(ROOT / "tests"))
-from relay import Relay                 # noqa: E402
+from relay import Relay, RemoteError    # noqa: E402
 from ws_client import Socket            # noqa: E402
 
 OUT = ROOT / "docs" / "images"
@@ -63,15 +63,40 @@ def story(now):
     return sessions, said
 
 
+def numbers(days, now):
+    """The owner's work as the played computer tells it: made up, the same every time, with quiet days at the weekend."""
+    import datetime
+    today, out, hours = datetime.date.fromtimestamp(now / 1000), [], [0] * 24
+    for back in range(days - 1, -1, -1):
+        date = today - datetime.timedelta(days=back)
+        seed = date.toordinal() * 7919 % 97
+        busy = 0 if date.weekday() == 6 and back else (seed % 23 + 6) // (3 if date.weekday() == 5 else 1)
+        out.append({"date": date.isoformat(), "prompts": busy, "sessions": min(busy, seed % 5 + 1), "active": busy * (190 + seed * 3), "in": busy * (4100 + seed * 40),
+                    "out": busy * (1900 + seed * 25), "cached": busy * (88000 + seed * 900), "wait": round(2.1 + seed % 30 / 10, 1) if busy else None})
+        for n in range(busy):
+            hours[(9 + (seed + n * 5) % 13) % 24] += 1
+    prompts, active, tokens = (sum(day[k] for day in out) for k in ("prompts", "active", "in"))
+    share = lambda names, parts: [{"name": name, "prompts": prompts * part // 100, "active": active * part // 100, "tokens": tokens * part // 100} for name, part in zip(names, parts)]
+    return {"ready": True, "days": out, "tools": share(["claude", "codex"], [62, 38]), "projects": share(["web-shop", "thesis", "data-tools"], [48, 33, 19]), "hours": hours, "wait": 3.4, "updated": now}
+
+
 class Played:
     """The relay as the phone's pages reach it, and the computer behind it, played."""
 
     def __init__(self, temporary):
         self.relay = Relay(str(Path(temporary) / "relay.json"))
         self.now = int(time.time() * 1000)
-        self.info = {"instance": "d" * 32, "enabled": True, "tools": ["claude", "codex", "shell"], "workspaces": ["web-shop", "thesis", "data-tools"], "name": "办公室的电脑",
-                     "features": ["peek", "reach", "end", "outbox", "marks", "files", "projects", "codex-desktop-control", "codex-desktop-open", "claude-desktop-open"]}
+        self.info = {"instance": "d" * 32, "enabled": True, "tools": ["claude", "codex", "shell"], "workspaces": ["web-shop", "thesis", "data-tools"], "name": "办公室的电脑", "version": "1.6.0", "shell": "PowerShell",
+                     "features": ["peek", "reach", "end", "outbox", "marks", "files", "projects", "work", "chains", "codex-desktop-control", "codex-desktop-open", "claude-desktop-open"]}
         self.sessions, self.said = story(self.now)
+        # what the computer keeps of its owner's work (docs/PROTOCOL.md, `/api/work`), and what it was asked to do
+        self.chains = [{"id": "e" * 32, "from": THESIS, "from_tool": "codex", "from_title": "整理第三章的参考文献", "to": TABLES, "to_tool": "claude", "to_title": "核对回归表的系数",
+                        "text": "按上面整理好的文献，核对正文里的引用编号有没有对上。", "left": 2, "rounds": 3, "runs": 1, "last": {"at": self.now - 14 * 60000, "ok": True, "note": "已交给对话"}}]
+        self.schedules = [{"id": "f" * 32, "tool": "codex", "session": EXPORT, "title": "把导出脚本改成增量", "text": "跑一遍夜间导出，把失败的记录列出来。", "kind": "daily", "time": "08:30", "at": 0, "minutes": 0,
+                           "on": True, "next": self.now + 9 * 3600000, "runs": 4, "last": {"at": self.now - 15 * 3600000, "ok": True, "note": "已交给对话"}}]
+        self.asked = []
+        self.relay.agent({"info": self.info, "sessions": self.sessions})
+        threading.Thread(target=self.compute, daemon=True).start()
         played = self
 
         class Handler(http.server.SimpleHTTPRequestHandler):
@@ -101,14 +126,75 @@ class Played:
                 if self.path == "/api/conversation" and payload.get("action", "read") == "read":
                     one = next(s for s in played.sessions if s["id"] == payload["session"])
                     return self.reply({"messages": played.said.get(one["id"], []), "status": one.get("status", ""), "stamp": "1", "asked": played.now - 84000, "updated": one["updated"]})
-                self.reply({"error": "这里只是画图"}, 400)
+                # what is asked of the computer goes through the relay as it is, and the played computer answers it
+                asks = {"/api/work": played.relay.work, "/api/conversation": played.relay.conversation}.get(self.path)
+                if not asks:
+                    return self.reply({"error": "这里只是画图"}, 400)
+                try:
+                    self.reply(asks(payload, wait=8))
+                except RemoteError as refused:
+                    self.reply({"error": str(refused)}, 400)
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.origin = "http://127.0.0.1:%d" % self.server.server_address[1]
 
     def close(self):
+        self.closed = True
         self.server.shutdown(); self.server.server_close()
+
+    closed = False
+
+    def compute(self):
+        """The computer: takes what the relay has for it and answers each thing at once."""
+        while not self.closed:
+            try:
+                asked = self.relay.pull({"instance": self.info["instance"], "wait": 2})["operations"]
+            except RemoteError:
+                time.sleep(0.5)
+                continue
+            acks = []
+            for op in asked:
+                self.asked.append(op)
+                try:
+                    acks.append({"id": op["id"], "error": "", "result": self.answer(op)})
+                except RemoteError as refused:
+                    acks.append({"id": op["id"], "error": str(refused)})
+            if acks:
+                self.relay.agent({"info": self.info, "sessions": self.sessions, "acks": acks})
+
+    def answer(self, op):
+        action, now = op["action"], int(time.time() * 1000)
+        title = lambda session: next((s["title"] for s in self.sessions if s["id"] == session), "")
+        if action == "work_stats":
+            return numbers(op["days"], self.now)
+        if action == "work_chains":
+            return {"chains": self.chains}
+        if action == "work_schedules":
+            return {"schedules": self.schedules}
+        if action == "work_chain_set":
+            item = dict(op["item"], from_title=title(op["item"]["from"]), to_title=title(op["item"]["to"]), left=op["item"]["rounds"], runs=0, last=None)
+            self.chains[:] = [one for one in self.chains if one["id"] != item["id"]] + [item]
+            return {"chain": item}
+        if action == "work_chain_remove":
+            self.chains[:] = [one for one in self.chains if one["id"] != op["chain"]]
+            return {}
+        if action == "work_schedule_set":
+            given, known = op["item"], next((one for one in self.schedules if one["id"] == op["item"]["id"]), {})
+            due = 0 if not given["on"] else given["at"] if given["kind"] == "once" else now + (given["minutes"] * 60000 if given["kind"] == "every" else 9 * 3600000)
+            if given["kind"] == "once" and given["on"] and given["at"] <= now:
+                raise RemoteError("时间需在现在之后、一年之内")
+            item = dict(given, title=title(given["session"]), next=due, runs=known.get("runs", 0), last=known.get("last"))
+            self.schedules[:] = [item if one["id"] == item["id"] else one for one in self.schedules] if known else self.schedules + [item]
+            return {"schedule": item}
+        if action == "work_schedule_remove":
+            self.schedules[:] = [one for one in self.schedules if one["id"] != op["schedule"]]
+            return {}
+        if action == "work_handoff":
+            return {"status": "accepted", "note": "已交给对话", "length": 420}
+        if action == "session_say":
+            return {"status": "accepted", "sent": True, "now": True, "way": "hook", "state": "handed", "message": op["id"]}
+        raise RemoteError("这里只是画图")
 
 
 class Browser:
@@ -170,12 +256,23 @@ def shots(browser, played):
     """The phone's pages as they are: the first page, a conversation at work, and the sheet for a new task."""
     browser.open(played.origin + "/", "document.querySelectorAll('.card, .task, article').length > 3 || document.body.innerText.includes('部署到测试环境')", "the first page")
     browser.picture(OUT / "overview.png")
-    browser.open(played.origin + "/?take=" + FIXING, "document.querySelector('#sheet .state') && document.querySelector('#sheet .said')?.textContent.includes('formatPrice')", "a conversation's window")
+    browser.open(played.origin + "/?project=web-shop", "!document.getElementById('project').hidden && document.querySelectorAll('#launch button').length === 3", "one project")
+    browser.picture(OUT / "project.png")
+    browser.open(played.origin + "/?tab=together", "document.querySelectorAll('#chains .card, #schedules .card').length >= 4", "the tab of conversations working together")
+    browser.picture(OUT / "together.png")
+    # (a taller screen for this one, so that the days are in the picture with today's figures)
+    browser.open(played.origin + "/?tab=me", "document.querySelectorAll('#me .day').length === 7 && !!document.querySelector('#computer')", "the tab of the owner's work", **dict(PHONE, height=940))
+    browser.picture(OUT / "me.png")
+    browser.open(played.origin + "/?tab=tasks&take=" + FIXING, "document.querySelector('#sheet .state') && document.querySelector('#sheet .said')?.textContent.includes('formatPrice')", "a conversation's window")
     browser.value("(() => { const said = document.querySelector('#sheet .said'); said.scrollTop = said.scrollHeight; })()")
     time.sleep(0.4)
     browser.picture(OUT / "look.png")
-    browser.open(played.origin + "/?new=1", "document.querySelector('#sheet[open] h3')?.textContent === '新建任务'", "the sheet for a new task")
+    browser.open(played.origin + "/?tab=tasks&new=1", "document.querySelector('#sheet[open] h3')?.textContent === '新建任务'", "the sheet for a new task")
     browser.picture(OUT / "new-task.png")
+    # the first page in a dark look; the look is kept by the browser, so the light one is put back after the picture
+    browser.open(played.origin + "/?tab=tasks&skin=night", "document.body.innerText.includes('部署到测试环境')", "the first page, dark")
+    browser.picture(OUT / "list-dark.png")
+    browser.open(played.origin + "/?tab=tasks&skin=paper", "document.body.innerText.includes('部署到测试环境')", "the light look again")
 
 
 def terminal(browser, temporary):

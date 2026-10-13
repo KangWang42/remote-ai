@@ -24,6 +24,7 @@ Besides a shell, the phone can start Claude Code and Codex when they are install
 this user, continue their saved conversations, and look at the files of a project.
 """
 import base64
+import calendar
 import codecs
 import datetime
 import fcntl
@@ -48,7 +49,7 @@ import time
 import uuid
 from urllib.parse import quote, urlsplit
 
-VERSION = "0.5.5"
+VERSION = "0.6.0"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -57,7 +58,12 @@ PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 FILE_ACTIONS = ("file_list", "file_read")
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "peek", "marks", "delete"]
+FEATURES = ["terminal-exit", "files", "peek", "marks", "delete", "work"]
+# What the phone asks about its owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
+# ("chains") needs the tools' hooks, which only the Windows program has.
+WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff")
+LONGEST_TURN, LONGEST_WAIT = 3 * 3600, 600      # a turn is counted for no longer; a first answer later than this is none
+MAX_SCHEDULES = 30
 MARKS = ("pinned", "hidden")     # what the owner says of single conversations from the phone
 MAX_MARKS = 300                 # of each kind; with more, the ones marked longest ago give way
 SAID_MESSAGES = 40      # of a conversation, the last this many things its user and the tool said are shown on the phone
@@ -1297,6 +1303,381 @@ class Projects:
         self._save()
 
 
+STAMP_RE = re.compile(r'"timestamp":"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|[+-]\d\d:?\d\d)?"')
+CWD_RE = re.compile(r'"cwd":"((?:[^"\\]|\\.)*)"')
+ANSWER_RE = re.compile(r'"id":"(msg_[A-Za-z0-9_-]+)"')
+
+
+def _stamp(line, last=False):
+    """When a row of a record was written, in seconds since 1970: its first time, or its last."""
+    found = None
+    for found in STAMP_RE.finditer(line):
+        if not last:
+            break
+    if found is None:
+        return None
+    year, month, day, hour, minute, second, part, zone = found.groups()
+    at = calendar.timegm((int(year), int(month), int(day), int(hour), int(minute), int(second))) + (float("0." + part) if part else 0.0)
+    if zone and zone != "Z":
+        away = int(zone[1:3]) * 3600 + int(zone[-2:]) * 60
+        at -= away if zone[0] == "+" else -away
+    return at
+
+
+def _number(text, name, start=0):
+    found = re.compile('"%s":(\\d+)' % name).search(text, start)
+    return int(found.group(1)) if found else 0
+
+
+def _day(at):
+    return time.strftime("%Y-%m-%d", time.localtime(at))
+
+
+class Stats:
+    """How the owner's work with the tools went, in numbers, read from the tools' own records on this computer: what
+    was asked and when, how long the tools worked on it, how soon they first answered, and the tokens they note for
+    each answer. By day, by tool, by project and by hour of the day. Nothing that was said is kept or passed on:
+    numbers, dates, and the names of the folders the conversations are in. (As Stats.cs of the Windows program.)"""
+
+    def __init__(self, claude_home, codex_home):
+        self.claude_home, self.codex_home = claude_home, codex_home
+        self.records = {}               # path -> (mtime, size, record): a record is read anew only when it changed
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def _of(record, at):
+        return record["days"].setdefault(_day(at), {"prompts": 0, "active": 0.0, "in": 0, "out": 0, "cached": 0, "waits": [], "sessions": set()})
+
+    @classmethod
+    def _claude(cls, lines, record):
+        """Claude Code: its prompts, the turns that followed, and the usage of each answer (noted in several rows,
+        counted once)."""
+        usage, began, ended, open_, waiting = {}, 0.0, 0.0, False, False
+
+        def close():
+            if open_:
+                cls._of(record, began)["active"] += max(0.0, min(LONGEST_TURN, ended - began))
+
+        for line in lines:
+            if len(line) < 40:
+                continue
+            answer = '"type":"assistant"' in line
+            asked = not answer and '"type":"user"' in line
+            if not (answer or asked) or '"isSidechain":true' in line:
+                continue
+            at = _stamp(line, last=True)
+            if at is None:
+                continue
+            if not record["folder"]:
+                where = CWD_RE.search(line)
+                if where:
+                    record["folder"] = re.sub(r"\\(.)", lambda m: m.group(1), where.group(1))
+            if asked:
+                # what a tool gave back belongs to the turn that runs; what Claude Code notes for itself is nobody's prompt
+                if '"tool_use_id"' in line:
+                    if open_:
+                        ended = at
+                    continue
+                if '"isMeta":true' in line:
+                    continue
+                close()
+                began = ended = at
+                open_ = waiting = True
+                day = cls._of(record, at)
+                day["prompts"] += 1
+                day["sessions"].add(record["session"])
+                record["hours"][time.localtime(at).tm_hour] += 1
+                continue
+            if open_:
+                if waiting:
+                    if 0 <= at - began <= LONGEST_WAIT:
+                        cls._of(record, began)["waits"].append(at - began)
+                    waiting = False
+                ended = at
+            start, name = line.find('"usage":{'), ANSWER_RE.search(line)
+            if start < 0 or not name:
+                continue
+            usage[name.group(1)] = (_day(at), _number(line, "input_tokens", start), _number(line, "output_tokens", start),
+                                    _number(line, "cache_read_input_tokens", start) + _number(line, "cache_creation_input_tokens", start))
+        close()
+        for key, given, written, cached in usage.values():
+            day = record["days"].setdefault(key, {"prompts": 0, "active": 0.0, "in": 0, "out": 0, "cached": 0, "waits": [], "sessions": set()})
+            day["in"] += given
+            day["out"] += written
+            day["cached"] += cached
+
+    @classmethod
+    def _codex(cls, lines, record):
+        """Codex: its turns with how long each took, and the tokens of each request."""
+        began, open_, waiting = 0.0, False, False
+        for line in lines:
+            if len(line) < 40:
+                continue
+            if not record["folder"] and '"type":"session_meta"' in line:
+                where = CWD_RE.search(line)
+                if where:
+                    record["folder"] = re.sub(r"\\(.)", lambda m: m.group(1), where.group(1))
+                continue
+            if '"type":"event_msg"' not in line:
+                # the first thing that comes back after a turn began: how soon it answered
+                if waiting and '"type":"response_item"' in line:
+                    first = _stamp(line)
+                    if first is not None and 0 <= first - began <= LONGEST_WAIT:
+                        cls._of(record, began)["waits"].append(first - began)
+                    waiting = False
+                continue
+            at = _stamp(line)
+            if at is None:
+                continue
+            if '"type":"task_started"' in line:
+                began, open_, waiting = at, True, True
+                day = cls._of(record, at)
+                day["prompts"] += 1
+                day["sessions"].add(record["session"])
+                record["hours"][time.localtime(at).tm_hour] += 1
+            elif '"type":"task_complete"' in line or '"type":"turn_aborted"' in line:
+                if open_:
+                    cls._of(record, began)["active"] += max(0.0, min(LONGEST_TURN, _number(line, "duration_ms") / 1000.0))
+                open_ = waiting = False
+            elif '"type":"token_count"' in line:
+                start = line.find('"last_token_usage":{')
+                if start < 0:
+                    continue
+                end = line.find("}", start)
+                last = line[start:end] if end > start else line[start:]
+                given, cached = _number(last, "input_tokens"), _number(last, "cached_input_tokens")
+                day = cls._of(record, at)
+                day["in"] += max(0, given - cached)
+                day["cached"] += cached
+                day["out"] += _number(last, "output_tokens")
+
+    def _summed(self, path, tool, session):
+        try:
+            info = os.stat(path)
+        except OSError:
+            return None
+        mark = (info.st_mtime_ns, info.st_size)
+        with self.lock:
+            known = self.records.get(path)
+            if known and known[0] == mark:
+                return known[1]
+        record = {"tool": tool, "session": session, "folder": "", "days": {}, "hours": [0] * 24}
+        try:
+            with open(path, encoding="utf-8", errors="replace") as lines:
+                (self._claude if tool == "claude" else self._codex)(lines, record)
+        except OSError:
+            pass
+        with self.lock:
+            self.records[path] = (mark, record)
+            if len(self.records) > 4000:
+                for old in list(self.records)[:1000]:
+                    del self.records[old]
+        return record
+
+    def _recent(self, since):
+        found = []
+        for path in glob.glob(os.path.join(self.claude_home(), "projects", "*", "*.jsonl")):
+            found.append((path, "claude"))
+        for path in glob.glob(os.path.join(self.codex_home(), "sessions", "**", "rollout-*.jsonl"), recursive=True):
+            found.append((path, "codex"))
+        out = []
+        for path, tool in found:
+            try:
+                if os.path.getmtime(path) < since:
+                    continue
+            except OSError:
+                continue
+            record = self._summed(path, tool, os.path.splitext(os.path.basename(path))[0])
+            if record:
+                out.append(record)
+        return out
+
+    @staticmethod
+    def _middle(values):
+        if not values:
+            return None
+        ordered, half = sorted(values), len(values) // 2
+        return round(ordered[half] if len(ordered) % 2 else (ordered[half - 1] + ordered[half]) / 2, 1)
+
+    def read(self, days, named, now=None):
+        """The last `days` days (today the last of them), as the phone shows them. `named`: the name a folder goes
+        by (its project's, where it is one)."""
+        days = max(1, min(90, days))
+        today = datetime.date.fromtimestamp(time.time() if now is None else now)
+        first = today - datetime.timedelta(days=days - 1)
+        read = self._recent(time.mktime(first.timetuple()) - 86400)
+        by_day, tools, projects, hours, waits = [], {}, {}, [0] * 24, []
+        for back in range(days):
+            key = (first + datetime.timedelta(days=back)).isoformat()
+            total = {"prompts": 0, "active": 0.0, "in": 0, "out": 0, "cached": 0}
+            sessions, waited = set(), []
+            for record in read:
+                day = record["days"].get(key)
+                if not day:
+                    continue
+                for name in total:
+                    total[name] += day[name]
+                sessions.update(record["tool"] + " " + session for session in day["sessions"])
+                waited.extend(day["waits"])
+                for sums, name in ((tools, record["tool"]), (projects, named(record["folder"]))):
+                    if name:
+                        kept = sums.setdefault(name, [0, 0, 0])
+                        kept[0] += day["prompts"]
+                        kept[1] += int(day["active"])
+                        kept[2] += day["in"] + day["out"]
+            waits.extend(waited)
+            by_day.append({"date": key, "prompts": total["prompts"], "sessions": len(sessions), "active": int(total["active"] + 0.5),
+                           "in": total["in"], "out": total["out"], "cached": total["cached"], "wait": self._middle(waited)})
+        # (the hours of the day are of the whole span that was read, by the records that have something in it)
+        for record in read:
+            if any(key >= first.isoformat() for key in record["days"]):
+                hours = [a + b for a, b in zip(hours, record["hours"])]
+        listed = lambda sums, most: [{"name": name, "prompts": kept[0], "active": kept[1], "tokens": kept[2]}
+                                     for name, kept in sorted(sums.items(), key=lambda one: (-one[1][1], -one[1][0])) if kept[0] > 0 or kept[2] > 0][:most]
+        return {"ready": True, "days": by_day, "tools": listed(tools, 4), "projects": listed(projects, 6), "hours": hours, "wait": self._middle(waits),
+                "updated": int(time.time() * 1000)}
+
+
+class Schedules:
+    """Questions the owner set to be asked at a time: once, every day at an hour, or every so many minutes. Each
+    names the conversation it is for and the words. This keeps them (in one file of the data folder, readable by
+    its owner only), says which are due, and notes how each asking went; the agent does the asking. (As
+    Schedules.cs of the Windows program.)"""
+
+    def __init__(self, path):
+        self.path, self.items = path, []
+        try:
+            with open(path, encoding="utf-8") as stream:
+                kept = json.load(stream)
+            self.items = [item for item in kept if isinstance(item, dict) and ID_RE.match(str(item.get("id") or ""))]
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save(self):
+        try:
+            write_private(self.path, json.dumps(self.items, ensure_ascii=False))
+        except OSError:
+            pass
+
+    @staticmethod
+    def next_of(item, now):
+        """When an item is due next after `now` (seconds), in milliseconds: 0 for a single one whose time has
+        passed, or one that is off."""
+        if not item["on"]:
+            return 0
+        if item["kind"] == "once":
+            return item["at"] if item["at"] > now * 1000 else 0
+        if item["kind"] == "every":
+            return int((now + item["minutes"] * 60) * 1000)
+        hour, minute = (int(part) for part in item["time"].split(":"))
+        at = datetime.datetime.fromtimestamp(now).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if at.timestamp() <= now:
+            at += datetime.timedelta(days=1)
+        return int(at.timestamp() * 1000)
+
+    @staticmethod
+    def shown(item):
+        """As the phone is told of one."""
+        out = {key: item[key] for key in ("id", "tool", "session", "title", "text", "kind", "time", "at", "minutes", "on", "next", "runs")}
+        out["last"] = {"at": item["last_at"], "ok": item["last_ok"], "note": item["last_note"]} if item["last_at"] else None
+        return out
+
+    def all(self):
+        return [self.shown(item) for item in self.items]
+
+    def set(self, given, now):
+        """Sets one: a new one under a new number, or the one of that number anew. Says in words what is wrong with it."""
+        word = lambda name: given.get(name) if isinstance(given.get(name), str) else ""
+        whole = lambda name: given.get(name) if type(given.get(name)) in (int, float) else 0
+        item = {"id": word("id"), "tool": word("tool"), "session": word("session"), "title": word("title")[:80], "text": word("text").strip(), "kind": word("kind"),
+                "time": word("time"), "at": int(whole("at")), "minutes": int(whole("minutes")), "on": given.get("on") is not False,
+                "next": 0, "runs": 0, "last_at": 0, "last_ok": False, "last_note": ""}
+        if not ID_RE.match(item["id"]):
+            raise OpError("编号无效")
+        if item["tool"] not in ("claude", "codex"):
+            raise OpError("工具无效")
+        if not UUID_RE.match(item["session"]):
+            raise OpError("请选择要提问的对话")
+        if not 0 < len(item["text"]) <= 2000:
+            raise OpError("要问的话需为 1 至 2000 字")
+        if item["kind"] == "once":
+            if item["on"] and not now * 1000 < item["at"] <= (now + 366 * 86400) * 1000:
+                raise OpError("时间需在现在之后、一年之内")
+        elif item["kind"] == "daily":
+            if not re.match(r"\A([01]\d|2[0-3]):[0-5]\d\Z", item["time"]):
+                raise OpError("每天的时间需写成 09:30 这样")
+        elif item["kind"] == "every":
+            if not 5 <= item["minutes"] <= 10080:
+                raise OpError("间隔需在 5 分钟到 7 天之间")
+        else:
+            raise OpError("重复方式无效")
+        item["next"] = self.next_of(item, now)
+        known = next((one for one in self.items if one["id"] == item["id"]), None)
+        if known is None and len(self.items) >= MAX_SCHEDULES:
+            raise OpError("最多保存 %d 个定时提问" % MAX_SCHEDULES)
+        if known is not None:
+            item.update({key: known[key] for key in ("runs", "last_at", "last_ok", "last_note")})
+            self.items[self.items.index(known)] = item
+        else:
+            self.items.append(item)
+        self._save()
+        return item
+
+    def remove(self, key):
+        left = [item for item in self.items if item["id"] != key]
+        gone = len(left) != len(self.items)
+        if gone:
+            self.items = left
+            self._save()
+        return gone
+
+    def due(self, now):
+        """What is to be asked now. Each is moved on to its next time at once (a single one is switched off), so
+        that it is asked once however long the asking takes."""
+        due = []
+        for item in self.items:
+            if item["on"] and 0 < item["next"] <= now * 1000:
+                due.append(dict(item))
+                if item["kind"] == "once":
+                    item["on"], item["next"] = False, 0
+                else:
+                    item["next"] = self.next_of(item, now)
+        if due:
+            self._save()
+        return due
+
+    def done(self, key, ok, note, now):
+        """How an asking went, for its owner to read."""
+        for item in self.items:
+            if item["id"] == key:
+                item["runs"] += 1
+                item.update(last_at=int(now * 1000), last_ok=ok, last_note=(note or "")[:200])
+                self._save()
+
+
+def handover(source, messages, note):
+    """What a conversation is handed over with: what its owner asked first and last, what the tool answered last
+    and did last, taken from its record. Written as its owner's own words to the conversation that takes over.
+    (The same words as the Windows program's.)"""
+    cut = lambda text, most: text.strip() if len(text.strip()) <= most else text.strip()[:most] + "…"
+    asked = [m["text"] for m in messages if m.get("role") == "user"]
+    answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
+    steps = [m["text"] for m in messages if m.get("role") == "tool"]
+    label = "Claude Code" if source["tool"] == "claude" else "Codex"
+    brief = "【对话交接】下面是我在另一段对话里的进展（%s，“%s”%s），请接着处理。\n" % (label, source["title"], "，项目 " + source["dir"] if source["dir"] else "")
+    if asked:
+        brief += "\n我最初的要求：\n" + cut(asked[0], 800) + "\n"
+    if len(asked) > 1:
+        brief += "\n我最近的要求：\n" + cut(asked[-1], 800) + "\n"
+    if answered:
+        brief += "\n它最后的回答：\n" + cut(answered, 2000) + "\n"
+    if steps:
+        brief += "\n它最近做的操作：\n" + "\n".join("- " + cut(step, 160) for step in steps[-8:]) + "\n"
+    if note.strip():
+        brief += "\n我的补充：\n" + cut(note, 1000) + "\n"
+    return brief.rstrip()
+
+
 class Agent:
     def __init__(self, data, password):
         self.data = data
@@ -1305,6 +1686,10 @@ class Agent:
         self.projects = Projects(data)
         self.marks = Marks(data)
         self.sessions = Sessions(self.marks)
+        # the owner's work: in numbers, and the questions asked at a set time
+        self.stats = Stats(self.sessions.claude_home, lambda: os.environ.get("CODEX_HOME") or os.path.join(self.sessions.home, ".codex"))
+        self.schedules = Schedules(os.path.join(data, "schedules.json"))
+        self.next_asking = 0.0
         self.sessions_at = 0.0          # when the conversations were last looked up
         self.sessions_sent = ("", 0.0)  # what the relay was last told, and when
         self.tools = (["shell"], 0.0)
@@ -1415,6 +1800,9 @@ class Agent:
             if now - self.sessions_at > 3:
                 self.sessions_at = now
                 self.sessions.scan(dirs, list(self.terminals.values()))
+            if enabled and now >= self.next_asking:
+                self.next_asking = now + 15
+                self.ask(now)
             payload = {
                 "info": {"instance": self.instance, "enabled": enabled, "tools": self.tools[0],
                          "features": FEATURES, "version": VERSION, "newer": "",
@@ -1484,7 +1872,7 @@ class Agent:
         the held pull; the same id is never carried out twice."""
         try:
             op_id, terminal = check_op(op, need_terminal=op.get("action") not in
-                                       PROJECT_ACTIONS + FILE_ACTIONS + ("session_read", "session_mark", "session_delete"))
+                                       PROJECT_ACTIONS + FILE_ACTIONS + WORK_ACTIONS + ("session_read", "session_mark", "session_delete"))
         except OpError as error:
             say("拒绝操作：%s" % error)
             return
@@ -1518,6 +1906,13 @@ class Agent:
             elif action == "session_delete":
                 self.sessions.delete(str(op.get("session") or ""), str(op.get("tool") or ""), dirs, list(self.terminals.values()))
                 self.sessions_at, result = 0.0, {}
+            elif action == "work_stats":
+                # read beside the terminals' work: the first reading of many records takes a while
+                days = op.get("days") if type(op.get("days")) is int else 14
+                threading.Thread(target=self.count, args=(op_id, days, dict(dirs)), daemon=True).start()
+                return
+            elif action in WORK_ACTIONS:
+                result = self.owner_work(action, op, dirs)
             elif action == "start":
                 self.start_terminal(op, dirs, terminal)
             else:
@@ -1555,6 +1950,73 @@ class Agent:
         self.soon = True
         if error:
             say("操作 %s 失败：%s" % (op_id[:8], error))
+
+    # ---- the owner's work: in numbers, asked at a set time, handed from one conversation to another
+    def count(self, op_id, days, dirs):
+        """The numbers of the owner's work, read on a thread of its own and answered when they are there."""
+        def named(folder):
+            if not folder:
+                return ""
+            plain = folder.rstrip("/")
+            within = [name for name, path in dirs.items() if plain == path.rstrip("/") or plain.startswith(path.rstrip("/") + "/")]
+            return max(within, key=lambda name: len(dirs[name])) if within else os.path.basename(plain)
+        error, result = "", None
+        try:
+            result = self.stats.read(days, named)
+        except Exception:                       # never leak a path or a stack to the phone
+            error = "统计没有读出来，请稍后再试"
+        with self.work:
+            self.completed[op_id] = {"id": op_id, "error": error}
+            if result is not None:
+                self.completed[op_id]["result"] = result
+            self.reported.discard(op_id)
+            self.soon = True
+        self.wake()
+
+    def tell(self, tool, session, text):
+        """Says something to a conversation: typed into the terminal of the phone's that runs it, the way its page
+        sends a message (the words as pasted text, then Enter). This computer has no other way to a conversation."""
+        live = next((one for one in self.terminals.values() if not one.closed and one.tool == tool and one.session.lower() == session.lower()), None)
+        if live is None:
+            raise OpError("这段对话没有在手机打开的终端里运行，这台电脑只能把消息发到那里")
+        live.write("\x1b[200~" + text.replace("\r\n", "\n").replace("\r", "\n").strip() + "\x1b[201~\r")
+        self.last_input = time.time()
+        return "已发到手机终端"
+
+    def ask(self, now):
+        """Asks what is due (called with self.work held)."""
+        for due in self.schedules.due(now):
+            try:
+                ok, note = True, self.tell(due["tool"], due["session"], due["text"])
+            except OpError as refused:
+                ok, note = False, str(refused)
+            self.schedules.done(due["id"], ok, note, now)
+
+    def owner_work(self, action, op, dirs):
+        listed = lambda tool, session: next((s for s in self.sessions.found if s["tool"] == tool and s["id"] == session), None)
+        if action == "work_schedules":
+            return {"schedules": self.schedules.all()}
+        if action == "work_schedule_set":
+            # for a conversation this computer lists: its title is kept with it, to name it by later
+            item = op.get("item")
+            of = listed(item.get("tool"), item.get("session")) if isinstance(item, dict) else None
+            if of is None:
+                raise OpError("电脑上没有找到这个对话，请刷新后重试")
+            return {"schedule": Schedules.shown(self.schedules.set(dict(item, title=of["title"]), time.time()))}
+        if action == "work_schedule_remove":
+            if not self.schedules.remove(str(op.get("schedule") or "")):
+                raise OpError("没有找到这个定时提问")
+            return {}
+        source, taker = listed(op.get("from_tool"), op.get("from")), listed(op.get("to_tool"), op.get("to"))
+        if source is None:
+            raise OpError("电脑上没有找到要交接的对话，请刷新后重试")
+        if taker is None:
+            raise OpError("接手的对话没有在电脑上开着")
+        if (source["tool"], source["id"]) == (taker["tool"], taker["id"]):
+            raise OpError("不能交接给同一段对话")
+        read = self.sessions.read(source["id"], source["tool"], source["dir"], dirs)
+        brief = handover(source, read.get("messages", []), str(op.get("note") or ""))
+        return {"status": "accepted", "note": self.tell(taker["tool"], taker["id"], brief), "length": len(brief)}
 
     def start_terminal(self, op, dirs, terminal):
         if terminal in self.terminals:

@@ -128,6 +128,9 @@ public sealed class Reach : IDisposable {
     volatile bool closed;
     /// Something about a conversation changed: the phone is to be told at once.
     public event Action Changed;
+    /// A conversation has done what it was at and stopped by itself, with nothing waiting for it (its tool and its
+    /// number): what is to follow on that can be started (Chains). Not one that was told to stop.
+    public event Action<string, string> Finished;
     public string Pipe { get { return pipe; } }
 
     /// `keeps`: what a tool is kept for now, as its owner has it; asked at every request and every stop.
@@ -447,6 +450,8 @@ public sealed class Reach : IDisposable {
         }
         if (message == null) {
             Tell();
+            var finished = Finished;
+            if (finished != null) { try { finished(tool, o.Session); } catch (Exception) { } }
             if (held) {
                 bool let = false;
                 lock (gate) {

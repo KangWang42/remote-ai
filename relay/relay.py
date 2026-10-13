@@ -286,6 +286,9 @@ FILE_SECONDS = 25
 WAKE_SECONDS = 85       # a message that is handed to a conversation where it sits idle takes a short run of its tool on the computer
 # What the program on the computer is asked about itself: a few of its settings, and the line it is reached by.
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
+# What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
+# it, the questions set to be asked at a time, and one conversation handed over to another.
+WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "chains", "chain_set", "chain_remove")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
 REACH = ("say", "answer", "stop")
 # By which way the computer does each thing to a conversation that a program there has open (docs/PROTOCOL.md):
@@ -293,7 +296,7 @@ REACH = ("say", "answer", "stop")
 WAYS = {"say": ("codex-desktop", "hook", "wake"), "stop": ("codex-desktop", "hook"), "answer": ("hook",), "end": ("process",)}
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS + tuple("work_" + name for name in WORK_ACTIONS)     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -977,6 +980,94 @@ class Relay:
                 raise RemoteError("电脑端版本不支持在手机上设置，请更新电脑端")
             return self._held(question, now, wait)
 
+    def work(self, payload, now=None, wait=FILE_SECONDS):
+        """The owner's work on the computer: its numbers by day ("stats"), the questions set to be asked at a time
+        ("schedules", "schedule_set", "schedule_remove"), and a conversation handed over to another ("handoff").
+        The computer keeps and does all of it; the relay checks the question, passes it on and keeps nothing."""
+        now = time.time() if now is None else now
+        if not isinstance(payload, dict):
+            raise RemoteError("请求格式无效")
+        op_id, action = payload.get("id"), payload.get("action")
+        if not isinstance(op_id, str) or not _id.fullmatch(op_id):
+            raise RemoteError("操作编号无效")
+        if action not in WORK_ACTIONS:
+            raise RemoteError("不支持此操作")
+        question = {"id": op_id, "action": "work_" + action}
+        with self._changed:
+            self._expire(now)
+            if op_id in self._pending:
+                raise RemoteError("操作编号已被其它操作使用")
+            if not self._view(now)["online"] or not self._device["enabled"]:
+                raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
+            if "work" not in self._device.get("features", []):
+                raise RemoteError("电脑端版本不支持这项功能，请更新电脑端")
+            # (passing on when a conversation stops needs its tool's own word that it has: a computer says whether it has that)
+            if action.startswith("chain") and "chains" not in self._device.get("features", []):
+                raise RemoteError("这台电脑的电脑端不支持接力")
+            listed = {s["id"]: s for s in self._sessions}
+            # (a conversation in one of the phone's own terminals is open too: the computer types into that terminal)
+            typed = {t.get("session") for t in self._state()["threads"].values() if t["state"] == "running" and t.get("session")}
+            if action == "stats":
+                days = payload.get("days", 14)
+                if type(days) is not int or not 1 <= days <= 90:
+                    raise RemoteError("天数无效")
+                question["days"] = days
+            elif action == "schedule_set":
+                item = payload.get("item")
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not _id.fullmatch(item["id"]):
+                    raise RemoteError("定时提问无效")
+                of = listed.get(item.get("session"))
+                if not of:
+                    raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
+                text, kind = item.get("text"), item.get("kind")
+                if not isinstance(text, str) or not 0 < len(text.strip()) <= 2000:
+                    raise RemoteError("要问的话需为 1 至 2000 字")
+                if kind not in ("once", "daily", "every"):
+                    raise RemoteError("重复方式无效")
+                if kind == "once" and type(item.get("at")) not in (int, float) or kind == "every" and type(item.get("minutes")) is not int \
+                        or kind == "daily" and not (isinstance(item.get("time"), str) and re.fullmatch(r"[0-2][0-9]:[0-5][0-9]", item["time"])):
+                    raise RemoteError("时间无效")
+                # (the tool is the one the computer listed the conversation with, whatever the phone says)
+                question["item"] = {"id": item["id"], "session": of["id"], "tool": of["tool"], "text": text, "kind": kind, "on": item.get("on") is not False,
+                                    "at": int(item["at"]) if kind == "once" else 0, "minutes": item["minutes"] if kind == "every" else 0, "time": item["time"] if kind == "daily" else ""}
+            elif action == "schedule_remove":
+                if not isinstance(payload.get("schedule"), str) or not _id.fullmatch(payload["schedule"]):
+                    raise RemoteError("定时提问无效")
+                question["schedule"] = payload["schedule"]
+            elif action == "chain_set":
+                # when the first has stopped, what it said last goes to the second, with these words
+                item = payload.get("item")
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not _id.fullmatch(item["id"]):
+                    raise RemoteError("接力无效")
+                first, then, text, rounds = listed.get(item.get("from")), listed.get(item.get("to")), item.get("text"), item.get("rounds")
+                if not first or not then:
+                    raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
+                if first["id"] == then["id"]:
+                    raise RemoteError("不能接力给同一段对话")
+                if not isinstance(text, str) or not 0 < len(text.strip()) <= 1000:
+                    raise RemoteError("要说的话需为 1 至 1000 字")
+                if type(rounds) is not int or not 1 <= rounds <= 10:
+                    raise RemoteError("次数需在 1 到 10 之间")
+                question["item"] = {"id": item["id"], "from": first["id"], "from_tool": first["tool"], "to": then["id"], "to_tool": then["tool"], "text": text, "rounds": rounds}
+            elif action == "chain_remove":
+                if not isinstance(payload.get("chain"), str) or not _id.fullmatch(payload["chain"]):
+                    raise RemoteError("接力无效")
+                question["chain"] = payload["chain"]
+            elif action == "handoff":
+                given, taking, note = listed.get(payload.get("from")), listed.get(payload.get("to")), payload.get("note", "")
+                if not given or not taking:
+                    raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
+                if given["id"] == taking["id"]:
+                    raise RemoteError("不能交接给同一段对话")
+                if not taking.get("live") and taking["id"] not in typed:
+                    raise RemoteError("接手的对话没有在电脑上开着")
+                if not isinstance(note, str) or len(note) > 1000:
+                    raise RemoteError("补充说明需在 1000 字以内")
+                question.update({"from": given["id"], "from_tool": given["tool"], "to": taking["id"], "to_tool": taking["tool"], "note": note})
+                if wait == FILE_SECONDS:
+                    wait = WAKE_SECONDS         # (the one that takes over may have to be woken first)
+            return self._held(question, now, wait)
+
     def pull(self, payload, now=None):
         """Held open by the computer: answers with the operations it has not been given yet, as soon as there is one.
         They stay queued until the computer reports them done, so a lost answer is made up by its next report."""
@@ -1026,7 +1117,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "codex-desktop-control") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "codex-desktop-control") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))
