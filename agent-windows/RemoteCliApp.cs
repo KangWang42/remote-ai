@@ -22,7 +22,7 @@ namespace RemoteCli {
 /// The program on the computer: a small window and a tray icon around the relay, the optional tunnel and the
 /// terminal agent. Everything it starts ends when it exits.
 public sealed partial class App : Form {
-    const string Version = "1.5.11";
+    const string Version = "1.5.12";
     const string TunnelDownload = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe";
     readonly string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     readonly string dataDir = TerminalAgent.DefaultData;
