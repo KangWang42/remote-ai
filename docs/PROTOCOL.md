@@ -546,6 +546,19 @@ The phone names the way it was told of (`transport` with `say` and `stop` for th
 answered in one shape, whatever carried it: `{"status": "accepted", "sent": true, "now": <bool>, "way": ...}`,
 `now` false when it was left for the conversation to take after what it is doing.
 
+A request submitted with `transport: "codex-desktop"` retains its durable operation identity even if
+its first dispatch selects a hook because the conversation became busy. Receipt lookup and payload
+fingerprint checks precede route selection; retries never enqueue again or become a new native turn.
+The accepted hook receipt confirms admission to the in-memory hook queue, not consumption or durable
+delivery across an agent restart. Hook/wake requests submitted without native transport do not yet
+have this durable receipt contract.
+
+The embedded reader stores native send recovery records in session storage, scoped by relay path,
+computer instance, tool and session. Reopening after a reload restores records less than 24 hours old;
+an interrupted in-flight request becomes unknown and is queried with `receipt: true`, never replayed
+automatically. This does not preserve unsent drafts, hook/wake requests or guarantee recovery after
+the tab or Android WebView is recreated.
+
 What has no way: the answer of Codex's command line cannot be stopped from outside. Codex 0.162.1 refuses a
 hook before a step that answers `continue: false` ("unsupported"), and the conversation of its window is not
 one of its shared background service's, so no other client of that service can interrupt its turn. It is

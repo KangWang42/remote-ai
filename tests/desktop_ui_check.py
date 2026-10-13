@@ -207,6 +207,10 @@ def main():
             value("document.querySelector('#sheet .write textarea').value='手机接着问一句'; document.querySelector('#sheet .write button.solid').click(); document.querySelector('#sheet .write button.solid').click()")
             until("document.querySelector('#sheet .said').textContent.includes('查询发送结果')")
             assert len(native_requests) == 1 and native_requests[0]['transport'] == 'codex-desktop', native_requests
+            # Recover the unknown operation after a full reload. Opening the reader must not resend.
+            ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, sid))
+            until("document.querySelector('#sheet .said')?.textContent.includes('查询发送结果')")
+            assert len(native_requests) == 1, 'restoring a pending send must not dispatch it'
             until("document.querySelector('#sheet .write button.solid').disabled")
             assert value("document.querySelector('#sheet .write').hidden") is False
             value("document.querySelector('#sheet .write textarea').value='等回答结束后再问'")
@@ -222,6 +226,24 @@ def main():
             transcript.append({'role': 'assistant', 'text': '电脑上继续回答后的新内容'})
             until("document.querySelector('#sheet .said').textContent.includes('电脑上继续回答后的新内容')")
             picture('native-stopped.png')
+            pending_key = value("Object.keys(sessionStorage).find(k => k.startsWith('rcli-desktop-pending-'))")
+            assert pending_key, 'native operation remains recoverable until it appears in the transcript'
+            # Computer identity is part of the recovery scope, even with an identical session id.
+            info['instance'] = 'c' * 32
+            ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, sid))
+            until("document.querySelector('#sheet .said')?.textContent.includes('电脑上的第一句')")
+            assert not value("document.querySelector('#sheet .said .mine')"), 'another computer must not inherit pending input'
+            info['instance'] = 'b' * 32
+            # A crashed tab may have stored the operation before it got any answer at all.
+            value("(() => { const key = %s, rows = JSON.parse(sessionStorage.getItem(key)); rows[0].sent = false; rows[0].uncertain = false; rows[0].delivery = ''; sessionStorage.setItem(key, JSON.stringify(rows)); })()" % json.dumps(pending_key))
+            ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, sid))
+            until("document.querySelector('#sheet .said')?.textContent.includes('查询发送结果')")
+            assert len(native_requests) == 3, 'a send with no response is restored as uncertain without dispatch'
+            # Old recovery records are removed on reopening, not shown as current deliveries.
+            value("(() => { const key = %s, rows = JSON.parse(sessionStorage.getItem(key)); rows[0].createdAt = Date.now() - 86400001; sessionStorage.setItem(key, JSON.stringify(rows)); })()" % json.dumps(pending_key))
+            ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, sid))
+            until("document.querySelector('#sheet .said')?.textContent.includes('电脑上的第一句')")
+            assert not value("document.querySelector('#sheet .said .mine')") and value("sessionStorage.getItem(%s)" % json.dumps(pending_key)) is None
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
             # The single injected 503 is intentional; no other error-level log is acceptable.
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']

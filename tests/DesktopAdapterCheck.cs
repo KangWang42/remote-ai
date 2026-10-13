@@ -91,6 +91,7 @@ public static class DesktopAdapterCheck {
         var both = new DesktopOperations(Path.Combine(root, "agent"), app, other);
         typeof(TerminalAgent).GetField("Desktop", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(agent, both);
         Require(String.Join(",", both.Tools) == "codex,claude", "the tools whose application can be opened: " + String.Join(",", both.Tools));
+        Refused(() => both.Check("gemini", folder, draft));
         var unfit = op('1', "demo"); unfit["tool"] = "claude"; run(unfit);
         Require(Convert.ToString(done[new string('1', 32)]["error"]).Contains("does not open") && other.Calls == 0 && !File.Exists(Path.Combine(root, "agent", "desktop-operations", new string('1', 32) + ".json")), "refused by its application's own rule, nothing reserved");
         other.Unfit = "";

@@ -192,6 +192,35 @@
   };
   const deliveryText = result => result.status === 'unknown' ? '发送结果未知，请检查原对话' : result.now === false ? '已排队，等待当前任务结束' : result.now === true ? '工具已接收，等待对话更新' : '已提交，等待对话更新';
   const desktopPending = new Map();
+  // A native request can be accepted by the computer and then lose its HTTP response. Keep the
+  // optimistic row in session storage so a refresh can still query the same operation instead of
+  // making the user guess whether the message was sent. It is scoped to this browser tab and expires.
+  const pendingKey = session => 'rcli-desktop-pending-' + JSON.stringify([location.pathname, data.device.instance || '', session.tool, session.id]);
+  function loadDesktopPending(key, session) {
+    try {
+      const raw = JSON.parse(sessionStorage.getItem(key) || '[]');
+      if (!Array.isArray(raw)) return [];
+      const now = Date.now();
+      const restored = raw.filter(p => p && p.payload && /^[a-f0-9]{16,32}$/.test(p.payload.id) && p.payload.session === session.id &&
+        p.payload.action === 'say' && p.payload.transport === APP && p.payload.text === p.text &&
+        typeof p.text === 'string' && p.text.length > 0 && p.text.length <= 8000 && Number.isFinite(p.before) && p.before >= 0 &&
+        Number.isFinite(p.createdAt) && now >= p.createdAt && now - p.createdAt < 24 * 60 * 60 * 1000).map(p => {
+          // A tab may have disappeared between dispatch and its response. Treat such a row as
+          // uncertain after reload; native rows offer the same operation receipt for querying.
+          if (p.sent || p.uncertain) return p;
+          return Object.assign({}, p, { uncertain: true, delivery: p.delivery || '发送结果未确认，请查询本次结果' });
+        });
+      saveDesktopPending(key, restored);
+      return restored;
+    } catch (error) { return []; }
+  }
+  function saveDesktopPending(key, pending) {
+    try {
+      const nativePending = pending.filter(p => p.payload.transport === APP);
+      if (nativePending.length) sessionStorage.setItem(key, JSON.stringify(nativePending));
+      else sessionStorage.removeItem(key);
+    } catch (error) { /* private browsing or a full storage quota */ }
+  }
 
   // Sends one operation and waits until the computer has carried it out. One at a time: what is asked for while
   // another is still being carried out waits for it, and is then done. (It was dropped without a word before, which
@@ -454,8 +483,10 @@
       // the computer is here within a moment, whatever the lists know. (A computer of an earlier version gives no
       // such word; it is asked when the lists say that the conversation changed.)
       let stamp = '', seen = '', read = false, reading = false, sending = false, stands = null, quick = 0, asked = 0, changed = 0, sawBusy = 0;
-      const pending = desktopPending.get(session.id) || [];
-      desktopPending.set(session.id, pending);
+      const pendingScope = pendingKey(session);
+      const pending = desktopPending.get(pendingScope) || loadDesktopPending(pendingScope, session);
+      desktopPending.set(pendingScope, pending);
+      const savePending = () => saveDesktopPending(pendingScope, pending);
       const same = (messages, text) => messages.filter(m => m.role === 'user' && String(m.text || '').trim() === text).length;
       let record = [];
       function waiting() {
@@ -478,11 +509,11 @@
         try {
           const result = await api('api/conversation', receipt ? { ...mine.payload, receipt: query } : mine.payload);
           mine.uncertain = result.status !== 'accepted' || result.sent !== true; mine.sent = !mine.uncertain;
-          mine.settledAt = Date.now(); mine.delivery = deliveryText(result);
+          mine.settledAt = Date.now(); mine.delivery = deliveryText(result); savePending();
           return true;
         } catch (error) {
           toast(error.message);
-          if (receipt) { mine.uncertain = true; mine.delivery = '发送结果未确认，请查询本次结果'; }
+          if (receipt) { mine.uncertain = true; mine.delivery = '发送结果未确认，请查询本次结果'; savePending(); }
           return receipt;
         }
       }
@@ -500,7 +531,9 @@
             // A different message typed at the computer is not an acknowledgement of a phone message.
             // Leave a confirmed phone turn visible briefly so its delivery state is readable before the transcript
             // replaces the optimistic row. A subsequent poll removes it once the persisted record is stable.
-            for (let i = pending.length - 1; i >= 0; i--) if (!pending[i].uncertain && same(record, pending[i].text) > pending[i].before && (!pending[i].settledAt || Date.now() - pending[i].settledAt > 1200)) pending.splice(i, 1);
+            let removed = false;
+            for (let i = pending.length - 1; i >= 0; i--) if (!pending[i].uncertain && same(record, pending[i].text) > pending[i].before && (!pending[i].settledAt || Date.now() - pending[i].settledAt > 1200)) { pending.splice(i, 1); removed = true; }
+            if (removed) savePending();
             const end = !read || atEnd(), was = said.scrollTop;
             const fresh = el('div');
             if (got.more) fresh.append(el('p', { className: 'earlier', textContent: '更早的内容在电脑上' }));
@@ -522,14 +555,14 @@
         if (send.disabled || !usable() || !can(now(), 'say') || now().ask) return;
         if (!text) return box.focus();
         // what is written stands in the window at once, as what the user said, while it is on its way
-        const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false, payload: { id: newId(), session: session.id, action: 'say', text } };
+        const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false, createdAt: Date.now(), payload: { id: newId(), session: session.id, action: 'say', text } };
         if (wayOf(now(), 'say') === APP) mine.payload.transport = APP;
-        pending.push(mine); box.value = ''; box.style.height = 'auto';
+        pending.push(mine); savePending(); box.value = ''; box.style.height = 'auto';
         phoneTexts.add(text);
         waiting(); said.scrollTop = said.scrollHeight;
         sending = true; send.disabled = true; quick = Date.now() + 45000;
         // what was not sent goes back into the box, to be sent again or changed
-        if (!await deliver(mine)) { pending.splice(pending.indexOf(mine), 1); phoneTexts.delete(text); if (!box.value) { box.value = text; box.dispatchEvent(new Event('input')); } }
+        if (!await deliver(mine)) { pending.splice(pending.indexOf(mine), 1); savePending(); phoneTexts.delete(text); if (!box.value) { box.value = text; box.dispatchEvent(new Event('input')); } }
         sending = false; send.disabled = false; waiting(); refresh(); seen = ''; shown = ''; show();
       } });
       // a conversation that has stopped is most often told to go on: one press, beside what is typed

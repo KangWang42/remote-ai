@@ -152,7 +152,12 @@ public sealed class DesktopOperations {
     public bool Available(string tool) { IDesktopAdapter adapter; return adapters.TryGetValue(tool ?? "", out adapter) && adapter.Available; }
     /// The tools whose application can be opened from the phone here.
     public string[] Tools { get { return adapters.Values.Where(a => a.Available).Select(a => a.Tool).ToArray(); } }
-    public void Check(string tool, string folder, string draft) { adapters[tool].Check(folder, draft); }
+    public void Check(string tool, string folder, string draft) {
+        IDesktopAdapter adapter;
+        if (!adapters.TryGetValue(tool ?? "", out adapter))
+            throw new InvalidOperationException("这个桌面应用暂不支持从手机打开项目和草稿");
+        adapter.Check(folder, draft);
+    }
     public Dictionary<string, object> Open(string id, string tool, string folder, string draft) {
         IDesktopAdapter adapter;
         if (!adapters.TryGetValue(tool ?? "", out adapter)) throw new InvalidOperationException("这个桌面应用暂不支持从手机打开项目和草稿");

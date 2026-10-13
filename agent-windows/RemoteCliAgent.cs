@@ -1202,13 +1202,8 @@ public sealed class TerminalAgent {
     void Execute(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string id = Get(op, "id"), terminal = Get(op, "terminal"), action = Get(op, "action");
         bool nativeControl = Get(op, "transport") == Ways.App && (action == "session_say" || action == "session_stop");
-        // The phone names the way it was told of; which way is used is decided here, as things stand now. What was
-        // to go by the application's channel while the application is at work is left for the conversation through
-        // its hooks, as it is for every other conversation at work.
-        if (nativeControl && action == "session_say" && Get(op, "receipt") != "True") {
-            var meant = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == Get(op, "session") && s.Live);
-            if (meant != null && WaysOf(meant, Reach.Of(meant.Tool, meant.Id)).Say == Ways.Hook) nativeControl = false;
-        }
+        // Native requests keep their durable identity even when the current route becomes a hook.
+        // Resolve that fallback inside Desktop.Run, after replay/query and before dispatch.
         if (completed.ContainsKey(id) && action != "app_open" && !nativeControl) { reported.Remove(id); return; }
         if (relaying.Contains(id)) return;       // being handed over: answered when that is done
         string error = ""; Dictionary<string, object> result = null;
@@ -1257,6 +1252,15 @@ public sealed class TerminalAgent {
                     try {
                         answer = Desktop.Run(id, new[] { action, "codex", session, dir, text, expectedTurn }, () => {
                             ValidateDesktopProject(dir, root, server);
+                            if (action == "session_say") {
+                                lock (work) {
+                                    var current = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Live && s.Dir == dir);
+                                    if (current != null && SamePath(current.ControlFolder, root) && WaysOf(current, Reach.Of("codex", session)).Say == Ways.Hook) {
+                                        ValidateDesktopProject(dir, root, server);
+                                        return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", Reach.Say("codex", session, text) }, { "way", Ways.Hook } };
+                                    }
+                                }
+                            }
                             using (var control = OpenDesktopConversation()) {
                                 var state = control.Inspect(session);
                                 if (!SamePath(CodexDesktopControl.Folder(state), root)) throw new InvalidOperationException("桌面对话所在项目已变化");

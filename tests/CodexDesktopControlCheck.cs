@@ -87,17 +87,31 @@ public static class CodexDesktopControlCheck {
         var why = (Dictionary<string, string>)shown.GetType().GetProperty("why").GetValue(shown, null);
         Require((string)ways["say"] == "hook" && (string)ways["stop"] == "codex-desktop" && (string)ways["end"] == "" && !why.ContainsKey("say") && !why.ContainsKey("stop") && why["end"].Length > 0 && (string)shown.GetType().GetProperty("transport").GetValue(shown, null) == "codex-desktop",
             "at work: said through its hooks, stopped by the application's channel: " + Json.Serialize(ways) + Json.Serialize(why));
+        first["text"] = "test"; first["receipt"] = false;
+        run(first);
+        Require(heard["codex " + Session].Queued == null && conversation.Sends == 1, "retry of an accepted native send must not enqueue again when busy");
+        Dictionary<string, object> switched = null;
         foreach (bool named in new[] { true, false }) {
             var left = request(); if (!named) left.Remove("transport");
             var answer = Object(run(left)["result"]);
             Require((string)answer["status"] == "accepted" && true.Equals(answer["sent"]) && false.Equals(answer["now"]) && (string)answer["way"] == "hook" && conversation.Sends == 1, "left for it through its hooks, the channel not asked: " + Json.Serialize(answer));
+            if (named) {
+                switched = left;
+                left["receipt"] = true;
+                Require((string)Object(run(left)["result"])["status"] == "accepted", "fallback receipt must be queryable while busy");
+            }
         }
         states[Session].Busy = false; states[Session].Ready = true; states[Session].Turn = ""; heard.Clear();
         shown = list.Invoke(agent, new object[] { sessions[0] });
         Require((string)((Dictionary<string, object>)shown.GetType().GetProperty("ways").GetValue(shown, null))["say"] == "codex-desktop", "ready again: by the application's channel");
         var unnamed = request(); unnamed.Remove("transport");
         Require(((string)run(unnamed)["error"]).Contains("再发一次") && conversation.Sends == 1, "the channel is only used where it was asked for by name, with a receipt");
+        switched["receipt"] = false;
+        Require((string)Object(run(switched)["result"])["way"] == "hook" && conversation.Sends == 1, "retry after becoming idle must replay the hook receipt, never send again");
         states.Clear();
+        typeof(TerminalAgent).GetField("Desktop", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(agent, new DesktopOperations(root));
+        switched["receipt"] = true;
+        Require((string)Object(run(switched)["result"])["way"] == "hook" && conversation.Sends == 1, "fallback receipt survives restart and channel loss");
         Console.WriteLine("native agent: async dispatch, receipt identity, project/cwd checks and permission revocation passed");
     }
     sealed class Peer : Stream {
