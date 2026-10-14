@@ -6,7 +6,7 @@
   const page = window.RemoteCliPage, { $, el, TOOLS, api, newId } = page;
   const box = $('me'), kept = {};       // by how many days were asked for: when, and what the computer answered
   const METRIC = { prompts: '提问', active: '时长', tokens: 'token' }, WEEK = '日一二三四五六';
-  let span = 7, metric = 'prompts', picked = -1, asking = 0, tried = 0, wanted = false, failed = '', drawn = '';
+  let span = 7, metric = 'prompts', picked = -1, asking = 0, tried = 0, wanted = false, failed = '', drawn = '', expanded = new URLSearchParams(location.search).has('stats');
 
   // ---- numbers as they are read
   const trim = value => value >= 100 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, '');
@@ -91,15 +91,29 @@
       tools ? row('工具', tools) : ''));
   }
 
+  function settings() {
+    const native = window.RemoteCliNative, group = (title, ...rows) => el('section', { className: 'settings-section' }, head(title), el('div', { className: 'settings-group' }, ...rows));
+    const row = (label, description, value, action) => el('button', { type: 'button', className: 'setting-row', onclick: action },
+      el('span', { className: 'setting-copy' }, el('b', { textContent: label }), el('small', { textContent: description })),
+      el('span', { className: 'setting-value', textContent: value || '' }), el('span', { className: 'setting-chevron', ariaHidden: 'true', textContent: '›' }));
+    const groups = [];
+    if (native && native.reminders) groups.push(group('提醒与后台', row('提醒与权限', '通知、电池与后台联网', native.reminderStatus ? native.reminderStatus() : '', () => native.reminders())));
+    groups.push(group('使用偏好', row('外观与文字', '主题、字号与终端阅读方式', '', () => { location.href = 'computer/#part-look'; })));
+    groups.push(group('连接与设备', row('电脑设置', '连接线路、远程访问与工具', page.usable() ? '在线' : '离线', () => { location.href = 'computer/'; })));
+    if (native && native.update) groups.push(group('版本与更新', row('检查更新', 'Remote AI · ' + (native.version ? native.version() : ''), '', () => native.update())));
+    groups.push(group('工作记录', row('工作统计', '提问、对话与工作时长', expanded ? '收起' : '查看', () => { expanded = !expanded; draw(); })));
+    return el('div', { className: 'settings-grid' }, ...groups);
+  }
   function draw() {
     const data = page.data, supported = page.has('work'), online = page.usable(), have = kept[span];
     // asked anew when the tab is opened, and once a minute while it stays open
     const old = have ? Date.now() - have.at : Infinity;
-    if (supported && online && !asking && (old > 60000 || (wanted && old > 15000)) && Date.now() - tried > 8000) { load(span); return; }
-    const signature = JSON.stringify([span, metric, picked, have && have.at, asking, failed, supported, online, data.device.version, data.device.newer, data.device.tools]);
+    if (expanded && supported && online && !asking && (old > 60000 || (wanted && old > 15000)) && Date.now() - tried > 8000) { load(span); return; }
+    const signature = JSON.stringify([expanded, span, metric, picked, have && have.at, asking, failed, supported, online, data.device.version, data.device.newer, data.device.tools]);
     if (signature === drawn) return;
     drawn = signature;
-    const parts = [];
+    const parts = [el('p', { className: 'settings-intro', textContent: '设备连接与个人偏好' }), settings()];
+    if (!expanded) { box.replaceChildren(...parts); return; }
     if (!supported) parts.push(el('section', { className: 'notice plain' }, el('b', { textContent: '需要更新电脑端' }), el('span', { textContent: '工作统计由电脑端读取，这台电脑的版本还没有这项功能。' })));
     else if (have) parts.push(today(have.stats), period(have.stats),
       el('p', { className: 'hint', textContent: '按这台电脑上 Claude Code 与 Codex 的记录统计 · ' + page.ago(have.at) + '更新' }));

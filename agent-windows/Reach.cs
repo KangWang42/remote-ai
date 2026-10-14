@@ -70,7 +70,10 @@ public sealed class Reach : IDisposable {
     /// `continue: false` it ends its turn and stays open, in whatever program has it (tried on Claude Code 2.1.283).
     /// Codex has no such answer; its desktop app is told by its own channel (CodexDesktopControl).
     public const string Step = "PreToolUse";
-    public static string[] EventsOf(string tool) { return tool == "claude" ? Events.Concat(new[] { Step }).ToArray() : Events; }
+    // Claude emits a completion hook after a permission prompt has been answered in its own window.  Listening to
+    // it closes a phone card immediately instead of waiting for the next user turn.  Codex has no equivalent hook in
+    // its supported contract, so its native channel remains the source of truth.
+    public static string[] EventsOf(string tool) { return tool == "claude" ? Events.Concat(new[] { Step, "PostToolUse", "PostToolUseFailure" }).ToArray() : Events; }
     /// What Claude Code shows where it was stopped. Read by the person at the computer, not by the model.
     public const string StoppedFromPhone = "已从手机停止（Remote AI）";
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
@@ -80,13 +83,14 @@ public sealed class Reach : IDisposable {
     /// or `Hold` has passed), "idle" (it has stopped).
     public sealed class Open {
         public string Tool = "", Session = "", Status = "idle", AskId = "", AskText = "", Last = "";
+        public object[] AskOptions = new object[0];
         public bool Answerable;             // the request can be answered from the phone (else only at the computer)
         public bool Held;                   // while it waits, its hook is kept: a message is taken at once. Else it has
                                             // stopped for good, and is told by its tool's own way in, where it has one
         public bool Beside;                 // while it asks, its own question is on the computer's screen as well
         public bool Steps;                  // it is heard before each of its steps: it runs the hook for that (one opened
                                             // before the hook was there does not, until it is opened anew)
-        internal bool StopAsked;
+        internal bool StopAsked, NativeAsked;
         // The step it is at, as its hook told it: when it began, by which of the tool's own tools, and whether it was
         // sent off to run beside the conversation (that is no command to end when the conversation is told to stop).
         internal DateTime StepAt; internal string StepTool = ""; internal bool StepAside;
@@ -97,7 +101,7 @@ public sealed class Reach : IDisposable {
         public bool Kept { get { return (Status == "confirm" && Answerable && !Beside) || (Status == "waiting" && Held); } }
         /// A message can be left for it here: it takes it now, or when it has done what it is doing.
         public bool Sayable { get { return Status == "busy" || Status == "confirm" || (Status == "waiting" && Held); } }
-        internal string Transcript = ""; internal bool? Verdict; internal DateTime Seen, AskedAt, Stopped; internal int Turn; internal long AskStamp;
+        internal string Transcript = "", AskKey = ""; internal bool? Verdict; internal string VerdictScope = "once"; internal Dictionary<string, object> Always = null; internal DateTime Seen, AskedAt, Stopped; internal int Turn; internal long AskStamp;
         internal Open Copy() { return (Open)MemberwiseClone(); }
     }
 
@@ -128,6 +132,8 @@ public sealed class Reach : IDisposable {
     volatile bool closed;
     /// Something about a conversation changed: the phone is to be told at once.
     public event Action Changed;
+    string receipt = "", receiptDetail = ""; DateTime receiptAt;
+    public string[] RecentAnswer() { lock (gate) return DateTime.UtcNow - receiptAt < TimeSpan.FromSeconds(8) ? new[] { receipt, receiptDetail } : null; }
     /// A conversation has done what it was at and stopped by itself, with nothing waiting for it (its tool and its
     /// number): what is to follow on that can be started (Chains). Not one that was told to stop.
     public event Action<string, string> Finished;
@@ -175,6 +181,18 @@ public sealed class Reach : IDisposable {
             if (o.Status == "confirm" && !o.Answerable && DateTime.UtcNow - o.AskedAt > TimeSpan.FromSeconds(1.5) && Stamp(o.Transcript) != o.AskStamp) { o.Status = "busy"; o.AskId = o.AskText = ""; }
             return o.Copy();
         }
+    }
+    /// A fresh native snapshot can retire a question that was released to the desktop. A still-held hook must never
+    /// be inferred answered from an application's cached state.
+    public void ObserveDesktop(string session, bool ready, bool takes, DateTime at) {
+        bool changed = false;
+        lock (gate) {
+            Open o;
+            if (!open.TryGetValue(Key("codex", session), out o) || o.Status != "confirm" || o.Answerable || at < o.AskedAt.AddSeconds(2)) return;
+            if (!ready && !takes) o.NativeAsked = true;
+            else if (ready || o.NativeAsked) { o.Status = ready ? "idle" : "busy"; o.AskId = o.AskText = ""; o.AskOptions = new object[0]; Monitor.PulseAll(gate); changed = true; }
+        }
+        if (changed) Tell();
     }
     /// The tools of Claude Code's that run a command in a shell: what such a step runs can be ended from outside.
     static readonly string[] ShellTools = { "Bash", "PowerShell" };
@@ -231,12 +249,15 @@ public sealed class Reach : IDisposable {
     /// one it had (conversations written then are still read).
     public static readonly string[] Names = { "Remote AI", "Remote CLI" };
     /// The phone's answer to a request for permission.
-    public void Answer(string tool, string session, string ask, bool allow) {
+    public void Answer(string tool, string session, string ask, bool allow, string scope = "once") {
         lock (gate) {
             Open o;
             if (!open.TryGetValue(Key(tool, session), out o) || o.Status != "confirm" || o.AskId != ask || ask.Length == 0) throw new InvalidOperationException("这个确认请求已经处理过了");
             if (!o.Answerable) throw new InvalidOperationException("这个确认请求正在电脑上等待，只能在电脑上回答");
-            o.Verdict = allow; Monitor.PulseAll(gate);
+            if (o.Verdict.HasValue) throw new InvalidOperationException("这个确认请求已经处理过了");
+            if (scope != "once" && scope != "always") throw new ArgumentException("授权范围无效");
+            if (scope == "always" && (!allow || o.Always == null || o.Always.Count == 0)) throw new InvalidOperationException("这个工具没有提供可保存的长期授权");
+            o.VerdictScope = scope; o.Verdict = allow; Monitor.PulseAll(gate);
         }
     }
 
@@ -285,7 +306,11 @@ public sealed class Reach : IDisposable {
                 string[] answer = Handle(Convert.ToString(tool), (Dictionary<string, object>)hooked, () => gone || closed, (int)process);
                 // `again`: this program is closing, and what it was asked has not been answered by anybody
                 WriteFrame(stream, Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string, object> { { "out", answer[0] }, { "code", Int32.Parse(answer[1]) }, { "again", closed && answer[0].Length == 0 } })));
-                try { stream.WaitForPipeDrain(); } catch { }
+                bool delivered = true; try { stream.WaitForPipeDrain(); } catch (IOException) { delivered = false; }
+                if (delivered && answer[0].Contains("\"hookEventName\":\"PermissionRequest\"") && answer[0].Contains("\"decision\"") && !answer[0].Contains(Deferred)) {
+                    lock (gate) { receipt = Convert.ToString(tool) == "claude" ? "Claude Code" : "Codex"; receipt += answer[0].Contains("\"behavior\":\"allow\"") ? "：手机已允许" : "：手机已拒绝"; receiptDetail = answer[0].Contains("updatedPermissions") ? "已提交长期规则，工具将按自身权限设置处理" : "本次操作的决定已交给工具"; receiptAt = DateTime.UtcNow; }
+                    Tell();
+                }
             } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }      // a pipe that closed, or words that are not an event
         }
     }
@@ -364,7 +389,7 @@ public sealed class Reach : IDisposable {
         lock (gate) {
             first = heard.Add(tool);
             string key = Key(tool, session);
-            if (name == "SessionEnd") { if (open.Remove(key)) Monitor.PulseAll(gate); o = null; }
+            if (name == "SessionEnd") { Open ending; if (open.TryGetValue(key, out ending)) { ending.AskId = ""; ending.Answerable = false; open.Remove(key); Monitor.PulseAll(gate); } o = null; }
             else {
                 if (!open.TryGetValue(key, out o)) open[key] = o = new Open { Tool = tool, Session = session };
                 o.Seen = DateTime.UtcNow; o.Turn++;
@@ -375,7 +400,8 @@ public sealed class Reach : IDisposable {
         if (o == null || first) Tell();
         if (o == null) return Nothing;
         if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") { o.Status = "idle"; o.Held = false; } } Tell(); return Nothing; }
-        if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.Answerable = o.Held = o.StopAsked = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
+        if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.AskOptions = new object[0]; o.Always = null; o.Answerable = o.Held = o.StopAsked = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
+        if (name == "PostToolUse" || name == "PostToolUseFailure") { lock (gate) { if (o.Status == "confirm" && o.AskKey == RequestKey(hooked)) { o.Status = "busy"; o.AskId = o.AskText = ""; o.AskOptions = new object[0]; o.Always = null; o.Answerable = false; o.Verdict = null; Monitor.PulseAll(gate); } } Tell(); return Nothing; }
         if (name != "PermissionRequest" && name != "Stop") return Nothing;
         bool mine = false;
         if (own != null && process > 0) try { mine = own(process, tool, session); } catch (Exception) { }
@@ -390,9 +416,11 @@ public sealed class Reach : IDisposable {
     // `mine`: it runs in one of this program's own terminals. Its question is the terminal's to answer.
     string[] Asked(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone, bool mine) {
         bool beside = tool == "claude" && !mine;         // its question is on the computer's screen while the hook runs
-        string id; var began = DateTime.UtcNow; bool? verdict = null; bool deferred = false;
+        string id; var began = DateTime.UtcNow; bool? verdict = null; bool deferred = false; Dictionary<string, object> savedPermission = null;
         lock (gate) {
-            id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null;
+            id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null; o.VerdictScope = "once";
+            o.AskKey = RequestKey(hooked); o.NativeAsked = false; o.Always = tool == "claude" ? AlwaysSuggestion(hooked) : null;
+            o.AskOptions = o.Always == null ? new object[] { new { id = "once", label = "允许一次", detail = "只允许这一次操作" } } : new object[] { new { id = "once", label = "允许一次", detail = "只允许这一次操作" }, new { id = "always", label = "始终允许此规则", detail = PermissionDetail(o.Always) } };
             // beside its own question the hook is not seen; a tool that asks its hooks first is kept only where its owner chose that
             o.Status = "confirm"; o.Answerable = !mine && (beside || (kept().Requests && idle() >= Unattended)); o.Beside = beside; o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
         }
@@ -400,8 +428,8 @@ public sealed class Reach : IDisposable {
         lock (gate) {
             for (;;) {
                 if (o.AskId != id) return Nothing;                                  // the tool has gone on to something else
-                if (o.Verdict.HasValue) { verdict = o.Verdict; break; }
                 if (gone()) { o.AskId = o.AskText = ""; o.Answerable = false; o.Status = "busy"; break; }
+                if (o.Verdict.HasValue) { verdict = o.Verdict; if (o.VerdictScope == "always") savedPermission = o.Always; break; }
                 if (o.Answerable && DateTime.UtcNow - began > TimeSpan.FromSeconds(Holds)) {
                     // its time is over. Nobody at the computer either: it is not left at a question nobody can answer
                     if (idle() >= Unattended) { verdict = false; deferred = true; break; }
@@ -411,14 +439,40 @@ public sealed class Reach : IDisposable {
                 if (!o.Answerable && !beside) break;
                 Monitor.Wait(gate, 300);
             }
-            if (verdict.HasValue) { o.AskId = o.AskText = ""; o.Answerable = false; o.Status = "busy"; }
+            if (verdict.HasValue) { o.AskId = o.AskText = ""; o.AskOptions = new object[0]; o.Answerable = false; o.Status = "busy"; }
         }
         Tell();
         if (!verdict.HasValue) return Nothing;
         var decision = new Dictionary<string, object> { { "behavior", verdict.Value ? "allow" : "deny" } };
+        if (verdict.Value && savedPermission != null) decision["updatedPermissions"] = new object[] { savedPermission };
         if (!verdict.Value) decision["message"] = deferred ? Deferred : "The user declined this from their phone (Remote AI app).";
         return new[] { json.Serialize(new Dictionary<string, object> { { "hookSpecificOutput", new Dictionary<string, object> { { "hookEventName", "PermissionRequest" }, { "decision", decision } } } }), "0" };
     }
+    static Dictionary<string, object> AlwaysSuggestion(Dictionary<string, object> hooked) {
+        object raw; if (!hooked.TryGetValue("permission_suggestions", out raw)) return null;
+        var list = raw as IEnumerable; if (list == null) return null;
+        foreach (var item in list) {
+            var map = item as Dictionary<string, object>;
+            if (map == null || Text(map, "type") != "addRules" || Text(map, "behavior") != "allow" || Text(map, "destination") != "localSettings" || !map.ContainsKey("rules") || !(map["rules"] is IEnumerable) || map["rules"] is string) continue;
+            var entries = ((IEnumerable)map["rules"]).Cast<object>().ToArray();
+            if (entries.Length == 0 || entries.Length > 4 || entries.Any(rule => !(rule is Dictionary<string, object>) || Text((Dictionary<string, object>)rule, "toolName").Length == 0)) continue;
+            // The complete scope has to fit on the phone before it can be approved.
+            if (PermissionDetail(map).Length > 600) continue;
+            return map;
+        }
+        return null;
+    }
+    static string PermissionDetail(Dictionary<string, object> suggestion) {
+        var rules = ((IEnumerable)suggestion["rules"]).Cast<object>().OfType<Dictionary<string, object>>().Select(rule => Text(rule, "toolName") + "(" + (Text(rule, "ruleContent").Length == 0 ? "全部操作" : Text(rule, "ruleContent")) + ")");
+        return "保存到此项目的本机设置：" + String.Join("；", rules);
+    }
+    static object Ordered(object value) {
+        var map = value as Dictionary<string, object>;
+        if (map != null) return map.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToDictionary(pair => pair.Key, pair => Ordered(pair.Value));
+        if (value is IEnumerable && !(value is string)) return ((IEnumerable)value).Cast<object>().Select(Ordered).ToArray();
+        return value;
+    }
+    static string RequestKey(Dictionary<string, object> hooked) { object input; hooked.TryGetValue("tool_input", out input); return Text(hooked, "tool_name") + new JavaScriptSerializer().Serialize(Ordered(input)); }
     // The tool has stopped. A message that waited for this goes to it now. Else, while nobody is at the computer, it
     // is kept waiting for one.
     /// The first Claude Code this was tried with. From it on, a Stop hook may hand Claude Code added context and the

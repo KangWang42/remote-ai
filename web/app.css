@@ -428,3 +428,22 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 #me .hint { margin-top: 18px; }
 #computer .row .text { flex: none; }
 #computer .row .value { flex: 1; min-width: 0; text-align: right; }
+.answers { flex-wrap: wrap; }
+.answers .there { white-space: normal; }
+.approval-rule { flex-basis: 100%; padding: 10px 0 0; border-top: 1px solid var(--line); }
+.approval-rule p { overflow-wrap: anywhere; white-space: pre-wrap; margin: 0 0 10px; font-size: .85rem; }
+.settings-intro { color: var(--muted); margin: -8px 0 20px; }
+.settings-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+.settings-section { margin: 0 !important; min-width: 0; }
+.settings-section .section-head { margin: 0 0 8px; }
+.settings-section h2 { font-size: .82rem; color: var(--muted); font-weight: 600; }
+.settings-group { background: var(--panel); border-radius: 16px; overflow: hidden; }
+.setting-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 72px; padding: 15px 17px; border: 0; border-radius: 0; background: none; text-align: start; color: var(--ink); }
+.setting-row + .setting-row { border-top: 1px solid var(--line); }
+.setting-row:hover { background: var(--raised); }
+.setting-copy { flex: 1; min-width: 0; }
+.setting-copy b { display: block; font-size: 1rem; font-weight: 550; }
+.setting-copy small { display: block; color: var(--muted); font-size: .8rem; margin-top: 5px; line-height: 1.5; }
+.setting-value { font-size: .82rem; color: var(--muted); }
+.setting-chevron { font-size: 1.45rem; color: var(--muted); }
+@media (min-width: 760px) { .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }

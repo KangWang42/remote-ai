@@ -206,6 +206,7 @@
     if (native && native.update) {
       $('part-app').hidden = false;
       const rows = [];
+      if (native.reminders) rows.push(row({ act: () => native.reminders() }, text('提醒与权限', '通知、电池与后台联网'), el('span', { className: 'act', textContent: native.reminderStatus ? native.reminderStatus() : '设置' })));
       // looking by itself is off until it is switched on (an app that cannot say so looks by itself as before)
       if (native.autoUpdate && native.setAutoUpdate) {
         const on = native.autoUpdate();

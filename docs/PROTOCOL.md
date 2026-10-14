@@ -734,6 +734,29 @@ filesystem path. Stop interrupts that turn, not the application process. Desktop
 from stop because this interface's expected-turn variant does not pause the goal. Hooks that already
 provide a permission request continue to use `session_answer`; native approvals are not implemented.
 
+### Remote approval scope (1.6.3)
+
+Hook based approval requests include a stable `ask.id` and an optional `ask.options` list. The list contains `once`
+(`允许一次`) and, for Claude Code only when the tool supplies a valid `permission_suggestions` entry, `always`
+(`始终允许此规则`). A client sends `scope` with `action: "answer"`; omitting it means `once`. `always` is rejected
+unless that request actually supplied a persistable suggestion, and it is never offered for Codex hooks. The first
+answer wins; an answer for an old request is rejected after the desktop or another phone has resolved it. Claude's
+`PostToolUse` and `PostToolUseFailure` hooks also clear a request resolved in the desktop application.
+
+Only `addRules` / `allow` suggestions destined for `localSettings` are offered as persistent choices; the full rule
+is shown before submission. Other persistence modes remain in the original tool. Terminal cards open the original
+terminal for scope selection instead of sending an unguarded Enter key to whatever choice happens to be selected.
+Codex desktop probes retire a released hook request when the application becomes idle, or transitions from its
+observed question to accepting input. An active held hook is never retired by a native snapshot.
+
+Android reminders use an opt-in `remoteMessaging` foreground service with a persistent low-priority connection
+notification and serialized overview checks about ten seconds apart. Task alerts use the separate `tasks` channel.
+The service keeps a baseline while the Activity is visible, suppresses task popups there, and preserves request
+identities across service recreation. New questions are reported on the first background check; resolved question
+notifications are cancelled. Tapping a task notification routes only to a computer already in the saved list.
+Notification, battery optimization and data-saver settings are exposed in the App; there is no exact-alarm permission.
+Android may still defer execution or networking during deep sleep or after a force stop.
+
 Responses are `status: "accepted", sent: true, turn: ...` for an acknowledged native start and
 `status: "confirmed", turn: ...` for an acknowledged interrupt. These are execution receipts, not completed
 AI answers. A native error, malformed reply, timeout or disconnect after possible dispatch yields

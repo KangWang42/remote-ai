@@ -151,6 +151,9 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
 
         # ---- 我的
         tab("me")
+        until("document.querySelectorAll('#me .setting-row').length >= 3", "settings before statistics")
+        assert not shown('#today')
+        value("Array.from(document.querySelectorAll('#me .setting-row')).find(b => b.textContent.includes('工作统计')).click()")
         until("document.querySelectorAll('#me .day').length === 7 && document.querySelectorAll('#me .tile').length === 4", "today in figures and the last seven days")
         assert shown("#settings") and not shown("#new-task") and asked("work_stats")[-1]["days"] == 7
         assert "次提问" in value("document.querySelector('#me .at').textContent") and "Claude Code" in value("document.querySelector('#me .shares').textContent")
@@ -169,7 +172,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         for width in (320, 390, 430, 1440):
             for name, ready in (("tasks", listed), ("projects", "document.querySelectorAll('#project-list .card').length === 4"),
                                 ("together", "document.querySelectorAll('#chains .card').length >= 2"), ("me", "document.querySelectorAll('#me .day').length === 7")):
-                browser.open(played.origin + "/?tab=" + name, ready, "%s at %d" % (name, width), **phone(width))
+                browser.open(played.origin + "/?tab=" + name + ('&stats=1' if name == 'me' else ''), ready, "%s at %d" % (name, width), **phone(width))
                 value("scrollTo(0, document.documentElement.scrollHeight)")
                 time.sleep(0.2)
                 seen = value("""(() => {
@@ -201,6 +204,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         value("document.getElementById('handoff').click()")
         until(toast + ".includes('电脑端版本不支持交接')", "why nothing is handed over")
         tab("me")
+        value("Array.from(document.querySelectorAll('#me .setting-row')).find(b => b.textContent.includes('工作统计')).click()")
         until("document.querySelector('#me .notice') && document.querySelector('#me .notice').textContent.includes('需要更新电脑端')", "the same on 我的")
         assert shown("#computer")
         errors = value("JSON.stringify(window.__errors)")

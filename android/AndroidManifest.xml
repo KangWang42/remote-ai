@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.kangwang42.remotecli" android:versionCode="66" android:versionName="1.6.2">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.kangwang42.remotecli" android:versionCode="67" android:versionName="1.6.3">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- Only for the reminders, which are off until turned on: a notification when a task waits or is done, and being
-         woken about once a minute to look at the computers while the app is not on the screen. No service runs. -->
+    <!-- Opt-in cross-device conversation reminders, with a visible foreground connection notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Only for reading the code on the computer's screen; asked for when "扫码连接" is tapped. -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -28,6 +28,6 @@
                 <data android:scheme="remotecli" android:host="connect" />
             </intent-filter>
         </activity>
-        <receiver android:name=".Watcher" android:exported="false" />
+        <service android:name=".Watcher" android:exported="false" android:foregroundServiceType="remoteMessaging" />
     </application>
 </manifest>

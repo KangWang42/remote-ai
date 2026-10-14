@@ -30,7 +30,7 @@ final class AppPages {
         generation++; holders.clear(); stats.clear(); answered = 0;
         boolean mine = "me".equals(tab);
         LinearLayout page = kit.page(22);
-        page.addView(kit.head(mine ? "我的" : "协作", null));
+        page.addView(kit.head(mine ? "我的" : "协作", mine ? kit.text("设备连接与个人偏好", 13, kit.MUTED) : null));
         if (!mine && activity.computers().length() > 0) {
             // the two things done at once, as on a computer's page: on the computer that is online, or the one chosen
             LinearLayout acts = kit.row();
@@ -41,12 +41,23 @@ final class AppPages {
             page.addView(acts, kit.below(16));
         }
         if (mine) {
-            total = kit.text("正在读取统计…", 16, kit.INK);
-            page.addView(total, kit.below(18));
-            page.addView(kit.button("外观", 1, activity::look), kit.below(16));
-            page.addView(kit.button("版本 " + activity.versionName() + " · 检查更新", 1, activity::checkUpdate), kit.below(8));
-            page.addView(kit.button("自动检查更新：" + (activity.autoUpdate() ? "已开启" : "未开启"), 1, activity::toggleAutoUpdate), kit.below(8));
-            page.addView(kit.button("任务提醒：" + (activity.watching() ? "已开启" : "未开启"), 1, activity::toggleWatch), kit.below(8));
+            LinearLayout reminders = kit.settingGroup(page, "提醒与后台");
+            kit.settingSwitch(reminders, "任务提醒", "需要确认或一轮完成时通知", activity.watching(), activity::toggleWatch);
+            kit.setting(reminders, "提醒与权限", "通知、电池与后台联网", activity.reminderStatus(), activity::reminderSettings);
+            LinearLayout experience = kit.settingGroup(page, "使用偏好");
+            kit.setting(experience, "外观与文字", "主题、字号与终端阅读方式", activity.appearanceName(), activity::look);
+            LinearLayout updates = kit.settingGroup(page, "版本与更新");
+            kit.setting(updates, "检查更新", "Remote AI · " + activity.versionName(), "", activity::checkUpdate);
+            kit.settingSwitch(updates, "自动检查更新", "发现新版时提示，安装前由你确认", activity.autoUpdate(), activity::toggleAutoUpdate);
+            LinearLayout connections = kit.settingGroup(page, "已连接的电脑");
+            JSONArray saved = activity.computers();
+            for (int i = 0; i < saved.length(); i++) { JSONObject computer = saved.optJSONObject(i); if (computer == null) continue; String url = computer.optString("url");
+                kit.setting(connections, computer.optString("name", MainActivity.host(url)), MainActivity.host(url), "管理", () -> activity.manage(url));
+            }
+            kit.setting(connections, "添加电脑", "扫描电脑端的连接二维码", "", activity::scan);
+            total = kit.text("正在读取工作统计…", 13, kit.MUTED);
+            page.addView(kit.bold("工作统计", 13, kit.MUTED), kit.below(24));
+            page.addView(total, kit.below(8));
         } else {
             page.addView(kit.text("接力怎么用\n1. 在同一台电脑上打开两段 Claude Code 或 Codex 对话，在电脑端“设置”开启“手机处理电脑上的对话”。\n2. 在下面选择电脑，设置来源、接手对话和要做的事。\n3. 来源对话下一次完成一轮后，自动把最后的回答和你的要求发给接手对话。", 14, kit.INK), kit.below(18));
             page.addView(kit.text("例如：Claude Code 写实现，Codex 审查。一次规则只负责单向转交；需要往返时另建反向规则。电脑须保持运行，暂不支持跨电脑接力。", 13, kit.MUTED), kit.below(8));

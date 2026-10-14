@@ -238,6 +238,8 @@ public sealed class TerminalAgent {
     // more, how it stands now, what it asks, what it last said, and what the phone can do to it and by which way
     // (Ways.cs: `reach` by name, `ways` for each thing, `why` for what cannot be done now).
     object Listed(SessionInfo s) {
+        var native = NativeState(s);
+        if (native != null) Reach.ObserveDesktop(s.Id, native.Ready, native.Takes, native.At);
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
         var ways = WaysOf(s, known);
         bool asks = known != null && known.Status == "confirm";
@@ -250,7 +252,7 @@ public sealed class TerminalAgent {
             opened = s.Live ? Desktop.CameOf(s.Tool, s.Id, s.ControlFolder, s.Created, Ways.InApplication(s.Origin)) : "",
             // what the phone said to it and it has not taken yet, each with its number: waiting, or held since it was told to stop
             queued = Reach.Outbox.Of(s.Tool, s.Id).Select(item => new { id = item.Id, text = item.Text.Length > 200 ? item.Text.Substring(0, 199) + "…" : item.Text, state = item.State, at = Milliseconds(item.At) }).ToArray(),
-            ask = asks ? new { id = known.AskId, text = known.AskText } : null, last = known != null ? known.Last : "" };
+            ask = asks ? new { id = known.AskId, text = known.AskText, options = known.AskOptions } : null, last = known != null ? known.Last : "" };
     }
     Ways WaysOf(SessionInfo s, Reach.Open known) { return Ways.Of(s, known, NativeState(s)); }
     // How a message stands, for the phone: the same answer whatever carries it, and for one that is asked after again.
@@ -1657,7 +1659,7 @@ public sealed class TerminalAgent {
                     }
                     result = new Dictionary<string, object> { { "released", released.Length }, { "way", ways.Say } };
                 }
-                else { Reach.Answer(tool, session, Get(op, "ask"), Get(op, "allow") == "True"); result = new Dictionary<string, object>(); }
+                else { Reach.Answer(tool, session, Get(op, "ask"), Get(op, "allow") == "True", Get(op, "scope").Length == 0 ? "once" : Get(op, "scope")); result = new Dictionary<string, object> { { "status", "accepted" } }; }
             }
             else if (file) {
                 string root;

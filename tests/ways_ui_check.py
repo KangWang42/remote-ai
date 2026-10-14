@@ -107,6 +107,12 @@ def main():
                             one = next(s for s in sessions if s['id'] == payload['session'])
                             one.update(live=False, status='idle')
                             ack = {'id': op['id'], 'result': {}}
+                        elif op['action'] == 'session_answer':
+                            one = next(s for s in sessions if s['id'] == payload['session'])
+                            one.update(status='busy', ask=None, reach=['say', 'stop'])
+                            one['ways']['answer'] = ''
+                            report()
+                            ack = {'id': op['id'], 'result': {'status': 'accepted'}}
                         elif op['action'] in ('session_withdraw', 'session_release'):
                             # the computer keeps what waits: taken back it is gone, released it waits again
                             one = next(s for s in sessions if s['id'] == payload['session'])
@@ -164,7 +170,7 @@ def main():
                     result = value(code)
                     if result: return result
                     time.sleep(.1)
-                raise AssertionError(why or code)
+                raise AssertionError((why or code, value("({url:location.href,tab:window.RemoteCliPage?.tab,body:document.body.innerText.slice(0,1000)})"), events[-3:]))
 
             def picture(name):
                 (out / name).write_bytes(base64.b64decode(ask('Page.captureScreenshot', format='png')['data']))
@@ -388,6 +394,40 @@ def main():
             ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
             until("document.querySelector('#sheet[open] h3')?.textContent === '新建对话'")
             assert texts('#sheet .tools button') == ['Codex'], 'only what the computer offers'
+
+            # Settings remain useful without statistics or an online computer. Check real layout viewports.
+            for width in (320, 390, 430, 1440):
+                ask('Emulation.setDeviceMetricsOverride', width=width, height=900, deviceScaleFactor=1, mobile=width < 760)
+                ask('Page.navigate', url='http://127.0.0.1:%d/?tab=me' % port)
+                until("!!document.querySelector('#me:not([hidden]) .setting-row')")
+                dimensions = value("[innerWidth,document.documentElement.clientWidth,document.documentElement.scrollWidth,document.body.scrollWidth]")
+                assert dimensions[0] == width and max(dimensions[2:]) <= dimensions[1] + 1, dimensions
+                assert value("document.querySelector('#me').textContent.includes('外观与文字')")
+                assert not value("!!document.querySelector('#period')")
+                picture('settings-%s.png' % width)
+
+            info['features'] = ['peek', 'reach']
+            question = {'id': 'abcdef123456', 'text': 'Bash：npm test', 'options': [
+                {'id': 'once', 'label': '允许一次', 'detail': '只允许这一次操作'},
+                {'id': 'always', 'label': '始终允许此规则', 'detail': '保存到此项目的本机设置：Bash(npm test)'}]}
+            sessions[0].update(status='confirm', ask=question, reach=['answer'], ways={'answer': 'hook', 'say': '', 'stop': '', 'end': ''})
+            for width in (320, 390, 430, 1440):
+                ask('Emulation.setDeviceMetricsOverride', width=width, height=900, deviceScaleFactor=1, mobile=width < 760)
+                window(CLAUDE)
+                until("document.querySelector('#sheet .answers .yes')?.textContent === '允许一次'")
+                value(button('始终允许此规则') + '.click()')
+                assert value("document.querySelector('#sheet .approval-rule').textContent.includes('Bash(npm test)')")
+                assert value("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+                picture('approval-%s.png' % width)
+            value(button('确认保存并允许') + '.click()')
+            until("!document.querySelector('#sheet .ask')", 'remote decision retires the card')
+            assert asked[-1]['scope'] == 'always' and asked[-1]['allow'] is True, asked[-1]
+            # A local answer retires the already-open dialog without tapping the phone.
+            sessions[0].update(status='confirm', ask=dict(question, id='abcdef123457'), reach=['answer'], ways={'answer': 'hook'})
+            window(CLAUDE)
+            until("!!document.querySelector('#sheet .ask')")
+            sessions[0].update(status='busy', ask=None, reach=['say'], ways={'say': 'hook'})
+            until("!document.querySelector('#sheet .ask')", 'desktop decision retires the card')
 
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']

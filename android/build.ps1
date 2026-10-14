@@ -1,13 +1,17 @@
 param(
     [string]$Jdk = $env:JAVA_HOME,
     [string]$Sdk = $env:ANDROID_HOME,
-    [string]$SecretDir = (Join-Path $HOME '.remote-cli-signing')
+    [string]$SecretDir = (Join-Path $HOME '.remote-cli-signing'),
+    [switch]$CreateSigningKey
 )
 # Builds dist/RemoteCli-Android.apk with the Android command-line tools only (no Gradle).
 # Needs a JDK 11+ and an Android SDK with build-tools 36.0.0 and platforms/android-36.
 # The signing key is created on first use in $SecretDir, outside the repository. Keep it: an app signed with
 # another key cannot be installed over this one.
 $ErrorActionPreference = 'Stop'
+if (!$CreateSigningKey -and (!(Test-Path -LiteralPath (Join-Path $SecretDir 'signing.p12')) -or !(Test-Path -LiteralPath (Join-Path $SecretDir 'signing-password.txt')))) {
+    throw 'Existing signing key and password are required. Pass -SecretDir for the release key; use -CreateSigningKey only for a new application identity.'
+}
 Set-Location -LiteralPath $PSScriptRoot
 if (!$Jdk -or !$Sdk) { throw 'Pass -Jdk and -Sdk, or set JAVA_HOME and ANDROID_HOME' }
 $buildTools = Join-Path $Sdk 'build-tools/36.0.0'

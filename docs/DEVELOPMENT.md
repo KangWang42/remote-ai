@@ -35,7 +35,7 @@ python tools\package_windows.py
 powershell -ExecutionPolicy Bypass -File android\build.ps1 -Jdk <JDK 目录> -Sdk <SDK 目录>
 ```
 
-安卓的签名密钥在第一次构建时生成，保存在仓库之外的 `~/.remote-cli-signing`。请保留它：换一把密钥签名的 App 不能覆盖安装原来的。
+安卓构建默认要求已有签名密钥；用 `-SecretDir <密钥目录>` 指定包含 `signing.p12` 和 `signing-password.txt` 的目录。只有首次创建独立应用签名时才传 `-CreateSigningKey`，默认目录为仓库之外的 `~/.remote-cli-signing`。正式发版必须与上一版 APK 比对证书，不能用新密钥替代已有发布密钥。
 
 ```powershell
 # 测试

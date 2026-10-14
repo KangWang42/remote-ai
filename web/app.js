@@ -311,10 +311,34 @@
     catch (error) { toast(error.message); }
     refresh();
   }
-  async function answerAsk(s, allow) {
-    try { await api('api/conversation', { id: newId(), session: s.id, action: 'answer', ask: s.ask.id, allow }); toast(allow ? '已允许' : '已拒绝'); }
+  const answering = new Set();
+  async function answerAsk(s, allow, scope = 'once') {
+    const id = s.ask.id;
+    if (answering.has(id)) return;
+    answering.add(id);
+    document.querySelectorAll('[data-approval="' + id + '"] button').forEach(b => b.disabled = true);
+    try { await api('api/conversation', { id: newId(), session: s.id, action: 'answer', ask: id, allow, scope }); toast(allow ? '已向电脑提交授权' : '已向电脑提交拒绝'); }
     catch (error) { toast(error.message); }
+    finally { answering.delete(id); }
     await refresh();
+    document.querySelectorAll('[data-approval="' + id + '"] button').forEach(b => b.disabled = false);
+  }
+  function approvalActions(s, after = () => {}) {
+    const answers = el('div', { className: 'answers' });
+    answers.dataset.approval = s.ask.id;
+    if (can(s, 'answer')) {
+      const options = s.ask.options && s.ask.options.length ? s.ask.options : [{ id: 'once', label: '允许一次', detail: '只允许这一次操作' }];
+      options.forEach(o => answers.append(el('button', { type: 'button', className: o.id === 'once' ? 'yes' : 'see', textContent: o.label, title: o.detail, disabled: answering.has(s.ask.id), onclick: () => {
+        if (o.id === 'once') { answerAsk(s, true, o.id).then(after); return; }
+        if (answers.querySelector('.approval-rule')) return;
+        const rule = el('div', { className: 'approval-rule' }, el('p', { textContent: o.detail }),
+          el('button', { type: 'button', className: 'yes', textContent: '确认保存并允许', onclick: () => answerAsk(s, true, o.id).then(after) }),
+          el('button', { type: 'button', className: 'see', textContent: '取消', onclick: () => rule.remove() }));
+        answers.append(rule);
+      } })));
+      answers.append(el('button', { type: 'button', className: 'no', textContent: '拒绝', disabled: answering.has(s.ask.id), onclick: () => answerAsk(s, false).then(after) }));
+    } else answers.append(el('span', { className: 'there', textContent: '请在电脑或原终端中选择授权范围' }));
+    return answers;
   }
   async function endTerminal(t) {
     if (!await ask('结束“' + t.title + '”？', '', [{ label: '结束终端', value: true, kind: 'danger' }])) return;
@@ -626,12 +650,12 @@
       let shown = '';
       function show() {
         // how it stands is what the computer said of it last: with the conversation itself, or in the lists
-        const listed = now(), current = stands === null || listed.ask || listed.transport === APP ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
+        const listed = now(), current = stands === null || stands === 'confirm' || listed.ask || listed.transport === APP ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
         const mode = controlMode(current);
         control.className = 'control-mode ' + mode;
         // (where it can only be read, the computer's own words why it cannot be told anything)
         control.textContent = mode === 'read' ? whyNot(current, 'say', controlCopy.read) : controlCopy[mode] + (mode === 'shared' && current.can_takeover === true ? ' 需要完整终端时，可选择“接管”。' : '');
-        const signature = JSON.stringify([current.live, current.status, current.reach, current.ways, current.why, current.queued, current.wake, current.ask && current.ask.id, current.host, current.now, current.dir, current.transport, current.turn]);
+        const signature = JSON.stringify([current.live, current.status, current.reach, current.ways, current.why, current.queued, current.wake, current.ask, current.host, current.now, current.dir, current.transport, current.turn]);
         follow(listed);
         // the line of how it stands: its clock goes on between the computer's words
         const kind = !current.live ? 'stopped' : phase || 'stopped';
@@ -652,9 +676,7 @@
         // what it asks is answered here, under what was said
         asks.textContent = '';
         if (current.ask) {
-          const answers = el('div', { className: 'answers' });
-          if (can(current, 'answer')) answers.append(el('button', { type: 'button', className: 'yes', textContent: '允许', onclick: () => answerAsk(current, true).then(show) }), el('button', { type: 'button', className: 'no', textContent: '拒绝', onclick: () => answerAsk(current, false).then(show) }));
-          else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
+          const answers = approvalActions(current, show);
           asks.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: current.ask.text }), answers)));
         }
         // The box stands wherever something can be said, and also where it will be once the conversation has done
@@ -772,7 +794,7 @@
   const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? PHONE : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
   // what a card shows: it is built again when any of this changes
   const signed = x => x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned, x.place, x.apart]
-    : [x.s.id, x.phase, x.s.now, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), canEnd(x.s), endingSessions.has(x.s.id), x.s.ask ? x.s.ask.id : '', x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state, x.source];
+    : [x.s.id, x.phase, x.s.now, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), canEnd(x.s), endingSessions.has(x.s.id), x.s.ask || null, x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state, x.source];
 
   // ---- the filters: by tool, and by where a thing runs. They last as long as the page is kept open.
   let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 2, hiddenShown = false;
@@ -918,12 +940,10 @@
     // A question the program waits on is answered here, under what it asks: the question is on the card, so nothing
     // is allowed unseen. The two keys are the ones Claude Code and Codex take for "yes" and "no".
     if (phase === 'confirm' && (t.asks || []).length) {
-      const answer = (key, done) => async () => { if (await run({ action: 'input', terminal: t.id, data: key }, '')) { toast(done); refresh(); } };
       made.classList.add('asking');
       made.append(el('div', { className: 'ask' }, el('pre', { textContent: t.asks.join('\n') }), el('div', { className: 'answers' },
-        el('button', { type: 'button', className: 'yes', textContent: '允许（回车）', onclick: answer('\r', '已允许') }),
-        el('button', { type: 'button', className: 'no', textContent: '拒绝（Esc）', onclick: answer('\x1b', '已拒绝') }),
-        el('button', { type: 'button', className: 'see', textContent: '进去看', onclick: () => open(t.id) }))));
+        el('button', { type: 'button', className: 'yes', textContent: '选择授权范围', onclick: () => open(t.id) }),
+        el('span', { className: 'there', textContent: '在原终端选择一次、会话内或长期允许' }))));
     }
     return made;
   }
@@ -953,9 +973,7 @@
       if (can(s, 'say') && phase !== 'confirm') made.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这段对话发消息', html: ICON.say, onclick: () => tell(s) }));
       if (phase === 'confirm' && s.ask) {
         made.classList.add('asking');
-        const answers = el('div', { className: 'answers' });
-        if (can(s, 'answer')) answers.append(el('button', { type: 'button', className: 'yes', textContent: '允许', onclick: () => answerAsk(s, true) }), el('button', { type: 'button', className: 'no', textContent: '拒绝', onclick: () => answerAsk(s, false) }));
-        else answers.append(el('span', { className: 'there', textContent: '正在电脑上等待确认' }));
+        const answers = approvalActions(s);
         answers.append(el('button', { type: 'button', className: 'see', textContent: '看对话', onclick: see }));
         made.append(el('div', { className: 'ask' }, el('pre', { textContent: s.ask.text }), answers));
       }

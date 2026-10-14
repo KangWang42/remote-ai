@@ -126,6 +126,34 @@ final class Kit {
     }
     LinearLayout column() { LinearLayout column = new LinearLayout(activity); column.setOrientation(LinearLayout.VERTICAL); return column; }
     LinearLayout row() { LinearLayout row = new LinearLayout(activity); row.setGravity(Gravity.CENTER_VERTICAL); return row; }
+    LinearLayout settingGroup(LinearLayout page, String label) {
+        page.addView(bold(label, 13, MUTED), below(24));
+        LinearLayout group = column(); group.setBackground(shape(PANEL, 0, 18));
+        page.addView(group, below(8)); return group;
+    }
+    void setting(LinearLayout group, String label, String description, String value, Runnable action) {
+        LinearLayout row = settingBody(group, label, description);
+        if (value != null && !value.isEmpty()) {
+            TextView status = line(value, 12.5f, MUTED, false); status.setMaxWidth(dp(110));
+            LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2); gap.setMargins(dp(10), 0, dp(8), 0); row.addView(status, gap);
+        }
+        row.addView(icon(R.drawable.ic_chevron, MUTED, 14)); press(row, action);
+    }
+    void settingSwitch(LinearLayout group, String label, String description, boolean on, Runnable action) {
+        LinearLayout row = settingBody(group, label, description);
+        android.widget.Switch toggle = new android.widget.Switch(activity); toggle.setChecked(on); toggle.setContentDescription(label);
+        toggle.setThumbTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}}, new int[]{ACCENT, MUTED}));
+        toggle.setTrackTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}}, new int[]{tint(ACCENT, 90), LINE}));
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2); gap.leftMargin = dp(12); row.addView(toggle, gap);
+        toggle.setOnCheckedChangeListener((button, checked) -> action.run());
+    }
+    private LinearLayout settingBody(LinearLayout group, String label, String description) {
+        if (group.getChildCount() > 0) { View line = new View(activity); line.setBackgroundColor(LINE); LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, dp(1)); divider.setMargins(dp(16), 0, dp(16), 0); group.addView(line, divider); }
+        LinearLayout row = row(); row.setPadding(dp(16), dp(13), dp(16), dp(13)); row.setMinimumHeight(dp(64));
+        LinearLayout copy = column(); copy.addView(text(label, 16, INK));
+        if (description != null && !description.isEmpty()) copy.addView(text(description, 12.5f, MUTED), below(3));
+        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); group.addView(row); return row;
+    }
     /** A screen's content: one column with the page margins. */
     LinearLayout page(int top) { LinearLayout page = column(); page.setPadding(dp(18), dp(top), dp(18), dp(28)); return page; }
 

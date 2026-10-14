@@ -84,6 +84,29 @@ public static class ReachCheck {
                 Require(claude(one).Status == "busy" && claude(one).AskId == "", "and works again");
                 Require(Refused(() => reach.Answer("claude", one, known.AskId, true)).Contains("已经处理"), "a request is answered once");
 
+                // Scope comes from this exact request, and never from a client-invented permission rule.
+                asked = Run("claude", Request(one, "npm test", ""));
+                Require(Until(() => claude(one).Status == "confirm", 3000), "once-only request");
+                Require(Refused(() => reach.Answer("claude", one, claude(one).AskId, true, "always")).Length > 0, "unsupported always rejected");
+                reach.Answer("claude", one, claude(one).AskId, true);
+                Require(!Answer(asked, 3000, "once only").Contains("updatedPermissions"), "once never persists rules");
+                string suggestion = ",\"permission_suggestions\":[{\"type\":\"addRules\",\"behavior\":\"allow\",\"destination\":\"localSettings\",\"rules\":[{\"toolName\":\"Bash\",\"ruleContent\":\"npm test\"}]}]";
+                asked = Run("claude", Event("PermissionRequest", one, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm test\"}" + suggestion));
+                Require(Until(() => claude(one).Status == "confirm", 3000) && claude(one).AskOptions.Length == 2, "persistent option offered by tool");
+                reach.Answer("claude", one, claude(one).AskId, true, "always");
+                verdict = Answer(asked, 3000, "save rule");
+                Require(verdict.Contains("updatedPermissions") && verdict.Contains("localSettings") && verdict.Contains("npm test"), "original scoped suggestion passed intact");
+                Require(Until(() => reach.RecentAnswer() != null, 3000), "desktop receives phone decision notice");
+
+                asked = Run("claude", Request(one, "npm test", ""));
+                Require(Until(() => claude(one).Status == "confirm", 3000), "desktop completion pending");
+                string pending = claude(one).AskId;
+                Answer(Run("claude", Event("PostToolUse", one, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"other\",\"description\":\"\"}")), 3000, "parallel unrelated result");
+                Require(claude(one).AskId == pending, "unrelated result cannot clear current question");
+                Answer(Run("claude", Event("PostToolUse", one, ",\"tool_name\":\"Bash\",\"tool_input\":{\"description\":\"\",\"command\":\"npm test\"}")), 3000, "desktop result");
+                Require(Answer(asked, 3000, "desktop finished") == "" && claude(one).AskId == "", "desktop result retires phone card");
+                Require(Refused(() => reach.Answer("claude", one, pending, true)).Length > 0, "late phone answer rejected");
+
                 // Claude Code writes to its conversation while it asks: that is not an answer
                 asked = Run("claude", Request(one, "git push", ""));
                 Require(Until(() => claude(one).Status == "confirm", 3000), "a second request");
@@ -105,12 +128,20 @@ public static class ReachCheck {
                 Require(local == "", "the question is left to the computer");
                 Require(codex(two).Status == "confirm" && !codex(two).Answerable, "the phone sees that it waits at the computer");
                 Require(Refused(() => reach.Answer("codex", two, codex(two).AskId, true)).Contains("只能在电脑上"), "and cannot answer it");
+                reach.ObserveDesktop(two, true, true, DateTime.UtcNow.AddSeconds(-10));
+                Require(codex(two).Status == "confirm", "cached native idle cannot retire a fresh question");
+                reach.ObserveDesktop(two, false, false, DateTime.UtcNow.AddSeconds(3));
+                reach.ObserveDesktop(two, false, true, DateTime.UtcNow.AddSeconds(4));
+                Require(codex(two).AskId == "" && codex(two).Status == "busy", "native desktop decision retires released hook");
+                Answer(Run("codex", Request(two, "cargo build", "Build it")), 3000, "local prompt again");
                 Thread.Sleep(1700); File.AppendAllText(transcript, "{\"went on\":true}\n");
                 Require(codex(two).Status == "busy", "once the tool goes on, the question is over");
                 // with nobody there, the phone is asked; no is said in words the tool passes on
                 idle = 600;
                 asked = Run("codex", Request(two, "rm -rf build", "Clean up"));
                 Require(Until(() => codex(two).Status == "confirm" && codex(two).Answerable, 3000), "nobody is at the computer: the phone is asked");
+                reach.ObserveDesktop(two, true, true, DateTime.UtcNow.AddSeconds(5));
+                Require(codex(two).Answerable && codex(two).Status == "confirm", "held hook is not retired by a native snapshot");
                 reach.Answer("codex", two, codex(two).AskId, false);
                 verdict = Answer(asked, 3000, "declined");
                 Require(verdict.Contains("\"behavior\":\"deny\"") && verdict.Contains("message"), "the tool is told no: " + verdict);
@@ -446,7 +477,7 @@ public static class ReachCheck {
             Require(Convert.ToString(read["model"]) == "opus" && Convert.ToString(read["note"]) == "保留原样" && Convert.ToString(read["number"], System.Globalization.CultureInfo.InvariantCulture) == "1.5", "what else is in the file stays");
             Require(File.ReadAllText(settings, Encoding.UTF8).Contains("保留原样"), "letters of any language are written as they are");
             // (the person had a hook of their own before each step, and one at a stop: this program's stand beside both)
-            Require(((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 2 && hooks.Count == 6, "the person's own hooks stay, this program's stand beside them: " + String.Join(",", hooks.Keys));
+            Require(((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 2 && hooks.Count == 8, "the person's own hooks stay, this program's stand beside them: " + String.Join(",", hooks.Keys));
             Require(Reach.EventsOf("claude").Contains(Reach.Step) && !Reach.EventsOf("codex").Contains(Reach.Step) && Convert.ToInt32(entry0(hooks, Reach.Step, program)["timeout"]) == 10 && Convert.ToString(entry0(hooks, Reach.Step, program)["statusMessage"]) == "Remote AI", "Claude Code is heard before each step, briefly; Codex is not");
             var mine = (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)((IEnumerable)hooks["PermissionRequest"]).Cast<object>().Single())["hooks"]).Cast<object>().Single();
             Require(Convert.ToString(mine["command"]) == program && String.Join(" ", ((IEnumerable)mine["args"]).Cast<object>()) == "--hook claude RemoteCli.reach.abc123" && Convert.ToInt32(mine["timeout"]) == Reach.Patience, "Claude Code is given the program and its arguments apart");

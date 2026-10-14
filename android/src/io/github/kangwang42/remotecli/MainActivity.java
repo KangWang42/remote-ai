@@ -2,6 +2,7 @@ package io.github.kangwang42.remotecli;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.NotificationManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -177,7 +178,18 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); linked(intent); }
 
     /** remotecli://connect?u=address&p=password&n=name, from the code on the computer's screen. */
-    private boolean linked(Intent intent) { return link(intent == null ? null : intent.getData()); }
+    private boolean linked(Intent intent) {
+        if (intent != null && intent.hasExtra("computer")) {
+            String url = intent.getStringExtra("computer"), task = intent.getStringExtra("task");
+            JSONArray saved = computers();
+            for (int i = 0; i < saved.length(); i++) if (url != null && url.equals(saved.optJSONObject(i).optString("url"))) {
+                if (task != null && task.matches("[a-f0-9]{32}")) openTerminal(url, task);
+                else openSession(url, intent.getStringExtra("project") == null ? "" : intent.getStringExtra("project"), task);
+                intent.removeExtra("computer"); return true;
+            }
+        }
+        return link(intent == null ? null : intent.getData());
+    }
     private boolean link(Uri link) {
         if (link == null || !"remotecli".equals(link.getScheme()) || !link.isHierarchical()) return false;
         String address = clean(link.getQueryParameter("u")), password = link.getQueryParameter("p"), name = link.getQueryParameter("n");
@@ -240,7 +252,7 @@ public final class MainActivity extends Activity {
         bench.refresh();        // (also under 协作 and 我的: what waits for an answer is counted on the tab of 任务)
     }
     /** One computer's own page of a tab: where what the app lists of it is seen whole and changed. */
-    void computerPage(String url, String tab) { openPage(url, "", "/?tab=" + tab); }
+    void computerPage(String url, String tab) { openPage(url, "", "/?tab=" + tab + ("me".equals(tab) ? "&stats=1" : "")); }
     /** That computer's page of 协作 with one of its sheets open: "handoff", "many", "chain", "schedule" (web/together.js). */
     void together(String url, String what) { openPage(url, "", "/?tab=together&do=" + what); }
     boolean autoUpdate() { return updater != null && updater.automatic(); }
@@ -354,8 +366,11 @@ public final class MainActivity extends Activity {
         if (request == NOTIFY) {
             if (results.length == 0 || results[0] != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 prefs.edit().putBoolean("watch", false).apply();
-                home("没有通知权限，任务提醒没有开启。可以在系统设置里允许通知后再开。");
+                Watcher.stop(this);
+                android.widget.Toast.makeText(this, "没有通知权限，请在系统设置中允许通知", android.widget.Toast.LENGTH_LONG).show();
             }
+            else Watcher.start(this, true);
+            reminderSettings();
             return;
         }
         if (request != CAMERA) return;
@@ -379,14 +394,61 @@ public final class MainActivity extends Activity {
     void startNew(String address) { openPage(address, "", "/?tab=tasks&new=1"); }
     // ---- reminders: off until the person turns them on
     boolean watching() { return prefs.getBoolean("watch", false); }
+    String reminderStatus() {
+        boolean allowed = getSystemService(NotificationManager.class).areNotificationsEnabled();
+        android.app.NotificationChannel channel = getSystemService(NotificationManager.class).getNotificationChannel("tasks");
+        allowed &= channel == null || channel.getImportance() > NotificationManager.IMPORTANCE_NONE;
+        return watching() && allowed ? "已开启" : allowed ? "未开启" : "需授权";
+    }
+    String appearanceName() { return Kit.title(prefs.getString("look-skin", "paper")); }
     void toggleWatch() {
         boolean on = !watching();
         prefs.edit().putBoolean("watch", on).apply();
         if (on && android.os.Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
-            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, NOTIFY);
-        if (!on) Watcher.stop(this);
-        home("");
+            { requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, NOTIFY); return; }
+        if (!on) Watcher.stop(this); else Watcher.start(this, true);
+        if ("reminders".equals(screen)) reminderSettings(); else home("");
+    }
+    /** A plain-language checklist for Android's controls that decide whether background reminders can arrive. */
+    void reminderSettings() {
+        LinearLayout page = kit.page(22);
+        page.addView(kit.head("提醒与权限", kit.text("这些开关由 Android 系统管理，开启后提醒更稳定。", 13, kit.MUTED)), kit.below(18));
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        boolean notifications = nm.areNotificationsEnabled();
+        boolean channel = nm.getNotificationChannel("tasks") == null || nm.getNotificationChannel("tasks").getImportance() != NotificationManager.IMPORTANCE_NONE;
+        boolean battery = getSystemService(android.os.PowerManager.class).isIgnoringBatteryOptimizations(getPackageName());
+        int data = getSystemService(android.net.ConnectivityManager.class).getRestrictBackgroundStatus();
+        page.addView(kit.text("必要权限", 13, kit.MUTED), kit.below(4));
+        page.addView(reminderRow("通知", notifications && channel ? "已允许" : "需要允许", notifications && channel ? kit.GOOD : kit.BAD,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()))), kit.below(8));
+        page.addView(reminderRow("任务通知类别", "声音、振动与锁屏显示", kit.MUTED,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "tasks"))), kit.below(8));
+        page.addView(reminderRow("电池优化", battery ? "已不受电池优化限制" : "系统可能延迟锁屏后的提醒", battery ? kit.GOOD : kit.BUSY,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))), kit.below(8));
+        page.addView(reminderRow("后台联网", data == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED ? "省流量模式正在限制后台联网" : "未被省流量模式限制", kit.MUTED,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS, Uri.parse("package:" + getPackageName())))), kit.below(8));
+        page.addView(reminderRow("应用详情", "检查后台数据、自启动和省电策略", kit.ACCENT,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())))), kit.below(18));
+        String error = getSharedPreferences("remote-cli-watch", MODE_PRIVATE).getString("error", "");
+        if (!error.isEmpty()) page.addView(kit.text(error, 13, kit.BAD), kit.below(12));
+        page.addView(kit.text("开启后会保留一条“后台连接”通知，约每 10 秒检查任务。回到应用时暂停弹出任务通知，电脑上的确认被处理后会撤下旧提醒。\n\n在应用详情中将电池设为“不限制”或“允许后台活动”。部分手机还需手动开启自启动；这项设置无法自动检测。\n\n锁屏省电、断网或系统强行停止应用仍可能延迟提醒。电脑需要保持在线。", 13.5f, kit.INK), kit.below(18));
+        page.addView(kit.button("发送测试通知", 1, () -> { Watcher.test(this); android.widget.Toast.makeText(this, "已请求发送测试通知，请检查通知栏", android.widget.Toast.LENGTH_LONG).show(); }), kit.below(14));
+        page.addView(kit.button(watching() ? "关闭任务提醒" : "开启任务提醒", watching() ? 1 : 0, this::toggleWatch), kit.below(8));
+        page.addView(kit.button("返回我的", 2, () -> appPage("me")));
+        show(page, "reminders");
+    }
+    private void systemSettings(Intent intent) {
+        try { startActivity(intent); }
+        catch (android.content.ActivityNotFoundException unavailable) {
+            startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+        }
+    }
+    private View reminderRow(String title, String status, int color, Runnable open) {
+        LinearLayout row = kit.row(); row.setPadding(kit.dp(14), kit.dp(10), kit.dp(8), kit.dp(10)); row.setBackground(kit.shape(kit.PANEL, kit.LINE, 14));
+        LinearLayout copy = kit.column(); copy.addView(kit.bold(title, 15, kit.INK)); copy.addView(kit.text(status, 12.5f, color), kit.below(3));
+        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); row.addView(kit.button("打开设置", 2, open), new LinearLayout.LayoutParams(kit.dp(92), -2));
+        return row;
     }
     /** Straight into one terminal; its page is told to come back here rather than to that computer's list. */
     void openTerminal(String address, String terminal) {
@@ -513,6 +575,8 @@ public final class MainActivity extends Activity {
     private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "renderer", "readfont", "readsize", "readline", "newkind");
     private final Saver saver = new Saver(this);
     private final class Bridge {
+        @JavascriptInterface public void reminders() { runOnUiThread(MainActivity.this::reminderSettings); }
+        @JavascriptInterface public String reminderStatus() { return MainActivity.this.reminderStatus(); }
         /** The system's speech recognizer; what was said goes into the page's message box. */
         @JavascriptInterface public void voice() { runOnUiThread(MainActivity.this::dictate); }
         /** Whether this phone has a speech recognizer of its own; without one the page does not offer the microphone. */
@@ -626,13 +690,14 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if ("reminders".equals(screen)) { appPage("me"); return; }
         if ("scan".equals(screen) || "add".equals(screen)) { endScan(); home(""); return; }
         if (web != null && web.canGoBack()) { web.goBack(); return; }
         if (web != null) { home(""); return; }
         if (Tabs.has(screen) && !"home".equals(screen)) { appPage("home"); return; }
         super.onBackPressed();
     }
-    @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0 && !isFinishing()) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
-    @Override protected void onResume() { super.onResume(); foreground = true; Watcher.stop(this); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if (updater != null) updater.checkIfDue(); }
+    @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
+    @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
     @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { web.destroy(); web = null; } super.onDestroy(); }
 }

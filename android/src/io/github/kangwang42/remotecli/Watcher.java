@@ -1,17 +1,19 @@
 package io.github.kangwang42.remotecli;
 
-import android.app.AlarmManager;
+import android.app.Service;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.os.Build;
 import android.os.PowerManager;
 import android.os.SystemClock;
+import android.os.IBinder;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import android.webkit.CookieManager;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -25,73 +27,74 @@ import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/**
- * Looks at the computers now and then while the app is not on the screen, and tells the person when a task begins to
- * wait on a question or finishes: one notification for each, and none that stays. The system wakes the app for each
- * look, about once a minute (less often while the phone sleeps deeply); nothing of the app runs in between, so there
- * is no service and no notification saying that one runs. A look asks each computer for its overview, the same
- * request the workbench makes; nothing is sent to any other service. The looks begin when the app leaves the screen,
- * only when the person turned reminders on, and end when the app comes back, when nothing has been running for five
- * minutes, or after eight hours.
- */
-public final class Watcher extends BroadcastReceiver {
-    private static final long FIRST = 20_000, EVERY = 60_000, LONGEST = 8 * 3600_000L;
-    private static final int QUIET_LOOKS = 5;
+/** Opt-in cross-device reminders. A visible foreground service retains a baseline while the app is open and
+ * reports changes while it is away. Polls are serialized, retry after failures, and survive idle task lists. */
+public final class Watcher extends Service {
+    private static final int ONGOING = 14711;
     private static final String CHANNEL_TASKS = "tasks", STATE = "remote-cli-watch";
+    private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
+    private volatile boolean active, visible;
+    static void test(Context context) {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        manager.createNotificationChannel(new NotificationChannel(CHANNEL_TASKS, "任务提醒", NotificationManager.IMPORTANCE_HIGH));
+        manager.notify(14712, new Notification.Builder(context, CHANNEL_TASKS).setSmallIcon(R.drawable.ic_shell).setContentTitle("Remote AI 测试提醒")
+            .setContentText("通知已送达。锁屏和后台效果还受系统电池策略影响。").setAutoCancel(true).setContentIntent(open(context)).build());
+    }
 
     static void start(Context context) {
+        start(context, false);
+    }
+    static void start(Context context, boolean visible) {
         try {
-            NotificationManager manager = context.getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(new NotificationChannel(CHANNEL_TASKS, "任务提醒", NotificationManager.IMPORTANCE_HIGH));
-            manager.deleteNotificationChannel("watch");       // of the notification that stayed while a service ran, in earlier versions
-            // What each task was doing is kept between the looks: the app is not running then.
-            context.getSharedPreferences(STATE, Context.MODE_PRIVATE).edit().clear().putLong("began", System.currentTimeMillis()).apply();
-            schedule(context, FIRST);
-        } catch (Exception refused) { /* the system does not allow it right now: no reminders this time */ }
+            if (!context.getSharedPreferences("remote-cli", MODE_PRIVATE).getBoolean("watch", false)) return;
+            if (!context.getSystemService(NotificationManager.class).areNotificationsEnabled()) {
+                context.getSharedPreferences(STATE, MODE_PRIVATE).edit().putString("error", "通知被系统关闭，请先允许通知").apply(); return;
+            }
+            context.startForegroundService(new Intent(context, Watcher.class).putExtra("visible", visible));
+        } catch (Exception refused) {
+            context.getSharedPreferences(STATE, MODE_PRIVATE).edit().putString("error", "后台监听未启动，请重新打开应用并检查提醒权限").apply();
+        }
     }
     static void stop(Context context) {
         try {
-            context.getSystemService(AlarmManager.class).cancel(wake(context));
-            context.getSharedPreferences(STATE, Context.MODE_PRIVATE).edit().clear().apply();
+            context.stopService(new Intent(context, Watcher.class));
         } catch (Exception ignored) { }
     }
-    private static PendingIntent wake(Context context) {
-        return PendingIntent.getBroadcast(context, 0, new Intent(context, Watcher.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    @Override public IBinder onBind(Intent intent) { return null; }
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        visible = intent != null && intent.getBooleanExtra("visible", false);
+        if (intent != null && "stop".equals(intent.getAction())) {
+            getSharedPreferences("remote-cli", MODE_PRIVATE).edit().putBoolean("watch", false).apply(); stopSelf(); return START_NOT_STICKY;
+        }
+        if (!getSharedPreferences("remote-cli", MODE_PRIVATE).getBoolean("watch", false)) { stopSelf(); return START_NOT_STICKY; }
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        manager.createNotificationChannel(new NotificationChannel(CHANNEL_TASKS, "任务提醒", NotificationManager.IMPORTANCE_HIGH));
+        manager.createNotificationChannel(new NotificationChannel("watch", "后台连接", NotificationManager.IMPORTANCE_LOW));
+        PendingIntent stop = PendingIntent.getService(this, 0, new Intent(this, Watcher.class).setAction("stop"), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        startForeground(ONGOING, new Notification.Builder(this, "watch").setSmallIcon(R.drawable.ic_shell).setContentTitle("Remote AI 正在接收任务提醒")
+            .setContentText("等待确认或任务完成时通知 · 点此打开应用").setContentIntent(open(this)).setOngoing(true)
+            .addAction(new Notification.Action.Builder(null, "关闭提醒", stop).build()).build());
+        if (!active) {
+            active = true;
+            getSharedPreferences(STATE, MODE_PRIVATE).edit().remove("error").apply();
+            worker.scheduleWithFixedDelay(() -> {
+                PowerManager.WakeLock awake = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "remote-cli:watch");
+                try { awake.acquire(20_000); if (active) look(this); }
+                catch (Exception ignored) { /* The next scheduled look still runs after a failure. */ }
+                finally { if (awake.isHeld()) awake.release(); }
+            }, 0, 10, TimeUnit.SECONDS);
+        }
+        return START_STICKY;
     }
-    private static void schedule(Context context, long delay) {
-        AlarmManager alarms = context.getSystemService(AlarmManager.class);
-        long at = SystemClock.elapsedRealtime() + delay;
-        try {
-            if (Build.VERSION.SDK_INT < 31 || alarms.canScheduleExactAlarms()) { alarms.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, wake(context)); return; }
-        } catch (SecurityException refused) { /* the system leaves the time to itself */ }
-        alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, wake(context));
-    }
-
-    @Override public void onReceive(Context given, Intent intent) {
-        final Context context = given.getApplicationContext();
-        final PendingResult result = goAsync();
-        // The phone may go back to sleep as soon as this method returns; the look takes a few seconds more.
-        final PowerManager.WakeLock awake = context.getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "remote-cli:watch");
-        try { awake.acquire(20_000); } catch (Exception refused) { /* looked at while the phone happens to be awake */ }
-        new Thread(() -> {
-            try { look(context); }
-            catch (Exception broken) { /* looked at again at the next wake */ }
-            finally {
-                try { if (awake.isHeld()) awake.release(); } catch (Exception ignored) { }
-                result.finish();
-            }
-        }, "remote-cli-watch").start();
-    }
+    @Override public void onDestroy() { active = false; worker.shutdownNow(); stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy(); }
 
     private static PendingIntent open(Context context) {
         Intent intent = new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
-    private static void look(Context context) throws Exception {
+    private void look(Context context) throws Exception {
         SharedPreferences state = context.getSharedPreferences(STATE, Context.MODE_PRIVATE);
-        final long began = state.getLong("began", 0);
-        if (began == 0) return;       // the app is on the screen again: this wake was on its way already
         JSONObject kept = new JSONObject(state.getString("phases", "{}"));
         JSONArray computers = new JSONArray(context.getSharedPreferences("remote-cli", Context.MODE_PRIVATE).getString("computers", "[]"));
         // Every computer is asked at the same time: the system allows a wake only a few seconds.
@@ -106,7 +109,6 @@ public final class Watcher extends BroadcastReceiver {
         }
         long until = SystemClock.elapsedRealtime() + 9000;
         for (Thread one : asking) one.join(Math.max(1, until - SystemClock.elapsedRealtime()));
-        boolean anything = false;
         JSONObject now = new JSONObject();
         for (int i = 0; i < computers.length(); i++) {
             JSONObject computer = computers.optJSONObject(i), data = answers[i];
@@ -116,7 +118,6 @@ public final class Watcher extends BroadcastReceiver {
             JSONObject noted = kept.optJSONObject(url);
             if (device == null || !device.optBoolean("online") || !device.optBoolean("enabled")) {
                 if (noted != null) now.put(url, noted);        // not reached this time: what was known stays
-                anything |= noted != null && noted.length() > 0;
                 continue;
             }
             List<Watch.Task> tasks = new ArrayList<>();
@@ -125,31 +126,32 @@ public final class Watcher extends BroadcastReceiver {
                 JSONObject t = terminals.optJSONObject(k);
                 if (t == null || !("running".equals(t.optString("state")) || "starting".equals(t.optString("state")))) continue;
                 tasks.add(new Watch.Task(t.optString("id"), t.optString("title"), t.optString("dir"),
-                    "starting".equals(t.optString("state")) ? "starting" : t.optString("phase"), t.optBoolean("done")));
+                    "starting".equals(t.optString("state")) ? "starting" : t.optString("phase"), t.optBoolean("done"), t.optString("phase_at")));
             }
             // A conversation open on the computer, of which its tool tells, is watched like a terminal: one that asks,
             // and one that has stopped and waits for a message, are told.
             JSONArray sessions = data.optJSONArray("sessions");
             for (int k = 0; sessions != null && k < sessions.length(); k++) {
                 JSONObject s = sessions.optJSONObject(k);
-                if (s == null || !s.optBoolean("live") || s.optJSONArray("reach") == null) continue;
+                if (s == null || !s.optBoolean("live") || !s.optString("terminal").isEmpty() || s.optJSONArray("reach") == null) continue;
                 String status = s.optString("status");
+                JSONObject ask = s.optJSONObject("ask");
                 tasks.add(new Watch.Task(s.optString("id"), s.optString("title"), s.optString("dir"),
-                    "confirm".equals(status) ? "confirm" : "busy".equals(status) ? "busy" : "idle", "waiting".equals(status)));
+                    "confirm".equals(status) ? "confirm" : "busy".equals(status) ? "busy" : "idle", "waiting".equals(status),
+                    ask == null ? ("waiting".equals(status) ? s.optString("updated") : "") : ask.optString("id")));
             }
-            anything |= !tasks.isEmpty();
             Map<String, String> before = new HashMap<>();
             if (noted != null) for (Iterator<String> keys = noted.keys(); keys.hasNext(); ) { String key = keys.next(); before.put(key, noted.optString(key)); }
             String name = computer.optString("name").isEmpty() ? MainActivity.host(url) : computer.optString("name");
-            for (Watch.Alert alert : Watch.news(tasks, before)) tell(context, url, name, alert);
+            Map<String, String> old = new HashMap<>(before);
+            List<Watch.Alert> alerts = Watch.news(tasks, before);
+            if (!active) return;
+            NotificationManager manager = context.getSystemService(NotificationManager.class);
+            for (String id : old.keySet()) if (old.get(id).startsWith("confirm") && !before.getOrDefault(id, "").startsWith("confirm")) manager.cancel((url + id).hashCode());
+            if (!visible) for (Watch.Alert alert : alerts) tell(context, url, name, alert);
             now.put(url, new JSONObject(before));
         }
-        int quiet = anything ? 0 : state.getInt("quiet", 0) + 1;
-        // The app came back, or left again, while this look was under way: its own start and stop decide what follows.
-        if (context.getSharedPreferences(STATE, Context.MODE_PRIVATE).getLong("began", 0) != began) return;
-        if (quiet >= QUIET_LOOKS || System.currentTimeMillis() - began > LONGEST) { state.edit().clear().apply(); return; }
-        state.edit().putString("phases", now.toString()).putInt("quiet", quiet).apply();
-        schedule(context, EVERY);
+        if (active) state.edit().putString("phases", now.toString()).putLong("checked", System.currentTimeMillis()).apply();
     }
 
     private static void tell(Context context, String url, String computer, Watch.Alert alert) {
@@ -158,10 +160,13 @@ public final class Watcher extends BroadcastReceiver {
         try {
             NotificationManager manager = context.getSystemService(NotificationManager.class);
             manager.createNotificationChannel(new NotificationChannel(CHANNEL_TASKS, "任务提醒", NotificationManager.IMPORTANCE_HIGH));
+            Intent target = new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .setData(android.net.Uri.parse("remotecli://task/" + (url + alert.id).hashCode())).putExtra("computer", url).putExtra("task", alert.id).putExtra("project", alert.dir);
+            PendingIntent tap = PendingIntent.getActivity(context, (url + alert.id).hashCode(), target, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification notification = new Notification.Builder(context, CHANNEL_TASKS).setSmallIcon(R.drawable.ic_shell)
                 .setContentTitle((asks ? "等你确认 · " : "已完成 · ") + computer)
                 .setContentText(title + (alert.dir.isEmpty() || alert.dir.equals(title) ? "" : " · " + alert.dir))
-                .setAutoCancel(true).setContentIntent(open(context)).build();
+                .setAutoCancel(true).setContentIntent(tap).build();
             manager.notify((url + alert.id).hashCode(), notification);
         } catch (Exception refused) { /* notifications are not allowed: the person will see it in the app */ }
     }

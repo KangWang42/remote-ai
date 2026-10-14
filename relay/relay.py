@@ -320,8 +320,13 @@ def _reached(session):
     if not isinstance(session.get("reach"), list):
         return {"reach": None, "ask": None, "last": "", "wake": False, "ways": ways and dict(ways, say="", stop="", answer=""), "why": why, "queued": _queued(session)}
     ask = session.get("ask")
+    options = ask.get("options") if isinstance(ask, dict) else None
     ask = {"id": ask["id"], "text": ask["text"][:600]} if (session.get("status") == "confirm" and isinstance(ask, dict) and isinstance(ask.get("id"), str)
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
+    if ask is not None and isinstance(options, list):
+        ask["options"] = [{"id": o["id"], "label": o["label"][:40], "detail": o.get("detail", "")[:600]}
+                          for o in options[:4] if isinstance(o, dict) and o.get("id") in ("once", "always")
+                          and isinstance(o.get("label"), str) and isinstance(o.get("detail", ""), str)]
     # wake: it sits idle, and a message is handed to it where it is (that takes some seconds), instead of being left for its next stop
     native = session.get("tool") == "codex" and session.get("transport") == "codex-desktop" and session.get("live") is True
     # told to stop through its tool's hooks, before its next step (Claude Code): no turn is named for that
@@ -859,6 +864,10 @@ class Relay:
             if not isinstance(payload.get("ask"), str) or not _ask.fullmatch(payload["ask"]) or type(payload.get("allow")) is not bool:
                 raise RemoteError("回答无效")
             more = {"ask": payload["ask"], "allow": payload["allow"]}
+            if "scope" in payload:
+                if payload["scope"] not in ("once", "always") or (payload["scope"] == "always" and not payload["allow"]):
+                    raise RemoteError("授权范围无效")
+                more["scope"] = payload["scope"]
         elif action == "mark":
             more = {mark: payload[mark] for mark in MARKS if mark in payload}
             if not more or any(type(value) is not bool for value in more.values()):

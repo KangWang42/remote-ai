@@ -863,6 +863,11 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual(shown[sid]["activity"], "active")          # it is seen at work, whatever program runs it
         self.assertEqual((shown[other]["reach"], shown[other]["ask"], shown[other]["last"], shown[other]["activity"]), (None, None, "", "locked"))
         ask = lambda **more: dict({"id": "c" * 32, "session": sid}, **more)
+        for scope in ("session", "*", [], None):
+            with self.assertRaisesRegex(RemoteError, "授权范围无效"):
+                self.relay.conversation(ask(action="answer", ask="ab12cd34ef56", allow=True, scope=scope), now=1001, wait=0)
+        with self.assertRaisesRegex(RemoteError, "授权范围无效"):
+            self.relay.conversation(ask(action="answer", ask="ab12cd34ef56", allow=False, scope="always"), now=1001, wait=0)
         for bad, why in ((ask(action="answer", ask="ab12cd34ef56"), "回答无效"), (ask(action="answer", ask="ab12cd34ef56", allow="yes"), "回答无效"), (ask(action="answer", ask="x", allow=True), "回答无效"),
                          (ask(action="answer", ask="ffffffffffff", allow=True), "已经处理过"), (ask(action="say", text="  "), "1 至 8000"), (ask(action="say", text="x" * 8001), "1 至 8000"),
                          (ask(action="end"), "不支持"), (ask(action="say", text="hi", session=other), "不能从手机发消息"), (ask(action="answer", ask="ab12cd34ef56", allow=True, session=other), "已经处理过")):

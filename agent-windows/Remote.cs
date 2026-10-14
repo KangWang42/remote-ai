@@ -80,7 +80,7 @@ public sealed partial class App {
     readonly Notice notice = new Notice();
     void ShowKept() {
         var kept = agent == null || !Reaching ? new Reach.Open[0] : agent.Reach.KeptNow();
-        if (kept.Length == 0) { notice.Clear(); Noted(); return; }
+        if (kept.Length == 0) { var answer = agent == null || !Reaching ? null : agent.Reach.RecentAnswer(); if (answer != null) notice.Say(answer[0], answer[1], offstage); else notice.Clear(); Noted(); return; }
         var one = kept.FirstOrDefault(o => o.Status == "confirm") ?? kept[0];
         string tool = ToolNames.ContainsKey(one.Tool) ? ToolNames[one.Tool] : one.Tool;
         if (one.Status == "confirm") notice.Say(tool + " 的确认请求已发到手机", "动一下鼠标或键盘，改在这台电脑上回答", offstage);
