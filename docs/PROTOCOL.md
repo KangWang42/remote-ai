@@ -370,6 +370,15 @@ at the computer.
 
 ### The owner's work
 
+The Android collaboration overview links stored rules to `/?tab=together&do=chain&item=<id>`
+or `do=schedule&item=<id>`. The page waits for that list to load before opening its existing
+rule; a missing id is reported and never treated as a request to create a new rule. Omitting
+`item` opens the creation form. `do=handoff` and `do=many` open immediate actions.
+Chains and schedules are loaded independently, with failures and explicit retry shown per
+kind; a failed refresh retains previously read data. New-rule forms retain the same rule id
+when a save is retried, preventing duplicate rules after a lost acknowledgement. Schedule
+switches ignore repeated taps while saving; a requested refresh is queued if one is underway.
+
 `POST /api/work` `{"id": "<16 to 32 hex digits>", "action": "..."}` is held like `/api/files` and needs the `work`
 capability, which the Windows program and the Linux agent have. The three actions that begin with `chain` need
 `chains` besides, which only the Windows program has: they depend on the tools' hooks. The computer keeps and does

@@ -30,15 +30,10 @@ final class AppPages {
         generation++; holders.clear(); stats.clear(); answered = 0;
         boolean mine = "me".equals(tab);
         LinearLayout page = kit.page(22);
-        page.addView(kit.head(mine ? "我的" : "协作", mine ? kit.text("设备连接与个人偏好", 13, kit.MUTED) : null));
+        page.addView(kit.head(mine ? "我的" : "协作", kit.text(mine ? "设备连接与个人偏好" : "交接上下文，让对话接着做", 13, kit.MUTED)));
         if (!mine && activity.computers().length() > 0) {
-            // the two things done at once, as on a computer's page: on the computer that is online, or the one chosen
-            LinearLayout acts = kit.row();
-            acts.addView(kit.button("交接对话", 1, () -> activity.pick("交接对话", bench.reachable(), url -> activity.together(url, "handoff"))), new LinearLayout.LayoutParams(0, -2, 1));
-            LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(0, -2, 1);
-            beside.leftMargin = kit.dp(8);
-            acts.addView(kit.button("同时提问", 1, () -> activity.pick("同时提问", bench.reachable(), url -> activity.together(url, "many"))), beside);
-            page.addView(acts, kit.below(16));
+            actions(page, "添加接力", "完成一轮后自动转交", "chain", "定时提问", "在指定时间发起提问", "schedule");
+            actions(page, "交接对话", "立即交出上下文", "handoff", "同时提问", "同一个问题发给多段对话", "many");
         }
         if (mine) {
             LinearLayout reminders = kit.settingGroup(page, "提醒与后台");
@@ -59,8 +54,8 @@ final class AppPages {
             page.addView(kit.bold("工作统计", 13, kit.MUTED), kit.below(24));
             page.addView(total, kit.below(8));
         } else {
-            page.addView(kit.text("接力怎么用\n1. 在同一台电脑上打开两段 Claude Code 或 Codex 对话，在电脑端“设置”开启“手机处理电脑上的对话”。\n2. 在下面选择电脑，设置来源、接手对话和要做的事。\n3. 来源对话下一次完成一轮后，自动把最后的回答和你的要求发给接手对话。", 14, kit.INK), kit.below(18));
-            page.addView(kit.text("例如：Claude Code 写实现，Codex 审查。一次规则只负责单向转交；需要往返时另建反向规则。电脑须保持运行，暂不支持跨电脑接力。", 13, kit.MUTED), kit.below(8));
+            page.addView(kit.text("选择电脑后设置对话。接力和定时提问由电脑执行，手机可以离线；电脑须保持运行。接力仅限同一台电脑。", 13, kit.MUTED), kit.below(16));
+            page.addView(kit.bold("已安排的协作", 16, kit.INK), kit.below(24));
         }
         JSONArray computers = activity.computers(); expected = computers.length();
         if (expected == 0) {
@@ -88,7 +83,7 @@ final class AppPages {
                 adds.addView(kit.button("添加接力", 1, () -> activity.together(url, "chain")), new LinearLayout.LayoutParams(0, -2, 1));
                 LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(0, -2, 1);
                 beside.leftMargin = kit.dp(8);
-                adds.addView(kit.button("添加定时提问", 1, () -> activity.together(url, "schedule")), beside);
+                adds.addView(kit.button("定时提问", 1, () -> activity.together(url, "schedule")), beside);
                 card.addView(adds, kit.below(10));
             } else card.addView(kit.button("查看统计详情", 1, () -> activity.computerPage(url, tab)), kit.below(10));
             page.addView(card, kit.below(16));
@@ -114,8 +109,9 @@ final class AppPages {
                         result = new JSONObject();
                         // An older computer can still provide schedules when it does not support chains.
                         try { result.put("chains", ask(url, cookie, "chains").optJSONArray("chains")); }
-                        catch (Exception unavailable) { result.put("chain_error", unavailable.getMessage()); }
-                        result.put("schedules", ask(url, cookie, "schedules").optJSONArray("schedules"));
+                        catch (Exception unavailable) { result.put("chain_error", unavailable.getMessage() == null ? "连接失败" : unavailable.getMessage()); }
+                        try { result.put("schedules", ask(url, cookie, "schedules").optJSONArray("schedules")); }
+                        catch (Exception unavailable) { result.put("schedule_error", unavailable.getMessage() == null ? "连接失败" : unavailable.getMessage()); }
                     }
                 } catch (Exception unavailable) { error = unavailable.getMessage() == null ? "连接失败，请重试" : unavailable.getMessage(); }
                 final JSONObject data = result; final String problem = error;
@@ -129,10 +125,12 @@ final class AppPages {
                     } else if ("me".equals(tab)) {
                         stats.put(url, data); body.addView(kit.text(today(data), 14, kit.INK));
                     } else {
-                        String chainError = data.optString("chain_error");
-                        if (!chainError.isEmpty()) body.addView(kit.text("接力暂不可用：" + chainError, 13, kit.MUTED));
-                        rows(body, data.optJSONArray("chains"), true);
-                        rows(body, data.optJSONArray("schedules"), false);
+                        for (boolean chain : new boolean[]{true, false}) {
+                            String failure = data.optString(chain ? "chain_error" : "schedule_error");
+                            if (!failure.isEmpty()) body.addView(kit.text((chain ? "接力" : "定时提问") + "暂不可用：" + failure, 13, kit.BAD), kit.below(10));
+                            else rows(body, url, data.optJSONArray(chain ? "chains" : "schedules"), chain);
+                        }
+                        if (data.has("chain_error") || data.has("schedule_error")) body.addView(kit.button("重新读取", 1, () -> refresh("together")), kit.below(10));
                     }
                     if ("me".equals(tab)) sum();
                 });
@@ -153,16 +151,39 @@ final class AppPages {
         for (JSONObject data : stats.values()) { JSONObject day = day(data); prompts += day.optLong("prompts"); sessions += day.optLong("sessions"); seconds += day.optDouble("active", 0); }
         total.setText("今天合计 " + prompts + " 次提问 · " + sessions + " 段对话\n" + Math.round(seconds / 60) + " 分钟（各电脑时长相加）\n已读取 " + stats.size() + "/" + expected + " 台" + (answered < expected ? " · 其余读取中" : stats.size() < expected ? " · 未连接电脑未计入" : ""));
     }
-    private void rows(LinearLayout body, JSONArray items, boolean chain) {
+    private void actions(LinearLayout page, String first, String firstHint, String firstAction, String second, String secondHint, String secondAction) {
+        LinearLayout row = kit.row();
+        row.addView(action(first, firstHint, firstAction), new LinearLayout.LayoutParams(0, -1, 1));
+        LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(0, -1, 1); beside.leftMargin = kit.dp(8);
+        row.addView(action(second, secondHint, secondAction), beside); page.addView(row, kit.below(10));
+    }
+    private View action(String title, String hint, String what) {
+        LinearLayout tile = kit.column(); tile.setPadding(kit.dp(14), kit.dp(14), kit.dp(14), kit.dp(14));
+        tile.setBackground(kit.shape(kit.PANEL, kit.LINE, 16));
+        tile.addView(kit.bold(title, 16, kit.INK)); tile.addView(kit.text(hint, 12, kit.MUTED), kit.below(5));
+        kit.press(tile, () -> {
+            java.util.List<String> urls = new java.util.ArrayList<>();
+            JSONArray saved = activity.computers();
+            for (int i = 0; i < saved.length(); i++) if (saved.optJSONObject(i) != null) urls.add(saved.optJSONObject(i).optString("url"));
+            activity.pick(title, urls, url -> activity.together(url, what));
+        });
+        return tile;
+    }
+    private void rows(LinearLayout body, String url, JSONArray items, boolean chain) {
         int size = items == null ? 0 : items.length();
         body.addView(kit.bold((chain ? "接力 " : "定时提问 ") + size + " 条", 14, kit.INK), kit.below(10));
         if (size == 0) body.addView(kit.text(chain ? "尚未设置接力" : "尚未设置定时提问", 13, kit.MUTED));
         for (int i = 0; i < size; i++) {
             JSONObject item = items.optJSONObject(i); if (item == null) continue;
             String title = chain ? item.optString("from_title", "来源对话") + " → " + item.optString("to_title", "接手对话") : item.optString("text");
-            String state = chain ? "还可转交 " + item.optInt("left") + " 次" : item.optBoolean("on") ? "已启用" : "已停用";
+            String state = chain ? item.optInt("left") > 0 ? "等待来源完成 · 还可转交 " + item.optInt("left") + " 次" : "次数已用完"
+                : item.optBoolean("on") && item.optLong("next") > 0 ? "下次 " + android.text.format.DateFormat.format("MM-dd HH:mm", item.optLong("next"))
+                : "once".equals(item.optString("kind")) && item.optJSONObject("last") != null ? "已执行" : "已停用";
             JSONObject last = item.optJSONObject("last");
-            body.addView(kit.text(title + "\n" + state + (last == null ? "" : " · " + last.optString("note")), 14, kit.INK), kit.below(10));
+            String description = state + (chain ? "\n" + item.optString("text") : "\n发给：" + item.optString("title", "对话"));
+            if (last != null) description += "\n" + (last.optBoolean("ok") ? "最近成功：" : "最近失败：") + last.optString("note");
+            LinearLayout entry = kit.column(); body.addView(entry, kit.below(8));
+            kit.setting(entry, title, description, "编辑", () -> activity.together(url, chain ? "chain" : "schedule", item.optString("id")));
         }
     }
 }
