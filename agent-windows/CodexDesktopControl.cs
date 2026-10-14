@@ -114,6 +114,13 @@ public sealed class CodexDesktopControl : IDesktopConversation {
     public static string Folder(Dictionary<string, object> state) { return Text(state, "cwd"); }
     public static bool Busy(Dictionary<string, object> state) { return Text(Obj(state, "threadRuntimeStatus"), "type") == "active"; }
     public static bool Ready(Dictionary<string, object> state) { return Text(state, "resumeState") == "resumed" && Text(Obj(state, "threadRuntimeStatus"), "type") == "idle"; }
+    public static bool CompletionReady(Dictionary<string, object> state) {
+        if (!Ready(state) || Text(Obj(state, "threadGoal"), "status") == "active") return false;
+        var active = new HashSet<string>();
+        CollectTurns(state.ContainsKey("turns") ? state["turns"] : null, active);
+        CollectTurns(Obj(state, "turnHistory"), active);
+        return active.Count == 0;
+    }
     /// It is at work and takes a message all the same: the application has a message of its own for that
     /// (`thread-follower-steer-turn`), which puts the words into the turn that runs, where the model has them
     /// from its next step on (run on Codex Windows 26.1007.2314.0: the turn notes a steering message as accepted).
@@ -181,7 +188,7 @@ public sealed class CodexDesktopControl : IDesktopConversation {
 
 // Only short capability summaries survive a probe. Prompts, settings and history stay off the relay.
 public sealed class CodexDesktopSessions {
-    public sealed class State { public string Folder, Turn; public bool Ready, Busy, Takes; public DateTime At; }       // Takes: at work, and takes a message (TakesAtWork)
+    public sealed class State { public string Folder, Turn; public bool Ready, Busy, Takes, CompletionReady; public DateTime At; }       // Takes: at work, and takes a message (TakesAtWork)
     readonly object gate = new object();
     readonly Dictionary<string, State> states = new Dictionary<string, State>();
     bool refreshing;
@@ -193,7 +200,7 @@ public sealed class CodexDesktopSessions {
             try {
                 Parallel.ForEach(wanted, new ParallelOptions { MaxDegreeOfParallelism = 2 }, id => {
                     State state = null;
-                    try { using (var control = CodexDesktopControl.Connect()) { var value = control.Inspect(id); state = new State { Folder = CodexDesktopControl.Folder(value), Ready = CodexDesktopControl.Ready(value), Busy = CodexDesktopControl.Busy(value), Takes = CodexDesktopControl.TakesAtWork(value), Turn = CodexDesktopControl.ActiveTurn(value), At = DateTime.UtcNow }; } }
+                    try { using (var control = CodexDesktopControl.Connect()) { var value = control.Inspect(id); state = new State { Folder = CodexDesktopControl.Folder(value), Ready = CodexDesktopControl.Ready(value), Busy = CodexDesktopControl.Busy(value), Takes = CodexDesktopControl.TakesAtWork(value), CompletionReady = CodexDesktopControl.CompletionReady(value), Turn = CodexDesktopControl.ActiveTurn(value), At = DateTime.UtcNow }; } }
                     catch (Exception) { /* No capability is inferred from an unavailable or incompatible endpoint. */ }
                     lock (gate) { if (state == null) states.Remove(id); else states[id] = state; }
                 });

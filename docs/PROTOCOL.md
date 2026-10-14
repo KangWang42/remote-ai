@@ -225,9 +225,9 @@ that has it open:
  "messages": [{"role": "user", "text": "..."}, {"role": "thought", "text": "..."}, {"role": "tool", "text": "Bash：run the tests", "detail": "npm test", "result": "12 passed"}, {"role": "assistant", "text": "..."}]}
 ```
 
-The last 40 things the user and the tool said to each other, each of at most 1,500 characters, oldest first, with what
+The last 40 things the user and the tool said to each other, with complete text up to 131,072 UTF-16 code units per message, oldest first, with what
 the tool did between them (`tool`; of one unbroken run of those the last 30, and a line that says how many came
-before); `more` says that earlier ones exist. `tool` names
+before); `more` says that earlier ones exist. Total text is bounded to 262,144 UTF-16 code units by dropping older entries. Exceptionally large blocks carry `truncated: true`, shown explicitly on the phone. `tool` names
 something the tool did. What a tool writes into a conversation for itself (reminders, results of commands) is left
 out. The tool and the folder asked of the computer are the ones it reported for that conversation.
 
@@ -707,7 +707,8 @@ nothing again, also after the computer's program started anew. A number used for
 | `state` | meaning |
 | --- | --- |
 | `queued` | it waits: the tool's hooks hand it over when they next run, or the conversation is woken for it |
-| `paused` | its conversation was told to stop before it was handed over: it waits for its owner |
+| `paused` | stopped, failed, or interrupted delivery: it waits for its owner to review |
+| `sending` | reserved by a courier; hooks cannot take it, and withdrawal waits until delivery finishes |
 | `handed` | the tool has it |
 | `withdrawn` | its owner took it back |
 
@@ -725,6 +726,12 @@ is said while it works need not wait until its turn is over. Any stop (`hook` or
 what is `queued` for that conversation into `paused`. What still waits for an idle conversation when the
 computer's program starts again is handed over by it once it has looked at the conversations (one try for
 each item; after that it stays listed for its owner).
+
+Claude courier delivery is acknowledged only by a successful `SendMessage` tool result matching its call ID. A failed delivery is never marked `handed`; an interrupted `sending` item is restored as `paused` on restart, without automatic resend. Hook wait timeouts leave the message queued until the courier reserves it.
+
+Claude `StopFailure` ends busy/permission state, reports the API error in `last`, and pauses queued messages. It does not signal successful completion to collaboration workflows. A new user prompt clears the error. Stop attachments accept both string and array content and identify the event by `hookEvent` or `hookName`, including `Stop:*`.
+
+Background completion reminders use an explicit completion token from a Claude stop or Codex `task_complete` record. Idle time, transcript file changes, intermediate assistant text, and a transient read result never create a completion notification. A candidate completion must remain stable across the watcher confirmation interval; if a new turn starts, it is discarded.
 
 ## Codex desktop conversation control (Windows)
 

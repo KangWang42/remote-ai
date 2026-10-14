@@ -23,6 +23,8 @@ public static class SaidCheck {
         string folder = Path.Combine(Path.GetTempPath(), "remote-cli-said-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         try {
+            Require(TerminalAgent.CompletedTurn("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn1\"}}\n") == "turn1", "explicit completed turn identity");
+            Require(TerminalAgent.CompletedTurn("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn1\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn2\"}}\n") == "", "new work invalidates prior completion");
             string claude = Write(folder, "claude.jsonl",
                 "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"第一句\"}}",
                 "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<system-reminder>不给人看</system-reminder>\"}}",
@@ -73,7 +75,23 @@ public static class SaidCheck {
             var messages = ((IEnumerable)result["messages"]).Cast<Dictionary<string, object>>().ToList();
             Require(messages.Count == 4, "claude count: " + Shown(result));
             Require(Shown(result).StartsWith("user:第一句 | assistant:我先看看登录的代码。 | tool:Bash：grep -rn login src | assistant:长长", StringComparison.Ordinal), "claude: " + Shown(result).Substring(0, 80));
-            Require(((string)messages[3]["text"]).Length == 1500 && ((string)messages[3]["text"]).EndsWith("…", StringComparison.Ordinal), "long text is cut to 1500");
+            Require((string)messages[3]["text"] == new string('长', 3000) && !messages[3].ContainsKey("truncated"), "the full long reply is retained");
+            foreach (string hook in new[] { "\"hookName\":\"Stop:remote-ai\"", "\"hookName\":\"other\",\"hookEvent\":\"Stop\"" }) {
+                foreach (bool array in new[] { false, true }) {
+                    string context = Quoted(Reach.FromPhone + ":\n\n真正的手机问题");
+                    string modern = Write(folder, "modern.jsonl",
+                        "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":" + Quoted(ClaudeRelay.Wake) + "}}",
+                        "{\"type\":\"assistant\",\"message\":{\"content\":\"唤醒回复\"}}",
+                        "{\"type\":\"attachment\",\"timestamp\":\"2026-10-14T01:00:00Z\",\"attachment\":{\"type\":\"hook_additional_context\"," + hook + ",\"content\":" + (array ? "[" + context + "]" : context) + "}}",
+                        "{\"type\":\"assistant\",\"message\":{\"content\":\"完整回答\"}}");
+                    var modernRead = TerminalAgent.Said(modern, "claude");
+                    Require(Shown(modernRead) == "user:真正的手机问题 | assistant:完整回答" && Convert.ToInt64(modernRead["asked"]) > 0, "modern Stop context must unhide real replies and record the phone turn");
+                }
+            }
+            string huge = Write(folder, "huge.jsonl", Enumerable.Range(0, 4).Select(n => "{\"type\":\"assistant\",\"message\":{\"content\":" + Quoted(new string('长', 140000) + n) + "}}").ToArray());
+            var hugeRead = TerminalAgent.Said(huge, "claude");
+            var hugeMessages = ((IEnumerable)hugeRead["messages"]).Cast<Dictionary<string, object>>().ToList();
+            Require(true.Equals(hugeRead["more"]) && hugeMessages.Count == 2 && hugeMessages.All(m => true.Equals(m["truncated"])), "bounded very large responses explicitly report partial content");
             Require(false.Equals(result["more"]), "nothing older");
 
             string codex = Write(folder, "rollout-x.jsonl",
@@ -106,7 +124,7 @@ public static class SaidCheck {
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"差别在第三步。\"}]}}");
             var worked = ((IEnumerable)TerminalAgent.Said(silent, "claude")["messages"]).Cast<Dictionary<string, object>>().ToList();
             Require(String.Join(" | ", worked.Select(m => m["role"] + ":" + (((string)m["text"]).Length > 30 ? ((string)m["text"]).Length + " letters" : m["text"]))) ==
-                "user:比一下两个版本 | tool:Bash：对比 4.0 和 2.0 的结果 | thought:已对比 4.0 和 2.0：差别在第三步。 | tool:Read：step3.R | tool:Bash：Rscript step3.R | thought:600 letters | assistant:差别在第三步。",
+                "user:比一下两个版本 | tool:Bash：对比 4.0 和 2.0 的结果 | thought:已对比 4.0 和 2.0：差别在第三步。 | tool:Read：step3.R | tool:Bash：Rscript step3.R | thought:700 letters | assistant:差别在第三步。",
                 "what it said of its work, and its steps by what they are for: " + String.Join(" | ", worked.Select(m => m["role"] + ":" + m["text"])).Substring(0, 200));
             // a step as a terminal would show it: the command itself where the step is told by what it is for, and
             // the first lines of what came back (six at most; nothing where nothing came back)

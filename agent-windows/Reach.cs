@@ -73,7 +73,7 @@ public sealed class Reach : IDisposable {
     // Claude emits a completion hook after a permission prompt has been answered in its own window.  Listening to
     // it closes a phone card immediately instead of waiting for the next user turn.  Codex has no equivalent hook in
     // its supported contract, so its native channel remains the source of truth.
-    public static string[] EventsOf(string tool) { return tool == "claude" ? Events.Concat(new[] { Step, "PostToolUse", "PostToolUseFailure" }).ToArray() : Events; }
+    public static string[] EventsOf(string tool) { return tool == "claude" ? Events.Concat(new[] { Step, "PostToolUse", "PostToolUseFailure", "StopFailure" }).ToArray() : Events; }
     /// What Claude Code shows where it was stopped. Read by the person at the computer, not by the model.
     public const string StoppedFromPhone = "已从手机停止（Remote AI）";
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
@@ -82,7 +82,7 @@ public sealed class Reach : IDisposable {
     /// "waiting" (it has stopped while nobody was at the computer: it is the phone's turn, until somebody comes back
     /// or `Hold` has passed), "idle" (it has stopped).
     public sealed class Open {
-        public string Tool = "", Session = "", Status = "idle", AskId = "", AskText = "", Last = "";
+        public string Tool = "", Session = "", Status = "idle", AskId = "", AskText = "", Last = "", Completion = "";
         public object[] AskOptions = new object[0];
         public bool Answerable;             // the request can be answered from the phone (else only at the computer)
         public bool Held;                   // while it waits, its hook is kept: a message is taken at once. Else it has
@@ -235,8 +235,8 @@ public sealed class Reach : IDisposable {
     /// has told of nothing yet. (A conversation that sits idle is woken for it by other means: ClaudeRelay.)
     public void Leave(string tool, string session, string text, string id = null) { Outbox.Add(id ?? Guid.NewGuid().ToString("N"), tool, session, text); }
     /// Whether a message that was left has been taken by the conversation's hooks (or held, or taken back): waits
-    /// for that for up to `seconds`. False: it still waited, and is now this caller's to hand over another way.
-    public bool Taken(string id, int seconds) { return Outbox.Settled(id, seconds) || !Outbox.Hand(id); }
+    /// for that for up to `seconds`. False: it still waits; a courier must reserve it before handing it over.
+    public bool Taken(string id, int seconds) { return Outbox.Settled(id, seconds); }
     static string Joined(Outbox.Item[] items) { return String.Join("\n\n", items.Select(item => item.Text)); }
     /// What stands in front of a message that a hook hands to its tool as its user's words from the phone.
     // (How a tool takes a message hangs on its wording: these words were tried with the real tools, and a change
@@ -367,6 +367,7 @@ public sealed class Reach : IDisposable {
                 stepping.StepAside = Text(given as Dictionary<string, object>, "run_in_background") == "True";
                 news = !stepping.Steps || stepping.Status == "idle" || stepping.Status == "waiting";
                 stepping.Steps = true;
+                stepping.Completion = "";
                 if (stepping.Status == "idle" || stepping.Status == "waiting") { stepping.Status = "busy"; stepping.Held = false; }
                 stop = stepping.StopAsked; stepping.StopAsked = false;
                 // Told to stop, it ends its turn here and runs no hook for that: how it stands is said now. Like one
@@ -400,7 +401,18 @@ public sealed class Reach : IDisposable {
         if (o == null || first) Tell();
         if (o == null) return Nothing;
         if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") { o.Status = "idle"; o.Held = false; } } Tell(); return Nothing; }
-        if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = ""; o.AskOptions = new object[0]; o.Always = null; o.Answerable = o.Held = o.StopAsked = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
+        if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = o.Completion = ""; o.AskOptions = new object[0]; o.Always = null; o.Answerable = o.Held = o.StopAsked = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
+        if (tool == "claude" && name == "StopFailure") {
+            Outbox.Pause(tool, session);
+            lock (gate) {
+                o.Status = "idle"; o.Held = o.Answerable = o.StopAsked = false;
+                o.Completion = "";
+                o.AskId = o.AskText = ""; o.AskOptions = new object[0]; o.Always = null; o.Verdict = null;
+                o.Last = "Claude Code 本次执行失败：" + Short(Text(hooked, "error_details").Length > 0 ? Text(hooked, "error_details") : Text(hooked, "error"), 300);
+                Monitor.PulseAll(gate);
+            }
+            Tell(); return Nothing;
+        }
         if (name == "PostToolUse" || name == "PostToolUseFailure") { lock (gate) { if (o.Status == "confirm" && o.AskKey == RequestKey(hooked)) { o.Status = "busy"; o.AskId = o.AskText = ""; o.AskOptions = new object[0]; o.Always = null; o.Answerable = false; o.Verdict = null; Monitor.PulseAll(gate); } } Tell(); return Nothing; }
         if (name != "PermissionRequest" && name != "Stop") return Nothing;
         bool mine = false;
@@ -492,6 +504,8 @@ public sealed class Reach : IDisposable {
     string[] Stopped(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone, bool mine) {
         string message = null; var began = DateTime.UtcNow; int turn, wait = kept().AtStop; bool held = false;
         lock (gate) {
+            bool interrupted = o.StopAsked;
+            o.Completion = "";
             o.Last = Short(Text(hooked, "last_assistant_message"), 300); o.AskId = o.AskText = ""; o.Answerable = o.Held = o.StopAsked = false; turn = o.Turn;
             var waited = Outbox.Hand(tool, o.Session);
             if (waited.Length > 0) { message = Joined(waited); Monitor.PulseAll(gate); }
@@ -501,6 +515,7 @@ public sealed class Reach : IDisposable {
                 o.Status = "waiting"; o.Stopped = began; o.Held = held = wait > 0;
                 Monitor.PulseAll(gate);
             } else o.Status = "idle";
+            if (message == null && !interrupted) o.Completion = Guid.NewGuid().ToString("N");
         }
         if (message == null) {
             Tell();
@@ -521,7 +536,7 @@ public sealed class Reach : IDisposable {
                 if (let) Tell();
             }
         }
-        if (message != null) lock (gate) { if (o.Turn == turn) { o.Status = "busy"; o.Last = ""; o.Held = false; } }
+        if (message != null) lock (gate) { if (o.Turn == turn) { o.Status = "busy"; o.Last = o.Completion = ""; o.Held = false; } }
         Tell();
         if (message == null) return Nothing;
         return new[] { AtStop(tool, tool == "claude" ? ClaudeSessions.Version(Text(hooked, "session_id")) : "", message), "0" };

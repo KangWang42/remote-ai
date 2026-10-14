@@ -35,16 +35,30 @@ final class Watch {
      * a short intervening turn be reported even when both polls saw an idle task.
      */
     static List<Alert> news(List<Task> tasks, Map<String, String> phases) {
+        return news(tasks, phases, System.currentTimeMillis());
+    }
+    static List<Alert> news(List<Task> tasks, Map<String, String> phases, long now) {
         List<Alert> alerts = new ArrayList<>();
         Set<String> present = new HashSet<>();
         for (Task task : tasks) {
             present.add(task.id);
-            String token = task.phase + (task.event.isEmpty() ? "" : "|" + task.event);
-            String before = phases.put(task.id, token);
-            if (token.equals(before)) continue;
-            if ("confirm".equals(task.phase)) alerts.add(new Alert(task.id, "confirm", task.title, task.dir));
-            else if ("idle".equals(task.phase) && task.done && before != null && (before.startsWith("busy") || before.startsWith("confirm") || before.startsWith("starting") || (!task.event.isEmpty() && before.startsWith("idle|"))))
-                alerts.add(new Alert(task.id, "done", task.title, task.dir));
+            String token = task.phase + "|" + task.event;
+            String before = phases.get(task.id);
+            String[] old = before == null ? new String[0] : before.split("\\|", -1);
+            boolean same = old.length >= 2 && token.equals(old[0] + "|" + old[1]);
+            String next = token + "|seen";
+            if ("confirm".equals(task.phase)) {
+                if (!same) alerts.add(new Alert(task.id, "confirm", task.title, task.dir));
+            } else if ("idle".equals(task.phase) && task.done && !task.event.isEmpty() && before != null) {
+                if (!same) next = token + "|" + now;
+                else if (old.length == 3 && !"seen".equals(old[2])) {
+                    long since;
+                    try { since = Long.parseLong(old[2]); } catch (NumberFormatException error) { since = now; }
+                    if (now >= since && now - since >= 10_000) alerts.add(new Alert(task.id, "done", task.title, task.dir));
+                    else next = token + "|" + Math.min(since, now);
+                }
+            }
+            phases.put(task.id, next);
         }
         phases.keySet().retainAll(present);
         return alerts;

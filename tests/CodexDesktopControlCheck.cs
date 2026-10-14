@@ -193,7 +193,9 @@ public static class CodexDesktopControlCheck {
     public static void Run(string root) {
         var peer = new Peer();
         using (var control = new CodexDesktopControl(peer, 1000)) {
-            var state = control.Inspect(Session); Require(CodexDesktopControl.Folder(state) == @"E:\中文项目" && CodexDesktopControl.Ready(state), "fragmented UTF8 snapshot");
+            var state = control.Inspect(Session); Require(CodexDesktopControl.Folder(state) == @"E:\中文项目" && CodexDesktopControl.Ready(state) && CodexDesktopControl.CompletionReady(state), "fragmented UTF8 snapshot");
+            state["threadGoal"] = new Dictionary<string, object> { { "status", "active" } };
+            Require(!CodexDesktopControl.CompletionReady(state), "idle between goal turns is not completion"); state.Remove("threadGoal");
             var result = control.Send(new string('a', 32), "中文消息"); Require((string)result["turn"] == "turn-2" && true.Equals(result["sent"]), "native turn receipt");
             var request = peer.Sent.Single(r => r.ContainsKey("method") && (string)r["method"] == "thread-follower-start-turn");
             Require((int)request["version"] == 2 && (string)request["targetClientId"] == "owner", "owner-targeted version");

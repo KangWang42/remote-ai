@@ -95,7 +95,7 @@ public final class Watcher extends Service {
 
     private void look(Context context) throws Exception {
         SharedPreferences state = context.getSharedPreferences(STATE, Context.MODE_PRIVATE);
-        JSONObject kept = new JSONObject(state.getString("phases", "{}"));
+        JSONObject kept = new JSONObject(state.getString("phases-v2", "{}"));
         JSONArray computers = new JSONArray(context.getSharedPreferences("remote-cli", Context.MODE_PRIVATE).getString("computers", "[]"));
         // Every computer is asked at the same time: the system allows a wake only a few seconds.
         final JSONObject[] answers = new JSONObject[computers.length()];
@@ -126,7 +126,8 @@ public final class Watcher extends Service {
                 JSONObject t = terminals.optJSONObject(k);
                 if (t == null || !("running".equals(t.optString("state")) || "starting".equals(t.optString("state")))) continue;
                 tasks.add(new Watch.Task(t.optString("id"), t.optString("title"), t.optString("dir"),
-                    "starting".equals(t.optString("state")) ? "starting" : t.optString("phase"), t.optBoolean("done"), t.optString("phase_at")));
+                    "starting".equals(t.optString("state")) ? "starting" : t.optString("phase"), !t.optString("completion").isEmpty(),
+                    "confirm".equals(t.optString("phase")) ? t.optString("phase_at") : t.optString("completion")));
             }
             // A conversation open on the computer, of which its tool tells, is watched like a terminal: one that asks,
             // and one that has stopped and waits for a message, are told.
@@ -137,8 +138,8 @@ public final class Watcher extends Service {
                 String status = s.optString("status");
                 JSONObject ask = s.optJSONObject("ask");
                 tasks.add(new Watch.Task(s.optString("id"), s.optString("title"), s.optString("dir"),
-                    "confirm".equals(status) ? "confirm" : "busy".equals(status) ? "busy" : "idle", "waiting".equals(status),
-                    ask == null ? ("waiting".equals(status) ? s.optString("updated") : "") : ask.optString("id")));
+                    "confirm".equals(status) ? "confirm" : "busy".equals(status) ? "busy" : "idle", !s.optString("completion").isEmpty(),
+                    ask == null ? s.optString("completion") : ask.optString("id")));
             }
             Map<String, String> before = new HashMap<>();
             if (noted != null) for (Iterator<String> keys = noted.keys(); keys.hasNext(); ) { String key = keys.next(); before.put(key, noted.optString(key)); }
@@ -147,11 +148,12 @@ public final class Watcher extends Service {
             List<Watch.Alert> alerts = Watch.news(tasks, before);
             if (!active) return;
             NotificationManager manager = context.getSystemService(NotificationManager.class);
-            for (String id : old.keySet()) if (old.get(id).startsWith("confirm") && !before.getOrDefault(id, "").startsWith("confirm")) manager.cancel((url + id).hashCode());
+            for (String id : old.keySet()) if ((old.get(id).startsWith("confirm") && !before.getOrDefault(id, "").startsWith("confirm"))
+                || before.getOrDefault(id, "").startsWith("busy|") || !before.containsKey(id)) manager.cancel((url + id).hashCode());
             if (!visible) for (Watch.Alert alert : alerts) tell(context, url, name, alert);
             now.put(url, new JSONObject(before));
         }
-        if (active) state.edit().putString("phases", now.toString()).putLong("checked", System.currentTimeMillis()).apply();
+        if (active) state.edit().putString("phases-v2", now.toString()).putLong("checked", System.currentTimeMillis()).apply();
     }
 
     private static void tell(Context context, String url, String computer, Watch.Alert alert) {
@@ -164,7 +166,7 @@ public final class Watcher extends Service {
                 .setData(android.net.Uri.parse("remotecli://task/" + (url + alert.id).hashCode())).putExtra("computer", url).putExtra("task", alert.id).putExtra("project", alert.dir);
             PendingIntent tap = PendingIntent.getActivity(context, (url + alert.id).hashCode(), target, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification notification = new Notification.Builder(context, CHANNEL_TASKS).setSmallIcon(R.drawable.ic_shell)
-                .setContentTitle((asks ? "等你确认 · " : "已完成 · ") + computer)
+                .setContentTitle((asks ? "等你确认 · " : "本轮回复结束 · ") + computer)
                 .setContentText(title + (alert.dir.isEmpty() || alert.dir.equals(title) ? "" : " · " + alert.dir))
                 .setAutoCancel(true).setContentIntent(tap).build();
             manager.notify((url + alert.id).hashCode(), notification);

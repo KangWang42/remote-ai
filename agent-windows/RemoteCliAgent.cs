@@ -247,7 +247,7 @@ public sealed class TerminalAgent {
             reach = ways.Reach, ways = s.Live ? ways.Named : null,
             // (only what is of use now: why it cannot be told or ended, why it cannot be stopped while it works, why it cannot be answered while it asks)
             why = s.Live ? ways.Why.Where(one => one.Key == "say" || one.Key == "end" || (one.Key == "stop" && ways.Status == "busy") || (one.Key == "answer" && asks)).ToDictionary(one => one.Key, one => one.Value) : null,
-            transport = ways.Transport, turn = ways.Turn, wake = ways.Woken,
+            transport = ways.Transport, turn = ways.Turn, wake = ways.Woken, completion = native != null && !native.CompletionReady ? "" : CompletionOf(s.Tool, s.Id, ways.Status),
             // the operation it came of, where it began in a desktop application that was opened for it from the phone
             opened = s.Live ? Desktop.CameOf(s.Tool, s.Id, s.ControlFolder, s.Created, Ways.InApplication(s.Origin)) : "",
             // what the phone said to it and it has not taken yet, each with its number: waiting, or held since it was told to stop
@@ -255,6 +255,43 @@ public sealed class TerminalAgent {
             ask = asks ? new { id = known.AskId, text = known.AskText, options = known.AskOptions } : null, last = known != null ? known.Last : "" };
     }
     Ways WaysOf(SessionInfo s, Reach.Open known) { return Ways.Of(s, known, NativeState(s)); }
+    readonly Dictionary<string, string[]> completions = new Dictionary<string, string[]>();
+    string CompletionOf(string tool, string session, string status) {
+        if (String.IsNullOrEmpty(session) || status == "busy" || status == "confirm" || Reach.Outbox.Of(tool, session).Length > 0) return "";
+        var known = Reach.Of(tool, session);
+        if (known != null && (known.Status == "busy" || known.Status == "confirm")) return "";
+        if (tool != "codex") return known == null ? "" : known.Completion;
+        // Codex's explicit turn events, not file modification times or pauses in terminal output.
+        string file;
+        if (!codexFiles.TryGetValue(session, out file)) return "";
+        try {
+            var info = new FileInfo(file);
+            string stamp = info.Length + "." + info.LastWriteTimeUtc.Ticks; string[] cached;
+            if (completions.TryGetValue(file, out cached) && cached[0] == stamp) return cached[1];
+            string completedTurn = CompletedTurn(ReadPart(file, true, 256 * 1024));
+            if (completions.Count > 200) completions.Clear();
+            completions[file] = new[] { stamp, completedTurn };
+            return completedTurn;
+        } catch (IOException) { return ""; } catch (UnauthorizedAccessException) { return ""; }
+    }
+    public static string CompletedTurn(string record) {
+        string completedTurn = "";
+        var reader = new JavaScriptSerializer { MaxJsonLength = 1024 * 1024 };
+        foreach (string line in (record ?? "").Split('\n')) {
+            if (!line.StartsWith("{", StringComparison.Ordinal) || line.Length > 1024 * 1024) continue;
+            try {
+                var row = reader.Deserialize<Dictionary<string, object>>(line); object value;
+                var payload = row.TryGetValue("payload", out value) ? value as Dictionary<string, object> : null;
+                if (payload == null) continue;
+                string type = Get(payload, "type");
+                if (Get(row, "type") == "event_msg") {
+                    if (type == "task_started" || type == "turn_aborted") completedTurn = "";
+                    else if (type == "task_complete") completedTurn = Get(payload, "turn_id");
+                } else if (Get(row, "type") == "response_item" && type == "message" && Get(payload, "role") == "user") completedTurn = "";
+            } catch (ArgumentException) { } catch (InvalidOperationException) { }
+        }
+        return completedTurn;
+    }
     // How a message stands, for the phone: the same answer whatever carries it, and for one that is asked after again.
     static Dictionary<string, object> Told(Outbox.Item item, string way) {
         return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", item.State == Outbox.Handed }, { "way", way }, { "state", item.State }, { "message", item.Id } };
@@ -273,7 +310,7 @@ public sealed class TerminalAgent {
             if (waiting.Length == 0) return;
             string launcher = FindTool(tool), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
             if (tool == "codex") {
-                foreach (var item in waiting) { CodexQueue.Send(launcher, session, item.Text); Reach.Outbox.Hand(item.Id); }
+                foreach (var item in waiting) Reach.Outbox.Deliver(item.Id, text => CodexQueue.Send(launcher, session, text));
                 return;
             }
             // (the hooks are there once Claude Code has told something through them, or stand in its settings:
@@ -282,9 +319,9 @@ public sealed class TerminalAgent {
             if (hooks) ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Wake);
             int patience = WakeSeconds;
             foreach (var item in waiting) {
-                if (hooks ? Reach.Taken(item.Id, patience) : !Reach.Outbox.Hand(item.Id)) continue;
+                if (hooks && Reach.Taken(item.Id, patience)) continue;
                 patience = 0;       // its hooks did not come: the rest is not waited for either
-                ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(item.Text));
+                Reach.Outbox.Deliver(item.Id, text => ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(text)));
             }
         }
     }
@@ -721,6 +758,7 @@ public sealed class TerminalAgent {
                     codexOrigins[file.FullName] = Folders.CodexOrigin("", source, originator);
                 }
                 if (folder.Length == 0) continue;
+                codexFiles[id] = file.FullName;
                 if (!usedBy.TryGetValue(file.FullName, out codexKind)) codexKind = Folders.Terminal;
                 // Keep live conversations regardless of age; older closed conversations only contribute project suggestions.
                 string dir = dirs.Where(d => SamePath(d.Value, folder)).Select(d => d.Key).FirstOrDefault();
@@ -954,16 +992,18 @@ public sealed class TerminalAgent {
     public static Dictionary<string, object> Said(string path, string tool) {
         // limit: how much of the file's end is read. most: how many things said by the user and the tool are given;
         // what the tool did between them goes with them, of one unbroken run the last `runs`.
-        const int limit = 4 * 1024 * 1024, most = 40, runs = 30, chars = 1500, aside = 600;
+        const int limit = 4 * 1024 * 1024, most = 40, runs = 30, chars = 128 * 1024;
         var reader = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
         var said = new List<Dictionary<string, object>>();
         Func<Dictionary<string, object>, string, object> at = (d, k) => { object v; return d != null && d.TryGetValue(k, out v) ? v : null; };
         Action<string, string> add = (role, text) => {
             text = role == "tool" ? Regex.Replace(text ?? "", @"\s+", " ").Trim() : (text ?? "").Trim();
             if (text.Length == 0) return;
-            int room = role == "thought" ? aside : chars;
+            int room = role == "tool" ? 1500 : chars;
+            bool truncated = text.Length > room;
             if (text.Length > room) text = text.Substring(0, Char.IsHighSurrogate(text[room - 2]) ? room - 2 : room - 1) + "…";
             said.Add(new Dictionary<string, object> { { "role", role }, { "text", text } });
+            if (truncated) said[said.Count - 1]["truncated"] = true;
         };
         Func<object, object, string> brief = (name, given) => {
             var input = given as Dictionary<string, object>; string about = "";
@@ -1014,12 +1054,14 @@ public sealed class TerminalAgent {
                     // What a hook handed the conversation as added context: the phone's words, where they came that
                     // way, when it stopped or between two of its steps.
                     var attached = at(row, "attachment") as Dictionary<string, object>;
-                    var handed = at(attached, "content") as IEnumerable;
-                    if (handed == null || at(attached, "content") is string || !"hook_additional_context".Equals(at(attached, "type")) || !("Stop".Equals(at(attached, "hookName")) || Reach.Step.Equals(at(attached, "hookEvent")))) continue;
+                    object contextValue = at(attached, "content");
+                    var handed = contextValue is string ? new object[] { contextValue } : contextValue as IEnumerable;
+                    string hookName = at(attached, "hookName") as string ?? "";
+                    if (handed == null || !"hook_additional_context".Equals(at(attached, "type")) || !(hookName == "Stop" || hookName.StartsWith("Stop:", StringComparison.Ordinal) || "Stop".Equals(at(attached, "hookEvent")) || Reach.Step.Equals(at(attached, "hookEvent")))) continue;
                     foreach (object one in handed) {
                         string context = one as string ?? ""; int from = context.IndexOf("\n\n", StringComparison.Ordinal);
                         if (from < 0 || context.IndexOf("from their phone", StringComparison.Ordinal) < 0 || !Reach.Names.Any(name => context.IndexOf(name, StringComparison.Ordinal) >= 0)) continue;
-                        add("user", context.Substring(from + 2)); woken = false;
+                        add("user", context.Substring(from + 2)); woken = false; stamped(row);
                     }
                     continue;
                 }
@@ -1033,7 +1075,7 @@ public sealed class TerminalAgent {
                     if (type != "user" || body.IndexOf("from their phone", StringComparison.Ordinal) < 0 || !Reach.Names.Any(name => body.IndexOf(name, StringComparison.Ordinal) >= 0)) continue;
                     if (Reach.Names.Any(name => body.StartsWith(name + " wake-up", StringComparison.Ordinal))) { woken = true; continue; }       // only woke it: the words follow
                     int words = body.IndexOf("\n\n", StringComparison.Ordinal);
-                    if (words >= 0) { add("user", body.Substring(words + 2)); woken = false; }
+                    if (words >= 0) { add("user", body.Substring(words + 2)); woken = false; stamped(row); }
                     continue;
                 }
                 if (woken && type == "assistant") continue;         // what it answered to being woken, before the words reached it
@@ -1103,6 +1145,15 @@ public sealed class TerminalAgent {
         }
         var file = new FileInfo(path);
         var kept = Talk(said, most, runs);
+        // Keep complete normal replies while bounding the relay payload, including JSON escaping.
+        // Drop older turns before shortening a reply; exceptionally large single blocks are explicitly marked.
+        int letters = kept.Sum(m => Convert.ToString(m["text"]).Length);
+        var sizes = kept.Select(m => Encoding.UTF8.GetByteCount(reader.Serialize(m)) + 1).ToArray();
+        int bytes = sizes.Sum(), removed = 0;
+        while (removed < kept.Count - 1 && (letters > 256 * 1024 || bytes > 3 * 1024 * 1024)) {
+            letters -= Convert.ToString(kept[removed]["text"]).Length; bytes -= sizes[removed++];
+        }
+        if (removed > 0) kept.RemoveRange(0, removed);
         // What came back is given with the latest steps only: a window that follows a conversation at work is sent
         // it anew whenever it changes, and the output of every step of a long one is too much for that.
         int withResult = 0;
@@ -1761,7 +1812,7 @@ public sealed class TerminalAgent {
                     candidates = candidates.ToArray() } },
                 // Every terminal says what it is, so that a relay that did not start it can list it: the computer may turn to another relay.
                 { "terminals", terminals.Values.Concat(ended).Select(t => new { id = t.Id, state = t.Pty.Closed ? "closed" : "running", cols = t.Pty.Cols, rows = t.Pty.Rows, session = t.Session, status = t.Status, exit_code = t.Pty.ExitCode, error = t.Pty.ExitCode.HasValue && t.Pty.ExitCode.Value != 0 ? "程序退出（代码 " + t.Pty.ExitCode.Value + "），请检查终端画面中的原因" : "",
-                    tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title }).ToArray() },
+                    tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title, completion = CompletionOf(t.Tool, t.Session, t.Status) }).ToArray() },
                 { "output", output }, { "acks", acknowledgments }
             };
             // The list of conversations is long: it goes out when it changed, and now and then in case the relay restarted.

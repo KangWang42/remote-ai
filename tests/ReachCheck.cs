@@ -412,8 +412,23 @@ public static class ReachCheck {
                 Require(reach.Outbox.Find(left).State == Outbox.Handed && reach.Outbox.Find(left).Text == "", "handed over, and its words are kept no longer");
                 reach.Leave("claude", asleep, "没有人来取", unfetched);
                 var began = DateTime.UtcNow;
-                Require(!reach.Taken(unfetched, 1) && (DateTime.UtcNow - began).TotalSeconds < 3, "what nothing comes for is taken back");
+                Require(!reach.Taken(unfetched, 1) && (DateTime.UtcNow - began).TotalSeconds < 3 && reach.Outbox.Find(unfetched).State == Outbox.Queued, "a wait timeout does not acknowledge delivery");
+                Require(reach.Outbox.Deliver(unfetched, text => {
+                    Require(text == "没有人来取" && reach.Outbox.Find(unfetched).State == Outbox.Sending, "courier reserves the words until acknowledged");
+                    Require(reach.Outbox.Hand("claude", asleep).Length == 0 && !reach.Outbox.Withdraw(unfetched) && !reach.Outbox.Forget(unfetched), "hooks and withdrawal cannot race a courier");
+                }) && reach.Outbox.Find(unfetched).State == Outbox.Handed, "successful courier acknowledges delivery");
                 Require(Answer(Run("claude", Event("Stop", asleep)), 5000, "nothing lies there any more") == "", "and is not given later");
+                string failedSend = Guid.NewGuid().ToString("N");
+                reach.Leave("claude", asleep, "发送失败也要保留", failedSend);
+                Require(Refused(() => reach.Outbox.Deliver(failedSend, text => { throw new InvalidOperationException("courier failed"); })).Contains("courier failed") && reach.Outbox.Find(failedSend).State == Outbox.Paused && reach.Outbox.Find(failedSend).Text == "发送失败也要保留", "failure is not acknowledged and does not lose the message");
+                Require(reach.Outbox.Forget(failedSend), "failed delivery can be returned to the phone composer");
+                string failedTurn = Guid.NewGuid().ToString("N");
+                Answer(Run("claude", Event("UserPromptSubmit", asleep)), 3000, "working before API failure");
+                reach.Say("claude", asleep, "下一条", failedTurn);
+                Answer(Run("claude", Event("StopFailure", asleep, ",\"error\":\"rate_limit\",\"error_details\":\"Rate limit reached\"")), 3000, "failed turn reported");
+                Require(claude(asleep).Status == "idle" && claude(asleep).Completion == "" && !claude(asleep).Held && claude(asleep).Last.Contains("Rate limit reached") && reach.Outbox.Find(failedTurn).State == Outbox.Paused, "API failure clears busy and holds unsent messages without reporting completion");
+                Answer(Run("claude", Event("UserPromptSubmit", asleep)), 3000, "new prompt after failure");
+                Require(claude(asleep).Status == "busy" && claude(asleep).Last == "" && claude(asleep).Completion == "", "new prompt clears stale failure and completion");
                 Answer(Run("claude", Event("SessionEnd", asleep)), 5000, "ended");
 
                 // ---- a conversation that ends is forgotten
@@ -440,6 +455,13 @@ public static class ReachCheck {
                 Require(later.Outbox.Find(s1).State == Outbox.Handed && !Directory.GetFiles(stored).Any(file => File.ReadAllText(file).Contains("\"text\"")), "settled: its words are dropped from the file");
             }
             Require(new Outbox(stored).Find(s2).State == Outbox.Handed && new Outbox(stored).Of("codex", surviving).Length == 0, "how it ended is remembered");
+            var courierBox = new Outbox(stored);
+            string interrupted = Guid.NewGuid().ToString("N");
+            courierBox.Add(interrupted, "claude", surviving, "投递中重启");
+            courierBox.Deliver(interrupted, text => {
+                var restarted = new Outbox(stored);
+                Require(restarted.Find(interrupted).State == Outbox.Paused && restarted.Find(interrupted).Text == text && !restarted.Waiting("claude", surviving), "interrupted delivery is preserved for review, never resent automatically");
+            });
 
             // ---- the program is started again while it keeps a request for the phone (an update, asked for from the
             // phone): the request is not lost to the tool's own question. Its hook waits and hands it over anew.
@@ -477,7 +499,7 @@ public static class ReachCheck {
             Require(Convert.ToString(read["model"]) == "opus" && Convert.ToString(read["note"]) == "保留原样" && Convert.ToString(read["number"], System.Globalization.CultureInfo.InvariantCulture) == "1.5", "what else is in the file stays");
             Require(File.ReadAllText(settings, Encoding.UTF8).Contains("保留原样"), "letters of any language are written as they are");
             // (the person had a hook of their own before each step, and one at a stop: this program's stand beside both)
-            Require(((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 2 && hooks.Count == 8, "the person's own hooks stay, this program's stand beside them: " + String.Join(",", hooks.Keys));
+            Require(((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && ((IEnumerable)hooks["PreToolUse"]).Cast<object>().Count() == 2 && hooks.Count == 9 && hooks.ContainsKey("StopFailure"), "the person's own hooks stay, this program's stand beside them: " + String.Join(",", hooks.Keys));
             Require(Reach.EventsOf("claude").Contains(Reach.Step) && !Reach.EventsOf("codex").Contains(Reach.Step) && Convert.ToInt32(entry0(hooks, Reach.Step, program)["timeout"]) == 10 && Convert.ToString(entry0(hooks, Reach.Step, program)["statusMessage"]) == "Remote AI", "Claude Code is heard before each step, briefly; Codex is not");
             var mine = (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)((IEnumerable)hooks["PermissionRequest"]).Cast<object>().Single())["hooks"]).Cast<object>().Single();
             Require(Convert.ToString(mine["command"]) == program && String.Join(" ", ((IEnumerable)mine["args"]).Cast<object>()) == "--hook claude RemoteCli.reach.abc123" && Convert.ToInt32(mine["timeout"]) == Reach.Patience, "Claude Code is given the program and its arguments apart");

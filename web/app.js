@@ -396,7 +396,7 @@
       run = null;
       // what the tool said of its work between its steps: a quieter line of its own, under the tool's name like its answers
       if (m.role === 'thought') {
-        box.append(el('div', { className: 'turn assistant thought' }, last !== 'assistant' ? el('b', { textContent: toolName }) : '', el('div', { className: 'plain', textContent: m.text })));
+        box.append(el('div', { className: 'turn assistant thought' }, last !== 'assistant' ? el('b', { textContent: toolName }) : '', el('div', { className: 'plain', textContent: m.text }), m.truncated ? el('small', { className: 'quiet', textContent: '这段内容超长，剩余部分请在电脑上查看' }) : ''));
         last = 'assistant';
         return;
       }
@@ -404,6 +404,7 @@
       const fromPhone = mine && phoneTexts && phoneTexts.has(String(m.text || '').trim());
       box.append(el('div', { className: 'turn ' + (mine ? 'user' : 'assistant') },
         !mine && last !== 'assistant' ? el('b', { textContent: toolName }) : '', set(m.text),
+        m.truncated ? el('small', { className: 'quiet', textContent: '这条消息超长，剩余部分请在电脑上查看' }) : '',
         fromPhone ? el('small', { className: 'phone-delivery', textContent: '手机消息' }) : ''));
       last = m.role;
     });
@@ -529,7 +530,10 @@
       // it has (`since`): the computer gives it anew only when it changed, with how it stands. So what is said on
       // the computer is here within a moment, whatever the lists know. (A computer of an earlier version gives no
       // such word; it is asked when the lists say that the conversation changed.)
-      let stamp = '', seen = '', read = false, reading = false, sending = false, stands = null, quick = 0, asked = 0, changed = 0, sawBusy = 0;
+      const syncNote = el('p', { className: 'quiet sync-note', role: 'status', hidden: true });
+      state.before(syncNote);
+      const stateKey = current => JSON.stringify([current.updated, current.status, current.last, current.turn]);
+      let stamp = '', seen = '', read = false, reading = false, sending = false, stands = null, standsAt = '', readError = '', quick = 0, asked = 0, changed = 0, sawBusy = 0;
       const pendingScope = pendingKey(session);
       const pending = desktopPending.get(pendingScope) || loadDesktopPending(pendingScope, session);
       desktopPending.set(pendingScope, pending);
@@ -554,7 +558,7 @@
         catch (error) { toast(error.message); }
         await refresh(); shown = ''; show();
       };
-      const QUEUED = { queued: '排队中 · 它做完手头这一步后收到', paused: '已暂停 · 对话被停止时还没有发出' };
+      const QUEUED = { queued: '排队中 · 它做完手头这一步后收到', sending: '正在送达 · 等待电脑确认', paused: '已暂停 · 请确认对话和发送情况后继续' };
       function waiting() {
         said.querySelectorAll('.turn.mine, .held').forEach(node => node.remove());
         const kept = now().queued || [], shownIds = new Set();
@@ -562,7 +566,7 @@
           const state = kept.find(item => item.id === id);
           const row = el('div', { className: 'turn user mine' + (going ? ' going' : '') }, el('div', { className: 'plain', textContent: text }),
             el('small', { className: 'phone-delivery', textContent: state ? QUEUED[state.state] : label }));
-          if (state) row.append(el('button', { type: 'button', textContent: '撤回', onclick: event => { event.currentTarget.disabled = true; withdraw(id); } }));
+          if (state && state.state !== 'sending') row.append(el('button', { type: 'button', textContent: '撤回', onclick: event => { event.currentTarget.disabled = true; withdraw(id); } }));
           return row;
         };
         pending.forEach(p => {
@@ -600,9 +604,11 @@
         const listed = [current.updated, current.status, current.last || ''].join('\n');
         if (!canPeek || reading || (read && stamp === null && listed === seen)) return;
         reading = true;
+        const startedAt = stateKey(current);
         try {
           const got = await api('api/conversation', Object.assign({ id: newId(), session: session.id }, stamp ? { since: stamp } : {}));
-          if (typeof got.status === 'string') stands = got.status;
+          readError = '';
+          if (typeof got.status === 'string') { stands = got.status; standsAt = startedAt; }
           if (!got.same) {
             record = got.messages || [];
             if (typeof got.asked === 'number') asked = got.asked;
@@ -623,7 +629,7 @@
             latest.hidden = atEnd();
           }
           stamp = typeof got.stamp === 'string' ? got.stamp : null; seen = listed; read = true;
-        } catch (error) { if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
+        } catch (error) { stands = null; readError = '对话同步中断，正在重试：' + error.message; if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
         reading = false;
       }
       // ---- how it stands, what it asks, and the box
@@ -650,7 +656,9 @@
       let shown = '';
       function show() {
         // how it stands is what the computer said of it last: with the conversation itself, or in the lists
-        const listed = now(), current = stands === null || stands === 'confirm' || listed.ask || listed.transport === APP ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
+        const listed = now(), current = stands === null || standsAt !== stateKey(listed) || stands === 'confirm' || listed.ask || listed.transport === APP ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
+        syncNote.textContent = readError || (String(current.last || '').startsWith('Claude Code 本次执行失败：') ? current.last : '');
+        syncNote.hidden = !syncNote.textContent;
         const mode = controlMode(current);
         control.className = 'control-mode ' + mode;
         // (where it can only be read, the computer's own words why it cannot be told anything)

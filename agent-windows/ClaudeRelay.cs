@@ -102,6 +102,7 @@ public static class ClaudeRelay {
     public static string Outcome(string said, out bool tried) {
         tried = false;
         string result = "", refused = null; bool sent = false;
+        var calls = new HashSet<string>();
         var reader = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 };
         foreach (string line in (said ?? "").Split('\n')) {
             if (!line.TrimStart().StartsWith("{", StringComparison.Ordinal)) continue;
@@ -115,13 +116,26 @@ public static class ClaudeRelay {
             foreach (object item in parts) {
                 var part = item as Dictionary<string, object>;
                 if (part == null || !part.TryGetValue("type", out value)) continue;
-                if ("tool_use".Equals(value)) tried = true;
+                if ("tool_use".Equals(value)) {
+                    object name, id;
+                    if (part.TryGetValue("name", out name) && "SendMessage".Equals(name)) {
+                        tried = true;
+                        if (part.TryGetValue("id", out id) && id is string) calls.Add((string)id);
+                    }
+                }
                 else if ("tool_result".Equals(value)) {
-                    tried = true;
+                    object id;
+                    if (!part.TryGetValue("tool_use_id", out id) || !(id is string) || !calls.Contains((string)id)) continue;
                     object content; part.TryGetValue("content", out content);
                     string text = content as string ?? (content is System.Collections.IEnumerable ? String.Join(" ", ((System.Collections.IEnumerable)content).OfType<Dictionary<string, object>>().Select(c => { object t; return c.TryGetValue("text", out t) ? Convert.ToString(t) : ""; })) : "");
                     object failed; bool error = part.TryGetValue("is_error", out failed) && true.Equals(failed);
-                    if (!error && text.IndexOf("\"success\":false", StringComparison.Ordinal) < 0) sent = true; else refused = text.Trim();
+                    bool success = false;
+                    try {
+                        var receipt = reader.Deserialize<Dictionary<string, object>>(text);
+                        object ok;
+                        success = receipt != null && receipt.TryGetValue("success", out ok) && true.Equals(ok);
+                    } catch (ArgumentException) { } catch (InvalidOperationException) { }
+                    if (!error && success) sent = true; else refused = text.Trim();
                 }
             }
         }

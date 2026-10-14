@@ -90,14 +90,17 @@ public static class InUseCheck {
         Require(Array.IndexOf(arguments, "stream-json") > 0 && Array.IndexOf(arguments, "--verbose") > 0, "every step of the courier is printed");
         // Whether the message was carried is read from what the courier's tool did, not from what the courier says:
         // it often answered the message itself, or refused the address, and said SENT or anything else.
-        string called = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"SendMessage\",\"input\":{\"to\":\"uds:x\",\"message\":\"m\"}}]}}\n";
-        Func<string, bool, string> answered = (text, error) => "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":" + new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(text) + (error ? ",\"is_error\":true" : "") + "}]}}\n";
+        string called = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"send1\",\"name\":\"SendMessage\",\"input\":{\"to\":\"uds:x\",\"message\":\"m\"}}]}}\n";
+        Func<string, bool, string> answered = (text, error) => "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"send1\",\"content\":" + new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(text) + (error ? ",\"is_error\":true" : "") + "}]}}\n";
         bool tried;
         ClaudeRelay.Taken(called + answered("{\"success\":true,\"message\":\"sent\"}", false) + "{\"type\":\"result\",\"result\":\"SENT\"}");
         Require(ClaudeRelay.Outcome(called + answered("{\"success\":true}", false) + "{\"type\":\"result\",\"result\":\"I refuse\"}", out tried) == "" && tried, "sent, whatever the courier says after");
         Require(ClaudeRelay.Outcome("{\"type\":\"system\",\"subtype\":\"init\"}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"…\"}]}}\n{\"type\":\"result\",\"result\":\"SENT\"}", out tried).Contains("SENT") && !tried, "a courier that only says SENT carried nothing, and is asked again");
         Require(ClaudeRelay.Outcome(called + answered("no session at that address", true) + "{\"type\":\"result\",\"result\":\"FAILED\"}", out tried).Contains("no session at that address") && tried, "what the tool refused, in its words; not asked again");
         Require(ClaudeRelay.Outcome(called + answered("{\"success\":false,\"error\":\"gone\"}", false), out tried).Contains("gone") && tried, "a tool that says it failed");
+        Require(ClaudeRelay.Outcome(called + answered("{\"success\": false, \"error\": \"gone\"}", false), out tried).Contains("gone") && tried, "spaced false receipt is not success");
+        Require(ClaudeRelay.Outcome(called + answered("{\"success\":true}", false).Replace("send1", "unrelated"), out tried).Length > 0 && tried, "unrelated tool result cannot acknowledge delivery");
+        Require(ClaudeRelay.Outcome(called + answered("unrecognized response", false), out tried).Length > 0 && tried, "unknown receipt is not delivery evidence");
         Func<string, string> refused = said => { try { ClaudeRelay.Taken(said); return ""; } catch (InvalidOperationException error) { return error.Message; } };
         Require(refused("{\"type\":\"result\",\"result\":\"I cannot send this\"}").Contains("I cannot send this") && refused("not json").Contains("没有把消息送出") && refused("{\"result\":\"\"}").Length > 0 && refused(null).Length > 0, "what was not taken says why");
         Require(ClaudeRelay.Tries >= 2, "asked more than once");

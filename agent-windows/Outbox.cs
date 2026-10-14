@@ -15,18 +15,18 @@ namespace RemoteCli {
 ///
 /// An item is `queued` (it waits for its conversation: the tool's hooks hand it over when they next run, or the
 /// conversation is woken for it), `paused` (its conversation was told to stop: it waits for its owner to say whether
-/// it is still to be sent), `handed` (the tool has it) or `withdrawn` (its owner took it back). The words are kept
+/// it is still to be sent), `sending` (reserved by a courier), `handed` (the tool has it) or `withdrawn` (its owner took it back). The words are kept
 /// encrypted for this Windows account and are dropped from the file as soon as the item is settled; what stays of
 /// a settled item, for a day, is its number and how it ended.
 public sealed class Outbox {
-    public const string Queued = "queued", Paused = "paused", Handed = "handed", Withdrawn = "withdrawn";
+    public const string Queued = "queued", Paused = "paused", Sending = "sending", Handed = "handed", Withdrawn = "withdrawn";
     public static readonly TimeSpan Waits = TimeSpan.FromDays(7), Remembered = TimeSpan.FromDays(1);
 
     public sealed class Item {
         public string Id = "", Tool = "", Session = "", Text = "", State = Queued;
         public DateTime At, Settled;
         public long Order;
-        public bool Open { get { return State == Queued || State == Paused; } }
+        public bool Open { get { return State == Queued || State == Paused || State == Sending; } }
         internal Item Copy() { return (Item)MemberwiseClone(); }
     }
 
@@ -47,6 +47,8 @@ public sealed class Outbox {
                 Item item = Read(file);
                 // what cannot be read, or has waited or been remembered long enough, is cleared away
                 if (item == null || DateTime.UtcNow - (item.Open ? item.At : item.Settled) > (item.Open ? Waits : Remembered)) { try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { } continue; }
+                // An interrupted courier may have delivered: never resend it automatically after a restart.
+                if (item.State == Sending) { item.State = Paused; Write(item); }
                 items.Add(item);
             }
             items.Sort((a, b) => a.Order.CompareTo(b.Order));
@@ -106,18 +108,27 @@ public sealed class Outbox {
     public Item[] Hand(string tool, string session) { return Settle(item => Same(item, tool, session), Queued, Handed); }
     /// One item has been handed over (by another way than the hooks). False: it no longer waited.
     public bool Hand(string id) { return Settle(item => item.Id == id, Queued, Handed).Length > 0; }
+    /// Reserve a message against concurrent hooks. Only a successful courier acknowledges delivery.
+    public bool Deliver(string id, Action<string> send) {
+        Item[] reserved = Settle(item => item.Id == id, Queued, Sending);
+        if (reserved.Length == 0) return false;
+        try { send(reserved[0].Text); }
+        catch { Settle(item => item.Id == id, Sending, Paused); throw; }
+        Settle(item => item.Id == id, Sending, Handed);
+        return true;
+    }
     /// The conversation is told to stop: what waited for it is held until its owner says more. How many.
     public int Pause(string tool, string session) { return Settle(item => Same(item, tool, session), Queued, Paused).Length; }
     /// What was held for a conversation waits for it again: returned in order.
     public Item[] Release(string tool, string session) { return Settle(item => Same(item, tool, session), Paused, Queued); }
     /// Its owner takes a message back. False: it was handed over already, or is not known.
-    public bool Withdraw(string id) { return Settle(item => item.Id == id, null, Withdrawn).Length > 0; }
+    public bool Withdraw(string id) { return Settle(item => item.Id == id && item.State != Sending, null, Withdrawn).Length > 0; }
     /// An item that could not be handed over is dropped altogether, as if it had not been said. False: it does not
     /// wait any more (it was handed over, or taken back), and stays as it is.
     public bool Forget(string id) {
         lock (gate) {
             Item known = items.FirstOrDefault(item => item.Id == id);
-            if (known == null || !known.Open) return false;
+            if (known == null || !known.Open || known.State == Sending) return false;
             items.Remove(known); Delete(known);
         }
         Tell();
@@ -157,7 +168,7 @@ public sealed class Outbox {
             var kept = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
             Func<string, string> word = name => { object value; return kept != null && kept.TryGetValue(name, out value) && value != null ? Convert.ToString(value) : ""; };
             var item = new Item { Id = word("id"), Tool = word("tool"), Session = word("session"), State = word("state") };
-            if (!Regex.IsMatch(item.Id, @"\A[a-f0-9]{16,32}\z") || Path.GetFileNameWithoutExtension(file) != item.Id || Array.IndexOf(new[] { Queued, Paused, Handed, Withdrawn }, item.State) < 0) return null;
+            if (!Regex.IsMatch(item.Id, @"\A[a-f0-9]{16,32}\z") || Path.GetFileNameWithoutExtension(file) != item.Id || Array.IndexOf(new[] { Queued, Paused, Sending, Handed, Withdrawn }, item.State) < 0) return null;
             if (!Int64.TryParse(word("order"), out item.Order)) return null;
             DateTime.TryParse(word("at"), null, System.Globalization.DateTimeStyles.RoundtripKind, out item.At);
             DateTime.TryParse(word("settled"), null, System.Globalization.DateTimeStyles.RoundtripKind, out item.Settled);

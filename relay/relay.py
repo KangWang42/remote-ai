@@ -306,7 +306,7 @@ def _queued(session):
     listed = session.get("queued")
     return [{"id": item["id"], "text": item["text"][:200], "state": item["state"], "at": item["at"] if type(item.get("at")) in (int, float) else 0}
             for item in (listed if isinstance(listed, list) else [])[:20]
-            if isinstance(item, dict) and isinstance(item.get("id"), str) and _id.fullmatch(item["id"]) and isinstance(item.get("text"), str) and item.get("state") in ("queued", "paused")]
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and _id.fullmatch(item["id"]) and isinstance(item.get("text"), str) and item.get("state") in ("queued", "paused", "sending")]
 
 
 def _reached(session):
@@ -1115,6 +1115,7 @@ class Relay:
                      "live": s.get("live") is True, "status": s.get("status") if s.get("status") in ("idle", "busy", "confirm", "waiting") else "", **_reached(s),
                      "host": s.get("host") if s.get("host") in ("cli", "shared", "remote", "unknown") else "",
                      "origin": str(s.get("origin") or "")[:60],
+                     "completion": str(s.get("completion") or "")[:200],
                      # the operation ("app_open") it came of, where it began in a desktop application opened for it from the phone
                      "opened": s["opened"] if isinstance(s.get("opened"), str) and _id.fullmatch(s["opened"]) else "",
                      # by what it is used, in the computer's words: by the program that has it open, else by what started it
@@ -1190,6 +1191,7 @@ class Relay:
                     status = item.get("status") if item.get("status") in ("idle", "busy") and term["state"] == "running" else ""
                     wrote = wrote or status != term.get("status")
                     term["status"] = status
+                    term["completion"] = str(item.get("completion") or "")[:200]
                     exit_code = item.get("exit_code")
                     if term["state"] == "closed" and type(exit_code) is int and term.get("exit_code") != exit_code:
                         term["exit_code"] = exit_code

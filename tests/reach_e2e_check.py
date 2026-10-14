@@ -77,7 +77,7 @@ def main():
     subprocess.run([str(agent_exe), "--set-password", str(data)], input=password.encode(), check=True)
     agent = subprocess.Popen([str(agent_exe), "--data", str(data)], env=environment)
     pipe = "RemoteCli.reach." + hashlib.sha256(os.path.abspath(str(data)).lower().encode("utf-8")).hexdigest()[:12]
-    browser, report = None, {}
+    browser, report, hooks = None, {}, []
     try:
         cookie = {}
 
@@ -108,6 +108,7 @@ def main():
             """The hook, as Codex runs it for an event. Returns the running program; its output is what Codex reads."""
             event = dict({"hook_event_name": name, "session_id": session, "transcript_path": str(rollout if session == SESSION else apart), "cwd": str(work if session == SESSION else elsewhere), "model": "gpt", "permission_mode": "default"}, **more)
             program = subprocess.Popen([str(agent_exe), "--hook", "codex", pipe], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            hooks.append(program)
             program.stdin.write(json.dumps(event, ensure_ascii=False).encode("utf-8")); program.stdin.close()
             return program
 
@@ -140,7 +141,8 @@ def main():
         assert asked["reach"] == ["say", "answer"] and "npm install coupon-kit" in asked["ask"]["text"] and "Install the coupon library" in asked["ask"]["text"], asked
         wrong = call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "answer", "ask": "ffffffffffff", "allow": True}, expect=400)
         assert "已经处理过" in wrong["error"] and asking.poll() is None, wrong
-        assert call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "answer", "ask": asked["ask"]["id"], "allow": True}) == {}
+        approval = call("/api/conversation", {"id": new_id(), "session": SESSION, "action": "answer", "ask": asked["ask"]["id"], "allow": True})
+        assert approval == {'status': 'accepted'}, approval
         verdict = json.loads(said(asking))
         assert verdict["hookSpecificOutput"]["decision"]["behavior"] == "allow", verdict
         until(lambda: listed()["status"] == "busy" and listed()["ask"] is None, 10, "it works again")
@@ -288,7 +290,7 @@ def main():
                 time.sleep(0.3)
             card = page_value(CARD)
             report["card_asking"] = card
-            assert card and card["pill"] == "等你确认" and "npm test" in card["ask"] and card["buttons"] == ["允许", "拒绝", "看对话"] and "等你确认" in card["summary"], card
+            assert card and card["pill"] == "等你确认" and "npm test" in card["ask"] and card["buttons"] == ["允许一次", "拒绝", "看对话"] and "等你确认" in card["summary"], card
             picture("reach-asking.png")
             page_value("(() => { const card = Array.from(document.querySelectorAll('#overview .card')).find(c => c.textContent.includes('给结算页加上优惠券')); card.querySelector('.answers .yes').click(); return 1; })()")
             verdict = json.loads(said(asking))
@@ -306,6 +308,9 @@ def main():
         print(json.dumps(report, ensure_ascii=False))
         print("a conversation open on the computer: listed at work, asked and answered, told what to do next, pinned and hidden, from the phone; one outside every project too")
     finally:
+        for program in hooks:
+            if program.poll() is None: program.kill()
+            program.wait(timeout=5)
         if browser:
             browser.kill()
         agent.kill(); relay.kill(); lock.close(); lock_apart.close()

@@ -48,6 +48,7 @@ def main():
         ]
         asked, forwarded, opened, events, refuse = [], [], [], [], [False]
         board_mode = [False]
+        read_failure = [False]
         board_terminals = []
         transcript = [{'role': 'user', 'text': '电脑上的第一句'}, {'role': 'assistant', 'text': '电脑上的回答。'}]
 
@@ -83,6 +84,7 @@ def main():
                 if self.path == '/api/conversation':
                     if payload.get('action', 'read') == 'read':
                         one = next(s for s in sessions if s['id'] == payload['session'])
+                        if read_failure[0]: return self.reply({'error': '测试：读取暂时中断'}, 503)
                         return self.reply({'messages': transcript, 'status': one['status'], 'stamp': str(len(transcript))})
                     asked.append(payload)
                     answers = {}
@@ -297,7 +299,7 @@ def main():
             window(CLAUDE)
             rows = "Array.from(document.querySelectorAll('#sheet .said .turn.mine')).map(row => row.querySelector('.plain').textContent + ' / ' + row.querySelector('small').textContent + ' / ' + Array.from(row.querySelectorAll('button')).map(b => b.textContent).join(','))"
             until("document.querySelectorAll('#sheet .said .turn.mine').length === 2", 'the two that wait are shown')
-            assert value(rows) == ['排着队的一句 / 排队中 · 它做完手头这一步后收到 / 撤回', '停止时还没发出的一句 / 已暂停 · 对话被停止时还没有发出 / 撤回'], value(rows)
+            assert value(rows) == ['排着队的一句 / 排队中 · 它做完手头这一步后收到 / 撤回', '停止时还没发出的一句 / 已暂停 · 请确认对话和发送情况后继续 / 撤回'], value(rows)
             assert value("document.querySelector('#sheet .said .held button').textContent") == '继续发送'
             picture('waiting-messages.png')
             value("document.querySelector('#sheet .said .turn.mine button').click()")
@@ -432,6 +434,33 @@ def main():
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']
             assert len(errors) == 1 and '400' in errors[0]['params']['entry']['text'], errors      # the one refusal that was played
+            # Long replies are readable through their final paragraph at narrow phone widths, without clipping.
+            long_reply = '完整正文，包含多段说明。\n\n' * 250 + '长回复的最后一句。'
+            transcript.append({'role': 'assistant', 'text': long_reply})
+            for width in (320, 390, 430, 1440):
+                ask('Emulation.setDeviceMetricsOverride', width=width, height=900, deviceScaleFactor=1, mobile=width < 760)
+                window(CLAUDE)
+                until("document.querySelector('#sheet .said').textContent.includes('长回复的最后一句。')")
+                assert value("document.querySelector('#sheet .said').textContent.includes(%s)" % json.dumps('完整正文，包含多段说明。'))
+                value("document.querySelector('#sheet .said').scrollTop = document.querySelector('#sheet .said').scrollHeight")
+                dimensions = value("[innerWidth,document.documentElement.clientWidth,document.documentElement.scrollWidth,document.body.scrollWidth]")
+                assert dimensions[0] == width and max(dimensions[2:]) <= dimensions[1] + 1, dimensions
+                picture('long-reply-%s.png' % width)
+            ask('Emulation.setDeviceMetricsOverride', width=390, height=900, deviceScaleFactor=1, mobile=True)
+            window(CLAUDE)
+            read_failure[0] = True
+            sessions[0].update(status='waiting')
+            until("document.querySelector('.sync-note')?.textContent.includes('对话同步中断')")
+            until("document.querySelector('#sheet .state').classList.contains('waiting')", 'fresh overview overrides stale busy transcript')
+            assert value("document.querySelector('#sheet .said').textContent.includes('长回复的最后一句。')"), 'failed refresh preserves existing content'
+            picture('sync-interrupted.png')
+            read_failure[0] = False
+            sessions[0].update(status='idle', last='Claude Code 本次执行失败：Rate limit reached')
+            until("document.querySelector('.sync-note')?.textContent.includes('Rate limit reached')")
+            picture('claude-failed.png')
+            sessions[0].update(status='busy', last='')
+            until("document.querySelector('.sync-note')?.hidden && document.querySelector('#sheet .state').classList.contains('busy')")
+            assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
             print('ways UI: Claude Code and Codex are told, stopped and ended by the same controls, each by its own way; reasons shown; a desktop app opened for either')
         finally:
             if pipe: pipe.close()
