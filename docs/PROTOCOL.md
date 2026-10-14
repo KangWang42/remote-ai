@@ -440,6 +440,18 @@ program encrypts their words for the Windows account.
 
 ## Computer
 
+Android computer management reads `GET /api/terminal` and displays `device.version`, `newer`,
+`online`, `enabled` and the `update` capability. An empty `newer` means no advertised update;
+it does not prove the current version is the latest. After user confirmation it sends
+`POST /api/terminal` with `{"action":"update","id":"<32 hex>"}`. This asks the computer to
+check **and install**, not merely check. Retries while queued or after a lost response reuse
+the same id. `done` only acknowledges invoking the updater; it is not an installation result.
+The management page polls the overview every five seconds while visible, including after
+reconnection, and confirms completion only from an online computer reporting a higher version.
+After three minutes without confirmation it shows an inconclusive result rather than success.
+Leaving the page stops polling; returning resumes the same pending request within this app instance.
+Unsupported, disabled, offline and signed-out computers show guidance instead of an active update button.
+
 `fork` requires a session UUID, the `codex-fork` capability, and `takeover=false`. The new terminal starts with
 an empty session association; the source remains untouched. The agent only associates a new Codex conversation
 when its verified writer belongs to that terminal's process tree, never by picking the first conversation in

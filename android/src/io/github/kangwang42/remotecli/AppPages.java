@@ -47,12 +47,12 @@ final class AppPages {
             LinearLayout experience = kit.settingGroup(page, "使用偏好");
             kit.setting(experience, "外观与文字", "主题、字号与终端阅读方式", activity.appearanceName(), activity::look);
             LinearLayout updates = kit.settingGroup(page, "版本与更新");
-            kit.setting(updates, "检查更新", "Remote AI · " + activity.versionName(), "", activity::checkUpdate);
-            kit.settingSwitch(updates, "自动检查更新", "发现新版时提示，安装前由你确认", activity.autoUpdate(), activity::toggleAutoUpdate);
+            kit.setting(updates, "手机 App 更新", "当前 v" + activity.versionName() + " · 检查手机安装包更新", "", activity::checkUpdate);
+            kit.settingSwitch(updates, "自动检查手机更新", "发现新版时提示，安装前由你确认", activity.autoUpdate(), activity::toggleAutoUpdate);
             LinearLayout connections = kit.settingGroup(page, "已连接的电脑");
             JSONArray saved = activity.computers();
             for (int i = 0; i < saved.length(); i++) { JSONObject computer = saved.optJSONObject(i); if (computer == null) continue; String url = computer.optString("url");
-                kit.setting(connections, computer.optString("name", MainActivity.host(url)), MainActivity.host(url), "管理", () -> activity.manage(url));
+                kit.setting(connections, computer.optString("name", MainActivity.host(url)), MainActivity.host(url) + " · 版本与远程更新", "管理", () -> activity.manage(url));
             }
             kit.setting(connections, "添加电脑", "扫描电脑端的连接二维码", "", activity::scan);
             total = kit.text("正在读取工作统计…", 13, kit.MUTED);

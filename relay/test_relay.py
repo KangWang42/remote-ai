@@ -22,6 +22,30 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": self.info, "acks": [{"id": payload["id"]}], "terminals": [{"id": self.terminal, "state": "running"}]}, now=1003)
         return payload
 
+    def test_phone_computer_update_receipt_and_version_are_distinct(self):
+        request = {"action": "update", "id": "a" * 32}
+        with self.assertRaisesRegex(RemoteError, "不支持"):
+            self.relay.command(request, now=1001)
+        self.info.update(features=["update"], version="1.6.3", newer="1.6.4")
+        self.relay.agent({"info": self.info}, now=1002)
+        device = self.relay.overview(now=1002)["device"]
+        self.assertEqual((device["version"], device["newer"]), ("1.6.3", "1.6.4"))
+        queued = self.relay.command(request, now=1003)
+        self.assertEqual(queued["state"], "queued")
+        self.assertEqual(self.relay.command(request, now=1004), queued)
+        self.assertEqual(len(self.relay._pending.queued), 1)
+        self.relay.agent({"info": self.info, "acks": [{"id": request["id"]}]}, now=1005)
+        self.assertEqual(self.relay.command(request, now=1006)["state"], "done")
+        self.assertEqual(self.relay.overview(now=1006)["device"]["version"], "1.6.3")
+        self.assertEqual(len(self.relay._pending.queued), 0)
+        self.info.update(version="1.6.4", newer="")
+        self.relay.agent({"info": self.info}, now=1007)
+        self.assertEqual(self.relay.overview(now=1007)["device"]["version"], "1.6.4")
+        self.info["enabled"] = False
+        self.relay.agent({"info": self.info}, now=1008)
+        with self.assertRaisesRegex(RemoteError, "远控已关闭"):
+            self.relay.command(dict(request, id="c" * 32), now=1009)
+
     def test_fresh_start_never_becomes_anonymous_resume(self):
         payload = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": True}
         with self.assertRaisesRegex(RemoteError, "resume"):

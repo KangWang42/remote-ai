@@ -85,6 +85,7 @@ public final class MainActivity extends Activity {
     final ExecutorService net = Executors.newFixedThreadPool(3);
     private Kit kit;
     private Workbench bench;
+    private ComputerManagement computerManagement;
     private AppPages appPages;
     private Tabs tabs;
     private String appTab = "home";                 // the tab the app's lists were left at
@@ -163,6 +164,7 @@ public final class MainActivity extends Activity {
         }
         kit = new Kit(this);
         bench = new Workbench(this, kit);
+        computerManagement = new ComputerManagement(this, kit, bench);
         appPages = new AppPages(this, kit, bench);
         tabs = new Tabs(this, kit);
         repaint();
@@ -217,6 +219,7 @@ public final class MainActivity extends Activity {
     private void show(View content, String name) {
         ticker.removeCallbacks(watch);
         bench.stop();
+        computerManagement.stop();
         if (web != null) { root.removeView(web); web.destroy(); web = null; }
         root.removeAllViews();
         bars(kit.BG);
@@ -259,6 +262,19 @@ public final class MainActivity extends Activity {
     void toggleAutoUpdate() { if (updater == null) return; updater.automatic(!updater.automatic()); home(""); }
     void checkUpdate() { message.setTextColor(kit.MUTED); message.setText("正在检查新版本…"); updater.check(true); }
     void manage(String url) {
+        JSONArray list = computers();
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject computer = list.optJSONObject(i);
+            if (computer == null || !url.equals(computer.optString("url"))) continue;
+            repaint();
+            String name = computer.optString("name");
+            show(computerManagement.build(url, name.isEmpty() ? host(url) : name), "computer");
+            computerManagement.refresh();
+            return;
+        }
+    }
+    void computerSettings(String url) { openPage(url, "", "/computer/"); }
+    void manageConnection(String url) {
         int found = -1;
         JSONArray list = computers();
         for (int i = 0; i < list.length(); i++) if (url.equals(list.optJSONObject(i).optString("url"))) found = i;
@@ -458,6 +474,7 @@ public final class MainActivity extends Activity {
     private void openPage(String address, String password, String path) {
         ticker.removeCallbacks(watch);
         bench.stop();
+        computerManagement.stop();
         currentOrigin = address;
         connectionHealth = new ConnectionHealth();
         prefs.edit().putString("server", address).apply();
@@ -690,6 +707,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if ("computer".equals(screen)) { home(""); return; }
         if ("reminders".equals(screen)) { appPage("me"); return; }
         if ("scan".equals(screen) || "add".equals(screen)) { endScan(); home(""); return; }
         if (web != null && web.canGoBack()) { web.goBack(); return; }
@@ -697,7 +715,7 @@ public final class MainActivity extends Activity {
         if (Tabs.has(screen) && !"home".equals(screen)) { appPage("home"); return; }
         super.onBackPressed();
     }
-    @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
-    @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
-    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { web.destroy(); web = null; } super.onDestroy(); }
+    @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
+    @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("computer".equals(screen)) computerManagement.refresh(); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
+    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { web.destroy(); web = null; } super.onDestroy(); }
 }
