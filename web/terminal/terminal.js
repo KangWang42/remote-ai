@@ -59,7 +59,7 @@
       ['/quit', '退出 Codex（终端随之结束）']],
     shell: []
   };
-  const KEYS = { escape: '\x1b', tab: '\t', backtab: '\x1b[Z', up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C', enter: '\r', interrupt: '\x03',
+  const KEYS = { escape: '\x1b', tab: '\t', backtab: '\x1b[Z', up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C', enter: '\r', interrupt: '\x03', ctrlp: '\x10',
     pageup: '\x1b[5~', pagedown: '\x1b[6~' };
 
   let running = false, restoring = true, initialized = false, lastSize = '', tool = 'claude', ended = false;
