@@ -29,6 +29,10 @@ class RustAgentContract(test_agent.EndToEnd):
     def agent_command(cls, agent_data):
         return [BINARY, "--data", agent_data]
 
+    @unittest.skip("the Rust agent runs shell only; tools beyond it are the Python agent's")
+    def test_a_tool_beyond_the_first_three_is_started_and_closed(self):
+        pass
+
     def test_end_to_end(self):
         # 0. the binary under test is the Rust agent
         started = self.op({"action": "start", "tool": "shell", "dir": "项目"})

@@ -39,6 +39,7 @@ import select
 import shutil
 import signal
 import socket
+import sqlite3
 import stat
 import struct
 import subprocess
@@ -47,6 +48,7 @@ import termios
 import threading
 import time
 import uuid
+from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
 
 VERSION = "0.6.0"
@@ -54,6 +56,8 @@ ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
 UUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\Z")
+OPENCODE_RE = re.compile(r"\Ases_[A-Za-z0-9]{10,40}\Z")   # opencode names its own conversations
+CLINE_RE = re.compile(r"\A[0-9]{10,16}_[A-Za-z0-9]{4,10}\Z")   # cline: a stamp and a short tail
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 FILE_ACTIONS = ("file_list", "file_read")
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
@@ -72,7 +76,7 @@ SAID_CHARS = 1500       # and of each, this much
 SAID_NOTED = 600        # of what the tool said of its work between its steps, this much
 SAID_RESULTS = 40       # of this many steps, counted from the last, the first lines of what came back are given
 # where the tools' own installers put them; a service's PATH seldom has these
-TOOL_DIRS = (".local/bin", ".npm-global/bin", "bin", ".bun/bin", ".volta/bin", ".cargo/bin")
+TOOL_DIRS = (".local/bin", ".npm-global/bin", "bin", ".bun/bin", ".volta/bin", ".cargo/bin", ".opencode/bin")
 MAX_TERMINALS = 8
 MAX_OWN_PROJECTS = 30
 OP_TTL = 150            # seconds an operation may travel before it is refused
@@ -160,6 +164,125 @@ def parse_dirs(cfg):
     return out
 
 
+def session_id_ok(tool, session):
+    """A conversation id in this tool's own shape; only a tool's own are honoured."""
+    if tool == "opencode":
+        return bool(OPENCODE_RE.match(session))
+    if tool == "cline":
+        return bool(CLINE_RE.match(session))
+    return bool(UUID_RE.match(session))       # claude, codex and qoder name theirs a UUID
+
+
+def iso_ms(stamp):
+    """An ISO-8601 stamp (cline and qoder write them, in UTC) as epoch milliseconds."""
+    try:
+        return int(datetime.datetime.fromisoformat(str(stamp)[:23].replace("Z", "+00:00")).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return 0
+
+
+def cline_alive(pid):
+    """Whether this process is a cline right now: a recorded pid may be gone, and its
+    number may since have been given to something else."""
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as stream:
+            return b"cline" in stream.read()
+    except OSError:
+        return False
+
+
+def opencode_db():
+    """opencode's own SQLite store; XDG_DATA_HOME is honoured the way opencode honours it."""
+    data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(data, "opencode", "opencode.db")
+
+
+def cline_db(name):
+    """One of cline's SQLite stores under its data dir; CLINE_HOME overrides where it is."""
+    root = os.environ.get("CLINE_HOME") or os.path.join(os.path.expanduser("~"), ".cline")
+    return os.path.join(root, "data", "db", name)
+
+
+def said_opencode(session):
+    """What was last said in an opencode conversation, the same shape as said(). The store
+    is a SQLite file the opencode server writes; reading it never waits for that server."""
+    con = sqlite3.connect("file:%s?mode=ro" % opencode_db(), uri=True)
+    try:
+        con.execute("pragma busy_timeout=1000")
+        rows = con.execute("select type, data from session_message where session_id = ? "
+                           "order by seq", (session,)).fetchall()
+    finally:
+        con.close()
+    out, updated = [], 0
+
+    def add(role, text):
+        text = text.strip()
+        if text:
+            out.append({"role": role, "text": text if len(text) <= SAID_CHARS else text[:SAID_CHARS - 1] + "…"})
+
+    for kind, data in rows:
+        try:
+            payload = json.loads(data) if isinstance(data, str) else {}
+        except ValueError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        created = payload.get("time", {}).get("created") if isinstance(payload.get("time"), dict) else None
+        if isinstance(created, int):
+            updated = max(updated, created)
+        if kind == "user":
+            text = payload.get("text")
+            if isinstance(text, str) and not text.lstrip().startswith("<"):
+                add("user", text)
+        elif kind == "assistant":
+            for part in payload.get("content") if isinstance(payload.get("content"), list) else []:
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                    add("assistant", part["text"])     # reasoning and tool parts are the tool's own
+    return {"messages": out[-SAID_MESSAGES:], "more": False, "updated": updated}
+
+
+def said_cline(session):
+    """What was last said in a cline conversation, the same shape as said(). The stores are
+    SQLite files cline's own hub writes; reading them never waits for that hub."""
+    con = sqlite3.connect("file:%s?mode=ro" % cline_db("session-search.db"), uri=True)
+    try:
+        con.execute("pragma busy_timeout=1000")
+        rows = con.execute("select role, content from session_search where session_id = ? "
+                           "order by ordinal", (session,)).fetchall()
+    finally:
+        con.close()
+    out, updated = [], 0
+
+    def add(role, text):
+        text = text.strip()
+        if text:
+            out.append({"role": role, "text": text if len(text) <= SAID_CHARS else text[:SAID_CHARS - 1] + "…"})
+
+    for role, content in rows:
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        lines = content.split("\n")
+        stamp = iso_ms(lines[1][:23]) if len(lines) > 1 else 0
+        if stamp:
+            updated = max(updated, stamp)
+        if role == "user":
+            if lines[0] == "tool_result":
+                continue                # what a tool answered, not what the person said
+            text = lines[1] if len(lines) > 1 else ""            # under the <user_input> line
+            if text.startswith("<user_input"):
+                text = text.split(">", 1)[-1].rsplit("</user_input>", 1)[0]
+            add("user", text)
+        else:
+            said = []
+            for line in lines[1:]:
+                if line != "text" and (line in ("tool_use", "tool_result", "thinking") or line.startswith("call_")):
+                    break
+                if line != "text":
+                    said.append(line)
+            add("assistant", "\n".join(said))
+    return {"messages": out[-SAID_MESSAGES:], "more": False, "updated": updated}
+
+
 def find_tool(name):
     """The program `claude` or `codex` of this user, or None."""
     home = os.path.expanduser("~")
@@ -179,6 +302,19 @@ def tool_argv(tool, launcher, session, history, mode, fresh):
         args = ["--session-id" if fresh else "--resume", session] if session else ["--resume"] if history else []
         args += ["--permission-mode", "plan"] if mode == "read" else \
             ["--permission-mode", "acceptEdits"] if mode == "edit" else []
+    elif tool == "opencode":
+        # --session takes an id that does not exist yet and makes it; --continue is the last one
+        args = ["--session", session] if session else ["--continue"] if history else []
+        # no read-only mode of its own: the default asks, --auto answers for the safe ones
+        args += ["--auto"] if mode == "edit" else []
+    elif tool == "qoder":
+        # --session-id names a conversation that does not exist yet, --resume continues one
+        args = ["--session-id" if fresh else "--resume", session] if session else ["--continue"] if history else []
+        args += ["--permission-mode", "accept_edits"] if mode == "edit" else []
+    elif tool == "cline":
+        # --id only continues; a new conversation is named by cline itself, like codex's
+        args = ["--id", session] if session else []
+        args += ["--plan"] if mode == "read" else []   # the default is act, already approving
     else:
         args = ["resume", session] if session else ["resume", "--include-non-interactive"] if history else []
         args += ["-s", "read-only"] if mode == "read" else ["-s", "workspace-write"] if mode == "edit" else []
@@ -621,6 +757,11 @@ class Sessions:
         one CLAUDE_CONFIG_DIR names, as Claude Code itself reads it."""
         return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(self.home, ".claude")
 
+    def qoder_home(self):
+        """Where qoder keeps its conversations: its folder in the person's home, or the one
+        QODER_HOME names."""
+        return os.environ.get("QODER_HOME") or os.path.join(self.home, ".qoder")
+
     def known(self, session, tool, name):
         return next((s for s in self.found if s["id"] == session and s["tool"] == tool and s["dir"] == name), None)
 
@@ -628,22 +769,37 @@ class Sessions:
         """What was last said in a conversation of a project, for the phone to look at. A page
         that follows it says what it has (`since`): it is given the conversation anew only
         when its file has changed."""
-        saved = self.known(session, tool, name) if UUID_RE.match(session) else None
+        saved = self.known(session, tool, name) if session_id_ok(tool, session) else None
         # one that is open in a folder that is no project is read where it is
         folder = dirs.get(name) if name else saved and saved["live"] and saved["folder"]
         if saved is None or not folder:
             raise OpError("电脑上没有找到这个对话，请刷新后重试")
-        if tool == "claude":
-            found = [os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")]
-        else:
-            home = os.environ.get("CODEX_HOME") or os.path.join(self.home, ".codex")
-            found = glob.glob(os.path.join(home, "sessions", "**", "rollout-*%s.jsonl" % session), recursive=True)
         try:
+            if tool == "opencode":
+                answer = said_opencode(session)
+                stamp = "u%d" % answer["updated"]
+                return dict({"same": True} if since and since == stamp else answer, stamp=stamp,
+                            title=saved["title"], status=saved.get("status", ""))
+            if tool == "cline":
+                answer = said_cline(session)
+                stamp = "u%d" % answer["updated"]
+                return dict({"same": True} if since and since == stamp else answer, stamp=stamp,
+                            title=saved["title"], status=saved.get("status", ""))
+            if tool == "claude":
+                found = [os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")]
+            elif tool == "qoder":
+                # its rows are claude's shape, so they are read the claude way
+                found = glob.glob(os.path.join(self.qoder_home(), "projects",
+                                               re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl"))
+                tool = "claude"
+            else:
+                home = os.environ.get("CODEX_HOME") or os.path.join(self.home, ".codex")
+                found = glob.glob(os.path.join(home, "sessions", "**", "rollout-*%s.jsonl" % session), recursive=True)
             info = os.stat(found[0])
             stamp = "%d.%d" % (info.st_size, info.st_mtime_ns)
             answer = {"same": True} if since and since == stamp else said(found[0], tool)
             return dict(answer, stamp=stamp, title=saved["title"], status=saved.get("status", ""))
-        except (OSError, IndexError):
+        except (OSError, IndexError, sqlite3.Error):
             raise OpError("读不到这个对话的内容")
 
     @staticmethod
@@ -746,6 +902,18 @@ class Sessions:
             found += self._codex(dirs, terminals)
         except OSError:
             pass
+        try:
+            found += self._opencode(dirs, terminals)
+        except (OSError, sqlite3.Error, ValueError):
+            pass                # the store is opencode's own; a miss here is never fatal
+        try:
+            found += self._qoder(dirs, terminals)
+        except (OSError, ValueError):
+            pass                # the store is qoder's own; a miss here is never fatal
+        try:
+            found += self._cline(dirs, terminals)
+        except (OSError, sqlite3.Error, ValueError):
+            pass                # the stores are cline's own; a miss here is never fatal
         # the ones a project can still be made of: no project yet, no folder of the system's, and there
         self.candidates = [dict(c, tools=" ".join(c["tools"])) for c in sorted(
             (c for c in self.offers.values() if elsewhere(c["path"]) and c["path"] not in dirs.values() and self.exists(c["path"])),
@@ -929,6 +1097,197 @@ class Sessions:
             except (OSError, ValueError):
                 continue                # another user's process, or one that has just left
         return held
+
+    def _opencode(self, dirs, terminals):
+        """Conversations opencode kept in its SQLite store, and the ones a TUI of this user
+        holds open (--session names the conversation it works in, wherever it was started)."""
+        held = {}
+        for cmd in glob.glob("/proc/[0-9]*/cmdline"):
+            try:
+                with open(cmd, "rb") as stream:
+                    parts = stream.read().split(b"\0")
+            except OSError:
+                continue
+            if b"opencode" not in parts[0]:
+                continue
+            args = [p.decode("utf-8", "replace") for p in parts if p]
+            for at, arg in enumerate(args):
+                if arg in ("-s", "--session") and at + 1 < len(args):
+                    held[args[at + 1]] = int(os.path.basename(os.path.dirname(cmd)))
+        db = opencode_db()
+        if not os.path.exists(db):
+            return []
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        try:
+            con.execute("pragma busy_timeout=1000")
+            rows = con.execute(
+                "select s.id, s.title, s.directory, s.time_updated, p.worktree "
+                "from session_v2 s left join project p on p.id = s.project_id "
+                "where s.time_archived is null "
+                "order by s.time_updated desc limit 300").fetchall()
+        finally:
+            con.close()
+        found, counts = [], {}
+        for session, title, directory, updated, worktree in rows:
+            if not session_id_ok("opencode", session):
+                continue
+            folder = directory or worktree or ""
+            name = next((n for n, p in dirs.items() if folder and os.path.normpath(folder) == p), None)
+            if name is None:
+                continue
+            pid = held.get(session)
+            owner = owner_of(pid, terminals) if pid else None
+            if owner is not None and owner.tool == "opencode" and not owner.session:
+                owner.session = session
+            live = pid is not None and owner is None
+            if not live and counts.get(name, 0) >= 15:
+                continue
+            if not live:
+                counts[name] = counts.get(name, 0) + 1
+            title = tidy(str(title or "")) \
+                or "Opencode 对话 " + time.strftime("%m-%d %H:%M", time.localtime((updated or 0) / 1000))
+            found.append(self._entry(session, "opencode", name, title,
+                                     SimpleNamespace(st_mtime=(updated or 0) / 1000.0), live, folder))
+        return found
+
+    def _qoder(self, dirs, terminals):
+        """Conversations qoder kept under its projects folder, named the way claude names
+        its own, and the ones a qoder of this user holds open (--resume or --session-id
+        names the conversation it works in, wherever it was started)."""
+        held = {}
+        for cmd in glob.glob("/proc/[0-9]*/cmdline"):
+            try:
+                with open(cmd, "rb") as stream:
+                    parts = stream.read().split(b"\0")
+            except OSError:
+                continue
+            if b"qoder" not in parts[0]:
+                continue
+            args = [p.decode("utf-8", "replace") for p in parts if p]
+            for at, arg in enumerate(args):
+                if arg in ("--resume", "-r", "--session-id") and at + 1 < len(args):
+                    held[args[at + 1]] = int(os.path.basename(os.path.dirname(cmd)))
+        root = os.path.join(self.qoder_home(), "projects")
+        found, counts = [], {}
+        for name, folder in dirs.items():
+            saved = os.path.join(root, re.sub(r"[^a-zA-Z0-9]", "-", folder))
+            recent = []
+            for path in glob.glob(os.path.join(saved, "*.jsonl")):
+                try:
+                    recent.append((os.stat(path), path, "jsonl"))
+                except OSError:
+                    pass
+            for path in glob.glob(os.path.join(saved, "*", "state.json")):
+                try:
+                    with open(path, encoding="utf-8") as stream:
+                        state = json.load(stream)
+                    stamp = iso_ms(state.get("updatedAt")) or int(os.stat(path).st_mtime * 1000)
+                    recent.append((SimpleNamespace(st_mtime=stamp / 1000.0), path, "state"))
+                except (OSError, ValueError):
+                    continue
+            recent.sort(key=lambda item: item[0].st_mtime, reverse=True)
+            for info, path, kind in recent[:60]:
+                if kind == "jsonl":
+                    session = os.path.basename(path)[:-6]
+                    title = self._qoder_title(path) \
+                        or "Qoder 对话 " + time.strftime("%m-%d %H:%M", time.localtime(info.st_mtime))
+                else:
+                    session = os.path.basename(os.path.dirname(path))
+                    title = "Qoder 对话 " + time.strftime("%m-%d %H:%M", time.localtime(info.st_mtime))
+                if not UUID_RE.match(session):
+                    continue
+                pid = held.get(session)
+                owner = owner_of(pid, terminals) if pid else None
+                if owner is not None and owner.tool == "qoder" and not owner.session:
+                    owner.session = session
+                live = pid is not None and owner is None
+                if not live and counts.get(name, 0) >= 15:
+                    continue
+                if not live:
+                    counts[name] = counts.get(name, 0) + 1
+                found.append(self._entry(session, "qoder", name, title, info, live, folder))
+        return found
+
+    def _qoder_title(self, path):
+        """The first thing the person said in a qoder conversation, like claude's own title."""
+        try:
+            head = read_part(path, False, 64 * 1024)
+        except OSError:
+            return ""
+        for row in rows(head):
+            if row.get("type") != "user":
+                continue
+            message = row.get("message") if isinstance(row.get("message"), dict) else {}
+            content = message.get("content")
+            parts = content if isinstance(content, list) else []
+            for part in parts:
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                    return tidy(part["text"].split("\n")[0])[:60]
+        return ""
+
+    def _cline(self, dirs, terminals):
+        """Conversations cline kept in its SQLite stores, and the ones a cline of this user
+        holds open (its hub records the process, wherever it was started)."""
+        held = {}
+        for cmd in glob.glob("/proc/[0-9]*/cmdline"):
+            try:
+                with open(cmd, "rb") as stream:
+                    parts = stream.read().split(b"\0")
+            except OSError:
+                continue
+            if b"cline" not in parts[0]:
+                continue
+            args = [p.decode("utf-8", "replace") for p in parts if p]
+            for at, arg in enumerate(args):
+                if arg == "--id" and at + 1 < len(args):
+                    held[args[at + 1]] = int(os.path.basename(os.path.dirname(cmd)))
+        search = cline_db("session-search.db")
+        if not os.path.exists(search):
+            return []
+        con = sqlite3.connect("file:%s?mode=ro" % search, uri=True)
+        try:
+            con.execute("pragma busy_timeout=1000")
+            rows = con.execute(
+                "select session_id, max(workspace_root), "
+                "max(case when role = 'session' then title else '' end), max(started_at) "
+                "from session_search group by session_id order by 4 desc limit 300").fetchall()
+        finally:
+            con.close()
+        runs = cline_db("sessions.db")
+        pids = {}
+        if os.path.exists(runs):
+            con = sqlite3.connect("file:%s?mode=ro" % runs, uri=True)
+            try:
+                con.execute("pragma busy_timeout=1000")
+                for session, pid in con.execute("select session_id, pid from sessions "
+                                                "where ended_at is null"):
+                    if isinstance(pid, int) and cline_alive(pid):
+                        pids[session] = pid
+            except sqlite3.Error:
+                pass
+            finally:
+                con.close()
+        found, counts = [], {}
+        for session, folder, title, started in rows:
+            if not session_id_ok("cline", session):
+                continue
+            name = next((n for n, p in dirs.items() if folder and os.path.normpath(folder) == p), None)
+            if name is None:
+                continue
+            pid = held.get(session, pids.get(session))
+            owner = owner_of(pid, terminals) if pid else None
+            if owner is not None and owner.tool == "cline" and not owner.session:
+                owner.session = session
+            live = pid is not None and owner is None
+            if not live and counts.get(name, 0) >= 15:
+                continue
+            if not live:
+                counts[name] = counts.get(name, 0) + 1
+            title = tidy(str(title or "")) \
+                or "Cline 对话 " + time.strftime("%m-%d %H:%M", time.localtime(iso_ms(started) / 1000))
+            found.append(self._entry(session, "cline", name, title,
+                                     SimpleNamespace(st_mtime=iso_ms(started) / 1000.0), live, folder))
+        return found
 
     @staticmethod
     def _entry(session, tool, name, title, info, live, folder="", kind=""):
@@ -1594,9 +1953,9 @@ class Schedules:
                 "next": 0, "runs": 0, "last_at": 0, "last_ok": False, "last_note": ""}
         if not ID_RE.match(item["id"]):
             raise OpError("编号无效")
-        if item["tool"] not in ("claude", "codex"):
+        if item["tool"] not in ("claude", "codex", "opencode", "qoder", "cline"):
             raise OpError("工具无效")
-        if not UUID_RE.match(item["session"]):
+        if not session_id_ok(item["tool"], item["session"]):
             raise OpError("请选择要提问的对话")
         if not 0 < len(item["text"]) <= 2000:
             raise OpError("要问的话需为 1 至 2000 字")
@@ -1796,7 +2155,7 @@ class Agent:
                     break
             now = time.time()
             if now - self.tools[1] > 30:
-                self.tools = ([t for t in ("claude", "codex") if find_tool(t)] + ["shell"], now)
+                self.tools = ([t for t in ("claude", "codex", "opencode", "qoder", "cline") if find_tool(t)] + ["shell"], now)
             if now - self.sessions_at > 3:
                 self.sessions_at = now
                 self.sessions.scan(dirs, list(self.terminals.values()))
@@ -2022,7 +2381,7 @@ class Agent:
         if terminal in self.terminals:
             return                              # already started; the operation is a repeat
         tool = str(op.get("tool") or "")
-        if tool not in ("claude", "codex", "shell"):
+        if tool not in ("claude", "codex", "opencode", "qoder", "cline", "shell"):
             raise OpError("电脑没有这个工具")
         name = str(op.get("dir") or "")
         if name not in dirs:
@@ -2047,14 +2406,16 @@ class Agent:
             session, history = str(op.get("session") or ""), op.get("history") is True
             if session:
                 self.sessions.scan(dirs, list(self.terminals.values()))     # as it is now, not seconds ago
-                saved = self.sessions.known(session, tool, name) if UUID_RE.match(session) else None
+                saved = self.sessions.known(session, tool, name) if session_id_ok(tool, session) else None
                 if saved is None:
                     raise OpError("电脑上没有找到这个对话，请刷新后重试")
                 if saved["live"] or any(t.session == session and not t.closed for t in self.terminals.values()):
                     raise OpError("这个对话正在被使用，请先结束使用它的程序")
-            fresh = tool == "claude" and not session and not history
+            fresh = tool in ("claude", "opencode", "qoder") and not session and not history
             if fresh:
-                session = str(uuid.uuid4())     # named by us, so the terminal knows its conversation at once
+                # named by us, so the terminal knows its conversation at once — in the
+                # shape the tool itself names them, or it refuses the id and exits
+                session = "ses_" + secrets.token_hex(13) if tool == "opencode" else str(uuid.uuid4())
             argv = tool_argv(tool, launcher, session, history, str(cfg.get("RemoteMaxMode") or ""), fresh)
         self.terminals[terminal] = Live(terminal, name, cwd, 80, 24, argv, self.wake, tool, session)
 
