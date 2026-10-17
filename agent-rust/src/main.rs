@@ -505,7 +505,7 @@ struct LiveInner {
     exit_code: Option<i64>,
     closed_at: Option<Instant>,
     closing_at: Option<Instant>, // TERM sent; KILL follows if this lapses three seconds
-    stopping: bool,     // disposed: the reader leaves the file description alone
+    stopping: bool,              // disposed: the reader leaves the file description alone
 }
 
 struct Live {
