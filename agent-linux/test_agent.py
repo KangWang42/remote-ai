@@ -46,7 +46,8 @@ def request(method, url, payload=None, token=None, timeout=10):
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read().decode("utf-8") or "{}")
+        with error:
+            return error.code, json.loads(error.read().decode("utf-8") or "{}")
 
 
 def stat_mode(path):
@@ -706,6 +707,39 @@ class Pure(unittest.TestCase):
         self.assertEqual((read["hours"][9], read["hours"][11], read["hours"][8], sum(read["hours"])), (1, 1, 1, 3))
         self.assertEqual([d["prompts"] for d in stats.read(1, named)["days"]], [1])
 
+    def test_the_work_records_stay_within_their_budget(self):
+        import datetime
+        home = tempfile.mkdtemp()
+        claude, codex = os.path.join(home, "claude"), os.path.join(home, "codex")
+        today = datetime.datetime.combine(datetime.date.today(), datetime.time())
+        utc = lambda local: datetime.datetime.fromtimestamp(local.timestamp(), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        later = lambda start, seconds: utc(start + datetime.timedelta(seconds=seconds))
+        row = lambda **fields: json.dumps(fields, separators=(",", ":"))
+        at = today + datetime.timedelta(hours=9)
+        os.makedirs(os.path.join(claude, "projects", "-work-shop"))
+        # six conversations of the same day: the room the records may take is small, so the
+        # oldest go before new ones are kept — and are read anew when they are asked for
+        for number in range(6):
+            name = "%08d-1111-2222-3333-444455556666" % number
+            with open(os.path.join(claude, "projects", "-work-shop", name + ".jsonl"), "w", encoding="utf-8") as stream:
+                stream.write("\n".join([
+                    row(type="user", isSidechain=False, cwd="/work/shop", message={"role": "user", "content": "q"}, timestamp=utc(at)),
+                    row(type="assistant", isSidechain=False, message={"id": "msg_one", "role": "assistant",
+                                                                      "content": [{"type": "text", "text": "a"}],
+                                                                      "usage": {"input_tokens": 1, "output_tokens": 1}}, timestamp=later(at, 3)),
+                ]) + "\n")
+        stats = agent.Stats(lambda: claude, lambda: codex)
+        budget = agent.RECORDS_BYTES
+        try:
+            agent.RECORDS_BYTES = 1000        # a small room: the records are counted by what they hold
+            read = stats.read(1, lambda folder: "shop")
+            self.assertEqual(len(stats.records), 2, sorted(stats.records))
+            self.assertLessEqual(stats.kept, 1000)
+            self.assertEqual([d["prompts"] for d in read["days"]], [6])     # every conversation still counts
+            self.assertEqual(read["days"][0]["wait"], 3.0)
+        finally:
+            agent.RECORDS_BYTES = budget
+
     def test_questions_asked_at_a_time_and_a_conversation_handed_over(self):
         import datetime
         data = tempfile.mkdtemp()
@@ -844,12 +878,13 @@ class EndToEnd(unittest.TestCase):
             stream.write(json.dumps({"type": "ai-title", "aiTitle": "上次的对话", "sessionId": cls.saved}) + "\n")
         with open(os.path.join(cls.project, "说明.txt"), "w", encoding="utf-8") as stream:
             stream.write("文件内容 e2e\n")
+        cls.agent_log = open(os.path.join(cls.tmp, "agent.log"), "wb")
         cls.agent = subprocess.Popen(cls.agent_command(agent_data),
                                      env={**os.environ, "RCLI_PASSWORD": PASSWORD, "HOME": cls.home,
                                           # a PATH of the system's own: the stand-ins above are what
                                           # find_tool must see, not whatever this machine has installed
                                           "PATH": "/usr/local/bin:/usr/bin:/bin"},
-                                     stdout=subprocess.DEVNULL, stderr=open(os.path.join(cls.tmp, "agent.log"), "wb"))
+                                     stdout=subprocess.DEVNULL, stderr=cls.agent_log)
         cls.token = request("POST", cls.base + "/api/login", {"password": PASSWORD})[1]["token"]
         view = None
         deadline = time.time() + 30
@@ -887,6 +922,7 @@ class EndToEnd(unittest.TestCase):
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
+        cls.agent_log.close()
         with open(os.path.join(cls.tmp, "agent.log"), encoding="utf-8", errors="replace") as stream:
             refused = [line for line in stream if "失败" in line or "拒绝" in line]
         if refused:                     # what the agent itself said, when a step went wrong
@@ -1071,6 +1107,62 @@ class EndToEnd(unittest.TestCase):
         self.poll(lambda: self.overview(),
                   lambda v: any(t["id"] == terminal and t["state"] == "closed" for t in v["terminals"]))
 
+    def test_close_kills_what_the_program_left_behind(self):
+        # a background task that made a session of its own is past a kill of the process
+        # group: closing the terminal takes it too, or it holds the screen open for ever
+        leftover = os.path.join(self.home, ".local", "bin", "leftover")
+        with open(leftover, "w") as stream:
+            stream.write("#!/bin/sh\nexec sleep 617\n")
+        os.chmod(leftover, 0o755)
+        started = self.op({"action": "start", "tool": "shell", "dir": "项目"})
+        terminal = started["terminal"]
+        after, text = 0, ""
+        deadline = time.time() + 20
+        while time.time() < deadline and not prompted(text):
+            status, view = request("GET", "%s/api/terminal?terminal=%s&after=%d&wait=2"
+                                   % (self.base, terminal, after), token=self.token)
+            for chunk in view.get("chunks", []):
+                text += chunk["data"]
+                after = chunk["seq"]
+            time.sleep(0.2)
+        self.assertTrue(prompted(text), "no shell prompt arrived")
+        self.op({"action": "input", "terminal": terminal, "data": "setsid %s & echo LEFTOVER_UP\n" % leftover})
+        deadline = time.time() + 10
+        while time.time() < deadline and "LEFTOVER_UP" not in plain(text):
+            status, view = request("GET", "%s/api/terminal?terminal=%s&after=%d&wait=2"
+                                   % (self.base, terminal, after), token=self.token)
+            for chunk in view.get("chunks", []):
+                text += chunk["data"]
+                after = chunk["seq"]
+            time.sleep(0.2)
+        self.assertIn("LEFTOVER_UP", plain(text), "the background task never reported: %r" % plain(text))
+        deadline = time.time() + 10
+        while time.time() < deadline and not self.leftovers():
+            time.sleep(0.2)
+        self.assertTrue(self.leftovers(), "the background task did not start: %r" % plain(text))
+        self.op({"action": "close", "terminal": terminal})
+        self.poll(lambda: self.overview(),
+                  lambda v: any(t["id"] == terminal and t["state"] == "closed" for t in v["terminals"]))
+        deadline = time.time() + 10
+        while time.time() < deadline and self.leftovers():
+            time.sleep(0.2)
+        self.assertFalse(self.leftovers(), "the background task outlived the terminal")
+
+    def leftovers(self):
+        """The background tasks this test started, by the sleep they are in."""
+        found = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open("/proc/%s/cmdline" % entry, "rb") as stream:
+                    command = stream.read().decode("utf-8", "replace").replace("\x00", " ")
+            except OSError:
+                continue
+            if "sleep 617" in command:
+                found.append(entry)
+        return found
+
     def read_until(self, terminal, marker, seconds=30):
         after, text = 0, ""
         deadline = time.time() + seconds
@@ -1201,9 +1293,16 @@ class EnvILocaleFallback(unittest.TestCase):
             self.assertIn("中文兜底", p, "Chinese echo broken")
             self.assertIn("LANG=C.UTF-8", p, "locale fallback did not reach the pty")
         finally:
-            if agent is not None:
-                agent.terminate()
-            relay.terminate()
+            for process in (agent, relay):
+                if process is not None and process.poll() is None:
+                    process.terminate()
+            for process in (agent, relay):
+                if process is not None:
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+            relay_log.close()
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
 

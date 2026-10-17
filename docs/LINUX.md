@@ -4,7 +4,18 @@
 
 在 Linux 服务器或台式机上被手机远控。
 
-Linux 上没有带窗口的程序。电脑端是一个 Python 文件，和中转一起作为你自己这个用户的后台服务运行，不需要 root，也不往系统目录里装东西。需要 Python 3.9 及以上和 systemd。
+Linux 上没有带窗口的程序。电脑端有 Python 和 Rust 两种实现，安装脚本装的是 Python 版；它和中转一起作为你自己这个用户的后台服务运行，不需要 root，也不往系统目录里装东西。需要 Python 3.9 及以上和 systemd。
+
+两种实现的区别：
+
+| | Python 版（`agent.py`） | Rust 版（`agent-rust/`，实验性） |
+| --- | --- | --- |
+| 普通终端 | 有 | 有 |
+| Claude Code、Codex、OpenCode、Qoder、Cline | 有 | 没有，只能开普通终端 |
+| 对话列表、查看内容、置顶、隐藏、删除 | 有 | 没有 |
+| 工作统计、定时提问、交接对话 | 有 | 没有 |
+| 查看项目文件 | 有 | 有 |
+| 运行方式 | 无需构建，Python 3.9+ | `cargo build --release` 后直接运行；配对二维码用系统里的 `qrencode`，没有它时只打印地址和密码 |
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/agent-linux/install.sh | bash
@@ -65,7 +76,7 @@ remote-cli uninstall   # 停止并移除全部；加 --purge 连设置和密码�
 | | Linux 电脑端 |
 | --- | --- |
 | 普通终端 | 有，用你的 shell，手机上显示的就是它的名字（如 bash、zsh）。中转和 App 是 1.0.0 之前的版本时仍显示为“PowerShell” |
-| Claude Code、Codex | 装在这个用户下（`PATH`、`~/.local/bin`、`~/.npm-global/bin`、nvm 等位置）就会出现在手机上；可以新建对话，也可以继续项目里保存的对话 |
+| Claude Code、Codex、OpenCode、Qoder、Cline | 装在这个用户下（`PATH`、`~/.local/bin`、`~/.npm-global/bin`、nvm 等位置）就会出现在手机上；可以新建对话，也可以继续项目里保存的对话 |
 | 查看文件、保存到手机 | 有，只给出项目文件夹之内的内容。Word 和 PowerPoint 的带格式预览不需要装任何软件 |
 | 查看电脑上打开着的对话 | 有，点开是对话窗口，可以看最近的内容；所在文件夹还不是项目的也会列出（0.5.0 起）。从手机给它发消息需要 Windows 电脑端 |
 | 添加项目时列出有对话的文件夹 | 有（0.5.1 起），每个写着由终端还是编辑器在用，可搜索 |

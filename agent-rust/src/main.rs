@@ -505,6 +505,7 @@ struct LiveInner {
     exit_code: Option<i64>,
     closed_at: Option<Instant>,
     closing_at: Option<Instant>, // TERM sent; KILL follows if this lapses three seconds
+    stopping: bool,     // disposed: the reader leaves the file description alone
 }
 
 struct Live {
@@ -618,9 +619,14 @@ impl Live {
                     }
                     libc::close(master);
                     if libc::chdir(pre.cwd.as_ptr()) != 0 {
+                        // why it did not start, on the terminal's own screen, before the exit code
+                        let note = "无法启动：进入不了这个文件夹\n";
+                        libc::write(2, note.as_ptr() as *const libc::c_void, note.len());
                         libc::_exit(127); // the folder is gone: do not start somewhere else
                     }
                     libc::execvpe(pre.file.as_ptr(), pre.argv.as_ptr(), pre.envp.as_ptr());
+                    let note = "无法启动：找不到这个程序\n";
+                    libc::write(2, note.as_ptr() as *const libc::c_void, note.len());
                     libc::_exit(127);
                 }
                 pid if pid > 0 => {
@@ -644,6 +650,7 @@ impl Live {
                             exit_code: None,
                             closed_at: None,
                             closing_at: None,
+                            stopping: false,
                         }),
                     });
                     {
@@ -670,7 +677,15 @@ impl Live {
         let mut leftover: Vec<u8> = Vec::new();
         let mut buf = [0u8; 8192];
         loop {
-            let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            // the check and the read share the lock with dispose: once it is disposed the
+            // number may already belong to someone else, and nothing is read from it
+            let n = {
+                let inner = live.inner.lock().unwrap();
+                if inner.stopping || inner.fd != fd {
+                    return;
+                }
+                unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) }
+            };
             if n < 0 {
                 let e = unsafe { *libc::__errno_location() };
                 if e == libc::EAGAIN || e == libc::EWOULDBLOCK || e == libc::EINTR {
@@ -901,6 +916,7 @@ impl Live {
 
     fn dispose(&self) {
         let mut inner = self.inner.lock().unwrap();
+        inner.stopping = true;
         if inner.fd >= 0 {
             unsafe { libc::close(inner.fd) };
             inner.fd = -1;
