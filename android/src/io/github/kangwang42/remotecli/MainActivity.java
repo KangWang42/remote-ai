@@ -86,6 +86,8 @@ public final class MainActivity extends Activity {
     private Kit kit;
     private Workbench bench;
     private ComputerManagement computerManagement;
+    private UuRemote uuRemote;
+    private String pairingRecord = "";
     private AppPages appPages;
     private Tabs tabs;
     private String appTab = "home";                 // the tab the app's lists were left at
@@ -120,20 +122,36 @@ public final class MainActivity extends Activity {
 
     // ---- the computers this phone knows: [{"name": ..., "url": ...}]
     JSONArray computers() {
-        try { return new JSONArray(prefs.getString("computers", "[]")); } catch (Exception broken) { return new JSONArray(); }
+        try {
+            JSONArray list = new JSONArray(prefs.getString("computers", "[]"));
+            boolean changed = false;
+            java.util.Set<String> ids = new java.util.HashSet<>();
+            for (int i = 0; i < list.length(); i++) {
+                JSONObject item = list.getJSONObject(i);
+                String id = item.optString("id");
+                if (!DesktopProtocol.validId(id) || !ids.add(id)) {
+                    id = DesktopProtocol.id(); item.put("id", id); ids.add(id); changed = true;
+                }
+            }
+            if (changed && !prefs.edit().putString("computers", list.toString()).commit()) throw new IllegalStateException();
+            return list;
+        } catch (Exception broken) { return new JSONArray(); }
     }
     private void store(JSONArray list) { prefs.edit().putString("computers", list.toString()).apply(); }
-    /** Adds a computer or updates it: the same address, or the same name with a new address (a tunnel that restarted). */
+    /** Only an existing address or an explicitly chosen record may inherit a desktop binding. */
     private void remember(String name, String url) {
         try {
             JSONArray list = computers();
-            int at = -1;
-            for (int i = 0; i < list.length(); i++) if (url.equals(list.getJSONObject(i).optString("url"))) at = i;
-            if (at < 0 && !name.isEmpty()) for (int i = 0; i < list.length(); i++) if (name.equals(list.getJSONObject(i).optString("name"))) at = i;
+            String[] ids = new String[list.length()], urls = new String[list.length()];
+            for (int i = 0; i < list.length(); i++) { ids[i] = list.getJSONObject(i).optString("id"); urls[i] = list.getJSONObject(i).optString("url"); }
+            int at = ComputerIdentity.match(ids, urls, url, pairingRecord);
+            if (at >= 0 && !pairingRecord.isEmpty() && !pairingRecord.equals(ids[at])) toastMessage("扫描的是另一条已保存电脑记录，原电脑关联保持不变。");
             String shown = !name.isEmpty() ? name : at >= 0 ? list.getJSONObject(at).optString("name") : host(url);
-            JSONObject item = new JSONObject().put("name", shown).put("url", url);
+            JSONObject item = at >= 0 ? list.getJSONObject(at) : new JSONObject().put("id", DesktopProtocol.id());
+            item.put("name", shown).put("url", url);
             if (at >= 0) list.put(at, item); else list.put(item);
             store(list);
+            pairingRecord = "";
         } catch (Exception ignored) { }
     }
     /** What is shown for a computer's address. A place at a relay for everyone shows none: whose relay it is, is not told. */
@@ -165,19 +183,43 @@ public final class MainActivity extends Activity {
         kit = new Kit(this);
         bench = new Workbench(this, kit);
         computerManagement = new ComputerManagement(this, kit, bench);
+        uuRemote = new UuRemote(this, kit);
         appPages = new AppPages(this, kit, bench);
         tabs = new Tabs(this, kit);
         repaint();
         root = new FrameLayout(this);
         setContentView(root);
         bars(kit.BG);
-        if (!linked(getIntent())) {
+        if (!external(getIntent(), true) && !linked(getIntent())) {
             home("");
         }
         updater.checkIfDue();
     }
 
-    @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); linked(intent); }
+    @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); if (!external(intent, false)) linked(intent); }
+
+    JSONObject computerByUrl(String url) { JSONArray list = computers(); for (int i = 0; i < list.length(); i++) { JSONObject item = list.optJSONObject(i); if (item != null && url.equals(item.optString("url"))) return item; } return null; }
+    JSONObject computerById(String id) { JSONArray list = computers(); for (int i = 0; i < list.length(); i++) { JSONObject item = list.optJSONObject(i); if (item != null && DesktopProtocol.validId(id) && id.equals(item.optString("id"))) return item; } return null; }
+    void desktop(String url) { uuRemote.menu(url); }
+    private boolean external(Intent intent, boolean cold) {
+        Uri uri = intent == null ? null : intent.getData();
+        if (uri == null) return false;
+        if (uuRemote.receive(uri, cold)) { intent.setData(null); return true; }
+        if (!"remoteai".equals(uri.getScheme())) return false;
+        JSONObject computer = null;
+        try {
+            java.net.URI parsed = new java.net.URI(uri.toString());
+            if ("computer".equals(parsed.getRawAuthority()) && (parsed.getRawPath().isEmpty() || "/".equals(parsed.getRawPath())) && parsed.getRawFragment() == null) {
+                java.util.Map<String, String> values = DesktopProtocol.query(parsed);
+                if (values.size() == 1) computer = computerById(values.get("id"));
+            }
+        } catch (Exception invalid) { }
+        intent.setData(null);
+        if (computer == null) { if (cold) home(""); toastMessage("这部手机未保存对应电脑，请在 Remote AI 中重新复制运维入口。"); }
+        else manage(computer.optString("url"));
+        return true;
+    }
+    private void toastMessage(String text) { android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show(); }
 
     /** remotecli://connect?u=address&p=password&n=name, from the code on the computer's screen. */
     private boolean linked(Intent intent) {
@@ -193,7 +235,7 @@ public final class MainActivity extends Activity {
         return link(intent == null ? null : intent.getData());
     }
     private boolean link(Uri link) {
-        if (link == null || !"remotecli".equals(link.getScheme()) || !link.isHierarchical()) return false;
+        if (link == null || !"remotecli".equals(link.getScheme()) || !"connect".equals(link.getHost()) || !link.isHierarchical()) return false;
         String address = clean(link.getQueryParameter("u")), password = link.getQueryParameter("p"), name = link.getQueryParameter("n");
         if (address.isEmpty()) { home("二维码里的地址无效，请在电脑上重新显示后再扫。"); return true; }
         remember(name == null ? "" : name.trim(), address);
@@ -238,6 +280,7 @@ public final class MainActivity extends Activity {
 
     // ---- the app's own lists: back to the one that was open last, or to 任务 with what went wrong
     void home(String problem) {
+        pairingRecord = "";
         repaint();
         if (problem.isEmpty() && !"home".equals(appTab)) { appPage(appTab); return; }
         appTab = "home";
@@ -285,7 +328,7 @@ public final class MainActivity extends Activity {
         kit.sheet(name, host(url), new String[]{"打开这台电脑", "改名", "重新扫码登录", "从列表移除"},
             new String[]{null, null, "地址变了或登录过期时使用", "只从这部手机移除，电脑上的终端和对话不受影响"}, 3, which -> {
             if (which == 0) open(url, "");
-            else if (which == 2) scan();
+            else if (which == 2) { pairingRecord = computers().optJSONObject(index).optString("id"); scan(); }
             else if (which == 1) {
                 final EditText box = new EditText(this);
                 box.setText(name); box.setSingleLine(true); box.setSelection(name.length());
@@ -297,6 +340,8 @@ public final class MainActivity extends Activity {
                 }).show();
             } else {
                 JSONArray now = computers();
+                JSONObject removed = now.optJSONObject(index);
+                if (removed != null) uuRemote.forget(removed.optString("id"));
                 now.remove(index); store(now); bench.forget(url);
                 home("");
             }
@@ -659,7 +704,8 @@ public final class MainActivity extends Activity {
                     for (int i = 0; i < list.length(); i++) {
                         JSONObject item = list.getJSONObject(i);
                         if (!movedFrom.equals(item.optString("url"))) now.put(item);
-                        else if (!known) now.put(item.put("url", movedTo));        // a computer listed under both keeps the entry it has there
+                        else if (!known) now.put(item.put("url", movedTo));
+                        else { uuRemote.forget(item.optString("id")); toastMessage("新线路已有电脑记录，原记录的桌面关联已移除，请核对后重新关联。"); }
                     }
                     store(now); bench.forget(movedFrom);
                 } catch (Exception ignored) { }
