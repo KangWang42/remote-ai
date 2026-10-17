@@ -62,6 +62,13 @@ class _Operations(collections.OrderedDict):
 _id = re.compile(r"^[a-f0-9]{16,32}$")
 _terminal = re.compile(r"^[a-f0-9]{32}$")
 _session = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+_session_re = {"opencode": re.compile(r"^ses_[A-Za-z0-9]{10,40}$"),
+               "cline": re.compile(r"^[0-9]{10,16}_[A-Za-z0-9]{4,10}$")}
+
+
+def session_id_ok(tool, session):
+    """A conversation id in this tool's own shape; claude, codex and qoder name a UUID."""
+    return bool(_session_re.get(tool, _session).fullmatch(session))
 _word = re.compile(r"^[a-z0-9_]{1,40}$")
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 DESKTOP_ACTIONS = ("app_open",)
@@ -69,7 +76,7 @@ DESKTOP_ACTIONS = ("app_open",)
 DESKTOP_TOOLS = ("codex", "claude")
 UPDATE_ACTION = "update"      # the program on the computer looks for a newer version of itself and installs it
 MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 8, 12, 2_000_000, 300_000
-LABELS = {"claude": "Claude Code", "codex": "Codex", "shell": "PowerShell"}
+LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "shell": "PowerShell"}
 OP_SECONDS = 120
 
 
@@ -86,7 +93,7 @@ def _folders(items, limit):
         if isinstance(item, dict) and _name(item.get("name"), 60) and _name(item.get("path"), 260):
             out.append({"name": item["name"], "path": item["path"], "fixed": item.get("fixed") is True, "exists": item.get("exists") is not False,
                         "updated": item["updated"] if type(item.get("updated")) is int else 0, "live": item.get("live") is True,
-                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex")],
+                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex", "opencode", "qoder", "cline")],
                         # by what the folder is used on the computer, in the computer's words: a desktop app, an editor, a terminal
                         "kinds": [k[:20] for k in item.get("kinds", []) if isinstance(k, str) and k.strip()][:4] if isinstance(item.get("kinds"), list) else []})
     return out
@@ -712,7 +719,7 @@ class Relay:
                 if fork and (tool != "codex" or not session or payload.get("takeover") or "codex-fork" not in self._device.get("features", [])):
                     raise RemoteError("电脑端不支持这个副本选项，请更新电脑后台")
                 if session:
-                    saved = next((s for s in self._sessions if s["id"] == session and s["tool"] == tool and s["dir"] == folder), None)                     if isinstance(session, str) and _session.fullmatch(session) else None
+                    saved = next((s for s in self._sessions if s["id"] == session and s["tool"] == tool and s["dir"] == folder), None)                     if isinstance(session, str) and session_id_ok(tool, session) else None
                     if not saved:
                         raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
                     if saved.get("live") and not fork and not payload.get("takeover"):
@@ -1123,12 +1130,12 @@ class Relay:
                      "can_takeover": s.get("can_takeover") is True, "ownership_known": s.get("ownership_known") is True,
                      "takeover_reason": str(s.get("takeover_reason") or "")[:200]}
                     for s in payload["sessions"][:120]
-                    if isinstance(s, dict) and isinstance(s.get("id"), str) and _session.fullmatch(s["id"]) and s.get("tool") in ("claude", "codex")
+                    if isinstance(s, dict) and isinstance(s.get("id"), str) and session_id_ok(s.get("tool"), s["id"]) and s.get("tool") in ("claude", "codex", "opencode", "qoder", "cline")
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "codex-desktop-control") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
-                           tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "shell")],
+                           tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "opencode", "qoder", "cline", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))
             for term in state["threads"].values():
@@ -1185,7 +1192,7 @@ class Relay:
                         _trim(term)
                         dirty = True
                     session = item.get("session")
-                    if isinstance(session, str) and _session.fullmatch(session) and session != term.get("session"):
+                    if isinstance(session, str) and session_id_ok(term["tool"], session) and session != term.get("session"):
                         term["session"] = session
                         dirty = True
                     status = item.get("status") if item.get("status") in ("idle", "busy") and term["state"] == "running" else ""

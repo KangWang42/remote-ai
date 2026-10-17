@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -45,7 +46,8 @@ def request(method, url, payload=None, token=None, timeout=10):
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read().decode("utf-8") or "{}")
+        with error:
+            return error.code, json.loads(error.read().decode("utf-8") or "{}")
 
 
 def stat_mode(path):
@@ -222,6 +224,26 @@ class Pure(unittest.TestCase):
                          ["/b/claude", "--resume", "--permission-mode", "acceptEdits"])
         self.assertEqual(agent.tool_argv("codex", "/b/codex", sid, False, "", False), ["/b/codex", "resume", sid])
         self.assertEqual(agent.tool_argv("codex", "/b/codex", "", False, "read", False), ["/b/codex", "-s", "read-only"])
+        self.assertEqual(agent.tool_argv("opencode", "/b/opencode", "ses_abc123", False, "", False),
+                         ["/b/opencode", "--session", "ses_abc123"])
+        self.assertEqual(agent.tool_argv("opencode", "/b/opencode", "", True, "edit", False),
+                         ["/b/opencode", "--continue", "--auto"])
+        self.assertEqual(agent.tool_argv("opencode", "/b/opencode", "", False, "read", False), ["/b/opencode"])
+        self.assertEqual(agent.tool_argv("qoder", "/b/qoder", sid, False, "", True), ["/b/qoder", "--session-id", sid])
+        self.assertEqual(agent.tool_argv("qoder", "/b/qoder", sid, False, "read", False),
+                         ["/b/qoder", "--resume", sid])
+        self.assertEqual(agent.tool_argv("qoder", "/b/qoder", "", True, "edit", False),
+                         ["/b/qoder", "--continue", "--permission-mode", "accept_edits"])
+        self.assertEqual(agent.tool_argv("cline", "/b/cline", "1792116013202_ffehs", False, "", False),
+                         ["/b/cline", "--id", "1792116013202_ffehs"])
+        self.assertEqual(agent.tool_argv("cline", "/b/cline", "", False, "read", False), ["/b/cline", "--plan"])
+        self.assertEqual(agent.tool_argv("cline", "/b/cline", "", False, "", False), ["/b/cline"])
+        self.assertTrue(agent.session_id_ok("opencode", "ses_ebd8614d0ffe4Z18FfuXFMXIFJ"))
+        self.assertTrue(agent.session_id_ok("qoder", sid))
+        self.assertTrue(agent.session_id_ok("cline", "1792116013202_ffehs"))
+        self.assertFalse(agent.session_id_ok("cline", sid))
+        self.assertFalse(agent.session_id_ok("opencode", sid))
+        self.assertTrue(agent.session_id_ok("claude", sid))
 
     def test_sessions(self):
         home = tempfile.mkdtemp()
@@ -362,6 +384,133 @@ class Pure(unittest.TestCase):
         for wrong in ((named, "codex", "项目"), (empty, "claude", "项目"), ("not-an-id", "claude", "项目"), (named, "claude", "别的")):
             with self.assertRaises(agent.OpError):
                 sessions.read(*wrong, dirs)
+
+    def test_opencode_sessions(self):
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp() + "/项目"
+        os.makedirs(project)
+        data = tempfile.mkdtemp()                      # stands in for XDG_DATA_HOME
+        os.makedirs(os.path.join(data, "opencode"))
+        con = sqlite3.connect(os.path.join(data, "opencode", "opencode.db"))
+        con.execute("create table project (id text, worktree text)")
+        con.execute("create table session_v2 (id text, project_id text, directory text, title text, "
+                    "time_updated integer, time_archived text)")
+        con.execute("create table session_message (id text, session_id text, type text, seq integer, data text)")
+        con.execute("insert into project values ('p1', ?)", (project,))
+        con.execute("insert into session_v2 values (?, 'p1', ?, '修登录', 1792107587487, null)", ("ses_" + "a" * 26, project))
+        con.execute("insert into session_v2 values (?, 'p1', ?, '', 1792100000000, null)", ("ses_" + "b" * 26, project))
+        con.execute("insert into session_v2 values (?, 'p1', ?, '归档的', 1792100000000, 'x')", ("ses_" + "c" * 26, project))
+        con.executemany("insert into session_message values (?, ?, ?, ?, ?)", [
+            ("m1", "ses_" + "a" * 26, "user", 1, json.dumps({"time": {"created": 1}, "text": "登录报错"})),
+            ("m2", "ses_" + "a" * 26, "assistant", 2, json.dumps({"time": {"created": 2}, "content": [
+                {"type": "reasoning", "text": "先想"}, {"type": "text", "text": "看一下登录代码"}]})),
+        ])
+        con.commit()
+        con.close()
+        sessions = agent.Sessions()
+        sessions.home = home
+        before = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data
+        try:
+            found = {s["id"]: s for s in sessions.scan({"项目": project, "别的": "/no/such"}, [])}
+            got = sessions.read("ses_" + "a" * 26, "opencode", "项目", {"项目": project})
+        finally:
+            if before is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = before
+        self.assertEqual(set(found), {"ses_" + "a" * 26, "ses_" + "b" * 26})       # the archived one is out
+        self.assertEqual((found["ses_" + "a" * 26]["title"], found["ses_" + "a" * 26]["tool"],
+                          found["ses_" + "a" * 26]["dir"], found["ses_" + "a" * 26]["live"]),
+                         ("修登录", "opencode", "项目", False))
+        self.assertTrue(found["ses_" + "b" * 26]["title"].startswith("Opencode 对话 "))
+        self.assertEqual(got["title"], "修登录")
+        self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
+                         [("user", "登录报错"), ("assistant", "看一下登录代码")])
+
+    def test_qoder_sessions(self):
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp() + "/项目"
+        os.makedirs(project)
+        saved = os.path.join(home, ".qoder", "projects", re.sub("[^a-zA-Z0-9]", "-", project))
+        os.makedirs(os.path.join(saved, "11111111-2222-3333-4444-555555555555"))
+        os.makedirs(os.path.join(saved, "aaaaaaaa-0000-0000-0000-000000000001"))
+        with open(os.path.join(saved, "aaaaaaaa-0000-0000-0000-000000000001.jsonl"), "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"type": "workspace-directories", "sessionId":
+                                     "aaaaaaaa-0000-0000-0000-000000000001", "directories": [project]}) + "\n")
+            stream.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
+                {"type": "text", "text": "第一行\n第二行"}]}}) + "\n")
+            stream.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "想"},
+                {"type": "text", "text": "部署好了"},
+                {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}}) + "\n")
+        with open(os.path.join(saved, "11111111-2222-3333-4444-555555555555", "state.json"), "w",
+                  encoding="utf-8") as stream:
+            json.dump({"sessionId": "11111111-2222-3333-4444-555555555555", "updatedAt":
+                       "2026-10-09T03:54:27.349Z", "data": {}, "items": {},
+                       "workspaceDirectories": [project]}, stream)
+        sessions = agent.Sessions()
+        sessions.home = home
+        found = {s["id"]: s for s in sessions.scan({"项目": project, "别的": "/no/such"}, [])}
+        self.assertEqual(set(found), {"aaaaaaaa-0000-0000-0000-000000000001", "11111111-2222-3333-4444-555555555555"})
+        self.assertEqual((found["aaaaaaaa-0000-0000-0000-000000000001"]["title"],
+                          found["aaaaaaaa-0000-0000-0000-000000000001"]["tool"],
+                          found["aaaaaaaa-0000-0000-0000-000000000001"]["dir"]),
+                         ("第一行", "qoder", "项目"))
+        self.assertTrue(found["11111111-2222-3333-4444-555555555555"]["title"].startswith("Qoder 对话 "))
+        self.assertEqual(found["11111111-2222-3333-4444-555555555555"]["updated"],
+                         agent.iso_ms("2026-10-09T03:54:27.349Z"))     # the store's own stamp, in UTC
+        got = sessions.read("aaaaaaaa-0000-0000-0000-000000000001", "qoder", "项目", {"项目": project})
+        self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
+                         [("user", "第一行\n第二行"), ("thought", "想"), ("assistant", "部署好了"), ("tool", "Bash：ls")])
+
+    def test_cline_sessions(self):
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp() + "/项目"
+        os.makedirs(project)
+        data = tempfile.mkdtemp()                      # stands in for CLINE_HOME
+        os.makedirs(os.path.join(data, "data", "db"))
+        session = "1700000000000_fixture"        # an id no real cline of this machine holds
+        search = sqlite3.connect(os.path.join(data, "data", "db", "session-search.db"))
+        search.execute("create table session_search (session_id text, document_id text, ordinal integer, "
+                       "role text, started_at text, workspace_root text, title text, content text)")
+        search.executemany("insert into session_search values (?, ?, ?, ?, ?, ?, ?, ?)", [
+            (session, "d1", 1, "session", "2026-10-16T02:00:13.210Z", project, "评估 CI 建构", ""),
+            (session, "d2", 2, "user", "2026-10-16T02:00:13.210Z", project, "",
+             'text\n<user_input mode="act">评估 CI 建构是否可以替代本地</user_input>'),
+            (session, "d3", 3, "assistant", "2026-10-16T02:00:14.000Z", project, "",
+             'text\n正在清点本地占用。\ntool_use\ncall_01\nrun_commands\npwd'),
+            (session, "d4", 4, "user", "2026-10-16T02:00:15.000Z", project, "",
+             "tool_result\ncall_01\n/home/doro"),
+        ])
+        search.commit()
+        search.close()
+        runs = sqlite3.connect(os.path.join(data, "data", "db", "sessions.db"))
+        runs.execute("create table sessions (session_id text, source text, pid integer, started_at text, "
+                     "ended_at text, exit_code integer, status text, status_lock integer, interactive integer, provider text)")
+        runs.execute("insert into sessions values (?, 'cli', 999999999, ?, null, null, 'idle', 0, 1, 'cline')",
+                     (session, "2026-10-16T02:00:13.210Z"))     # a pid no linux can have: dead, not reused
+        runs.commit()
+        runs.close()
+        sessions = agent.Sessions()
+        sessions.home = home
+        before = os.environ.get("CLINE_HOME")
+        os.environ["CLINE_HOME"] = data
+        try:
+            found = {s["id"]: s for s in sessions.scan({"项目": project, "别的": "/no/such"}, [])}
+            got = sessions.read(session, "cline", "项目", {"项目": project})
+        finally:
+            if before is None:
+                os.environ.pop("CLINE_HOME", None)
+            else:
+                os.environ["CLINE_HOME"] = before
+        self.assertEqual(set(found), {session})
+        self.assertEqual((found[session]["title"], found[session]["tool"], found[session]["dir"],
+                          found[session]["live"]), ("评估 CI 建构", "cline", "项目", False))
+        self.assertEqual(found[session]["updated"], agent.iso_ms("2026-10-16T02:00:15.000Z"))
+        self.assertEqual(got["title"], "评估 CI 建构")
+        self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
+                         [("user", "评估 CI 建构是否可以替代本地"), ("assistant", "正在清点本地占用。")])
 
     def test_marks_are_kept_by_tool_and_conversation(self):
         data = tempfile.mkdtemp()
@@ -558,6 +707,39 @@ class Pure(unittest.TestCase):
         self.assertEqual((read["hours"][9], read["hours"][11], read["hours"][8], sum(read["hours"])), (1, 1, 1, 3))
         self.assertEqual([d["prompts"] for d in stats.read(1, named)["days"]], [1])
 
+    def test_the_work_records_stay_within_their_budget(self):
+        import datetime
+        home = tempfile.mkdtemp()
+        claude, codex = os.path.join(home, "claude"), os.path.join(home, "codex")
+        today = datetime.datetime.combine(datetime.date.today(), datetime.time())
+        utc = lambda local: datetime.datetime.fromtimestamp(local.timestamp(), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        later = lambda start, seconds: utc(start + datetime.timedelta(seconds=seconds))
+        row = lambda **fields: json.dumps(fields, separators=(",", ":"))
+        at = today + datetime.timedelta(hours=9)
+        os.makedirs(os.path.join(claude, "projects", "-work-shop"))
+        # six conversations of the same day: the room the records may take is small, so the
+        # oldest go before new ones are kept — and are read anew when they are asked for
+        for number in range(6):
+            name = "%08d-1111-2222-3333-444455556666" % number
+            with open(os.path.join(claude, "projects", "-work-shop", name + ".jsonl"), "w", encoding="utf-8") as stream:
+                stream.write("\n".join([
+                    row(type="user", isSidechain=False, cwd="/work/shop", message={"role": "user", "content": "q"}, timestamp=utc(at)),
+                    row(type="assistant", isSidechain=False, message={"id": "msg_one", "role": "assistant",
+                                                                      "content": [{"type": "text", "text": "a"}],
+                                                                      "usage": {"input_tokens": 1, "output_tokens": 1}}, timestamp=later(at, 3)),
+                ]) + "\n")
+        stats = agent.Stats(lambda: claude, lambda: codex)
+        budget = agent.RECORDS_BYTES
+        try:
+            agent.RECORDS_BYTES = 1000        # a small room: the records are counted by what they hold
+            read = stats.read(1, lambda folder: "shop")
+            self.assertEqual(len(stats.records), 2, sorted(stats.records))
+            self.assertLessEqual(stats.kept, 1000)
+            self.assertEqual([d["prompts"] for d in read["days"]], [6])     # every conversation still counts
+            self.assertEqual(read["days"][0]["wait"], 3.0)
+        finally:
+            agent.RECORDS_BYTES = budget
+
     def test_questions_asked_at_a_time_and_a_conversation_handed_over(self):
         import datetime
         data = tempfile.mkdtemp()
@@ -682,6 +864,12 @@ class EndToEnd(unittest.TestCase):
         with open(os.path.join(tools, "claude"), "w") as stream:
             stream.write("#!/bin/sh\necho \"STANDIN_CLAUDE[$*]\"\nexec sleep 600\n")
         os.chmod(os.path.join(tools, "claude"), 0o755)
+        # and one for opencode, where its own installer puts it
+        other = os.path.join(cls.home, ".opencode", "bin")
+        os.makedirs(other)
+        with open(os.path.join(other, "opencode"), "w") as stream:
+            stream.write("#!/bin/sh\necho \"STANDIN_OPENCODE[$*]\"\nexec sleep 600\n")
+        os.chmod(os.path.join(other, "opencode"), 0o755)
         cls.saved = "0a1b2c3d-1111-2222-3333-444455556666"
         saved = os.path.join(cls.home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", cls.project))
         os.makedirs(saved)
@@ -690,9 +878,13 @@ class EndToEnd(unittest.TestCase):
             stream.write(json.dumps({"type": "ai-title", "aiTitle": "上次的对话", "sessionId": cls.saved}) + "\n")
         with open(os.path.join(cls.project, "说明.txt"), "w", encoding="utf-8") as stream:
             stream.write("文件内容 e2e\n")
+        cls.agent_log = open(os.path.join(cls.tmp, "agent.log"), "wb")
         cls.agent = subprocess.Popen(cls.agent_command(agent_data),
-                                     env={**os.environ, "RCLI_PASSWORD": PASSWORD, "HOME": cls.home},
-                                     stdout=subprocess.DEVNULL, stderr=open(os.path.join(cls.tmp, "agent.log"), "wb"))
+                                     env={**os.environ, "RCLI_PASSWORD": PASSWORD, "HOME": cls.home,
+                                          # a PATH of the system's own: the stand-ins above are what
+                                          # find_tool must see, not whatever this machine has installed
+                                          "PATH": "/usr/local/bin:/usr/bin:/bin"},
+                                     stdout=subprocess.DEVNULL, stderr=cls.agent_log)
         cls.token = request("POST", cls.base + "/api/login", {"password": PASSWORD})[1]["token"]
         view = None
         deadline = time.time() + 30
@@ -730,6 +922,7 @@ class EndToEnd(unittest.TestCase):
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
+        cls.agent_log.close()
         with open(os.path.join(cls.tmp, "agent.log"), encoding="utf-8", errors="replace") as stream:
             refused = [line for line in stream if "失败" in line or "拒绝" in line]
         if refused:                     # what the agent itself said, when a step went wrong
@@ -853,7 +1046,8 @@ class EndToEnd(unittest.TestCase):
 
         # 8. a tool installed for this user is offered and started; a new Claude Code
         # conversation is named by the agent, so the terminal knows it at once
-        self.assertEqual(device["tools"], ["claude", "shell"])
+        self.assertIn("claude", device["tools"])       # the stand-in; what else is here is the machine's own
+        self.assertIn("shell", device["tools"])
         new = self.op({"action": "start", "tool": "claude", "dir": "项目"})["terminal"]
         shown = self.read_until(new, "STANDIN_CLAUDE[")
         named = re.search(r"STANDIN_CLAUDE\[--session-id ([0-9a-f-]{36})\]", shown)
@@ -893,6 +1087,81 @@ class EndToEnd(unittest.TestCase):
     def file(self, payload):
         return request("POST", self.base + "/api/files", {"id": secrets.token_hex(16), **payload},
                        token=self.token, timeout=30)
+
+    def test_a_tool_beyond_the_first_three_is_started_and_closed(self):
+        # the phone offers every tool the agent reports: one beyond claude/codex/shell
+        # passes the door, gets the agent-named conversation, and ends for good
+        view = self.poll(lambda: self.overview(),
+                         lambda v: "opencode" in v["device"].get("tools", []))
+        started = self.op({"action": "start", "tool": "opencode", "dir": "项目"})
+        self.assertEqual(started["state"], "queued", started)
+        terminal = started["terminal"]
+        shown = self.read_until(terminal, "STANDIN_OPENCODE[")
+        named = re.search(r"STANDIN_OPENCODE\[--session (ses_[a-z0-9]{26})\]", shown)
+        self.assertIsNotNone(named, shown)
+        view = self.poll(lambda: self.overview(),
+                         lambda v: any(t["id"] == terminal and t.get("session") == named.group(1)
+                                       for t in v["terminals"]))
+        self.assertEqual(next(t for t in view["terminals"] if t["id"] == terminal)["state"], "running")
+        self.op({"action": "close", "terminal": terminal})
+        self.poll(lambda: self.overview(),
+                  lambda v: any(t["id"] == terminal and t["state"] == "closed" for t in v["terminals"]))
+
+    def test_close_kills_what_the_program_left_behind(self):
+        # a background task that made a session of its own is past a kill of the process
+        # group: closing the terminal takes it too, or it holds the screen open for ever
+        leftover = os.path.join(self.home, ".local", "bin", "leftover")
+        with open(leftover, "w") as stream:
+            stream.write("#!/bin/sh\nexec sleep 617\n")
+        os.chmod(leftover, 0o755)
+        started = self.op({"action": "start", "tool": "shell", "dir": "项目"})
+        terminal = started["terminal"]
+        after, text = 0, ""
+        deadline = time.time() + 20
+        while time.time() < deadline and not prompted(text):
+            status, view = request("GET", "%s/api/terminal?terminal=%s&after=%d&wait=2"
+                                   % (self.base, terminal, after), token=self.token)
+            for chunk in view.get("chunks", []):
+                text += chunk["data"]
+                after = chunk["seq"]
+            time.sleep(0.2)
+        self.assertTrue(prompted(text), "no shell prompt arrived")
+        self.op({"action": "input", "terminal": terminal, "data": "setsid %s & echo LEFTOVER_UP\n" % leftover})
+        deadline = time.time() + 10
+        while time.time() < deadline and "LEFTOVER_UP" not in plain(text):
+            status, view = request("GET", "%s/api/terminal?terminal=%s&after=%d&wait=2"
+                                   % (self.base, terminal, after), token=self.token)
+            for chunk in view.get("chunks", []):
+                text += chunk["data"]
+                after = chunk["seq"]
+            time.sleep(0.2)
+        self.assertIn("LEFTOVER_UP", plain(text), "the background task never reported: %r" % plain(text))
+        deadline = time.time() + 10
+        while time.time() < deadline and not self.leftovers():
+            time.sleep(0.2)
+        self.assertTrue(self.leftovers(), "the background task did not start: %r" % plain(text))
+        self.op({"action": "close", "terminal": terminal})
+        self.poll(lambda: self.overview(),
+                  lambda v: any(t["id"] == terminal and t["state"] == "closed" for t in v["terminals"]))
+        deadline = time.time() + 10
+        while time.time() < deadline and self.leftovers():
+            time.sleep(0.2)
+        self.assertFalse(self.leftovers(), "the background task outlived the terminal")
+
+    def leftovers(self):
+        """The background tasks this test started, by the sleep they are in."""
+        found = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open("/proc/%s/cmdline" % entry, "rb") as stream:
+                    command = stream.read().decode("utf-8", "replace").replace("\x00", " ")
+            except OSError:
+                continue
+            if "sleep 617" in command:
+                found.append(entry)
+        return found
 
     def read_until(self, terminal, marker, seconds=30):
         after, text = 0, ""
@@ -1024,9 +1293,16 @@ class EnvILocaleFallback(unittest.TestCase):
             self.assertIn("中文兜底", p, "Chinese echo broken")
             self.assertIn("LANG=C.UTF-8", p, "locale fallback did not reach the pty")
         finally:
-            if agent is not None:
-                agent.terminate()
-            relay.terminate()
+            for process in (agent, relay):
+                if process is not None and process.poll() is None:
+                    process.terminate()
+            for process in (agent, relay):
+                if process is not None:
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+            relay_log.close()
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
 

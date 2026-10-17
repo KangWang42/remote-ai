@@ -72,7 +72,7 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
 `GET /api/terminal` →
 
 ```json
-{"device": {"online": true, "enabled": true, "workspaces": ["demo"], "tools": ["claude", "codex", "shell"],
+{"device": {"online": true, "enabled": true, "workspaces": ["demo"], "tools": ["claude", "codex", "opencode", "qoder", "cline", "shell"],
             "projects": [{"name": "demo", "path": "D:\\demo", "fixed": true, "exists": true, "tools": ["codex"], "kinds": ["Codex 桌面版", "终端"]}],
             "candidates": [{"name": "notes", "path": "D:\\notes", "updated": 1700000000000, "live": false, "tools": ["claude"], "kinds": ["Claude 桌面版", "终端"]}]},
  "terminals": [{"id": "...", "tool": "shell", "dir": "demo", "title": "PowerShell", "state": "running", "status": "idle", "seq": 12, "cols": 80, "rows": 24, "session": ""}],
@@ -229,7 +229,7 @@ to held requests. Switching to the background cancels the active reader; returni
 
 | `action` | Fields |
 | --- | --- |
-| `start` | `tool` (`claude`, `codex`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list) |
+| `start` | `tool` (`claude`, `codex`, `opencode`, `qoder`, `cline`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list) |
 | `input` | `terminal`, `data` (at most 16,000 characters) |
 | `say` | `terminal`, `text` (at most 8,000 characters, no control characters but line breaks and tabs). A message for a running terminal from where the terminal is not on the screen (a list, the app's workbench): what the box of the terminal's page sends, the text and then Enter. The relay knows from the program's output whether it takes pasted text in brackets (`ESC [ ? 2004 h`): it then gives the computer `input` with the text between `ESC [ 200 ~` and `ESC [ 201 ~` and `\r`, and otherwise the text on one line and `\r`. Refused while the terminal's phase is `confirm`: Enter would answer its question |
 | `resize` | `terminal`, `cols` (20–240), `rows` (6–100) |

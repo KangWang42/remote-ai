@@ -58,7 +58,7 @@ final class GithubUpdater {
     private void finish(String text) { activity.runOnUiThread(() -> { checking = false; if (!stopped && text.length() > 0) listener.message(text); }); }
     void install(Release release) { if (release == null) return; listener.message("正在从 GitHub 下载 v" + release.version + "…"); worker.execute(() -> { try {
             File dir = new File(activity.getCacheDir(), "updates"); if (!dir.isDirectory() && !dir.mkdirs()) throw new Exception("无法创建下载目录");
-            File part = new File(dir, "remote-cli.apk.part"), apk = new File(dir, "remote-cli.apk"); download(release.url, part); if (!release.sha256.isEmpty() && !release.sha256.equals(hash(part))) throw new Exception("安装包校验未通过");
+            File part = new File(dir, "remote-cli.apk.part"), apk = new File(dir, "remote-cli.apk"); download(release.url, part); if (release.sha256.isEmpty()) throw new Exception("本次发布没有提供 SHA-256，无法校验安装包"); if (!release.sha256.equals(hash(part))) throw new Exception("安装包校验未通过");
             PackageInfo info = activity.getPackageManager().getPackageArchiveInfo(part.getPath(), 0); if (info == null || !activity.getPackageName().equals(info.packageName) || code(info) <= currentCode()) throw new Exception("下载的安装包不是本应用的新版本");
             if (apk.exists()) apk.delete(); if (!part.renameTo(apk)) throw new Exception("无法保存安装包"); commit(apk);
         } catch (Exception e) { finish(e.getMessage() == null ? "更新未完成" : e.getMessage()); } }); }
