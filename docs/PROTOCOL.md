@@ -1,5 +1,44 @@
 # Protocol
 
+## Optional UU desktop access (Android 1.6.6)
+
+This adapter opens the installed `com.netease.uuremote` app (4.42.0 or newer). It does not route video through
+the relay and sends no UU identifiers, accounts or bindings to the computer or relay. Windows/macOS targets
+must be selected by the owner in UU; Linux, Android and iOS targets are outside the external protocol.
+The reference contract is <https://github.com/netease-uuyc/uuremote-integration-guide>.
+
+`ComputerIdentity` matches an exact saved address or an explicitly selected re-pairing record, never a name.
+Each saved Android computer receives a random persistent `id`. A confirmed line change retains it; an address
+collision keeps the existing destination record and removes the discarded source record's desktop binding.
+Ordinary re-pairing preserves an existing record; a new address without an explicit selection creates a new one.
+
+`DesktopStore` encrypts each opaque binding with Android Keystore AES-GCM and the record ID as associated data.
+Backup is disabled. Removing a computer removes its binding and any pending request for it. Device identifiers
+and callback URLs must not be logged, displayed or copied. Native screens alone initiate remote control.
+
+`UuRemote` serializes binding and PiP requests, persisting the record, operation, random 32-hex request ID and
+creation time before launching UU. Binding passes both `nonce` and a `request` query parameter in the callback;
+PiP uses the preserved `request` parameter. `DesktopProtocol` validates exact scheme, authority and path,
+request identity, a 15-minute maximum age, duplicate query keys and mutually exclusive success/error fields.
+Pending state is consumed before applying a valid result. Unknown/malformed callbacks cannot alter bindings.
+Fifteen minutes is only a local acceptance limit, not evidence of device failure: some UU dialogs wait for the user.
+The user can end waiting without disconnecting UU. Late callbacks are then ignored. A cold callback restores the
+corresponding computer management page; a warm callback leaves the current screen intact and shows a short result.
+
+Callbacks: `remoteai-uu://result/bind?request=<id>` and `remoteai-uu://result/control?request=<id>`.
+Full screen requests have no callback and are reported only as handed to UU. PiP success confirms its initial
+start, never ongoing connectivity. `device_not_found` invalidates the binding. Unsupported PiP offers full screen
+through the existing menu rather than launching another connection automatically. External links never perform
+remote control or pairing without a native user action.
+
+The native menu can copy `remoteai://computer?id=<saved-record-id>` for another app on the same phone.
+Only a single `id` parameter and a known local record are accepted. The link opens computer management, does not
+log in or execute anything, and contains neither credentials nor UU identifiers. Other phones cannot resolve it.
+The old `remotecli://connect` QR endpoint is dispatched separately and now checks its exact host.
+
+Compatibility: the feature works with the existing 1.6.5 computer and relay. The Windows 1.6.6 bundle is released
+alongside Android for version consistency; updating a running terminal host is not required for desktop access.
+
 Three parties: the **viewer** (the phone app's pages), the **relay** (`relay/server.py`) and the **computer**
 (`agent-windows/`). The viewer and the computer both make requests to the relay; the relay never connects to
 either and never runs a command. Anything that speaks this protocol can replace one of the three: another

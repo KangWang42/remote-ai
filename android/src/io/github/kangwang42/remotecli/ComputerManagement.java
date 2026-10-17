@@ -43,6 +43,7 @@ final class ComputerManagement {
         draw();
         LinearLayout access = kit.settingGroup(page, "使用这台电脑");
         kit.setting(access, "打开工作台", "查看这台电脑上的对话、终端和项目", "", () -> activity.open(url, ""));
+        kit.setting(access, "远程桌面", "关联 UU 远程、打开桌面或小窗；终端离线时也可使用", "", () -> activity.desktop(url));
         kit.setting(access, "电脑设置", "连接线路、远程访问与工具", "", () -> activity.computerSettings(url));
         LinearLayout saved = kit.settingGroup(page, "连接管理");
         kit.setting(saved, "名称与连接", "改名、重新扫码登录或从手机移除", "", () -> activity.manageConnection(url));
