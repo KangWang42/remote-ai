@@ -7,7 +7,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   // The plain terminal is called what the computer calls it: PowerShell on Windows, the person's shell elsewhere.
-  const TOOLS = { claude: 'Claude Code', codex: 'Codex', shell: '终端' };
+  const TOOLS = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', shell: '终端' };
   const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const native = window.RemoteCliNative || null;
   // The look belongs to the app, not to one computer: inside the app it is kept there, so every computer's pages
@@ -51,6 +51,8 @@
     chev: svg('<path d="M9 6l6 6-6 6"/>', 18), stop: svg('<rect x="6" y="6" width="12" height="12" rx="3.2" fill="currentColor" stroke="none"/>', 18), plus: svg('<path d="M12 5v14M5 12h14"/>', 20),
     folder: svg('<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
     claude: svg('<path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6L6 18"/>'), codex: svg('<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>'),
+    opencode: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/>'),
+    qoder: svg('<path d="M4 18L12 5l8 13M8.5 14h7"/>'), cline: svg('<path d="M5 5h14v14H5zM9 9.5h6M9 13h4"/>'),
     say: svg('<path d="M20.5 3.5L3.5 10.5l6.5 3 3 6.5zM10 13.5L20.5 3.500"/>', 18),
     pin: svg('<path d="M9 3.5h6l-1 6 3.5 3.5v1.5h-11V13L10 9.5zM12 14.5V21"/>', 13),
     shell: svg('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7.5 10l3 2.2-3 2.2M12.5 15h4"/>'), mark: svg('<path d="M7 8l5 4-5 4M13.5 16.5h4.5"/>', 30)

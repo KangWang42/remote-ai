@@ -75,7 +75,8 @@ public static class AutoUpdater {
         try {
             var request = (HttpWebRequest)WebRequest.Create(update.Url); request.Timeout = 120000; request.UserAgent = "RemoteCli/" + update.Version + " (GitHub updater)";
             using (var response = (HttpWebResponse)request.GetResponse()) using (var input = response.GetResponseStream()) using (var output = File.Create(temporary)) input.CopyTo(output);
-            if (!String.IsNullOrEmpty(update.Sha256) && !String.Equals(Hash(temporary), update.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("安装包校验未通过");
+            if (String.IsNullOrEmpty(update.Sha256)) throw new InvalidDataException("本次发布没有提供 SHA-256，无法校验安装包");
+            if (!String.Equals(Hash(temporary), update.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("安装包校验未通过");
             if (new FileInfo(temporary).Length < 100000) throw new InvalidDataException("安装包大小异常");
             if (File.Exists(final)) File.Delete(final); File.Move(temporary, final); return final;
         } catch { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } throw; }
