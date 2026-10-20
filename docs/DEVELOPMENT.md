@@ -79,6 +79,7 @@ python tests\move_check.py                             # 电脑端换到另一�
 python tests\history_check.py                          # 电脑端保留已交给中转的输出，中转缺少时从缺的地方再给一遍
 chrome --headless=new --window-size=1480,520 --screenshot=skins.png tests\skin_code_check.html   # 各外观下代码、diff 和 16 色的显示
 python tests\setup_check.py dist\RemoteCli-Setup-x.y.z.exe      # 安装程序，沙盒方式，不碰已有安装
+python tests\tools_ui_check.py <chrome.exe> <输出文件夹>   # 六种工具的启动按钮、新工具终端与 Ctrl+P 输入，手机和桌面布局
 python tests\pages_check.py <chrome.exe> <输出文件夹>     # 用本机的中转和电脑端截取列表页和终端页；对话是编造的（tests\made_up.py），不会把本机真实的对话画进图里
 java -cp .cache\zxing-core-3.5.3.jar tests\QrDecodeCheck.java <二维码.png> <内容>   # 手机端的二维码识别
 ```

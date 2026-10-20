@@ -325,7 +325,8 @@ def tool_argv(tool, launcher, session, history, mode, fresh):
     elif tool == "qoder":
         # --session-id names a conversation that does not exist yet, --resume continues one
         args = ["--session-id" if fresh else "--resume", session] if session else ["--continue"] if history else []
-        args += ["--permission-mode", "accept_edits"] if mode == "edit" else []
+        args += ["--permission-mode", "plan"] if mode == "read" else \
+            ["--permission-mode", "accept_edits"] if mode == "edit" else []
     elif tool == "cline":
         # --id only continues; a new conversation is named by cline itself, like codex's
         args = ["--id", session] if session else []
@@ -1453,10 +1454,11 @@ class Live:
                     return                  # disposed: the number may already be someone else's
                 if not select.select([fd], [], [], 0.5)[0]:
                     continue
-                if self.stopping or self.fd != fd:
-                    return                  # disposed while this looked: never read from the new one
                 try:
-                    data = os.read(fd, 8192)
+                    with self.lock:
+                        if self.stopping or self.fd != fd:
+                            return          # dispose and read cannot reuse the same descriptor
+                        data = os.read(fd, 8192)
                 except BlockingIOError:
                     continue
                 if not data:

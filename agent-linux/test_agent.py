@@ -114,6 +114,67 @@ class Pure(unittest.TestCase):
         self.assertEqual("".join(c["data"] for c in live.output), "字" * 20000)
         self.assertEqual(live.pending, [])
 
+    def test_dispose_waits_for_inflight_read(self):
+        import codecs
+        import threading
+        from unittest import mock
+
+        reading, release, attempted = threading.Event(), threading.Event(), threading.Event()
+        acquired = []
+        lock = threading.Lock()
+
+        class ObservedLock:
+            def __enter__(self):
+                if threading.current_thread().name == "dispose-check":
+                    immediate = lock.acquire(False)
+                    acquired.append(immediate)
+                    attempted.set()
+                    if immediate:
+                        return self
+                lock.acquire()
+                return self
+
+            def __exit__(self, *args):
+                lock.release()
+
+        live = agent.Live.__new__(agent.Live)
+        live.fd, other = os.pipe()
+        live.lock, live.stopping, live.drained = ObservedLock(), False, False
+        live.pending, live.decoder, live.wake = [], codecs.getincrementaldecoder("utf-8")(), lambda: None
+
+        def read(fd, size):
+            reading.set()
+            if not release.wait(5):
+                raise OSError("read test timed out")
+            return b""
+
+        reader = threading.Thread(target=live._read)
+        disposer = threading.Thread(target=live.dispose, name="dispose-check")
+        try:
+            with mock.patch.object(agent.select, "select", return_value=([live.fd], [], [])), \
+                    mock.patch.object(agent.os, "read", side_effect=read):
+                reader.start()
+                try:
+                    self.assertTrue(reading.wait(3), "reader reached the descriptor")
+                    disposer.start()
+                    self.assertTrue(attempted.wait(3), "dispose attempted the same lock")
+                    self.assertEqual(acquired, [False], "dispose must not recycle a descriptor being read")
+                finally:
+                    release.set()
+                    reader.join(5)
+                    if disposer.ident is not None:
+                        disposer.join(5)
+            self.assertFalse(reader.is_alive() or disposer.is_alive())
+            self.assertTrue(live.drained and live.stopping)
+            self.assertEqual(live.fd, -1)
+        finally:
+            live.dispose()
+            os.close(other)
+
+    def test_qoder_read_mode(self):
+        self.assertEqual(agent.tool_argv("qoder", "qoder", "", False, "read", False),
+                         ["qoder", "--permission-mode", "plan"])
+
     def test_output_batch_limits(self):
         import threading
         def fake(data, count):
@@ -231,7 +292,7 @@ class Pure(unittest.TestCase):
         self.assertEqual(agent.tool_argv("opencode", "/b/opencode", "", False, "read", False), ["/b/opencode"])
         self.assertEqual(agent.tool_argv("qoder", "/b/qoder", sid, False, "", True), ["/b/qoder", "--session-id", sid])
         self.assertEqual(agent.tool_argv("qoder", "/b/qoder", sid, False, "read", False),
-                         ["/b/qoder", "--resume", sid])
+                         ["/b/qoder", "--resume", sid, "--permission-mode", "plan"])
         self.assertEqual(agent.tool_argv("qoder", "/b/qoder", "", True, "edit", False),
                          ["/b/qoder", "--continue", "--permission-mode", "accept_edits"])
         self.assertEqual(agent.tool_argv("cline", "/b/cline", "1792116013202_ffehs", False, "", False),

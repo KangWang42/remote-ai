@@ -72,6 +72,7 @@ App 底部有任务、项目、协作、我的四个栏目，都汇总所有电�
 - 手机更新：进入 App“我的 → 手机 App 更新”。电脑更新：进入“我的 → 已连接的电脑 → 管理”，查看电脑当前版本和在线状态，点击“检查并更新电脑端”；发现新版后由电脑下载、安装并重启。电脑端“设置”也可更新。1.5.7 及更早版本需手动安装一次 1.5.8 或更高版本，之后可以在应用内更新。
 - 项目原名 Remote CLI，安装包和命令仍沿用 `RemoteCli`、`remote-cli`。
 - Linux 提供后台电脑端，支持远程终端和文件查看，安装方法和差异见 [Linux 说明](docs/LINUX.md)。
+- Linux Python 电脑端新增 OpenCode、Qoder、Cline 的终端和历史对话支持；手机可查看、继续对话及安排定时提问。Windows 电脑端仍支持 Claude Code、Codex 和 PowerShell。
 
 </details>
 

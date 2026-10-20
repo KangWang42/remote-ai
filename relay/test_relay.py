@@ -639,6 +639,35 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": info, "sessions": [{"id": sid, "tool": "claude", "dir": "demo", "title": "原对话", "updated": 1, "live": True, "host": "cli", "kind": "Claude 桌面版"}]}, now=1007)
         self.assertEqual([s["kind"] for s in self.relay.overview(now=1007)["sessions"]], ["Claude 桌面版"])
 
+    def test_new_tool_conversations_can_be_read_and_marked(self):
+        import threading
+        info = dict(self.info, features=["peek", "marks"])
+        for tool, sid in (("opencode", "ses_" + "a" * 26), ("cline", "1792116013202_ffehs")):
+            self.relay.agent({"info": info, "sessions": [{"id": sid, "tool": tool, "dir": "demo", "title": tool, "updated": 1}]}, now=1001)
+            for action in ("read", "mark"):
+                with self.subTest(tool=tool, action=action):
+                    ask = {"id": __import__("secrets").token_hex(16), "session": sid, "action": action}
+                    if action == "mark":
+                        ask["pinned"] = True
+                    answers = {}
+                    def request():
+                        try:
+                            answers["got"] = self.relay.conversation(ask, now=1001, wait=3)
+                        except Exception as error:
+                            answers["error"] = error
+                    waiting = threading.Thread(target=request)
+                    waiting.start()
+                    operations = self.relay.pull({"instance": info["instance"], "wait": 1})["operations"]
+                    if operations:
+                        self.relay.agent({"info": info, "acks": [{"id": ask["id"], "result": {"ok": True}}]}, now=1002)
+                    waiting.join(4)
+                    self.assertFalse(waiting.is_alive())
+                    self.assertNotIn("error", answers)
+                    self.assertEqual([(op["action"], op["tool"], op["session"]) for op in operations], [("session_" + action, tool, sid)])
+                    self.assertEqual(answers["got"], {"ok": True})
+        with self.assertRaises(RemoteError):
+            self.relay.conversation({"id": "f" * 32, "session": "ses_../invalid"}, now=1003, wait=0)
+
     def test_a_conversation_is_pinned_or_hidden_from_the_phone_and_the_computer_keeps_it(self):
         import threading
         sid = "11111111-2222-3333-4444-555555555555"

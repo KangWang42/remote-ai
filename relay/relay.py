@@ -854,7 +854,7 @@ class Relay:
         op_id, session, action = payload.get("id"), payload.get("session"), payload.get("action", "read")
         if not isinstance(op_id, str) or not _id.fullmatch(op_id):
             raise RemoteError("操作编号无效")
-        if not isinstance(session, str) or not _session.fullmatch(session):
+        if not isinstance(session, str) or not any(session_id_ok(tool, session) for tool in ("claude", "opencode", "cline")):
             raise RemoteError("对话编号无效")
         more = {}
         if action == "say":

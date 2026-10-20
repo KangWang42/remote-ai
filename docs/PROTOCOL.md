@@ -240,6 +240,10 @@ to held requests. Switching to the background cancels the active reader; returni
 | `project_remove` | `name`. The folder and what is in it stay. A project that stands in the computer's own settings (`fixed`) is renamed or removed from the phone only where the computer says it does that (the `projects` capability: the Windows program, for the projects added in its window); else the relay refuses |
 | `update` | none. The program on the computer looks for a newer release of itself and installs it; needs the `update` capability |
 
+Linux Python agents also offer OpenCode, Qoder and Cline when installed; Windows continues to offer Claude Code, Codex and shell. Conversation IDs are validated by tool: UUID for Claude Code/Codex/Qoder, `ses_` plus 10–40 alphanumeric characters for OpenCode, and 10–16 digits plus `_` and 4–10 alphanumeric characters for Cline. The same shapes apply to conversation reads and marks, terminal resumes and agent reports. The relay resolves the tool and workspace from its reported session list, not from client-supplied values.
+
+Linux `RemoteMaxMode=read` starts Qoder with `--permission-mode plan` and Cline with `--plan`; Qoder `edit` uses `--permission-mode accept_edits`. OpenCode uses its own default permissions for `read` and `--auto` for `edit`; it does not provide a separate read-only flag. These modes remain the tools' own interactive permission modes. Qoder startup parameters follow its [CLI reference](https://docs.qoder.com/cli/cli-reference) and [Plan mode](https://docs.qoder.com/cli/plan-mode) documentation.
+
 ### Files
 
 `POST /api/files` `{"id": "<16 to 32 hex digits>", "action": "file_list" | "file_read", "dir": "<workspace>", "path": "sub/folder", "offset": 0}`

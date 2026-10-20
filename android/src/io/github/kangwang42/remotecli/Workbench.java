@@ -492,7 +492,7 @@ final class Workbench {
         List<String> tools = new ArrayList<>(board.tools), sources = new ArrayList<>(board.sources);
         // (a project whose folder is used by an app or in a terminal is told apart too, also while nothing of it is listed)
         for (Snapshot snapshot : snapshots.values()) for (AggregateSessions.Project project : snapshot.projects) {
-            for (String known : new String[]{"claude", "codex"}) if (project.tools.contains(known) && !tools.contains(known)) tools.add(known);
+            for (String known : new String[]{"claude", "codex", "opencode", "qoder", "cline"}) if (project.tools.contains(known) && !tools.contains(known)) tools.add(known);
             for (String known : new String[]{"term", "app"}) if (project.sources.contains(known) && !sources.contains(known)) sources.add(known);
         }
         if (!tool.isEmpty() && !tools.contains(tool)) tools.add(tool);
@@ -505,7 +505,7 @@ final class Workbench {
         filters.removeAllViews();
         if (tools.isEmpty() && sources.isEmpty()) return;
         filters.addView(chip("全部", tool.isEmpty() && source.isEmpty(), () -> { tool = ""; source = ""; draw(); }));
-        for (final String one : tools) filters.addView(chip("claude".equals(one) ? "Claude Code" : "codex".equals(one) ? "Codex" : "终端", one.equals(tool), () -> { tool = one.equals(tool) ? "" : one; draw(); }));
+        for (final String one : tools) filters.addView(chip(AggregateSessions.toolName(one), one.equals(tool), () -> { tool = one.equals(tool) ? "" : one; draw(); }));
         if (!tools.isEmpty() && !sources.isEmpty()) {
             View between = new View(activity);
             between.setBackgroundColor(kit.LINE);

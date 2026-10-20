@@ -12,6 +12,15 @@ import java.util.Set;
 
 /** One computer's project inventory. Kept independent of Android views for regression checks. */
 final class AggregateSessions {
+    static String toolName(String tool) {
+        if ("claude".equals(tool)) return "Claude Code";
+        if ("codex".equals(tool)) return "Codex";
+        if ("opencode".equals(tool)) return "OpenCode";
+        if ("qoder".equals(tool)) return "Qoder";
+        if ("cline".equals(tool)) return "Cline";
+        return "终端";
+    }
+
     static final class Entry {
         final boolean terminal, live, done;
         final long at;
@@ -103,7 +112,7 @@ final class AggregateSessions {
         int rank() { return AggregateSessions.rank(kind(null)); }
         /** What the computer calls its plain terminal ("PowerShell", "bash"); empty from a computer that does not say. */
         String shell = "";
-        String toolName() { return "claude".equals(tool) ? "Claude Code" : "codex".equals(tool) ? "Codex" : shell.isEmpty() ? "PowerShell" : shell; }
+        String toolName() { return "shell".equals(tool) ? (shell.isEmpty() ? "PowerShell" : shell) : AggregateSessions.toolName(tool); }
         String shownTitle() { return title.isEmpty() ? toolName() : title; }
     }
     static String label(String kind) {
@@ -186,7 +195,7 @@ final class AggregateSessions {
         List<String> words = new ArrayList<>();
         for (String word : query.trim().toLowerCase(java.util.Locale.ROOT).split("\\s+")) if (!word.isEmpty()) words.add(word);
         board.searched = !words.isEmpty();
-        for (String known : new String[]{"claude", "codex", "shell"}) for (Thing thing : things) if (known.equals(thing.entry.tool)) { board.tools.add(known); break; }
+        for (String known : new String[]{"claude", "codex", "opencode", "qoder", "cline", "shell"}) for (Thing thing : things) if (known.equals(thing.entry.tool)) { board.tools.add(known); break; }
         for (String known : new String[]{"term", "app"}) for (Thing thing : things) if (known.equals(thing.entry.source())) { board.sources.add(known); break; }
         for (Thing thing : things) {
             Entry entry = thing.entry;
