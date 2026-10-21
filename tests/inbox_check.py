@@ -374,10 +374,11 @@ def main():
         search("")
         lists(lambda seen: seen["results"] is None and seen["recent"], "the lists again")
 
-        # ---- a held press asks what to do with a card: a mouse's other button
+        # ---- a held press asks what to do with a card: a mouse's other button (a saved one goes on as a conversation
+        # at a press, and in a terminal from here)
         page_value("(() => { %s('给结算页加上优惠券').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
         offered = until(lambda: page_value(SHEET), 5, "the sheet of a held press")
-        assert offered == ["置顶", "从列表隐藏", "交接给另一段对话", "进入项目 web-shop", "删除对话"], offered
+        assert offered == ["置顶", "从列表隐藏", "在手机终端继续", "交接给另一段对话", "进入项目 web-shop", "删除对话"], offered
         time.sleep(0.5)             # the sheet has come up
         picture("inbox-manage.png")
         choose("置顶")
@@ -395,7 +396,7 @@ def main():
         offered = until(lambda: page_value(SHEET), 5, "the sheet of a finger held down")
         ask("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
         time.sleep(0.6)
-        assert offered == ["置顶", "从列表隐藏", "交接给另一段对话", "进入项目 thesis", "删除对话"] and page_value(SHEET) == offered, (offered, page_value(SHEET))
+        assert offered == ["置顶", "从列表隐藏", "在手机终端继续", "交接给另一段对话", "进入项目 thesis", "删除对话"] and page_value(SHEET) == offered, (offered, page_value(SHEET))
         choose("从列表隐藏")
         hidden = lists(lambda seen: seen["recent"] and "摘要翻译" not in seen["recent"], "hidden")
         assert listed(uuid(14))["hidden"] is True and len(call("/api/terminal")["terminals"]) == started, hidden
@@ -421,7 +422,7 @@ def main():
         page_value("(() => { document.getElementById('hidden-history').click(); return 1; })()")
         assert page_value(HISTORY)["saved"] == ["画流程图", "整理第三章的参考文献", "摘要翻译"] and about("摘要翻译")["pill"] == "已隐藏"
         page_value("(() => { %s('摘要翻译').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return 1; })()" % CARD)
-        assert until(lambda: page_value(SHEET), 5, "the sheet in a project") == ["置顶", "取消隐藏", "交接给另一段对话", "删除对话"]
+        assert until(lambda: page_value(SHEET), 5, "the sheet in a project") == ["置顶", "取消隐藏", "在手机终端继续", "交接给另一段对话", "删除对话"]
         choose("取消隐藏")
         until(lambda: listed(uuid(14))["hidden"] is False, 10, "no longer hidden")
         page_value("(() => { document.getElementById('back').click(); return 1; })()")
