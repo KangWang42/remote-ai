@@ -1267,6 +1267,79 @@ class InputNeverHolds(unittest.TestCase):
             live.dispose()
 
 
+class Chats(unittest.TestCase):
+    """A conversation run through its tool's structured mode, for both tools, against the stand-ins that speak their
+    protocols (tests/chat_standin.py): the first words given back with the phone's number, the answer in pieces, a step
+    that asks first and is allowed, one that is stopped while it runs, and the end."""
+
+    def events(self, chat):
+        with chat.lock:
+            text = "".join(chat.pending)
+        return [json.loads(line) for line in text.split("\n") if line.strip()]
+
+    def until(self, chat, test, what, seconds=20):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            found = [e for e in self.events(chat) if test(e)]
+            if found:
+                return found[-1]
+            time.sleep(0.05)
+        self.fail("waited in vain for %s: %s" % (what, self.events(chat)[-6:]))
+
+    def test_both_tools(self):
+        for tool in ("claude", "codex"):
+            with self.subTest(tool=tool):
+                folder = tempfile.mkdtemp()
+                launcher = os.path.join(folder, tool)
+                with open(launcher, "w", encoding="utf-8") as stream:
+                    stream.write('#!/bin/sh\nexec "%s" "%s" %s "$@"\n' % (sys.executable, os.path.join(REPO, "tests", "chat_standin.py"), tool))
+                os.chmod(launcher, 0o755)
+                chat = agent.open_chat("c" * 32, "p", folder, tool, launcher, lambda: None, "", False, "full")
+                try:
+                    self.until(chat, lambda e: e["t"] == "session", "its id")
+                    chat.say("帮我检查一下金额", "f" * 32)
+                    mine = self.until(chat, lambda e: e["t"] == "item" and e["kind"] == "user", "the first words")
+                    self.assertEqual((mine["text"], mine["op"]), ("帮我检查一下金额", "f" * 32))
+                    ask = self.until(chat, lambda e: e["t"] == "ask", "what it asks")
+                    self.assertEqual([o["id"] for o in ask["options"]], ["allow", "always", "deny"])
+                    self.assertIn("echo chat-ok", chat.asking)
+                    self.assertEqual(chat.status, "confirm")
+                    with self.assertRaises(agent.OpError):
+                        chat.answer(ask["id"], "maybe")
+                    chat.answer(ask["id"], "allow")
+                    with self.assertRaises(agent.OpError):
+                        chat.answer(ask["id"], "allow")         # answered once
+                    self.until(chat, lambda e: e["t"] == "done" and e["ok"], "the step's end")
+                    self.until(chat, lambda e: e["t"] == "turn" and e["end"] == "done", "the end of the turn")
+                    words = [e for e in self.events(chat) if e["t"] == "item" and e["kind"] == "text"][0]
+                    self.assertEqual("".join(e.get("text", "") for e in self.events(chat) if e.get("id") == words["id"] and e["t"] in ("item", "more")), "我先看看。")
+                    self.assertIn("chat-ok", chat.said_last)
+                    with self.assertRaises(agent.OpError):
+                        chat.write("y\r")
+                    # stopped while a step runs
+                    chat.say("慢慢部署", "")
+                    ask = self.until(chat, lambda e: e["t"] == "ask" and e["id"] != ask["id"], "the slow step's question")
+                    chat.answer(ask["id"], "always")
+                    time.sleep(0.4)
+                    chat.stop_turn()
+                    self.until(chat, lambda e: e["t"] == "turn" and e["end"] == "stopped", "the stopped turn")
+                    deadline = time.time() + 5
+                    while time.time() < deadline and chat.status != "idle":
+                        time.sleep(0.05)
+                    self.assertEqual(chat.status, "idle")
+                    with self.assertRaises(agent.OpError):
+                        chat.stop_turn()
+                    chat.begin_close()
+                    deadline = time.time() + 8
+                    while time.time() < deadline and not chat.closed:
+                        chat.escalate()
+                        time.sleep(0.05)
+                    self.assertTrue(chat.closed)
+                finally:
+                    chat.kill()
+                    chat.dispose()
+
+
 class SingletonLock(unittest.TestCase):
     """A second agent on the same data directory must refuse to start (exit 3)."""
 

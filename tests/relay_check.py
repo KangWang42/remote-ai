@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_build  # noqa: E402
 
 
 def free_port():
@@ -26,10 +27,7 @@ def free_port():
 
 with tempfile.TemporaryDirectory(prefix="remote-cli-relay-check-") as folder:
     exe = Path(folder) / "RelayCheck.exe"
-    subprocess.run([str(compiler), "/nologo", "/target:exe", "/platform:x64", "/codepage:65001",
-                    "/reference:System.Management.dll", "/reference:System.Net.Http.dll", "/reference:System.Web.Extensions.dll",
-                    "/reference:System.Security.dll", "/main:RelayCheck", "/out:" + str(exe),
-                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "agent-windows/Outbox.cs"), str(ROOT / "agent-windows/Running.cs"), str(ROOT / "agent-windows/Stats.cs"), str(ROOT / "agent-windows/Schedules.cs"), str(ROOT / "agent-windows/Chains.cs"), str(ROOT / "agent-windows/Marks.cs"), str(ROOT / "agent-windows/ClaudeRelay.cs"), str(ROOT / "agent-windows/Folders.cs"), str(ROOT / "agent-windows/Removal.cs"), str(ROOT / "agent-windows/CodexQueue.cs"), str(ROOT / "agent-windows/DesktopAdapters.cs"), str(ROOT / "agent-windows/Ways.cs"), str(ROOT / "agent-windows/CodexDesktopControl.cs"), str(ROOT / "agent-windows/RemoteCliAgent.cs"), str(ROOT / "tests/RelayCheck.cs")], check=True)
+    agent_build.compile_check('RelayCheck', str(exe), [ROOT / 'tests/RelayCheck.cs'])
     port, other, closed, password = free_port(), free_port(), free_port(), "test-" + secrets.token_hex(12)
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(port), "--data", str(Path(folder) / "relay")],
                              env=dict(os.environ, RCLI_PASSWORD=password, PYTHONUTF8="1"), stdout=subprocess.DEVNULL)

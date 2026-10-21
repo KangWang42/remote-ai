@@ -513,8 +513,9 @@ public final class MainActivity extends Activity {
         return row;
     }
     /** Straight into one terminal; its page is told to come back here rather than to that computer's list. */
-    void openTerminal(String address, String terminal) {
-        try { openPage(address, "", AggregateSessions.terminalPath(terminal) + "&from=bench"); }
+    void openTerminal(String address, String terminal) { openTerminal(address, terminal, false); }
+    void openTerminal(String address, String terminal, boolean chat) {
+        try { openPage(address, "", AggregateSessions.terminalPath(terminal, chat) + "&from=bench"); }
         catch (IllegalArgumentException invalid) { android.widget.Toast.makeText(this, invalid.getMessage(), android.widget.Toast.LENGTH_SHORT).show(); }
     }
     private void openPage(String address, String password, String path) {

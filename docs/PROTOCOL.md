@@ -214,7 +214,7 @@ One answer carries at most about 180,000 characters; `after < terminal.seq` mean
 twice. `state` is `queued` until the computer has done it, then `done` or `error`.
 
 On an upgraded viewer connection, send the same operation object as a text message (`input`, `resize`,
-`rename` and `close` only, for the connection's terminal). The relay replies with
+`rename`, `close`, and for a chat `say`, `stop` and `answer`, for the connection's terminal). The relay replies with
 `{"t": "ack", "status": 200, "id": "...", "terminal": "...", "state": "queued", "error": ""}`.
 Validation errors return an acknowledgment with status 400; storage failures return 500. A queued
 acknowledgment means accepted by the relay, not yet executed by the computer. Inputs can be sent in
@@ -229,10 +229,12 @@ to held requests. Switching to the background cancels the active reader; returni
 
 | `action` | Fields |
 | --- | --- |
-| `start` | `tool` (`claude`, `codex`, `opencode`, `qoder`, `cline`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list) |
+| `start` | `tool` (`claude`, `codex`, `opencode`, `qoder`, `cline`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list), `form: "chat"` (a conversation run through its tool's structured mode, see "Chats"; `claude` and `codex` only, needs the `chat` capability, not with `history` or `fork`) with optional `text` (the first thing to say, at most 8,000 characters) |
 | `input` | `terminal`, `data` (at most 16,000 characters) |
 | `say` | `terminal`, `text` (at most 8,000 characters, no control characters but line breaks and tabs). A message for a running terminal from where the terminal is not on the screen (a list, the app's workbench): what the box of the terminal's page sends, the text and then Enter. The relay knows from the program's output whether it takes pasted text in brackets (`ESC [ ? 2004 h`): it then gives the computer `input` with the text between `ESC [ 200 ~` and `ESC [ 201 ~` and `\r`, and otherwise the text on one line and `\r`. Refused while the terminal's phase is `confirm`: Enter would answer its question |
-| `resize` | `terminal`, `cols` (20–240), `rows` (6–100) |
+| `resize` | `terminal`, `cols` (20–240), `rows` (6–100). Not for a chat |
+| `stop` | `terminal` of a chat: stop what it is at now (see "Chats"). Refused while its phase is not `busy` or `confirm` |
+| `answer` | `terminal` of a chat, `ask` (the id of what it asks), `decision`: `allow`, `always`, `deny`, or `choice:<n>` for a question with choices |
 | `rename` | `terminal`, `title` |
 | `close` | `terminal` |
 | `project_add` | `path`, optional `name`, `create` |
@@ -496,6 +498,47 @@ conversation", below). The Linux agent knows the first way only.
 
 The computer keeps the questions and rules in `schedules.json` and `chains.json` of its data folder; the Windows
 program encrypts their words for the Windows account.
+
+## Chats
+
+A chat is a terminal whose program is not drawn on a screen: the computer runs Claude Code or Codex through the
+tool's own structured mode, and the terminal's output is the conversation's events, one JSON object a line. It is
+what the phone shows as a conversation (`web/chat/`; the terminal page hands such a terminal over to it), begun by
+`start` with `form: "chat"`. Everything a terminal has applies: numbered output, `after`, `reset`, several readers,
+the list, `close`, `rename`, keeping it across an update of the computer's program. The computer offers it with the
+capability `chat` (Windows program 1.7.0, Linux agent 0.7.0; the Rust agent does not).
+
+| Tool | Run as | Said | Stopped | Asks |
+| --- | --- | --- | --- | --- |
+| Claude Code | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio --session-id <new id>` (or `--resume <id>`), with `--permission-mode plan` or `acceptEdits` for the computer's `read` and `edit` | a `user` message on its standard input; one sent while it works is taken when it gets to it | the control request `interrupt` | a `can_use_tool` control request, answered `allow` (with the input), `allow` with `updatedPermissions` (the tool's own suggestions) for `always`, or `deny` |
+| Codex | `codex app-server`; `thread/start` with the project folder (`sandbox` for `read` and `edit`) or `thread/resume` | `turn/start`, or `turn/steer` while a turn runs | `turn/interrupt` of the running turn | `item/commandExecution/requestApproval` and `item/fileChange/requestApproval`, answered `accept`, `acceptForSession`, `decline`; `item/tool/requestUserInput` with one question and its choices |
+
+Run on Claude Code 2.1.283 and Codex 0.163.0. The conversation is the tool's own and saved where its other
+windows find it: it is listed with the others, and can be gone on with in a terminal or a desktop app once the chat
+is closed. While a chat has it, the computer lists it as held by the phone's own program. Requests of the tools that
+this protocol does not answer are refused, so that the tool does not wait.
+
+The events (`t` names the kind; `at` is the computer's time in milliseconds):
+
+| `t` | Fields | Means |
+| --- | --- | --- |
+| `state` | `state`: `starting`, `busy`, `confirm`, `idle`, `ended`; `at` | how it stands; `busy` from what was said until the turn ends |
+| `session` | `session` | the conversation's id in its tool, once known |
+| `history` | `messages` (as `/api/conversation` gives them: `role`, `text`, `detail`, `result`), `more` | what was said before, where a saved conversation is gone on with; it comes before what follows |
+| `item` | `id`, `kind` (`user`, `text`, `thought`, `step`, `note`), `text`, `at`; a `user` item may have `op` (the phone's operation id it came of); a `step` has `name`, `detail` (the command, or the file), `state: "run"` | something said or done begins |
+| `more` | `id`, `text` | more of a text or thought, as it is written |
+| `set` | `id`, `text` | the whole text, once its tool says it; replaces what came in pieces |
+| `out` | `id`, `text` | more of what a step prints; at most 60,000 characters a step |
+| `done` | `id`, `ok`, optional `result` (its last lines, where nothing was printed as it ran) | a step ended |
+| `ask` | `id` (16 hex), `kind` (`tool`, `plan`, `command`, `edit`, `question`), `title`, `text`, `options` (`id`, `label`) | it asks before it goes on; answered by `answer` |
+| `answered` | `id`, `decision` (or `gone`: it no longer asks, after a stop or when it ended) | what it asked is settled |
+| `turn` | `end` (`done`, `stopped`, `failed`), optional `error`, `at` | a turn ended |
+| `note` | `text`, `at` | something said of the conversation (the computer's program was updated, the tool exited) |
+
+A reader that begins later is given what the relay keeps (as for a terminal): an event about an item whose `item`
+was before that is shown as a new one. The computer reports a chat in `terminals` with `form: "chat"`, `status`
+(`starting`, `busy`, `confirm`, `idle`), `said` (one line of what it said last) and `ask` (what it asks, or ""); the
+relay lists its phase from `status`, `said` from the computer and `asks` from `ask`, not from a screen.
 
 ## Computer
 

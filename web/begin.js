@@ -1,15 +1,19 @@
-/* 新建对话: where a new conversation begins, and with what. In an application (the desktop app of Codex or of Claude
-   on the computer: the conversation is the app's own and runs there), or in a terminal (Claude Code, Codex, the
-   shell: it runs under this program and is worked wholly from the phone). Both are offered wherever a conversation
-   is begun, and the kind that stands open is the one its owner chose last: kept, in the app for every computer.
+/* 新建对话: where a new conversation begins, and with what. As a conversation (应用: Claude Code or Codex, run by the
+   computer through the tool's structured mode and shown on the phone as a conversation, chat/; on a computer that
+   cannot, the desktop app of Codex or of Claude, which opens with the first words in its box), or in a terminal
+   (Claude Code, Codex, the shell, as a screen). Both are offered wherever a conversation is begun, and the kind that
+   stands open is the one its owner chose last: kept, in the app for every computer. A held press on a tool of 应用
+   opens its desktop app on the computer instead, where the computer offers that.
    A project's page offers them for that project (`draw`); 任务, and the app's own lists, for every project
    (`anywhere`). */
 (() => {
   'use strict';
   const page = window.RemoteCliPage, { $, el, ICON, TOOLS, api, newId, toast, openSheet } = page;
   const KINDS = { app: '应用', term: '终端' }, APPS = { codex: 'Codex', claude: 'Claude' };
-  // what the computer offers of each kind: the desktop apps it opens a conversation in, and the tools it has
-  const offered = () => ({ app: Object.keys(APPS).filter(tool => page.has(tool + '-desktop-open')), term: Object.keys(TOOLS).filter(tool => (page.data.device.tools || []).includes(tool)) });
+  // what the computer offers of each kind: the tools it runs conversations of (else the desktop apps it opens one in),
+  // and the tools it has
+  const desktop = tool => page.has(tool + '-desktop-open');
+  const offered = () => ({ app: Object.keys(APPS).filter(tool => page.chatOk(tool) || desktop(tool)), term: Object.keys(TOOLS).filter(tool => (page.data.device.tools || []).includes(tool)) });
   const named = (kind, tool) => kind === 'app' ? APPS[tool] : TOOLS[tool];
   // The kind that stands open: the one chosen last. Before any choice: a terminal for a project whose folder has
   // only been used in terminals, an application for any other.
@@ -31,10 +35,14 @@
     } })));
     return group;
   }
-  const tile = (kind, tool, props) => el('button', Object.assign({ type: 'button' }, props), el('span', { className: 'tool ' + tool, html: ICON[tool] }), el('span', { textContent: named(kind, tool) }));
-  // Resolves with whether the page goes on with what began (a terminal's page), as everything here does: where it
-  // does not, a page that the app opened for this is left for the app's list again.
-  const begin = (kind, tool, project) => kind === 'app' ? inApp(tool, project) : page.start(tool, project);
+  // (the tile of a tool of 应用 opens its desktop app on the computer at a held press, where both are there)
+  const tile = (kind, tool, props, project) => {
+    const made = el('button', Object.assign({ type: 'button' }, props), el('span', { className: 'tool ' + tool, html: ICON[tool] }), el('span', { textContent: named(kind, tool) }));
+    return kind === 'app' && page.chatOk(tool) && desktop(tool) && project ? page.held(made, () => inApp(tool, project)) : made;
+  };
+  // Resolves with whether the page goes on with what began (a conversation's or a terminal's page), as everything
+  // here does: where it does not, a page that the app opened for this is left for the app's list again.
+  const begin = (kind, tool, project) => kind !== 'app' ? page.start(tool, project) : page.chatOk(tool) ? page.chat(tool, project) : inApp(tool, project);
 
   // ---- on a project's page: the kinds, and a button for each tool of the one that stands open
   function draw(project) {
@@ -43,7 +51,7 @@
     if (box.dataset.signature === signature) return;
     box.dataset.signature = signature;
     box.replaceChildren(el('div', { className: 'section-head' }, el('h2', { textContent: '新建对话' }), switcher(kind, has, () => draw(project))),
-      has[kind].length ? el('div', { id: 'launch' }, ...has[kind].map(tool => tile(kind, tool, { disabled: !ready, onclick: () => begin(kind, tool, project) })))
+      has[kind].length ? el('div', { id: 'launch' }, ...has[kind].map(tool => tile(kind, tool, { disabled: !ready, onclick: () => begin(kind, tool, project) }, project)))
         : el('p', { className: 'none', textContent: '电脑上没有找到 Claude Code、Codex 或命令行终端' }));
   }
 

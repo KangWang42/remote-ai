@@ -46,6 +46,50 @@ class TerminalRelayTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteError, "远控已关闭"):
             self.relay.command(dict(request, id="c" * 32), now=1009)
 
+    def test_a_chat_is_a_terminal_whose_output_is_its_events(self):
+        start = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": False, "form": "chat", "text": "结算页的金额\n有时多一位小数"}
+        with self.assertRaisesRegex(RemoteError, "不支持这种对话"):
+            self.relay.command(start, now=1001)
+        self.info["features"] = ["chat"]
+        self.relay.agent({"info": self.info}, now=1001)
+        for change in ({"tool": "shell"}, {"history": True}, {"form": "screen"}, {"text": "\0"}, {"text": "x" * 8001}):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(start, id="c" * 32, **change), now=1002)
+        with self.assertRaisesRegex(RemoteError, "终端选项无效"):
+            self.relay.command({"action": "start", "id": "c" * 32, "tool": "claude", "dir": "demo", "history": False, "text": "hi"}, now=1002)
+        terminal = self.relay.command(start, now=1002)["terminal"]
+        op = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]
+        self.assertEqual((op["form"], op["text"]), ("chat", start["text"]))
+        listed = self.relay.overview(now=1003)["terminals"][0]
+        self.assertEqual((listed["form"], listed["title"]), ("chat", "结算页的金额 有时多一位小数"))
+        # the computer says how it stands, what it said last and what it asks: the list shows that, not a screen
+        self.relay.agent({"info": self.info, "acks": [{"id": start["id"]}], "terminals": [{"id": terminal, "state": "running", "form": "chat", "status": "confirm", "said": "我先看看。", "ask": "Bash\nnpm test"}],
+                          "output": [{"terminal": terminal, "seq": 1, "data": '{"t":"ask","id":"0123456789abcdef"}\n'}]}, now=1004)
+        listed = self.relay.overview(now=1006)["terminals"][0]
+        self.assertEqual((listed["phase"], listed["said"], listed["asks"]), ("confirm", "我先看看。", ["Bash", "npm test"]))
+        self.assertNotIn("asking", listed)
+        self.assertEqual(self.relay.overview(terminal, now=1006)["chunks"][0]["data"], '{"t":"ask","id":"0123456789abcdef"}\n')
+        # what is said, a stop and an answer go to the computer as they are; a screen's input and size do not apply
+        said = {"action": "say", "id": "d" * 32, "terminal": terminal, "text": "  先跑测试\r\n再改  "}
+        self.relay.command(said, now=1007)
+        op = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]
+        self.assertEqual((op["action"], op["text"]), ("say", "先跑测试\n再改"))
+        self.relay.command({"action": "answer", "id": "e" * 32, "terminal": terminal, "ask": "0123456789abcdef", "decision": "choice:2"}, now=1007)
+        self.assertEqual(self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]["decision"], "choice:2")
+        for bad in ({"action": "answer", "ask": "0123456789abcdef", "decision": "yes"}, {"action": "answer", "ask": "x", "decision": "allow"},
+                    {"action": "input", "data": "y\r"}, {"action": "resize", "cols": 80, "rows": 24}):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(bad, id="f" * 32, terminal=terminal), now=1008)
+        self.relay.command({"action": "stop", "id": "1" * 32, "terminal": terminal}, now=1008)
+        self.relay.agent({"info": self.info, "terminals": [{"id": terminal, "state": "running", "form": "chat", "status": "idle", "said": "好了", "ask": ""}]}, now=1009)
+        with self.assertRaisesRegex(RemoteError, "没有在执行"):
+            self.relay.command({"action": "stop", "id": "2" * 32, "terminal": terminal}, now=1010)
+        # a screen's terminal is not told to stop or answered this way
+        screen = self.relay.command({"action": "start", "id": "3" * 32, "tool": "codex", "dir": "demo", "history": False}, now=1011)["terminal"]
+        self.relay.agent({"info": self.info, "terminals": [{"id": terminal, "state": "running", "form": "chat", "status": "idle"}, {"id": screen, "state": "running"}]}, now=1012)
+        with self.assertRaisesRegex(RemoteError, "不支持此操作"):
+            self.relay.command({"action": "stop", "id": "4" * 32, "terminal": screen}, now=1013)
+
     def test_fresh_start_never_becomes_anonymous_resume(self):
         payload = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": True}
         with self.assertRaisesRegex(RemoteError, "resume"):

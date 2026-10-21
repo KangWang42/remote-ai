@@ -1,19 +1,17 @@
 """Compile and test ownership using only disposable fake codex processes."""
 import os
+import sys
 import shutil
 from pathlib import Path
 import subprocess
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
-compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_build  # noqa: E402
 with tempfile.TemporaryDirectory(prefix='remote-cli-native-') as folder:
     exe=Path(folder)/'codex.exe'
-    subprocess.run([str(compiler),'/nologo','/target:exe','/platform:x64','/codepage:65001',
-                    '/reference:System.Management.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',
-                    '/reference:System.Security.dll','/main:CodexOwnerCheck','/out:'+str(exe),
-                    str(ROOT/'agent-windows/CodexSessions.cs'), str(ROOT/'agent-windows/Reach.cs'), str(ROOT/'agent-windows/Outbox.cs'), str(ROOT/'agent-windows/Running.cs'), str(ROOT/'agent-windows/Stats.cs'), str(ROOT/'agent-windows/Schedules.cs'), str(ROOT/'agent-windows/Chains.cs'), str(ROOT/'agent-windows/Marks.cs'), str(ROOT / "agent-windows/ClaudeRelay.cs"), str(ROOT / "agent-windows/Folders.cs"), str(ROOT / "agent-windows/Removal.cs"), str(ROOT / "agent-windows/CodexQueue.cs"),str(ROOT / "agent-windows/DesktopAdapters.cs"), str(ROOT / "agent-windows/Ways.cs"), str(ROOT / "agent-windows/CodexDesktopControl.cs"), str(ROOT/'agent-windows/RemoteCliAgent.cs'),
-                    str(ROOT/'tests/CodexOwnerCheck.cs')],check=True)
+    agent_build.compile_check('CodexOwnerCheck', str(exe), [ROOT / 'tests/CodexOwnerCheck.cs'])
     shutil.copy2(exe, Path(folder)/'RemoteCliAgent.exe')
     for host in ['Positron', 'Code', 'rstudio']:
         shutil.copy2(exe, Path(folder)/(host + '.exe'))

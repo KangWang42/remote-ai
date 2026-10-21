@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # an embedded P
 import relay  # noqa: E402
 import websocket  # noqa: E402
 
-VERSION = "1.6.8"
+VERSION = "1.7.0"
 SESSION_DAYS = 90
 LOGIN_TRIES, LOGIN_LOCK, LOGIN_TRIES_ALL = 6, 900, 40
 BODY_LIMIT = 4 * 1024 * 1024
@@ -534,7 +534,7 @@ class Handler(BaseHTTPRequestHandler):
                     channel.close(1008)
                     break
                 payload = json.loads(raw)
-                if not isinstance(payload, dict) or payload.get("terminal") != terminal or payload.get("action") not in ("input", "resize", "close", "rename"):
+                if not isinstance(payload, dict) or payload.get("terminal") != terminal or payload.get("action") not in ("input", "resize", "close", "rename", "say", "stop", "answer"):
                     raise relay.RemoteError("终端操作无效")
                 try:
                     result = terminals.command(payload)

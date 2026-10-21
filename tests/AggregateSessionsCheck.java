@@ -55,6 +55,11 @@ public final class AggregateSessionsCheck {
             terminal("终端独有项目", "busy", "starting", ""), terminal("同名项目", "idle", "closed", "")));
         require(AggregateSessions.signature(groups).equals(AggregateSessions.signature(copied)), "Unchanged display must retain its views during refresh");
         require(AggregateSessions.terminalPath(TERMINAL).equals("/terminal/?id=" + TERMINAL), "Terminal link must identify the exact terminal");
+        // a terminal that runs a conversation (form "chat") opens the conversation's page, and is a conversation in the lists
+        require(AggregateSessions.terminalPath(TERMINAL, true).equals("/chat/?id=" + TERMINAL), "A conversation opens its own page");
+        AggregateSessions.Entry talk = new AggregateSessions.Entry(true, TERMINAL, "thesis", "核对回归表", "claude", "running", "busy", "busy", false, "", "", "");
+        talk.chat = true;
+        require("app".equals(talk.source()) && "手机对话 · thesis".equals(AggregateSessions.where(talk)), AggregateSessions.where(talk));
         boolean refused = false;
         try { AggregateSessions.terminalPath("../?p=secret"); } catch (IllegalArgumentException expected) { refused = true; }
         require(refused, "Terminal route must reject malformed identifiers");

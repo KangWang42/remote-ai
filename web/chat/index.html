@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#fbfbfc">
+  <meta name="robots" content="noindex">
+  <meta name="description" content="在手机上进行的 Claude Code 或 Codex 对话。">
+  <title>Remote AI</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="chat.css">
+  <script defer src="../terminal/skins.js"></script>
+  <script defer src="chat.js"></script>
+  <script defer src="../terminal/bridge.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <button type="button" class="icon" id="back" aria-label="返回">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="who">
+        <h1 id="title">对话</h1>
+        <p id="where"><span id="dot" aria-hidden="true"></span><span id="where-text">正在连接…</span></p>
+      </div>
+      <button type="button" class="icon" id="files" aria-label="查看项目文件" hidden>
+        <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button type="button" class="icon" id="menu" aria-label="对话选项">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>
+      </button>
+    </header>
+    <p id="link" role="status" aria-live="polite" hidden></p>
+    <div id="reads">
+      <div id="said" aria-live="polite"></div>
+      <button type="button" id="latest" hidden>回到最新 ↓</button>
+    </div>
+    <section id="asks" aria-label="等你确认" hidden></section>
+    <div id="stands" class="idle">
+      <span class="dot" aria-hidden="true"></span><span id="standing"></span><span id="clock"></span>
+      <button type="button" id="stop" hidden>停止</button>
+      <button type="button" id="again" hidden>继续这段对话</button>
+    </div>
+    <form id="write">
+      <button type="button" id="go" hidden>继续</button>
+      <textarea id="box" rows="1" maxlength="8000" placeholder="发消息" spellcheck="false" autocapitalize="off" aria-label="消息"></textarea>
+      <button type="submit" id="send">发送</button>
+    </form>
+  </main>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

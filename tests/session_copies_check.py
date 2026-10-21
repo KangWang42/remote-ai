@@ -3,17 +3,15 @@
     python tests/session_copies_check.py
 """
 import os
+import sys
 import subprocess
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_build  # noqa: E402
 with tempfile.TemporaryDirectory(prefix="remote-cli-copies-") as folder:
     exe = Path(folder) / "check.exe"
-    subprocess.run([str(compiler), "/nologo", "/target:exe", "/platform:x64", "/codepage:65001",
-                    "/reference:System.Management.dll", "/reference:System.Net.Http.dll", "/reference:System.Web.Extensions.dll",
-                    "/reference:System.Security.dll", "/main:SessionCopiesCheck", "/out:" + str(exe),
-                    str(ROOT / "agent-windows/CodexSessions.cs"), str(ROOT / "agent-windows/Reach.cs"), str(ROOT / "agent-windows/Outbox.cs"), str(ROOT / "agent-windows/Running.cs"), str(ROOT / "agent-windows/Stats.cs"), str(ROOT / "agent-windows/Schedules.cs"), str(ROOT / "agent-windows/Chains.cs"), str(ROOT / "agent-windows/Marks.cs"), str(ROOT / "agent-windows/ClaudeRelay.cs"), str(ROOT / "agent-windows/Folders.cs"), str(ROOT / "agent-windows/Removal.cs"), str(ROOT / "agent-windows/CodexQueue.cs"), str(ROOT / "agent-windows/DesktopAdapters.cs"), str(ROOT / "agent-windows/Ways.cs"), str(ROOT / "agent-windows/CodexDesktopControl.cs"), str(ROOT / "agent-windows/RemoteCliAgent.cs"),
-                    str(ROOT / "tests/SessionCopiesCheck.cs")], check=True)
+    agent_build.compile_check('SessionCopiesCheck', str(exe), [ROOT / 'tests/SessionCopiesCheck.cs'])
     subprocess.run([str(exe)], check=True, timeout=60)

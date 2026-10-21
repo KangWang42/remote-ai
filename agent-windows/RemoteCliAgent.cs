@@ -17,7 +17,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace RemoteCli {
 // A real Windows terminal, with cursor movement, interactive menus and UTF-8.
-public sealed class PseudoTerminal : IDisposable {
+public sealed class PseudoTerminal : IRunning {
     [StructLayout(LayoutKind.Sequential)] public struct Coord { public short X, Y; public Coord(int x, int y) { X = (short)x; Y = (short)y; } }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct StartupInfo {
         public int cb; public string reserved, desktop, title;
@@ -47,9 +47,10 @@ public sealed class PseudoTerminal : IDisposable {
     public bool Closed { get; private set; }
     public bool Drained { get; private set; }   // the reader has delivered everything the program wrote
     public string ReadError = "";
-    public int? ExitCode;
+    public int? ExitCode { get; private set; }
     public bool Alive { get { try { return process != null && !process.HasExited; } catch { return false; } } }
-    public int Cols = 80, Rows = 24;
+    public int Cols { get; private set; }
+    public int Rows { get; private set; }
 
     public PseudoTerminal(string command, string cwd, int cols, int rows, Action<string> receive) {
         IntPtr inRead = IntPtr.Zero, inWrite = IntPtr.Zero, outRead = IntPtr.Zero, outWrite = IntPtr.Zero, attributes = IntPtr.Zero, environment = IntPtr.Zero;
@@ -169,7 +170,7 @@ public sealed class TerminalAgent {
     public void KeepForRestart() {
         lock (work) lock (gate) {
             foreach (var t in terminals.Values) Seal(t);
-            var open = terminals.Values.Where(t => !t.Pty.Closed).Select(t => new Dictionary<string, object> { { "id", t.Id }, { "tool", t.Tool }, { "dir", t.Dir }, { "folder", t.Folder }, { "session", t.Session }, { "seq", t.Seq }, { "cols", t.Pty.Cols }, { "rows", t.Pty.Rows } }).ToArray();
+            var open = terminals.Values.Where(t => !t.Pty.Closed).Select(t => new Dictionary<string, object> { { "id", t.Id }, { "tool", t.Tool }, { "dir", t.Dir }, { "folder", t.Folder }, { "session", t.Chat != null ? t.Chat.Session : t.Session }, { "seq", t.Seq }, { "cols", t.Pty.Cols }, { "rows", t.Pty.Rows }, { "form", t.Chat != null ? "chat" : "" } }).ToArray();
             try { File.WriteAllText(RestartFile, json.Serialize(new Dictionary<string, object> { { "instance", instance }, { "at", DateTime.UtcNow.ToString("o") }, { "terminals", open } }), new UTF8Encoding(false)); } catch { }
         }
     }
@@ -182,13 +183,42 @@ public sealed class TerminalAgent {
         var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
         string where = Place(live, dirs);
         if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || where == null || !Directory.Exists(where)) return;
+        if (Get(kept, "form") == "chat") {
+            // a conversation goes on where it was; one whose tool had not named it yet cannot be found again
+            if (session.Length == 0 || (tool != "claude" && tool != "codex")) return;
+            live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
+            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live));
+            terminals[id] = live;
+            return;
+        }
         live.Pending.Append("\r\n\x1b[2m" + (tool == "shell" ? "Remote AI 已更新，这是重新打开的 PowerShell。" : session.Length > 0 ? "Remote AI 已更新，正在接回原来的对话…" : "Remote AI 已更新；原对话保存在电脑上，可从历史对话继续。") + "\x1b[0m\r\n");
         live.Pty = new PseudoTerminal(Command(tool, launcher, session, false, Get(prefs, "RemoteMaxMode"), false, tool == "codex" && SupportsStandalone(launcher), false), where,
-            Math.Max(20, Math.Min(240, Convert.ToInt32(kept["cols"]))), Math.Max(6, Math.Min(100, Convert.ToInt32(kept["rows"]))), text => {
-                lock (gate) { live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
-                Wake();
-            });
+            Math.Max(20, Math.Min(240, Convert.ToInt32(kept["cols"]))), Math.Max(6, Math.Min(100, Convert.ToInt32(kept["rows"]))), Emitted(live));
         terminals[id] = live;
+    }
+    // What a terminal's program gives is kept for the next report, which goes out at once.
+    Action<string> Emitted(LiveTerminal live) {
+        return text => {
+            lock (gate) { live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
+            Wake();
+        };
+    }
+    /// What was said in a saved conversation before it is gone on with in a chat: shown above what follows.
+    void Recall(LiveTerminal live, string root) {
+        try {
+            string file = ConversationFile(live.Tool, live.Session, root);
+            if (file == null) return;
+            var said = Said(file, live.Tool);
+            live.Chat.Before((List<Dictionary<string, object>>)said["messages"], (bool)said["more"]);
+        } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+    /// The file a tool keeps a conversation in; null where there is none.
+    string ConversationFile(string tool, string session, string root) {
+        string file;
+        if (tool == "claude") file = Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl");
+        else if (!codexFiles.TryGetValue(session, out file) || !File.Exists(file))
+            codexFiles[session] = file = Directory.GetFiles(Path.Combine(CodexSessions.Home, "sessions"), "rollout-*" + session + ".jsonl", SearchOption.AllDirectories).FirstOrDefault();
+        return file != null && File.Exists(file) ? file : null;
     }
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
     string instance = Guid.NewGuid().ToString("N");       // the same again after a restart for an update
@@ -203,7 +233,9 @@ public sealed class TerminalAgent {
     HttpClient client;
     DateTime nextLogin = DateTime.MinValue;
     public sealed class LiveTerminal {
-        public string Id, Tool, Dir, Session = "", Status = "", Title = ""; public PseudoTerminal Pty; public long Seq;
+        public string Id, Tool, Dir, Session = "", Status = "", Title = ""; public IRunning Pty; public long Seq;
+        /// A conversation run through its tool's structured mode (Chats.cs) rather than a screen; null for a screen.
+        public Chat Chat { get { return Pty as Chat; } }
         // A terminal runs in a project (Dir). One that took on a conversation that was open in a folder that is no
         // project runs in that folder instead: it has no project ("") and says the folder.
         public string Folder = "";
@@ -391,6 +423,13 @@ public sealed class TerminalAgent {
     /// where it could not be said.
     string Tell(SessionInfo to, string text, Dictionary<string, object> prefs, out bool ok) {
         LiveTerminal own = OwnTerminal(to.Tool, to.Id);
+        if (own != null && own.Chat != null) {
+            // a conversation run through its tool's structured mode is told through it, at work or not
+            own.Chat.Say(text.Trim(), null);
+            lastInput = DateTime.UtcNow;
+            ok = true;
+            return "已发到手机上的对话";
+        }
         if (own != null) {
             // Enter would say yes to a question it waits on: that is answered where the question is read
             var asks = Reach.Of(to.Tool, to.Id);
@@ -670,7 +709,7 @@ public sealed class TerminalAgent {
                         owner = running.FirstOrDefault(t => !t.Pty.Closed && t.Pty.Id == at);
                         int parent; if (!parents.TryGetValue(at, out parent) || parent == at || parent == 0) break; at = parent;
                     }
-                    if (owner != null) { owner.Session = session; owner.Status = source.Status; }
+                    if (owner != null) { owner.Session = session; if (owner.Chat == null) owner.Status = source.Status; }
                     else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true, Folders.Held(source.Origin, Folders.OfClaude(source.Entry))); }
                 } catch { }
             }
@@ -1230,11 +1269,8 @@ public sealed class TerminalAgent {
         if (dir.Length == 0 && saved.Folder.Length > 0) root = saved.Folder;
         else if (!AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         try {
-            string file;
-            if (tool == "claude") file = Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl");
-            else if (!codexFiles.TryGetValue(session, out file) || !File.Exists(file))
-                codexFiles[session] = file = Directory.GetFiles(Path.Combine(CodexSessions.Home, "sessions"), "rollout-*" + session + ".jsonl", SearchOption.AllDirectories).FirstOrDefault();
-            if (file == null || !File.Exists(file)) throw new FileNotFoundException();
+            string file = ConversationFile(tool, session, root);
+            if (file == null) throw new FileNotFoundException();
             // A page that follows a conversation asks again and again: it says what it has (`since`), and is given
             // the conversation anew only when its file has changed. How it stands goes with either answer.
             var info = new FileInfo(file);
@@ -1750,16 +1786,35 @@ public sealed class TerminalAgent {
                 bool fresh = tool == "claude" && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
                 var live = new LiveTerminal { Id = terminal, Tool = tool, Dir = dir, Folder = folder, Session = fork ? "" : session };
-                live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, tool == "codex" && SupportsStandalone(launcher), fresh), Place(live, dirs), 80, 24, text => {
-                    lock (gate) { live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
-                    Wake();
-                });
-                terminals[terminal] = live;
+                if (Get(op, "form") == "chat") {
+                    // A conversation run through its tool's structured mode: what it says and does is given as events, and
+                    // the first thing to say, where there is one, is said at once (Chats.cs).
+                    if (tool != "claude" && tool != "codex") throw new ArgumentException("这个工具不支持对话");
+                    if (fork || Get(op, "history") == "True") throw new ArgumentException("对话选项无效");
+                    bool resume = !fresh && session.Length > 0;
+                    live.Pty = Chat.Open(tool, launcher, Place(live, dirs), session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live));
+                    terminals[terminal] = live;
+                    if (resume) Recall(live, Place(live, dirs));
+                    string first = Get(op, "text").Trim();
+                    if (first.Length > 0) live.Chat.Say(first, id);
+                } else {
+                    live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, tool == "codex" && SupportsStandalone(launcher), fresh), Place(live, dirs), 80, 24, Emitted(live));
+                    terminals[terminal] = live;
+                }
             } else {
                 LiveTerminal live;
                 if (!terminals.TryGetValue(terminal, out live) || live.Pty.Closed) throw new ArgumentException("终端已结束");
                 if (Place(live, AllDirs(prefs)) == null) throw new ArgumentException("目录不再获允许");
-                if (action == "input") { lastInput = DateTime.UtcNow; string text = Get(op, "data"); if (text.Length == 0 || text.Length > 16000) throw new ArgumentException("输入无效"); live.Pty.Write(text); }
+                if (live.Chat != null) {
+                    // a conversation: told something, stopped, answered, or ended; it has no screen to type into
+                    lastInput = DateTime.UtcNow;
+                    if (action == "say") { string text = Get(op, "text").Trim(); if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字"); live.Chat.Say(text, id); }
+                    else if (action == "stop") live.Chat.Stop();
+                    else if (action == "answer") live.Chat.Answer(Get(op, "ask"), Get(op, "decision"));
+                    else if (action == "close") live.Pty.Dispose();
+                    else throw new ArgumentException("对话不接受这个操作");
+                }
+                else if (action == "input") { lastInput = DateTime.UtcNow; string text = Get(op, "data"); if (text.Length == 0 || text.Length > 16000) throw new ArgumentException("输入无效"); live.Pty.Write(text); }
                 else if (action == "resize") { int cols = Convert.ToInt32(op["cols"]), rows = Convert.ToInt32(op["rows"]); if (cols < 20 || cols > 240 || rows < 6 || rows > 100) throw new ArgumentException("尺寸无效"); live.Pty.Resize(cols, rows); }
                 else if (action == "close") live.Pty.Dispose();
                 else throw new ArgumentException("操作无效");
@@ -1795,6 +1850,8 @@ public sealed class TerminalAgent {
             if (DateTime.UtcNow - toolsAt > TimeSpan.FromSeconds(30)) { tools = new[] { "claude", "codex", "shell" }.Where(t => FindTool(t) != null).ToArray(); toolsAt = DateTime.UtcNow; }
             // An ended terminal whose conversation runs in a terminal again is no longer one of the recent ones.
             ended.RemoveAll(e => e.Session.Length > 0 && terminals.Values.Any(t => !t.Pty.Closed && t.Tool == e.Tool && t.Session == e.Session));
+            // a conversation says itself how it stands and which it is
+            foreach (var t in terminals.Values.Where(t => t.Chat != null)) { t.Status = t.Chat.Status == "ended" ? "" : t.Chat.Status; if (t.Chat.Session.Length > 0) t.Session = t.Chat.Session; }
             lock (gate) { foreach (var t in terminals.Values) Seal(t); output = OutputBatch(terminals.Values.Concat(ended).SelectMany(t => t.Output.Take(30))); }
             if (output.Count > 0) lastActivity = DateTime.UtcNow;
             // Pieces of files are large: a report carries as many as fit, the rest go with the next.
@@ -1806,13 +1863,14 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "codex-desktop-control" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "codex-desktop-control", "chat" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },
                 // Every terminal says what it is, so that a relay that did not start it can list it: the computer may turn to another relay.
                 { "terminals", terminals.Values.Concat(ended).Select(t => new { id = t.Id, state = t.Pty.Closed ? "closed" : "running", cols = t.Pty.Cols, rows = t.Pty.Rows, session = t.Session, status = t.Status, exit_code = t.Pty.ExitCode, error = t.Pty.ExitCode.HasValue && t.Pty.ExitCode.Value != 0 ? "程序退出（代码 " + t.Pty.ExitCode.Value + "），请检查终端画面中的原因" : "",
-                    tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title, completion = CompletionOf(t.Tool, t.Session, t.Status) }).ToArray() },
+                    tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title, completion = CompletionOf(t.Tool, t.Session, t.Status),
+                    form = t.Chat != null ? "chat" : "", said = t.Chat != null ? t.Chat.Said : "", ask = t.Chat != null ? t.Chat.Asking : "" }).ToArray() },
                 { "output", output }, { "acks", acknowledgments }
             };
             // The list of conversations is long: it goes out when it changed, and now and then in case the relay restarted.

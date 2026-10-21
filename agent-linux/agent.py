@@ -52,7 +52,7 @@ import uuid
 from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -76,7 +76,7 @@ PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 FILE_ACTIONS = ("file_list", "file_read")
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "peek", "marks", "delete", "work"]
+FEATURES = ["terminal-exit", "files", "peek", "marks", "delete", "work", "chat"]
 # What the phone asks about its owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
 # ("chains") needs the tools' hooks, which only the Windows program has.
 WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff")
@@ -1677,6 +1677,616 @@ def output_batch(lives):
     return batch
 
 
+# ---- conversations run through their tool's structured mode (docs/PROTOCOL.md, "Chats")
+CHAT_TOOLS = ("claude", "codex")
+CHAT_DECISIONS = ("allow", "always", "deny")
+CHAT_OUTPUT_MOST = 60000        # of one step's output, what is passed on
+
+
+def chat_brief(name, given):
+    """A step named as the tools' windows name it: what it is, and what for, where the tool says it."""
+    about = ""
+    if isinstance(given, dict):
+        for key in ("description", "command", "file_path", "path", "pattern", "query", "url"):
+            if isinstance(given.get(key), str) and given[key]:
+                about = given[key]
+                break
+    return (str(name) + ("：" + about[:160] if about else "")).strip()
+
+
+def chat_shown(back):
+    """What a step gave back, where its output was not passed on as it came: its last lines."""
+    back = (back or "").replace("\r\n", "\n").strip("\r\n")
+    if len(back) > 6000:
+        back = "…\n" + back[-6000:]
+    lines = back.split("\n")
+    return "…\n" + "\n".join(lines[-40:]) if len(lines) > 40 else back
+
+
+class Chat(Live):
+    """A conversation of Claude Code or Codex that this computer runs for the phone through the tool's own
+    structured mode, as the Windows program does (agent-windows/Chats.cs). To the relay it is a terminal whose output
+    is the conversation's events, one JSON object a line; what is said to it, a stop and an answer go to the tool.
+    It keeps the shape of a terminal (Live) for the report, the relay's acknowledgements and ending it."""
+
+    form = "chat"
+
+    def __init__(self, terminal_id, project, cwd, tool, launcher, wake, session, resume, mode):
+        # (a terminal's fields, without a screen: Live.__init__ is not run, it would start a pty)
+        self.id, self.project, self.dir, self.tool, self.session, self.status = terminal_id, project, cwd, tool, session, "starting"
+        self.wake, self.lock = wake, threading.Lock()
+        self.pending, self.output, self.out_bytes, self.seq = [], [], 0, 0
+        self.closing_at, self.swept, self.closed, self.drained, self.exit_code, self.closed_at, self.told_closed = None, False, False, False, None, None, False
+        self.stopping, self.fd, self.tty, self.cols, self.rows = False, -1, None, 80, 24
+        self.said_last, self.gate = "", threading.RLock()
+        self.asks, self.printed, self.gather, self.halting, self.errors = {}, {}, ["", "", ""], False, []
+        self.start(launcher, session, resume, mode)
+
+    def run(self, argv):
+        env = dict(os.environ)
+        for key in STRIP_ENV:
+            env.pop(key, None)
+        if not any("utf-8" in env.get(k, "").lower() for k in ("LANG", "LC_ALL")):
+            env["LANG"] = "C.UTF-8"
+        beside = os.path.dirname(argv[0])       # a tool finds its own runtime (node) next to itself
+        if beside not in env.get("PATH", "").split(os.pathsep):
+            env["PATH"] = beside + os.pathsep + env.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        self.proc = subprocess.Popen(argv, cwd=self.dir, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        self.pid = self.proc.pid
+        threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._errors, daemon=True).start()
+        threading.Thread(target=self._flush_now_and_then, daemon=True).start()
+
+    # ---- the tool's program
+    def _read(self):
+        try:
+            for raw in self.proc.stdout:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(message, dict):
+                    with self.gate:
+                        try:
+                            self.received(message)
+                        except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+                            pass            # a message of a shape not known here is passed over
+        except (OSError, ValueError):
+            pass
+        code = self.proc.wait()
+        with self.gate:
+            for ask in list(self.asks):
+                self.event(t="answered", id=ask, decision="gone")
+            self.asks.clear()
+            if code and not self.stopping and not self.closing_at:
+                self.note("工具已退出（代码 %d）%s" % (code, "：" + "\n".join(self.errors[-6:]) if self.errors else ""))
+            self.state("ended")
+            self.flush()
+        with self.lock:
+            self.exit_code = code
+            self.closed = self.drained = True
+            self.closed_at = time.time()
+        self.wake()
+
+    def _errors(self):
+        try:
+            for raw in self.proc.stderr:
+                self.errors = (self.errors + [raw.decode("utf-8", "replace").rstrip()])[-6:]
+        except (OSError, ValueError):
+            pass
+
+    def _flush_now_and_then(self):
+        while not self.closed:
+            time.sleep(0.12)
+            with self.gate:
+                self.flush()
+
+    def send(self, message):
+        try:
+            self.proc.stdin.write((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
+            self.proc.stdin.flush()
+        except (OSError, ValueError):
+            raise OpError("对话已结束")
+
+    # ---- what goes to the phone
+    def emit(self, line):
+        with self.lock:
+            self.pending.append(line)
+        self.wake()
+
+    def event(self, **what):
+        self.flush()
+        self.emit(json.dumps(what, ensure_ascii=False) + "\n")
+
+    def flush(self):
+        kind, item, text = self.gather
+        if text:
+            self.gather = ["", "", ""]
+            self.emit(json.dumps({"t": kind, "id": item, "text": text}, ensure_ascii=False) + "\n")
+
+    def append(self, kind, item, text):
+        if not text:
+            return
+        if kind == "out":
+            had = self.printed.get(item, 0)
+            if had >= CHAT_OUTPUT_MOST:
+                return
+            if had + len(text) > CHAT_OUTPUT_MOST:
+                text = text[:CHAT_OUTPUT_MOST - had] + "\n…"
+            self.printed[item] = had + len(text)
+        if self.gather[2] and (self.gather[0], self.gather[1]) != (kind, item):
+            self.flush()
+        self.gather = [kind, item, self.gather[2] + text]
+        if len(self.gather[2]) > 8000:
+            self.flush()
+        if kind == "more":
+            self.spoken(self.said_last + text)
+
+    def spoken(self, text):
+        lines = [one.strip() for one in (text or "").split("\n") if one.strip()]
+        self.said_last = lines[-1][:200] if lines else self.said_last
+
+    def state(self, now):
+        if self.status != now:
+            self.status = now
+            self.event(t="state", state=now, at=int(time.time() * 1000))
+
+    def known(self, session):
+        if session and session != self.session:
+            self.session = session
+            self.event(t="session", session=session)
+
+    def item(self, item, kind, text, **more):
+        self.event(t="item", id=item, kind=kind, text=text or "", at=int(time.time() * 1000), **more)
+        if kind == "text":
+            self.said_last = ""
+            self.spoken(text)
+
+    def done(self, item, ok, result):
+        more = {"result": chat_shown(result)} if result and item not in self.printed else {}
+        self.event(t="done", id=item, ok=ok, **more)
+
+    def note(self, text):
+        self.event(t="note", text=text, at=int(time.time() * 1000))
+
+    def turn_ended(self, how, error=""):
+        more = {"error": error} if error else {}
+        self.event(t="turn", end=how, at=int(time.time() * 1000), **more)
+        self.halting = False
+
+    def ask(self, request, kind, title, text, always, choices=None):
+        ask = secrets.token_hex(8)
+        self.asks[ask] = {"request": request, "text": (title + ("\n" + text if text else "")).strip(), "always": always, "choices": list(choices or [])}
+        options = [{"id": "choice:%d" % n, "label": label} for n, label in enumerate(choices)] if choices else \
+            [{"id": "allow", "label": "允许"}] + ([{"id": "always", "label": "总是允许"}] if always else [])
+        options.append({"id": "deny", "label": "不回答" if choices else "拒绝"})
+        self.event(t="ask", id=ask, kind=kind, title=title, text=text[:4000], options=options)
+        self.state("confirm")
+
+    def before(self, messages, more):
+        """What was said before, where a saved conversation is gone on with."""
+        with self.gate:
+            self.event(t="history", messages=messages, more=more)
+
+    @property
+    def asking(self):
+        with self.gate:
+            return next(iter(self.asks.values()))["text"] if self.asks else ""
+
+    def answer(self, ask, decision):
+        with self.gate:
+            asked = self.asks.get(ask)
+            if asked is None:
+                raise OpError("这个确认请求已经处理过了")
+            chosen = decision.startswith("choice:") and decision[7:].isdigit() and int(decision[7:]) < len(asked["choices"])
+            if not chosen and decision not in CHAT_DECISIONS:
+                raise OpError("回答无效")
+            if decision == "always" and not asked["always"]:
+                raise OpError("这个请求不能设为总是允许")
+            del self.asks[ask]
+            self.event(t="answered", id=ask, decision=decision)
+            if not self.asks and self.status == "confirm":
+                self.state("busy")
+        self.reply(asked, decision)
+
+    # ---- a terminal's ways, as they apply to a conversation
+    def write(self, text):
+        raise OpError("对话不接受终端输入")
+
+    def resize(self, cols, rows):
+        self.cols, self.rows = cols, rows
+
+    def escalate(self):
+        if self.swept or self.closing_at is None or time.time() - self.closing_at <= 3:
+            return
+        self.swept = True
+        self.kill_leftovers()
+
+    def kill_leftovers(self):
+        try:
+            os.killpg(self.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    def dispose(self):
+        with self.lock:
+            self.stopping = True
+        for pipe in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
+                pass
+
+
+class ClaudeChat(Chat):
+    """Claude Code in --print mode with JSON lines both ways, as its SDK drives it: told what to say on its standard
+    input, stopped by a control request, asked by it whether a step may run (--permission-prompt-tool stdio)."""
+
+    def start(self, launcher, session, resume, mode):
+        if not session:
+            if resume:
+                raise OpError("对话编号无效")
+            session = str(uuid.uuid4())
+        if not session_id_ok("claude", session):
+            raise OpError("对话编号无效")
+        self.message, self.streamed, self.blocks, self.steps, self.said_here, self.requests = "", set(), {}, {}, [], 0
+        with self.gate:
+            self.known(session)
+        argv = [launcher, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--replay-user-messages", "--permission-prompt-tool", "stdio", "--resume" if resume else "--session-id", session]
+        argv += ["--permission-mode", "plan"] if mode == "read" else ["--permission-mode", "acceptEdits"] if mode == "edit" else []
+        self.run(argv)
+        self.requests += 1
+        self.send({"type": "control_request", "request_id": "init-%d" % self.requests, "request": {"subtype": "initialize"}})
+        with self.gate:
+            self.state("idle")
+
+    def say(self, text, op_id=""):
+        with self.gate:
+            self.said_here.append((text.strip(), op_id or ""))
+            if self.status != "confirm":
+                self.state("busy")
+        self.send({"type": "user", "message": {"role": "user", "content": text}})
+
+    def stop_turn(self):
+        with self.gate:
+            if self.status not in ("busy", "confirm"):
+                raise OpError("它现在没有在执行")
+            self.halting = True
+            self.requests += 1
+        self.send({"type": "control_request", "request_id": "stop-%d" % self.requests, "request": {"subtype": "interrupt"}})
+
+    def received(self, m):
+        kind = m.get("type")
+        if kind == "system":
+            if m.get("subtype") == "init":
+                self.known(m.get("session_id") or "")
+            elif m.get("subtype") == "status" and m.get("status") == "requesting" and self.status == "idle":
+                self.state("busy")
+        elif kind == "stream_event":
+            self.streamed_event(m.get("event") or {})
+        elif kind == "assistant":
+            self.whole(m.get("message") or {})
+        elif kind == "user":
+            self.came(m)
+        elif kind == "control_request":
+            self.permission(m)
+        elif kind == "control_cancel_request":
+            for key, asked in list(self.asks.items()):
+                if asked["request"].get("request_id") == m.get("request_id"):
+                    del self.asks[key]
+                    self.event(t="answered", id=key, decision="gone")
+            if not self.asks and self.status == "confirm":
+                self.state("busy")
+        elif kind == "result":
+            ok = m.get("subtype") == "success" and not m.get("is_error")
+            how = "stopped" if self.halting and not ok else "done" if ok else "failed"
+            self.turn_ended(how, "" if ok or how == "stopped" else str(m.get("result") or m.get("subtype") or "")[:600])
+            self.blocks = {}
+            self.state("confirm" if self.asks else "idle")
+
+    def streamed_event(self, e):
+        kind = e.get("type")
+        if kind == "message_start":
+            self.message, self.blocks = (e.get("message") or {}).get("id", ""), {}
+            if self.status == "idle":
+                self.state("busy")
+            return
+        index = e.get("index", -1)
+        if kind == "content_block_start":
+            block = e.get("content_block") or {}
+            if block.get("type") in ("text", "thinking"):
+                item = "%s:%s" % (self.message, index)
+                self.blocks[index] = item
+                self.item(item, "text" if block["type"] == "text" else "thought", block.get(block["type"]) or "")
+                self.streamed.add(self.message)
+        elif kind == "content_block_delta" and index in self.blocks:
+            delta = e.get("delta") or {}
+            self.append("more", self.blocks[index], (delta.get("text") or "") + (delta.get("thinking") or ""))
+
+    def whole(self, message):
+        for part in message.get("content") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_use" and part.get("id") not in self.steps:
+                item = "step-" + part["id"]
+                self.steps[part["id"]] = item
+                given, name = part.get("input") or {}, part.get("name") or ""
+                more = {"name": name, "state": "run"}
+                if isinstance(given, dict) and given.get("command"):
+                    more["detail"] = str(given["command"])[:2000]
+                elif isinstance(given, dict) and name in ("Edit", "Write", "MultiEdit"):
+                    more["detail"] = str(given.get("file_path") or "")
+                self.item(item, "step", chat_brief(name, given), **more)
+            elif part.get("type") == "text" and message.get("id") not in self.streamed and (part.get("text") or "").strip():
+                self.item("%s:t%s" % (message.get("id"), secrets.token_hex(3)), "text", part["text"])
+
+    def came(self, m):
+        content = (m.get("message") or {}).get("content")
+        if isinstance(content, str):
+            return self.spoke(content, m)
+        for part in content or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and not str(part.get("text") or "").startswith("[Request interrupted"):
+                self.spoke(part.get("text") or "", m)
+            elif part.get("type") == "tool_result" and part.get("tool_use_id") in self.steps:
+                back = part.get("content")
+                text = back if isinstance(back, str) else "\n".join(one.get("text", "") for one in back or [] if isinstance(one, dict))
+                self.done(self.steps[part["tool_use_id"]], not part.get("is_error"), text)
+
+    def spoke(self, text, m):
+        if not text.strip() or m.get("isSynthetic"):
+            return
+        mine = ""
+        if self.said_here and self.said_here[0][0] == text.strip():
+            mine = self.said_here.pop(0)[1]
+        self.item("user-" + (m.get("uuid") or secrets.token_hex(16)), "user", text, **({"op": mine} if mine else {}))
+
+    def permission(self, m):
+        request = m.get("request") or {}
+        if request.get("subtype") != "can_use_tool":
+            return self.respond(m.get("request_id"), None, "不支持的请求")
+        name, given = request.get("tool_name") or "", request.get("input") or {}
+        if name == "AskUserQuestion":
+            questions = given.get("questions") or []
+            if len(questions) == 1 and not questions[0].get("multiSelect"):
+                labels = [one.get("label") for one in questions[0].get("options") or [] if one.get("label")]
+                if labels:
+                    return self.ask(m, "question", questions[0].get("question") or "", "", False, labels)
+        plan = name == "ExitPlanMode"
+        text = given.get("plan") if plan else given.get("command") or given.get("file_path") or json.dumps(given, ensure_ascii=False)
+        about = request.get("description") or ""
+        if about and about != text:
+            text = about + "\n" + str(text)
+        self.ask(m, "plan" if plan else "tool", "开始按计划执行？" if plan else request.get("display_name") or name, str(text or ""), bool(request.get("permission_suggestions")))
+
+    def reply(self, asked, decision):
+        m = asked["request"]
+        request = m.get("request") or {}
+        given = request.get("input") or {}
+        if decision.startswith("choice:"):
+            question = (given.get("questions") or [{}])[0]
+            answer = {"behavior": "allow", "updatedInput": dict(given, answers={question.get("question", ""): asked["choices"][int(decision[7:])]})}
+        elif decision == "deny":
+            answer = {"behavior": "deny", "message": "用户在手机上拒绝了这一步"}
+        else:
+            answer = {"behavior": "allow", "updatedInput": given}
+            if decision == "always":
+                answer["updatedPermissions"] = request.get("permission_suggestions") or []
+        self.respond(m.get("request_id"), answer, None)
+
+    def respond(self, request, answer, error):
+        response = {"request_id": request, "subtype": "success", "response": answer} if error is None else {"request_id": request, "subtype": "error", "error": error}
+        self.send({"type": "control_response", "response": response})
+
+
+class CodexChat(Chat):
+    """Codex through `codex app-server`: JSON-RPC on its standard input and output. What is said starts a turn or
+    joins the one at work; a stop interrupts it; the steps and file changes it wants are asked of this program."""
+
+    def start(self, launcher, session, resume, mode):
+        if resume and not session_id_ok("codex", session):
+            raise OpError("对话编号无效")
+        self.next, self.waiting, self.turn, self.early, self.thoughts = 0, {}, "", [], set()
+        self.run([launcher, "app-server"])
+        self.call("initialize", {"clientInfo": {"name": "remote-ai", "title": "Remote AI", "version": "1"}}, lambda _: None)
+        self.send({"method": "initialized", "params": {}})
+        given = {"cwd": self.dir}
+        if mode in ("read", "edit"):
+            given["sandbox"] = "read-only" if mode == "read" else "workspace-write"
+        if resume:
+            given["threadId"] = session
+
+        def opened(answer):
+            thread = ((answer.get("result") or {}).get("thread") or {}).get("id") or ""
+            if not thread:
+                self.note("Codex 没有打开这段对话：" + str((answer.get("error") or {}).get("message") or ""))
+                return self.state("ended")
+            self.known(thread)
+            self.state("busy" if self.status == "busy" else "idle")
+            for text, op_id in self.early:
+                self.begin_turn(text, op_id)
+            self.early = []
+        self.call("thread/resume" if resume else "thread/start", given, opened)
+
+    def call(self, method, given, answered):
+        with self.gate:
+            self.next += 1
+            number = self.next
+            self.waiting[number] = answered
+        self.send({"id": number, "method": method, "params": given})
+
+    @staticmethod
+    def words(text):
+        return [{"type": "text", "text": text, "text_elements": []}]
+
+    def say(self, text, op_id=""):
+        with self.gate:
+            if not self.session:
+                self.early.append((text, op_id))
+                return self.state("busy")
+            if self.turn:
+                # at work: the words join the turn, as its own window's box does
+                def steered(answer):
+                    if answer.get("error") is not None:
+                        self.begin_turn(text, op_id)      # the turn had just ended: a new one
+                return self.call("turn/steer", {"threadId": self.session, "expectedTurnId": self.turn, "input": self.words(text), "clientUserMessageId": op_id or secrets.token_hex(16)}, steered)
+            self.begin_turn(text, op_id)
+
+    def begin_turn(self, text, op_id):
+        self.state("busy")
+
+        def started(answer):
+            if answer.get("error") is not None:
+                self.note("Codex 没有收下这句话：" + str(answer["error"].get("message") or ""))
+                return self.state("busy" if self.turn else "idle")
+            begun = ((answer.get("result") or {}).get("turn") or {}).get("id") or ""
+            if begun and not self.turn:
+                self.turn = begun
+        self.call("turn/start", {"threadId": self.session, "input": self.words(text), "clientUserMessageId": op_id or secrets.token_hex(16)}, started)
+
+    def stop_turn(self):
+        with self.gate:
+            if not self.turn:
+                raise OpError("它现在没有在执行")
+            self.halting = True
+            self.call("turn/interrupt", {"threadId": self.session, "turnId": self.turn}, lambda _: None)
+
+    def received(self, m):
+        method, p = m.get("method") or "", m.get("params") or {}
+        if "id" in m and not method:
+            answered = self.waiting.pop(m["id"], None) if isinstance(m["id"], int) else None
+            if answered:
+                answered(m)
+            return
+        if "id" in m:
+            return self.requested(m["id"], method, p)
+        if method == "turn/started":
+            self.turn = (p.get("turn") or {}).get("id") or ""
+            self.state("confirm" if self.asks else "busy")
+        elif method == "turn/completed":
+            done = p.get("turn") or {}
+            if done.get("id") == self.turn or not self.turn:
+                self.turn = ""
+            status = done.get("status")
+            self.turn_ended("done" if status == "completed" else "stopped" if status == "interrupted" else "failed",
+                            str((done.get("error") or {}).get("message") or "") if status == "failed" else "")
+            self.state("confirm" if self.asks else "busy" if self.turn else "idle")
+        elif method == "item/started":
+            self.started(p.get("item") or {})
+        elif method == "item/completed":
+            self.completed(p.get("item") or {})
+        elif method == "item/agentMessage/delta":
+            self.append("more", p.get("itemId") or "", p.get("delta") or "")
+        elif method == "item/reasoning/summaryTextDelta":
+            item = p.get("itemId") or ""
+            if item not in self.thoughts:
+                self.thoughts.add(item)
+                self.item(item, "thought", "")
+            self.append("more", item, p.get("delta") or "")
+        elif method in ("item/commandExecution/outputDelta", "item/fileChange/outputDelta"):
+            self.append("out", p.get("itemId") or "", p.get("delta") or "")
+        elif method == "serverRequest/resolved":
+            for key, asked in list(self.asks.items()):
+                if str(asked["request"].get("id")) == str(p.get("requestId")):
+                    del self.asks[key]
+                    self.event(t="answered", id=key, decision="gone")
+            if not self.asks and self.status == "confirm":
+                self.state("busy" if self.turn else "idle")
+        elif method == "error":
+            self.note(str((p.get("error") or {}).get("message") or "Codex 出错"))
+
+    def started(self, item):
+        kind, key = item.get("type"), item.get("id") or ""
+        if kind == "userMessage":
+            text = "\n".join(one.get("text", "") for one in item.get("content") or [] if isinstance(one, dict) and one.get("type") == "text")
+            if text:
+                self.item(key, "user", text, **({"op": item["clientId"]} if item.get("clientId") else {}))
+        elif kind == "agentMessage":
+            self.item(key, "text", item.get("text") or "")
+        elif kind == "commandExecution":
+            actions = [one for one in item.get("commandActions") or [] if isinstance(one, dict)]
+            short = next((one.get("command") for one in actions if one.get("command")), None) or item.get("command") or ""
+            reads = [one.get("name") or one.get("path") for one in actions if one.get("type") == "read" and (one.get("name") or one.get("path"))]
+            title = "读取：" + "、".join(reads[:3]) + (" 等 %d 个文件" % len(reads) if len(reads) > 3 else "") if actions and len(reads) == len(actions) else "运行：" + short[:160]
+            self.item(key, "step", title, name="shell", detail=short[:2000], state="run")
+        elif kind == "fileChange":
+            names = [os.path.basename(one.get("path", "")) for one in item.get("changes") or [] if isinstance(one, dict) and one.get("path")]
+            self.item(key, "step", "修改：" + ("、".join(names[:3]) + (" 等 %d 个文件" % len(names) if len(names) > 3 else "") if names else "文件"), name="edit", state="run")
+        elif kind == "mcpToolCall":
+            self.item(key, "step", "%s：%s" % (item.get("server") or "", item.get("tool") or ""), name="mcp", state="run")
+        elif kind == "webSearch":
+            self.item(key, "step", "搜索：" + str(item.get("query") or ""), name="search", state="run")
+        elif kind in ("dynamicToolCall", "collabAgentToolCall"):
+            self.item(key, "step", str(item.get("tool") or ""), name="tool", state="run")
+
+    def completed(self, item):
+        kind, key = item.get("type"), item.get("id") or ""
+        if kind == "commandExecution":
+            code, status = item.get("exitCode"), item.get("status")
+            ok = status == "completed" and code in (None, 0)
+            lead = "（退出码 %s）\n" % code if code not in (None, 0) else "（已拒绝）\n" if status == "declined" else ""
+            self.done(key, ok, lead + (item.get("aggregatedOutput") or ""))
+        elif kind == "fileChange":
+            self.done(key, item.get("status") == "completed", "\n".join("%s\n%s" % (one.get("path", ""), one.get("diff", "")) for one in item.get("changes") or [] if isinstance(one, dict)))
+        elif kind == "mcpToolCall":
+            self.done(key, item.get("status") == "completed", str((item.get("error") or {}).get("message") or "") if item.get("error") else json.dumps(item.get("result") or "", ensure_ascii=False))
+        elif kind in ("webSearch", "dynamicToolCall", "collabAgentToolCall"):
+            self.done(key, item.get("status") != "failed", "")
+        elif kind == "agentMessage":
+            self.event(t="set", id=key, text=item.get("text") or "")
+            self.said_last = ""
+            self.spoken(item.get("text") or "")
+        elif kind == "reasoning" and key not in self.thoughts:
+            summary = "\n\n".join(one if isinstance(one, str) else one.get("text", "") for one in item.get("summary") or [] if one)
+            if summary.strip():
+                self.thoughts.add(key)
+                self.item(key, "thought", summary)
+
+    def requested(self, number, method, p):
+        request = {"id": number, "method": method, "params": p}
+        if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
+            actions = [one.get("command") for one in p.get("commandActions") or [] if isinstance(one, dict) and one.get("command")]
+            reason = p.get("reason") or ""
+            self.ask(request, "command", "运行命令", (reason + "\n" if reason else "") + ("\n".join(actions) if actions else str(p.get("command") or "")), True)
+        elif method in ("item/fileChange/requestApproval", "applyPatchApproval"):
+            self.ask(request, "edit", "修改文件", p.get("reason") or p.get("grantRoot") or "", True)
+        elif method == "item/tool/requestUserInput":
+            questions = p.get("questions") or []
+            labels = [one.get("label") for one in (questions[0].get("options") or []) if one.get("label")] if len(questions) == 1 else []
+            if labels:
+                self.ask(request, "question", questions[0].get("question") or "", "", False, labels)
+            else:
+                self.send({"id": number, "error": {"code": -32601, "message": "手机上不能回答这个问题"}})
+        else:
+            self.send({"id": number, "error": {"code": -32601, "message": "Remote AI 不支持这个请求"}})
+
+    def reply(self, asked, decision):
+        request, method = asked["request"], asked["request"]["method"]
+        if decision.startswith("choice:"):
+            question = (request["params"].get("questions") or [{}])[0]
+            result = {"answers": {question.get("id", ""): {"answers": [asked["choices"][int(decision[7:])]]}}}
+        elif method == "item/tool/requestUserInput":
+            result = {"answers": {}}
+        elif method in ("execCommandApproval", "applyPatchApproval"):
+            result = {"decision": "denied" if decision == "deny" else "approved_for_session" if decision == "always" else "approved"}
+        else:
+            result = {"decision": "decline" if decision == "deny" else "acceptForSession" if decision == "always" else "accept"}
+        self.send({"id": request["id"], "result": result})
+
+
+def open_chat(terminal_id, project, cwd, tool, launcher, wake, session, resume, mode):
+    """A conversation of `tool`, new or (`resume`) the saved one `session` gone on with."""
+    kind = ClaudeChat if tool == "claude" else CodexChat if tool == "codex" else None
+    if kind is None:
+        raise OpError("这个工具不支持对话")
+    return kind(terminal_id, project, cwd, tool, launcher, wake, session, resume, mode)
+
+
 class Projects:
     """Folders a terminal may start in: the config's own list, plus folders added from the phone."""
 
@@ -2282,11 +2892,14 @@ class Agent:
                          "workspaces": list(dirs.keys()),
                          "projects": self.sessions.told(self.projects.entries(cfg, dirs)),
                          "candidates": self.sessions.candidates},
-                "terminals": [{"id": live.id, "state": "closed" if live.closed else "running",
+                "terminals": [dict({"id": live.id, "state": "closed" if live.closed else "running",
                                "cols": live.cols, "rows": live.rows, "session": live.session,
-                               "status": "" if live.closed else live.status, "exit_code": live.exit_code,
+                               "status": "" if live.closed or live.status == "ended" else live.status, "exit_code": live.exit_code,
                                "error": "程序退出（代码 %d），请检查终端画面中的原因" % live.exit_code
-                                        if live.exit_code else ""} for live in self.terminals.values()],
+                                        if live.exit_code else ""},
+                              # a conversation run through its tool's structured mode: what it said last and what it asks
+                              **({"form": "chat", "said": live.said_last, "ask": live.asking} if isinstance(live, Chat) else {}))
+                               for live in self.terminals.values()],
                 "output": output, "acks": acks}
             # A program may end while this report travels: it is forgotten only after a
             # report that said so, or the phone would show it running for ever.
@@ -2389,7 +3002,7 @@ class Agent:
             elif action in WORK_ACTIONS:
                 result = self.owner_work(action, op, dirs)
             elif action == "start":
-                self.start_terminal(op, dirs, terminal)
+                self.start_terminal(op, dirs, terminal, op_id)
             else:
                 live = self.terminals.get(terminal)
                 if live is None or live.closed:
@@ -2397,7 +3010,23 @@ class Agent:
                 # a terminal can always be ended; typing into it needs its folder still allowed
                 if action != "close" and live.dir not in dirs.values():
                     raise OpError("目录不再获允许")
-                if action == "input":
+                if isinstance(live, Chat):
+                    # a conversation: told something, stopped, answered or ended; it has no screen to type into
+                    self.last_input = time.time()
+                    if action == "say":
+                        text = str(op.get("text") or "").strip()
+                        if not text or len(text) > 8000:
+                            raise OpError("消息需为 1 至 8000 字")
+                        live.say(text, op_id)
+                    elif action == "stop":
+                        live.stop_turn()
+                    elif action == "answer":
+                        live.answer(str(op.get("ask") or ""), str(op.get("decision") or ""))
+                    elif action == "close":
+                        live.begin_close()
+                    else:
+                        raise OpError("对话不接受这个操作")
+                elif action == "input":
                     data = op.get("data")
                     if not isinstance(data, str) or not data or len(data) > 16000:
                         raise OpError("输入无效")
@@ -2454,6 +3083,10 @@ class Agent:
         live = next((one for one in self.terminals.values() if not one.closed and one.tool == tool and one.session.lower() == session.lower()), None)
         if live is None:
             raise OpError("这段对话没有在手机打开的终端里运行，这台电脑只能把消息发到那里")
+        if isinstance(live, Chat):
+            live.say(text.strip())
+            self.last_input = time.time()
+            return "已发到手机上的对话"
         live.write("\x1b[200~" + text.replace("\r\n", "\n").replace("\r", "\n").strip() + "\x1b[201~\r")
         self.last_input = time.time()
         return "已发到手机终端"
@@ -2493,7 +3126,7 @@ class Agent:
         brief = handover(source, read.get("messages", []), str(op.get("note") or ""))
         return {"status": "accepted", "note": self.tell(taker["tool"], taker["id"], brief), "length": len(brief)}
 
-    def start_terminal(self, op, dirs, terminal):
+    def start_terminal(self, op, dirs, terminal, op_id=""):
         if terminal in self.terminals:
             return                              # already started; the operation is a repeat
         tool = str(op.get("tool") or "")
@@ -2540,6 +3173,19 @@ class Agent:
                 # named by us, so the terminal knows its conversation at once — in the
                 # shape the tool itself names them, or it refuses the id and exits
                 session = "ses_" + secrets.token_hex(13) if tool == "opencode" else str(uuid.uuid4())
+            if op.get("form") == "chat":
+                # a conversation run through its tool's structured mode; the first thing to say is said at once
+                if tool not in CHAT_TOOLS or history:
+                    raise OpError("对话选项无效")
+                resume = bool(op.get("session"))       # (a new one of Claude Code's is named above, as for a terminal)
+                chat = open_chat(terminal, name, cwd, tool, launcher, self.wake, session, resume, str(cfg.get("RemoteMaxMode") or ""))
+                self.terminals[terminal] = chat
+                if resume:
+                    earlier = self.sessions.read(session, tool, name, dirs)
+                    chat.before(earlier.get("messages", []), bool(earlier.get("more")))
+                if str(op.get("text") or "").strip():
+                    chat.say(str(op["text"]).strip(), op_id)
+                return
             argv = tool_argv(tool, launcher, session, history, str(cfg.get("RemoteMaxMode") or ""), fresh)
         self.terminals[terminal] = Live(terminal, name, cwd, 80, 24, argv, self.wake, tool, session)
 

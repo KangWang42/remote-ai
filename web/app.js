@@ -270,7 +270,8 @@
   // ?take=<conversation> comes from the app's workbench: the question about taking over a conversation that runs on
   // the computer is asked at once, and the terminal that follows leads back to the workbench.
   let take = new URLSearchParams(location.search).get('take') || '', anew = new URLSearchParams(location.search).get('new') === '1', fromBench = !!take || anew;
-  function open(terminal) { location.href = 'terminal/?id=' + encodeURIComponent(terminal) + (fromBench ? '&from=bench' : ''); }
+  // A terminal's page; for one that runs a conversation through its tool's structured mode, the conversation's (chat/).
+  function open(terminal, form) { location.href = (form === 'chat' ? 'chat/' : 'terminal/') + '?id=' + encodeURIComponent(terminal) + (fromBench ? '&from=bench' : ''); }
   // What the app's own lists opened this page for (a new conversation, one conversation's window) leads back to
   // them when it is left without going on to a terminal's page.
   const leave = left => { if (!left && fromBench && native && native.home) native.home(); };
@@ -283,6 +284,21 @@
     if (result) open(result.terminal);
     return !!result;
   }
+  // A conversation that the computer runs through its tool's structured mode, shown on the phone as a conversation
+  // (web/chat/): a new one, or a saved one gone on with (`session`). The computer says whether it can (`chat`).
+  const CHAT_TOOLS = ['claude', 'codex'];
+  const chatOk = tool => !!data && (data.device.features || []).includes('chat') && CHAT_TOOLS.includes(tool) && (data.device.tools || []).includes(tool);
+  async function chat(tool, dir, session, takeover) {
+    const payload = { action: 'start', tool, dir, history: false, form: 'chat' };
+    if (session) Object.assign(payload, { session, takeover: !!takeover });
+    const result = await run(payload, '正在电脑上启动 ' + TOOLS[tool] + '…');
+    if (result) open(result.terminal, 'chat');
+    return !!result;
+  }
+  // A saved conversation is gone on with the way its owner begins conversations (begin.js): as a conversation, or in
+  // a terminal for one who chose terminals. The other way is behind a held press.
+  const asChat = s => chatOk(s.tool) && saved('newkind', '') !== 'term';
+  const goOn = s => asChat(s) ? chat(s.tool, s.dir, s.id) : start(s.tool, s.dir, s.id, false);
   // A message for a running terminal without going into it: what the box of its page would send. The relay puts it
   // the way the program takes pasted text and adds Enter (the operation "say").
   async function say(t) {
@@ -358,6 +374,7 @@
     // apps and shared backends stay in shared collaboration mode; showing a disabled-looking action that still
     // submits takeover=true was the source of a guaranteed error from the phone.
     if (session.can_takeover === true && (!locked || inTerminal(session))) {
+      if (chatOk(session.tool)) choices.push({ label: '接管到手机对话（结束电脑会话）', value: 'chat-close' });
       choices.push({ label: '接管到手机终端（结束电脑会话）', value: 'close' });
     }
     if (session.tool === 'codex' && (data.device.features || []).includes('codex-fork')) choices.push({ label: '另开一份到手机终端', value: 'copy' });
@@ -699,7 +716,7 @@
         if (!sayable && !later && !current.ask && current.live && mode !== 'read' && whyNot(current, 'say', '')) below.append(el('p', { className: 'quiet', textContent: whyNot(current, 'say', '') }));
         // where it cannot be told anything from here, it can still be taken into a terminal: the one thing left to do
         if (!sayable && !current.ask) {
-          const taken = current.live ? ways(current) : current.dir ? [{ label: '在手机终端继续', value: 'resume' }] : [];
+          const taken = current.live ? ways(current) : current.dir ? (chatOk(current.tool) ? [{ label: '在手机上继续', value: 'chat' }] : []).concat([{ label: '在手机终端继续', value: 'resume' }]) : [];
           taken.forEach(c => below.append(el('button', { type: 'button', className: 'choice', onclick: () => finish({ value: c.value, session: current }) }, el('span', { textContent: c.label }))));
         }
       }
@@ -714,7 +731,10 @@
   }
   // Into a terminal of the phone's: by taking the conversation from the program that has it, by a copy, or, for one
   // that nothing has open, simply by going on with it.
-  function into(session, how) { return start(session.tool, session.dir, session.id, how === 'close', how === 'copy'); }
+  function into(session, how) {
+    if (how === 'chat' || how === 'chat-close') return chat(session.tool, session.dir, session.id, how === 'chat-close');
+    return start(session.tool, session.dir, session.id, how === 'close', how === 'copy');
+  }
   // A new conversation is begun by begin.js: for one project on its page, for any of them from 任务 and from the
   // app's own lists (?new=1).
   const beginAnywhere = () => window.RemoteCliPage.begin.anywhere();
@@ -758,7 +778,7 @@
   // Where a thing runs is told apart in two: in a terminal (one of the phone's, or a command line on the computer),
   // or in an app (a desktop app, an editor). The computer says by what a conversation or a folder is used (`kind`,
   // `kinds`: docs/PROTOCOL.md); every word of it but the terminal's is an app.
-  const SOURCE = { term: '终端', app: '应用' }, PHONE = '手机终端';
+  const SOURCE = { term: '终端', app: '应用' }, PHONE = '手机终端', PHONE_CHAT = '手机对话';
   const sourceOfKind = kind => !kind ? '' : kind === '终端' ? 'term' : 'app';
   const marks = () => (data.device.features || []).includes('marks');
   const base = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(path || '');
@@ -775,7 +795,7 @@
       const s = t.session ? saved[t.tool + ':' + t.session] || null : null, phase = phaseOf(t), live = running(t);
       // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
       return { t, s, tool: t.tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
-        source: 'term', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
+        source: t.form === 'chat' ? 'app' : 'term', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
     });
     sessions.filter(s => !s.terminal).forEach(s => {
       const phase = !s.live || s.now === false ? '' : reachPhase(s) || (sessionHost(s) === 'cli' ? (s.status === 'busy' ? 'busy' : s.status === 'confirm' ? 'confirm' : s.status === 'waiting' ? 'waiting' : 'idle') : '');
@@ -794,14 +814,14 @@
   // line; an editor, and whether it is the editor's terminal); for one that is only saved, by what it was started.
   const whereOf = x => {
     const tool = TOOLS[x.tool];
-    if (x.t) return tool + (x.live ? ' · ' + PHONE : '');
+    if (x.t) return tool + (x.live ? ' · ' + (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '');
     const kind = x.s.kind || '';
     if (!x.live) return !kind ? tool : /桌面版/.test(kind) ? kind : tool + ' · ' + kind;
     const origin = x.s.origin && x.s.origin !== '电脑独立终端' ? x.s.origin : '';
     return !origin ? tool : /桌面版|后台服务/.test(origin) ? origin : tool + ' · ' + origin + (kind === '终端' && origin !== '命令行' ? ' 的终端' : '');
   };
   // what a search looks through
-  const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? PHONE : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
+  const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
   // what a card shows: it is built again when any of this changes
   const signed = x => x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned, x.place, x.apart]
     : [x.s.id, x.phase, x.s.now, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), canEnd(x.s), endingSessions.has(x.s.id), x.s.ask || null, x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state, x.source];
@@ -852,6 +872,7 @@
     if (s && !x.t && marks() && (!s.live || s.hidden || s.now === false)) choices.push({ label: s.hidden ? '取消隐藏' : '从列表隐藏', value: 'hide' });
     if (s && !x.t && canEnd(s) && usable()) choices.push({ label: '结束电脑上的这段对话', value: 'finish', kind: 'danger' });
     if (s && !x.t && s.live) ways(s).forEach(way => choices.push(way));
+    if (s && !x.t && !s.live && s.dir && chatOk(s.tool) && usable()) choices.push(asChat(s) ? { label: '在手机终端继续', value: 'resume' } : { label: '在手机上继续', value: 'chat' });
     const folder = x.apart ? (x.t ? x.t.folder : s.folder) || '' : '';
     if (folder && usable()) choices.push({ label: '把 ' + base(folder) + ' 加为项目', value: 'add' });
     if (s && views.together && views.together.handoff && usable() && (data.device.features || []).includes('work')) choices.push({ label: '交接给另一段对话', value: 'handoff' });
@@ -868,7 +889,7 @@
     else if (choice === 'handoff') views.together.handoff(s);
     else if (choice === 'end') endTerminal(x.t);
     else if (choice === 'finish') endConversation(s);
-    else if (choice === 'close' || choice === 'copy') into(s, choice);
+    else if (choice === 'close' || choice === 'copy' || choice === 'chat' || choice === 'chat-close' || choice === 'resume') into(s, choice);
     else if (choice === 'delete') remove(s);
   }
   async function remove(s) {
@@ -942,7 +963,7 @@
     // What the program last said. It changes far more often than the card, so peeks() writes it without a rebuild.
     const peek = el('span', { className: 'peek', hidden: true });
     peek.dataset.peek = t.id;
-    const made = el('li', { className: 'card ' + phase }, el('button', { type: 'button', className: 'open', onclick: () => open(t.id) },
+    const made = el('li', { className: 'card ' + phase }, el('button', { type: 'button', className: 'open', onclick: () => open(t.id, t.form) },
       el('span', { className: 'tool ' + t.tool, html: ICON[t.tool] }), el('span', { className: 'text' }, named(x), meta, peek)));
     // A terminal that waits on a question is answered below, where the question is read: Enter would say yes to it.
     if (t.state === 'running' && phase !== 'confirm') made.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这个终端发消息', html: ICON.say, onclick: () => say(t) }));
@@ -951,9 +972,10 @@
     // is allowed unseen. The two keys are the ones Claude Code and Codex take for "yes" and "no".
     if (phase === 'confirm' && (t.asks || []).length) {
       made.classList.add('asking');
+      // (a conversation answers with its own buttons, on its page)
       made.append(el('div', { className: 'ask' }, el('pre', { textContent: t.asks.join('\n') }), el('div', { className: 'answers' },
-        el('button', { type: 'button', className: 'yes', textContent: '选择授权范围', onclick: () => open(t.id) }),
-        el('span', { className: 'there', textContent: '在原终端选择一次、会话内或长期允许' }))));
+        el('button', { type: 'button', className: 'yes', textContent: t.form === 'chat' ? '去确认' : '选择授权范围', onclick: () => open(t.id, t.form) }),
+        t.form === 'chat' ? '' : el('span', { className: 'there', textContent: '在原终端选择一次、会话内或长期允许' }))));
     }
     return made;
   }
@@ -994,7 +1016,7 @@
     else if (x.hidden) meta.append(pill('locked', '已隐藏'));
     placed(meta, x);
     meta.append(el('span', { textContent: whereOf(x) + ' · ' + ago(s.updated) }));
-    return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => { if (!usable()) return toast('电脑离线，暂时无法打开'); if (s.live) takeOver(s); else start(s.tool, s.dir, s.id, false); } },
+    return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => { if (!usable()) return toast('电脑离线，暂时无法打开'); if (s.live) takeOver(s); else goOn(s); } },
       el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, named(x), meta), el('span', { className: 'chev', html: ICON.chev })));
   }
   // Lists are rebuilt only when what they show has changed, so a press or a scroll is not interrupted every few seconds.
@@ -1245,7 +1267,7 @@
   // What the views of their own work with: the page's helpers, what the computer last said, and the ways into a
   // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
   window.RemoteCliPage = {
-    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, saved, keep,
+    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep,
     get data() { return data; },
     get tab() { return tab; },
     has: feature => !!data && (data.device.features || []).includes(feature),

@@ -322,6 +322,7 @@ final class Workbench {
                 JSONObject ways = entry.optJSONObject("ways");
                 made.endWay = ways == null ? null : ways.optString("end");
                 made.folder = entry.optString("folder");
+                made.chat = terminal && "chat".equals(entry.optString("form"));
                 made.now = terminal || entry.optBoolean("now", true);
                 if (!terminal) { made.origin = entry.optString("origin"); made.kind = entry.optString("kind"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
                 for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
@@ -581,7 +582,7 @@ final class Workbench {
         kit.press(card, () -> {
             if (!entry.terminal) { activity.openSession(task.url, entry.project, entry.id); return; }
             markSeen(task.url, entry.id, entry.at);
-            activity.openTerminal(task.url, entry.id);
+            activity.openTerminal(task.url, entry.id, entry.chat);
         });
         // a held press asks what to do with it besides opening it
         card.setOnLongClickListener(v -> { manage(task); return true; });
@@ -992,7 +993,7 @@ final class Workbench {
         kit.press(row, () -> {
             if (!entry.terminal) { activity.openSession(url, entry.project, entry.id); return; }
             markSeen(url, entry.id, entry.at);
-            activity.openTerminal(url, entry.id);
+            activity.openTerminal(url, entry.id, entry.chat);
         });
         return row;
     }

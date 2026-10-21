@@ -1,5 +1,7 @@
 /* Connects the terminal page to the relay from a browser: reading output, sending input, and the page's menu.
-   Inside the Android app, window.RemoteCliNative adds system speech recognition and status-bar colour. */
+   Inside the Android app, window.RemoteCliNative adds system speech recognition and status-bar colour. The page of a
+   conversation run through its tool's structured mode (chat/) is connected by it too: it sets window.TerminalUI to
+   itself, and says so by window.ChatPage; a terminal that turns out to be such a conversation is shown there. */
 (() => {
   'use strict';
   const id = new URLSearchParams(location.search).get('id') || '';
@@ -100,6 +102,7 @@
 
   // ---- output: a WebSocket, then a kept-open response or held requests when needed
   function receive(item, pushed = false) {
+    if (item.terminal && item.terminal.form === 'chat' && !window.ChatPage) { gone = true; hangUp(); location.replace('../chat/' + location.search); return; }
     terminal = item.terminal;
     if (streamed || pushed) after = item.after;
     ui().receive(item);
@@ -144,7 +147,7 @@
         clearTimeout(op.timer);
         if (item.status >= 500) { socketMode = false; channel.close(); return; }
         queue.splice(at, 1);
-        if (item.status !== 200 || item.state === 'error') ui().inputError(item.error || '操作没有执行', op.data || '');
+        if (item.status !== 200 || item.state === 'error') ui().inputError(item.error || '操作没有执行', op.data || '', op);
         flush();
       }
     };
@@ -222,7 +225,7 @@
   const queue = [];
   let sending = false;
   function enqueue(op) {
-    Object.assign(op, { id: newId(), terminal: id });
+    Object.assign(op, { id: op.id || newId(), terminal: id });
     op.at = Date.now();
     const last = queue[queue.length - 1];
     if (last && !last.sent && op.action === 'input' && last.action === 'input' && last.data.length + op.data.length <= 8000) last.data += op.data;
@@ -235,7 +238,7 @@
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       for (const op of [...queue]) {
         if (op.inFlight) continue;
-        if (Date.now() - op.at > 110000) { queue.splice(queue.indexOf(op), 1); ui().inputError('发送超时，请确认终端画面后重试', op.data || ''); continue; }
+        if (Date.now() - op.at > 110000) { queue.splice(queue.indexOf(op), 1); ui().inputError('发送超时，请确认终端画面后重试', op.data || '', op); continue; }
         op.sent = true; op.inFlight = true;
         const { at, sent, inFlight, timer, ...payload } = op;
         const channel = socket;
@@ -246,7 +249,7 @@
       return;
     }
     const op = queue[0];
-    if (Date.now() - op.at > 110000) { queue.shift(); ui().inputError('发送超时，请确认终端画面后重试', op.data || ''); return flush(); }
+    if (Date.now() - op.at > 110000) { queue.shift(); ui().inputError('发送超时，请确认终端画面后重试', op.data || '', op); return flush(); }
     sending = true; op.sent = true;
     let message = '', again = false;
     try {
@@ -256,7 +259,7 @@
     } catch (error) { again = true; message = '发送失败，正在重连'; }
     sending = false;
     if (!again) queue.shift();
-    if (message) ui().inputError(message, again ? '' : op.data || '');
+    if (message) ui().inputError(message, again ? '' : op.data || '', op);
     if (again) setTimeout(flush, 1000); else flush();
   }
 
@@ -286,6 +289,7 @@
     const start = { action: 'start', id: newId(), tool: terminal.tool, dir: terminal.dir };
     if (terminal.session) start.session = terminal.session;
     start.history = false;
+    if (terminal.form === 'chat') start.form = 'chat';
     try {
       const { status, body } = await post(start);
       if (status !== 200) throw new Error(body.error || '没有打开');
@@ -356,6 +360,9 @@
       if (native && native.chrome) native.chrome(color);
     },
     input(data) { if (data && data.length <= 16000) enqueue({ action: 'input', data }); },
+    // any other operation on this terminal (a conversation's say, stop, answer, close); its id is kept where it has one
+    send(op) { enqueue(Object.assign({}, op)); },
+    post,
     resize(size) { try { const s = JSON.parse(size); enqueue({ action: 'resize', cols: s.cols, rows: s.rows }); } catch (error) { /* ignore */ } },
     menu,
     files,

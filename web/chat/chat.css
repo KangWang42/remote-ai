@@ -1,0 +1,129 @@
+/* A conversation run through its tool's structured mode. Colours come from the chosen skin (terminal/skins.js sets
+   them on :root); these are the default skin's, for the first frame. */
+:root { --bg: #fbfbfc; --panel: #f0f1f4; --raised: #e4e6eb; --line: #d5d8df; --ink: #2b2f3a; --muted: #666b78; --accent: #2f6fe4; --on-accent: #ffffff; --good: #3d8a3a; --busy: #a36a00; --bad: #c93c37; color-scheme: light;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK SC", monospace; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html { font-size: 15.5px; height: 100%; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+body { height: 100%; overflow: hidden; }
+button, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; touch-action: manipulation; border: 0; background: none; }
+button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+h1, p { margin: 0; }
+
+/* the page is one column: the bar, what was said (all the room that is left), what it asks, how it stands, the box */
+main { height: 100%; max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+main > * { flex: none; }
+header { display: flex; align-items: center; gap: 2px; padding: 6px 8px 6px 6px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+header .who { flex: 1; min-width: 0; padding: 0 4px; }
+header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#where { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .8rem; line-height: 1.35; white-space: nowrap; overflow: hidden; }
+#where-text { overflow: hidden; text-overflow: ellipsis; }
+#dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+#dot.on { background: var(--good); }
+#dot.off { background: var(--bad); }
+.icon { flex: none; width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; color: var(--muted); }
+.icon:active { background: var(--raised); color: var(--ink); }
+#link { padding: 6px 14px; font-size: .8rem; color: var(--busy); background: color-mix(in srgb, var(--busy) 10%, var(--bg)); }
+
+/* ---- what was said */
+#reads { position: relative; flex: 1 1 auto; min-height: 0; }
+#said { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 14px 14px 18px; display: flex; flex-direction: column; gap: 12px;
+  font-family: var(--read-font, inherit); font-size: var(--read-size, .95rem); line-height: var(--read-line, 1.62); }
+#said > * { min-width: 0; }
+#latest { position: absolute; right: 12px; bottom: 10px; min-height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel); font-size: .84rem; font-weight: 600; box-shadow: 0 4px 14px rgb(0 0 0 / .14); }
+.empty { margin: auto; color: var(--muted); text-align: center; font-size: .9rem; }
+.earlier { align-self: center; color: var(--muted); font-size: .78rem; }
+.divide { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .76rem; }
+.divide::before, .divide::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+
+.user { align-self: flex-end; max-width: 86%; padding: 8px 13px; border-radius: 16px 16px 5px 16px; background: color-mix(in srgb, var(--accent) 15%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.user.going { opacity: .6; }
+.user.failed { box-shadow: inset 0 0 0 1px var(--bad); }
+.user small { display: block; margin-top: 3px; color: var(--muted); font-size: .74rem; }
+.text { overflow-wrap: anywhere; }
+.text.writing::after { content: ""; display: inline-block; width: .5em; height: 1em; margin-left: 2px; vertical-align: -.12em; background: var(--accent); opacity: .7; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.thought { color: var(--muted); font-size: .9em; white-space: pre-wrap; overflow-wrap: anywhere; padding-left: 10px; border-left: 2px solid var(--line); }
+.thought.writing::before { content: "思考中 · "; font-weight: 600; }
+.note { align-self: center; max-width: 92%; padding: 5px 12px; border-radius: 10px; background: var(--panel); color: var(--muted); font-size: .8rem; text-align: center; overflow-wrap: anywhere; }
+.note.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 9%, var(--panel)); }
+
+/* a step, as a terminal shows it: what it is, the command, and what it printed */
+.step { display: grid; gap: 4px; padding: 7px 10px 8px; border-radius: 11px; background: var(--panel); font-size: .84rem; line-height: 1.5; }
+.step > button { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; text-align: left; }
+.step .mark { flex: none; width: 15px; height: 15px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; }
+.step.run .mark { border: 2px solid color-mix(in srgb, var(--busy) 35%, transparent); border-top-color: var(--busy); animation: spin .9s linear infinite; }
+.step.ok .mark { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
+.step.ok .mark::before { content: "✓"; }
+.step.fail .mark { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.step.fail .mark::before { content: "✕"; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.step .what { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step .more { flex: none; color: var(--muted); font-size: .76rem; }
+.step code { display: block; font-family: var(--mono); font-size: .92em; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
+.step pre { margin: 0; padding: 6px 9px; border-radius: 8px; background: var(--bg); font-family: var(--mono); font-size: .9em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
+.step.shut pre, .step.shut code { display: none; }
+
+/* answers in Markdown */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md pre, .md blockquote, .md .wide { margin: 0 0 .6em; }
+.md h1, .md h2, .md h3, .md h4 { margin: .9em 0 .35em; font-size: 1em; font-weight: 700; line-height: 1.4; }
+.md h1, .md h2 { font-size: 1.06em; }
+.md ul, .md ol { padding-left: 1.35em; }
+.md li { margin: .15em 0; }
+.md li > p { margin: 0; }
+.md code { font-family: var(--mono); font-size: .86em; padding: .1em .35em; border-radius: 5px; background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.md pre { padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--ink) 7%, transparent); overflow-x: auto; line-height: 1.5; }
+.md pre code { padding: 0; background: none; font-size: .82em; white-space: pre; }
+.md blockquote { padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
+.md .wide { overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: .88em; white-space: nowrap; }
+.md th, .md td { padding: 4px 10px; border: 1px solid var(--line); text-align: left; }
+.md th { background: color-mix(in srgb, var(--ink) 6%, transparent); font-weight: 600; }
+
+/* ---- what it asks: above the box, where the thumb is */
+#asks { display: grid; gap: 8px; padding: 10px 12px 4px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--bad) 5%, var(--bg)); }
+.ask { display: grid; gap: 8px; }
+.ask b { font-size: .9rem; }
+.ask pre { margin: 0; max-height: 30vh; overflow: auto; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font: .8rem/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask .answers { display: flex; flex-wrap: wrap; gap: 8px; }
+.ask .answers button { flex: 1 1 auto; min-height: 44px; padding: 0 14px; border-radius: 12px; font-weight: 600; border: 1px solid var(--line); background: var(--raised); }
+.ask .answers .yes { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.ask .answers .no { color: var(--bad); }
+
+/* ---- how it stands, and the box */
+#stands { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 2px 12px 0 16px; font-size: .86rem; color: var(--muted); }
+#stands .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; }
+#stands.busy .dot, #stands.starting .dot { background: var(--busy); opacity: 1; animation: working 1.2s ease-in-out infinite; }
+#stands.confirm .dot { background: var(--bad); opacity: 1; }
+#stands.idle .dot { background: var(--good); opacity: 1; }
+@keyframes working { 50% { opacity: .35; } }
+#standing { font-weight: 600; color: var(--ink); }
+#clock { font-variant-numeric: tabular-nums; }
+#stop, #again { margin-left: auto; min-height: 34px; padding: 0 16px; border-radius: 10px; font-size: .86rem; font-weight: 600; }
+#stop { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
+#again { background: var(--accent); color: var(--on-accent); }
+#write { display: flex; align-items: flex-end; gap: 8px; padding: 6px 12px 10px; }
+#box { flex: 1; min-width: 0; min-height: 46px; max-height: 160px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); line-height: 1.5; resize: none; }
+#box:focus { border-color: var(--accent); outline: none; }
+#send { flex: none; min-height: 46px; padding: 0 18px; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+#go { flex: none; min-height: 46px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); font-weight: 600; }
+
+/* the page's own sheet: the menu, a name, a question */
+dialog { width: min(100%, 520px); max-width: 100%; margin: auto auto 0; padding: 0; border: 0; border-radius: 20px 20px 0 0; background: var(--panel); color: var(--ink); }
+dialog::backdrop { background: rgb(0 0 0 / .4); }
+dialog form { display: grid; gap: 8px; padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); }
+dialog h2 { margin: 2px 4px 4px; font-size: 1.02rem; }
+dialog p { margin: 0 4px 4px; color: var(--muted); font-size: .9rem; }
+dialog button { min-height: 48px; border-radius: 13px; background: var(--raised); font-weight: 600; text-align: center; }
+dialog button.danger { color: var(--bad); }
+dialog button.solid { background: var(--accent); color: var(--on-accent); }
+dialog button.cancel { background: none; color: var(--muted); font-weight: 500; }
+dialog input { min-height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); font: inherit; color: inherit; }
+#toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 20; max-width: min(88vw, 480px); padding: 10px 16px; border-radius: 14px; background: var(--ink); color: var(--bg); font-size: .9rem; font-weight: 600; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); text-align: center; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
