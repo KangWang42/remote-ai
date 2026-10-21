@@ -278,11 +278,12 @@ With `"action": "say"` or `"action": "answer"` the same request acts on a conver
 `reach` (the computer needs the `reach` capability). Neither takes the conversation from the program that has it:
 it stays open on the computer and is used there as before.
 
-The Windows agent sets the Codex `SessionEnd` command hook's `timeout` to `3` seconds, within
-[Codex's supported limit](https://learn.chatgpt.com/docs/hooks). This event only reports that the conversation
-ended; permission and stop hooks retain their longer timeout for phone interaction. Checking the installed
-hooks also replaces Remote AI's previous `SessionEnd` timeout of `2000`, preserving other hooks and the
-configuration backup.
+The Windows agent sets both tools' `SessionEnd` command hooks to `3` seconds, within
+[Codex's supported limit](https://learn.chatgpt.com/docs/hooks) and
+[Claude Code's shutdown budget](https://code.claude.com/docs/en/hooks#sessionend).
+Hooks that only report state use `10` seconds; only `PermissionRequest` and `Stop` retain `2000` seconds for
+phone interaction. Checking the installed hooks replaces Remote AI's previous timeouts, preserving other
+hooks and the configuration backup. Codex may require reviewing the changed definitions in `/hooks` again.
 
 - `messages[].role` is `user`, `assistant`, `tool` (one step of the tool's: for Claude Code its name and what it is
   for, or else its command or file; for Codex the command that ran, or the files read or changed, as Codex notes

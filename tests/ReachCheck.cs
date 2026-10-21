@@ -506,8 +506,17 @@ public static class ReachCheck {
             // the one hook that can run for minutes says on Claude Code's screen what it is doing; the others say nothing
             Func<string, Dictionary<string, object>> entry = name => ((IEnumerable)hooks[name]).Cast<object>().Select(group => (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)group)["hooks"]).Cast<object>().First()).Single(hook => Convert.ToString(hook["command"]) == program);
             Require(Convert.ToString(entry("Stop")["statusMessage"]) == Reach.Waiting && Reach.Events.Where(name => name != "Stop").All(name => !entry(name).ContainsKey("statusMessage")), "the hook at a stop says what it waits for");
-            Require(Convert.ToInt32(entry("SessionEnd")["timeout"]) == Reach.Patience, "Claude Code keeps its own SessionEnd timeout");
+            Require(Convert.ToInt32(entry("SessionEnd")["timeout"]) == 3 && Reach.EventsOf("claude").Where(name => name != "SessionEnd" && name != "PermissionRequest" && name != "Stop").All(name => Convert.ToInt32(entry(name)["timeout"]) == 10), "Claude Code's shutdown and state reports have bounded timeouts");
+            Require(Convert.ToInt32(entry("Stop")["timeout"]) == Reach.Patience, "Claude Code can still wait for the phone at a stop");
             Require(File.ReadAllText(settings, Encoding.UTF8).Contains(Reach.Waiting), "in the words as they are, not as escapes");
+            entry("SessionEnd")["timeout"] = Reach.Patience;
+            entry("SessionStart")["timeout"] = Reach.Patience;
+            File.WriteAllText(settings, new JavaScriptSerializer().Serialize(read), new UTF8Encoding(false));
+            Require(!ReachHooks.Installed("claude", program, "RemoteCli.reach.abc123"), "Claude Code's old timeout needs migration");
+            ReachHooks.Set("claude", true, program, "RemoteCli.reach.abc123");
+            read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(settings, Encoding.UTF8));
+            hooks = (Dictionary<string, object>)read["hooks"];
+            Require(ReachHooks.Installed("claude", program, "RemoteCli.reach.abc123") && Convert.ToInt32(entry("SessionEnd")["timeout"]) == 3 && Convert.ToInt32(entry("SessionStart")["timeout"]) == 10 && ((IEnumerable)hooks["Stop"]).Cast<object>().Count() == 2 && File.ReadAllText(settings, Encoding.UTF8).Contains("check.sh"), "Claude Code migration preserves the person's hooks");
             Require(File.ReadAllText(settings + ".before-remotecli", Encoding.UTF8) == before, "the file as it was is kept beside it");
             ReachHooks.Set("claude", false, program, "RemoteCli.reach.abc123");
             read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(settings, Encoding.UTF8));
@@ -522,7 +531,7 @@ public static class ReachCheck {
             read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(codexHooks, Encoding.UTF8));
             hooks = (Dictionary<string, object>)read["hooks"];
             line = "& '" + program + "' --hook codex RemoteCli.reach.abc123";
-            Require(Convert.ToInt32(entry0(hooks, "SessionEnd", line)["timeout"]) == 3 && Reach.Events.Where(name => name != "SessionEnd").All(name => Convert.ToInt32(entry0(hooks, name, line)["timeout"]) == Reach.Patience), "Codex SessionEnd stays within its three-second limit without shortening hooks that wait for the phone");
+            Require(Convert.ToInt32(entry0(hooks, "SessionEnd", line)["timeout"]) == 3 && new[] { "SessionStart", "UserPromptSubmit" }.All(name => Convert.ToInt32(entry0(hooks, name, line)["timeout"]) == 10) && new[] { "PermissionRequest", "Stop" }.All(name => Convert.ToInt32(entry0(hooks, name, line)["timeout"]) == Reach.Patience), "Codex reports stay within short timeouts without shortening hooks that wait for the phone");
             // A previous installation used the general timeout here. Startup must recognize and repair it,
             // preserving the person's own hook and the backup of the previous file.
             entry0(hooks, "SessionEnd", line)["timeout"] = Reach.Patience;

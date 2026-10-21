@@ -612,9 +612,9 @@ public static class ReachHooks {
         // Claude Code starts a program with its arguments as they are given; Codex takes one line for a shell.
         if (tool == "claude") { hook["command"] = program; hook["args"] = new object[] { "--hook", "claude", pipe }; }
         else hook["command"] = Plain(program) + " --hook codex " + pipe;
-        hook["timeout"] = name == Reach.Step ? 10 : Reach.Patience;
-        // Codex caps SessionEnd hooks at three seconds; they only report that the conversation ended.
-        if (tool == "codex" && name == "SessionEnd") hook["timeout"] = 3;
+        // Only approvals and stops can wait for the phone. SessionEnd must also fit Codex's three-second cap
+        // and Claude Code's shutdown budget; the other events only report state.
+        hook["timeout"] = name == "SessionEnd" ? 3 : name == "PermissionRequest" || name == "Stop" ? Reach.Patience : 10;
         if (name == Reach.Step) hook["statusMessage"] = "Remote AI";
         // The one hook that can run for minutes says what it is doing. Codex gets no status message: changing its
         // hook definition requires the user's trust again.
