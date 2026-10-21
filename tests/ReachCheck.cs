@@ -506,6 +506,7 @@ public static class ReachCheck {
             // the one hook that can run for minutes says on Claude Code's screen what it is doing; the others say nothing
             Func<string, Dictionary<string, object>> entry = name => ((IEnumerable)hooks[name]).Cast<object>().Select(group => (Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)group)["hooks"]).Cast<object>().First()).Single(hook => Convert.ToString(hook["command"]) == program);
             Require(Convert.ToString(entry("Stop")["statusMessage"]) == Reach.Waiting && Reach.Events.Where(name => name != "Stop").All(name => !entry(name).ContainsKey("statusMessage")), "the hook at a stop says what it waits for");
+            Require(Convert.ToInt32(entry("SessionEnd")["timeout"]) == Reach.Patience, "Claude Code keeps its own SessionEnd timeout");
             Require(File.ReadAllText(settings, Encoding.UTF8).Contains(Reach.Waiting), "in the words as they are, not as escapes");
             Require(File.ReadAllText(settings + ".before-remotecli", Encoding.UTF8) == before, "the file as it was is kept beside it");
             ReachHooks.Set("claude", false, program, "RemoteCli.reach.abc123");
@@ -518,10 +519,35 @@ public static class ReachCheck {
             var line = Convert.ToString(((Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)((IEnumerable)((Dictionary<string, object>)new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(codexHooks, Encoding.UTF8))["hooks"])["Stop"]).Cast<object>().Single())["hooks"]).Cast<object>().Single())["command"]);
             Require(line == "& '" + program + "' --hook codex RemoteCli.reach.abc123", "a path with a space in it is called the way PowerShell calls one: " + line);
             Require(!File.ReadAllText(codexHooks, Encoding.UTF8).Contains("statusMessage"), "Codex's hooks are as they were: it asks anew whether a changed hook is trusted");
+            read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(codexHooks, Encoding.UTF8));
+            hooks = (Dictionary<string, object>)read["hooks"];
+            line = "& '" + program + "' --hook codex RemoteCli.reach.abc123";
+            Require(Convert.ToInt32(entry0(hooks, "SessionEnd", line)["timeout"]) == 3 && Reach.Events.Where(name => name != "SessionEnd").All(name => Convert.ToInt32(entry0(hooks, name, line)["timeout"]) == Reach.Patience), "Codex SessionEnd stays within its three-second limit without shortening hooks that wait for the phone");
+            // A previous installation used the general timeout here. Startup must recognize and repair it,
+            // preserving the person's own hook and the backup of the previous file.
+            entry0(hooks, "SessionEnd", line)["timeout"] = Reach.Patience;
+            hooks["SessionEnd"] = ((IEnumerable)hooks["SessionEnd"]).Cast<object>().Concat(new object[] {
+                new Dictionary<string, object> { { "hooks", new object[] {
+                    new Dictionary<string, object> { { "type", "command" }, { "command", "echo keep-session-end" }, { "timeout", 1 } }
+                } } }
+            }).ToArray();
+            string oldCodex = new JavaScriptSerializer().Serialize(read);
+            File.WriteAllText(codexHooks, oldCodex, new UTF8Encoding(false));
+            Require(!ReachHooks.Installed("codex", program, "RemoteCli.reach.abc123"), "the old timeout needs migration");
+            ReachHooks.Set("codex", true, program, "RemoteCli.reach.abc123");
+            string migratedCodex = File.ReadAllText(codexHooks, Encoding.UTF8);
+            read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(migratedCodex);
+            hooks = (Dictionary<string, object>)read["hooks"];
+            Require(ReachHooks.Installed("codex", program, "RemoteCli.reach.abc123") && Convert.ToInt32(entry0(hooks, "SessionEnd", line)["timeout"]) == 3 && Convert.ToInt32(entry0(hooks, "SessionEnd", "echo keep-session-end")["timeout"]) == 1 && ((IEnumerable)hooks["SessionEnd"]).Cast<object>().Count() == 2, "migration fixes only Remote AI's SessionEnd hook");
+            Require(File.ReadAllText(codexHooks + ".before-remotecli", Encoding.UTF8) == oldCodex, "the old Codex configuration is recoverable");
+            ReachHooks.Set("codex", true, program, "RemoteCli.reach.abc123");
+            Require(File.ReadAllText(codexHooks, Encoding.UTF8) == migratedCodex, "reinstalling the corrected hooks is idempotent");
             ReachHooks.Set("codex", true, @"D:\Tools\RemoteCliAgent.exe", "RemoteCli.reach.abc123");
             Require(File.ReadAllText(codexHooks, Encoding.UTF8).Contains("\"D:\\\\Tools\\\\RemoteCliAgent.exe --hook codex RemoteCli.reach.abc123\"") && ReachHooks.Installed("codex", @"D:\Tools\RemoteCliAgent.exe", "RemoteCli.reach.abc123"), "one without is a command as it stands");
             ReachHooks.Set("codex", false, program, "RemoteCli.reach.abc123");
-            Require(!ReachHooks.Installed("codex") && File.ReadAllText(codexHooks, Encoding.UTF8).Trim() == "{}", "and taken out");
+            read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(codexHooks, Encoding.UTF8));
+            hooks = (Dictionary<string, object>)read["hooks"];
+            Require(!ReachHooks.Installed("codex") && hooks.Count == 1 && Convert.ToInt32(entry0(hooks, "SessionEnd", "echo keep-session-end")["timeout"]) == 1 && !File.ReadAllText(codexHooks, Encoding.UTF8).Contains("RemoteCli.reach"), "taken out without removing the person's own SessionEnd hook");
             // a file that cannot be read is left alone
             File.WriteAllText(settings, "{ this is not json", new UTF8Encoding(false));
             Require(Refused(() => ReachHooks.Set("claude", true, program, "RemoteCli.reach.abc123")).Contains("无法读懂") && File.ReadAllText(settings) == "{ this is not json" && !ReachHooks.Installed("claude"), "a settings file that cannot be read is not written over");

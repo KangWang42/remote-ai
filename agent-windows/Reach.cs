@@ -613,9 +613,11 @@ public static class ReachHooks {
         if (tool == "claude") { hook["command"] = program; hook["args"] = new object[] { "--hook", "claude", pipe }; }
         else hook["command"] = Plain(program) + " --hook codex " + pipe;
         hook["timeout"] = name == Reach.Step ? 10 : Reach.Patience;
+        // Codex caps SessionEnd hooks at three seconds; they only report that the conversation ended.
+        if (tool == "codex" && name == "SessionEnd") hook["timeout"] = 3;
         if (name == Reach.Step) hook["statusMessage"] = "Remote AI";
-        // The one hook that can run for minutes says what it is doing. Codex's entries stay as they were: Codex asks
-        // its user anew whether a hook that has changed is trusted.
+        // The one hook that can run for minutes says what it is doing. Codex gets no status message: changing its
+        // hook definition requires the user's trust again.
         if (tool == "claude" && name == "Stop") hook["statusMessage"] = Reach.Waiting;
         return new Dictionary<string, object> { { "hooks", new object[] { hook } } };
     }
