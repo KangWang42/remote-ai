@@ -432,7 +432,7 @@ public sealed class Reach : IDisposable {
         lock (gate) {
             id = o.AskId = Guid.NewGuid().ToString("N").Substring(0, 12); o.AskText = Describe(hooked); o.Verdict = null; o.VerdictScope = "once";
             o.AskKey = RequestKey(hooked); o.NativeAsked = false; o.Always = tool == "claude" ? AlwaysSuggestion(hooked) : null;
-            o.AskOptions = o.Always == null ? new object[] { new { id = "once", label = "允许一次", detail = "只允许这一次操作" } } : new object[] { new { id = "once", label = "允许一次", detail = "只允许这一次操作" }, new { id = "always", label = "始终允许此规则", detail = PermissionDetail(o.Always) } };
+            o.AskOptions = o.Always == null ? new object[] { new { id = "once", label = "允许一次", detail = "只允许这一次操作" } } : new object[] { new { id = "once", label = "允许一次", detail = "只允许这一次操作" }, new { id = "always", label = "始终允许此规则", detail = ClaudePermissions.Detail(o.Always) } };
             // beside its own question the hook is not seen; a tool that asks its hooks first is kept only where its owner chose that
             o.Status = "confirm"; o.Answerable = !mine && (beside || (kept().Requests && idle() >= Unattended)); o.Beside = beside; o.AskedAt = began; o.AskStamp = Stamp(o.Transcript);
         }
@@ -462,21 +462,7 @@ public sealed class Reach : IDisposable {
     }
     static Dictionary<string, object> AlwaysSuggestion(Dictionary<string, object> hooked) {
         object raw; if (!hooked.TryGetValue("permission_suggestions", out raw)) return null;
-        var list = raw as IEnumerable; if (list == null) return null;
-        foreach (var item in list) {
-            var map = item as Dictionary<string, object>;
-            if (map == null || Text(map, "type") != "addRules" || Text(map, "behavior") != "allow" || Text(map, "destination") != "localSettings" || !map.ContainsKey("rules") || !(map["rules"] is IEnumerable) || map["rules"] is string) continue;
-            var entries = ((IEnumerable)map["rules"]).Cast<object>().ToArray();
-            if (entries.Length == 0 || entries.Length > 4 || entries.Any(rule => !(rule is Dictionary<string, object>) || Text((Dictionary<string, object>)rule, "toolName").Length == 0)) continue;
-            // The complete scope has to fit on the phone before it can be approved.
-            if (PermissionDetail(map).Length > 600) continue;
-            return map;
-        }
-        return null;
-    }
-    static string PermissionDetail(Dictionary<string, object> suggestion) {
-        var rules = ((IEnumerable)suggestion["rules"]).Cast<object>().OfType<Dictionary<string, object>>().Select(rule => Text(rule, "toolName") + "(" + (Text(rule, "ruleContent").Length == 0 ? "全部操作" : Text(rule, "ruleContent")) + ")");
-        return "保存到此项目的本机设置：" + String.Join("；", rules);
+        return ClaudePermissions.Select(raw, false);
     }
     static object Ordered(object value) {
         var map = value as Dictionary<string, object>;

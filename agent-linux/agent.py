@@ -51,6 +51,7 @@ import time
 import uuid
 from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
+import claude_permissions
 
 VERSION = "0.7.0"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
@@ -2062,7 +2063,10 @@ class ClaudeChat(Chat):
         about = request.get("description") or ""
         if about and about != text:
             text = about + "\n" + str(text)
-        self.ask(m, "plan" if plan else "tool", "开始按计划执行？" if plan else request.get("display_name") or name, str(text or ""), bool(request.get("permission_suggestions")))
+        suggestion = claude_permissions.select(request.get("permission_suggestions"), allow_session=True)
+        if suggestion is not None:
+            text = claude_permissions.detail(suggestion) + "\n\n" + str(text or "")
+        self.ask(m, "plan" if plan else "tool", "开始按计划执行？" if plan else request.get("display_name") or name, str(text or ""), suggestion is not None)
 
     def reply(self, asked, decision):
         m = asked["request"]
@@ -2076,7 +2080,10 @@ class ClaudeChat(Chat):
         else:
             answer = {"behavior": "allow", "updatedInput": given}
             if decision == "always":
-                answer["updatedPermissions"] = request.get("permission_suggestions") or []
+                suggestion = claude_permissions.select(request.get("permission_suggestions"), allow_session=True)
+                if suggestion is None:
+                    raise OpError("这个请求不能设为总是允许")
+                answer["updatedPermissions"] = [suggestion]
         self.respond(m.get("request_id"), answer, None)
 
     def respond(self, request, answer, error):

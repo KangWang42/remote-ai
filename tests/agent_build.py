@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPILER = Path(os.environ.get("WINDIR", "C:/Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-AGENT = ["RemoteCliAgent", "Chats", "CodexSessions", "Reach", "Outbox", "Running", "Stats", "Schedules", "Chains", "Marks",
+AGENT = ["RemoteCliAgent", "Chats", "ClaudePermissions", "CodexSessions", "Reach", "Outbox", "Running", "Stats", "Schedules", "Chains", "Marks",
          "ClaudeRelay", "Folders", "Removal", "CodexQueue", "DesktopAdapters", "Ways", "CodexDesktopControl"]
 REFERENCES = ["System.Management", "System.Net.Http", "System.Web.Extensions", "System.Web", "System.Security"]
 

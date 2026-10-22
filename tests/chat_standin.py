@@ -52,7 +52,7 @@ def claude(args):
         answered = threading.Event()
         answers[request] = [answered, None]
         put({"type": "control_request", "request_id": request, "request": {"subtype": "can_use_tool", "tool_name": "Bash", "display_name": "Bash", "input": {"command": command, "description": "运行命令"},
-                                                                          "description": "运行命令", "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "Bash"}], "behavior": "allow", "destination": "session"}]}})
+                                                                          "description": "运行命令", "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": command}], "behavior": "allow", "destination": "session"}]}})
         while not answered.wait(0.05):
             if stop.is_set():
                 put({"type": "control_cancel_request", "request_id": request})

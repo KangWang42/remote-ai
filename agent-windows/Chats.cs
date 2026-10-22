@@ -406,7 +406,9 @@ public sealed class ClaudeChat : Chat {
         string text = name == "ExitPlanMode" ? Text(input, "plan") : Text(input, "command").Length > 0 ? Text(input, "command") : Text(input, "file_path").Length > 0 ? Text(input, "file_path") : json.Serialize(input ?? new object());
         string about = Text(request, "description");
         if (about.Length > 0 && about != text) text = about + "\n" + text;
-        Ask(m, name == "ExitPlanMode" ? "plan" : "tool", title, text, Many(request, "permission_suggestions").Any());
+        var suggestion = ClaudePermissions.Select(At(request, "permission_suggestions"), true);
+        if (suggestion != null) text = ClaudePermissions.Detail(suggestion) + "\n\n" + text;
+        Ask(m, name == "ExitPlanMode" ? "plan" : "tool", title, text, suggestion != null);
     }
     void Withdrawn(string request) {
         foreach (var one in asks.Values.Where(a => Text(a.Request, "request_id") == request).ToArray()) {
@@ -429,7 +431,11 @@ public sealed class ClaudeChat : Chat {
         else if (decision == "deny") answer = new Dictionary<string, object> { { "behavior", "deny" }, { "message", "用户在手机上拒绝了这一步" } };
         else {
             answer = new Dictionary<string, object> { { "behavior", "allow" }, { "updatedInput", input } };
-            if (decision == "always") answer["updatedPermissions"] = Many(request, "permission_suggestions").ToList();
+            if (decision == "always") {
+                var suggestion = ClaudePermissions.Select(At(request, "permission_suggestions"), true);
+                if (suggestion == null) throw new ArgumentException("这个请求不能设为总是允许");
+                answer["updatedPermissions"] = new object[] { suggestion };
+            }
         }
         Respond(Text(m, "request_id"), answer, null);
     }

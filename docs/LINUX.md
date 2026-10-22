@@ -69,7 +69,7 @@ remote-cli uninstall   # 停止并移除全部；加 --purge 连设置和密码�
 | `Shell` | 普通终端用的 shell，不写用 `$SHELL` |
 | `RemoteMaxMode` | 从手机启动 Claude Code、Codex 时的权限上限：`read` 只读，`edit` 可改文件，不写用它们自己的默认 |
 
-中转在别的机器上时不用安装脚本：把 `agent.py` 和 `remote-cli-agent.service` 按服务文件开头的说明放好，`Server` 填那台中转的地址即可。
+中转在别的机器上时不用安装脚本：把 `agent.py`、`claude_permissions.py` 和 `remote-cli-agent.service` 按服务文件开头的说明放好，`Server` 填那台中转的地址即可。
 
 和 Windows 电脑端相比：
 

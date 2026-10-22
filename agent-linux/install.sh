@@ -245,6 +245,7 @@ install() {
     mkdir -p -m 700 "$state" "$relay_state"
     rm -rf "$share/relay" "$share/web"
     cp "$repo/agent-linux/agent.py" "$share/agent.py"
+    cp "$repo/agent-linux/claude_permissions.py" "$share/claude_permissions.py"
     cp "$repo/agent-linux/install.sh" "$share/install.sh"
     cp -r "$repo/relay" "$repo/web" "$share/"
     find "$share" -name '__pycache__' -prune -exec rm -rf {} +

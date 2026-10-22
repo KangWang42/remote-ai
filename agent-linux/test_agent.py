@@ -1277,6 +1277,30 @@ class Chats(unittest.TestCase):
             text = "".join(chat.pending)
         return [json.loads(line) for line in text.split("\n") if line.strip()]
 
+    def test_permission_suggestions(self):
+        chat = object.__new__(agent.ClaudeChat)
+        offered, answered = [], []
+        chat.ask = lambda *args: offered.append(args)
+        chat.respond = lambda *args: answered.append(args)
+        for command, valid in (("npm test *", True), ("mv *.csv backup/", False)):
+            with self.subTest(command=command):
+                suggestion = {"type": "addRules", "behavior": "allow", "destination": "localSettings",
+                              "rules": [{"toolName": "Bash", "ruleContent": command}]}
+                m = {"request_id": "test-permission", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": command},
+                     "permission_suggestions": [suggestion, {"type": "setMode", "mode": "acceptEdits", "destination": "userSettings"}]}}
+                chat.permission(m)
+                self.assertEqual(offered[-1][4], valid)
+                if valid:
+                    self.assertIn(agent.claude_permissions.detail(suggestion), offered[-1][3])
+                    chat.reply({"request": m}, "always")
+                    self.assertEqual(answered[-1][1]["updatedPermissions"], [suggestion])
+                else:
+                    with self.assertRaises(agent.OpError):
+                        chat.reply({"request": m}, "always")
+                chat.reply({"request": m}, "allow")
+                self.assertEqual(answered[-1][1]["behavior"], "allow")
+                self.assertNotIn("updatedPermissions", answered[-1][1])
+
     def until(self, chat, test, what, seconds=20):
         deadline = time.time() + seconds
         while time.time() < deadline:

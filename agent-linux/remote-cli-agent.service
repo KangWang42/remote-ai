@@ -5,7 +5,7 @@
 #
 # Install (as your own user, no root needed):
 #   mkdir -p ~/.local/share/remote-cli-agent ~/.local/state/remote-cli-agent
-#   cp agent.py ~/.local/share/remote-cli-agent/
+#   cp agent.py claude_permissions.py ~/.local/share/remote-cli-agent/
 #   echo '<relay password>' | python3 ~/.local/share/remote-cli-agent/agent.py --set-password
 #   editor ~/.local/state/remote-cli-agent/config.json
 #     {"Server": "https://relay.example.com", "RemoteEnabled": true,

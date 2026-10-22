@@ -510,13 +510,27 @@ capability `chat` (Windows program 1.7.0, Linux agent 0.7.0; the Rust agent does
 
 | Tool | Run as | Said | Stopped | Asks |
 | --- | --- | --- | --- | --- |
-| Claude Code | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio --session-id <new id>` (or `--resume <id>`), with `--permission-mode plan` or `acceptEdits` for the computer's `read` and `edit` | a `user` message on its standard input; one sent while it works is taken when it gets to it | the control request `interrupt` | a `can_use_tool` control request, answered `allow` (with the input), `allow` with `updatedPermissions` (the tool's own suggestions) for `always`, or `deny` |
+| Claude Code | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio --session-id <new id>` (or `--resume <id>`), with `--permission-mode plan` or `acceptEdits` for the computer's `read` and `edit` | a `user` message on its standard input; one sent while it works is taken when it gets to it | the control request `interrupt` | a `can_use_tool` control request, answered `allow` (with the input), `allow` with one validated and displayed `updatedPermissions` suggestion for `always`, or `deny` |
 | Codex | `codex app-server`; `thread/start` with the project folder (`sandbox` for `read` and `edit`) or `thread/resume` | `turn/start`, or `turn/steer` while a turn runs | `turn/interrupt` of the running turn | `item/commandExecution/requestApproval` and `item/fileChange/requestApproval`, answered `accept`, `acceptForSession`, `decline`; `item/tool/requestUserInput` with one question and its choices |
 
 Run on Claude Code 2.1.283 and Codex 0.163.0. The conversation is the tool's own and saved where its other
 windows find it: it is listed with the others, and can be gone on with in a terminal or a desktop app once the chat
 is closed. While a chat has it, the computer lists it as held by the phone's own program. Requests of the tools that
 this protocol does not answer are refused, so that the tool does not wait.
+
+Claude permission suggestions are validated by the computer before offering `always`, both for chats
+(Windows and Python Linux) and Windows `PermissionRequest` hooks. Only a complete `addRules` / `allow`
+suggestion for `localSettings` is accepted; chats also accept `session`. Changes to user/shared settings,
+permission modes, directories and replacement rules are not offered. Each suggestion contains 1–4 rules
+and its complete scope must fit within 600 characters. For `Bash` and `PowerShell`, a nonempty command
+is required: either no `*`, or one trailing ` *` / `:*`. Embedded stars, including quoted file globs
+and regex stars, multiple stars and multiline commands cannot be saved from the phone. This deliberately
+also excludes some otherwise valid patterns such as `git log * main`. A rejected suggestion leaves
+single-use allow and deny available; a forged `always` answer is rejected. If several suggestions arrive,
+only the first eligible one is displayed and returned unchanged, never the entire suggestion list.
+The program does not rewrite or broaden rejected rules, edit existing permission lists or suppress
+Claude's startup warnings. See Claude Code's [permission updates](https://code.claude.com/docs/en/hooks#permission-update-entries)
+and [wildcard matching](https://code.claude.com/docs/en/permissions#wildcard-patterns).
 
 The events (`t` names the kind; `at` is the computer's time in milliseconds):
 

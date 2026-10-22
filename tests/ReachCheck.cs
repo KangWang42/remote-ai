@@ -98,6 +98,14 @@ public static class ReachCheck {
                 Require(verdict.Contains("updatedPermissions") && verdict.Contains("localSettings") && verdict.Contains("npm test"), "original scoped suggestion passed intact");
                 Require(Until(() => reach.RecentAnswer() != null, 3000), "desktop receives phone decision notice");
 
+                string unsafeSuggestion = suggestion.Replace("npm test", "mv *.csv backup/");
+                asked = Run("claude", Event("PermissionRequest", one, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mv *.csv backup/\"}" + unsafeSuggestion));
+                Require(Until(() => claude(one).Status == "confirm", 3000) && claude(one).AskOptions.Length == 1, "wildcard rule offers only single use");
+                Require(Refused(() => reach.Answer("claude", one, claude(one).AskId, true, "always")).Length > 0, "unsafe persistent answer rejected");
+                reach.Answer("claude", one, claude(one).AskId, true);
+                verdict = Answer(asked, 3000, "unsafe rule allowed only once");
+                Require(verdict.Contains("\"behavior\":\"allow\"") && !verdict.Contains("updatedPermissions"), "single use runs without saving wildcard rule");
+
                 asked = Run("claude", Request(one, "npm test", ""));
                 Require(Until(() => claude(one).Status == "confirm", 3000), "desktop completion pending");
                 string pending = claude(one).AskId;
