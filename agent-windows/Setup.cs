@@ -17,7 +17,7 @@ namespace RemoteCli {
 ///   --quiet            no questions and no start afterwards
 ///   --dir <folder>     where to install (default: the folder of an earlier installation, else %LOCALAPPDATA%\Programs\RemoteCli)
 public static class Setup {
-    const string Version = "1.7.0", Name = "Remote AI";
+    const string Version = "1.7.1", Name = "Remote AI";
     // The names it had before. Their shortcuts are taken away when this one is installed or removed; the folder, the
     // registry keys and the files keep their names, so that an installation is found and replaced whatever it was called.
     static readonly string[] EarlierNames = { "Remote CLI" };
