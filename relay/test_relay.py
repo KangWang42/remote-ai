@@ -1071,6 +1071,38 @@ class TerminalRelayTests(unittest.TestCase):
         failing.join(5)
         self.assertEqual(said, {"error": "新线路还没有准备好"})
 
+    def test_file_upload_validation_and_forwarding(self):
+        import threading
+        ask = {"id": "f" * 32, "action": "file_upload_start", "dir": "demo", "path": "手机.txt", "upload": "a" * 32, "size": 1}
+        self.relay.agent({"info": dict(self.info, features=["files"])}, now=1001)
+        with self.assertRaisesRegex(RemoteError, "不支持上传"):
+            self.relay.files(ask, now=1001, wait=0)
+        info = dict(self.info, features=["files", "file-upload"])
+        self.relay.agent({"info": info}, now=1001)
+        for bad in (dict(ask, size=True), dict(ask, size=-1), dict(ask, size=314572801), dict(ask, upload="bad"),
+                    dict(ask, action="file_upload_chunk", data="bad!"), dict(ask, action="file_upload_chunk", data="a" * 983044),
+                    dict(ask, action="file_upload_chunk", data=""), dict(ask, offset=True)):
+            with self.assertRaises(RemoteError):
+                self.relay.files(bad, now=1001, wait=0)
+        for index, (action, extra) in enumerate((("start", {"size": 1}), ("chunk", {"data": "YQ=="}), ("finish", {}), ("cancel", {}))):
+            sent = dict(ask, id="%032x" % (index + 1), action="file_upload_" + action, unexpected="drop", **extra)
+            answer = {}
+            waiting = threading.Thread(target=lambda: answer.update(got=self.relay.files(sent, now=1002, wait=5)))
+            waiting.start()
+            operations = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"]
+            self.assertEqual(len(operations), 1)
+            operation = operations[0]
+            self.assertEqual(operation["upload"], ask["upload"])
+            self.assertNotIn("unexpected", operation)
+            if action != "start":
+                self.assertNotIn("size", operation)
+            for key, value in extra.items():
+                self.assertEqual(operation[key], value)
+            self.relay.agent({"info": info, "acks": [{"id": sent["id"], "error": "", "result": {"offset": 1}}]}, now=1003)
+            waiting.join(5)
+            self.assertEqual(answer["got"], {"offset": 1})
+            self.assertNotIn(sent["id"], self.relay._pending)
+
     def test_files_are_asked_of_the_computer_and_answered_once(self):
         import threading
         ask = {"id": "f" * 32, "action": "file_list", "dir": "demo", "path": "src"}

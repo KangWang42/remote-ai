@@ -174,7 +174,9 @@ def samples(project):
 
 def main():
     chrome, out = (sys.argv[1], Path(sys.argv[2])) if len(sys.argv) > 2 else (None, None)
-    temp = tempfile.TemporaryDirectory()
+    work = ROOT / "09_backup/workbench/file-transfer"
+    work.mkdir(parents=True, exist_ok=True)
+    temp = tempfile.TemporaryDirectory(dir=work)
     data, profile, project, outside = (Path(temp.name) / name for name in ("agent", "profile", "cohort-study", "outside"))
     for folder in (data, project, outside):
         folder.mkdir()
@@ -219,12 +221,38 @@ def main():
             time.sleep(0.5)
         features = call("/api/terminal")["device"]["features"]
         assert "files" in features
+        assert "file-upload" in features
+
+        def upload(action, path, upload_id, expect=200, **extra):
+            return call("/api/files", dict(id=secrets.token_hex(16), action="file_upload_" + action, dir="cohort-study", path=path, upload=upload_id, **extra), expect)
+
+        contents = os.urandom(1600001)
+        upload_id, target = secrets.token_hex(16), "data/手机上传.bin"
+        upload("start", target, upload_id, size=len(contents))
+        assert not (project / target).exists()
+        for at in range(0, len(contents), 737280):
+            chunk = contents[at:at + 737280]
+            assert upload("chunk", target, upload_id, offset=at, data=base64.b64encode(chunk).decode())["offset"] == at + len(chunk)
+        upload("finish", target, upload_id)
+        assert (project / target).read_bytes() == contents
+        assert "同名" in upload("start", target, secrets.token_hex(16), expect=400, size=1)["error"]
+        for path in ("../outside/new.txt", "C:/new.txt", "file:stream", "NUL.txt"):
+            upload("start", path, secrets.token_hex(16), expect=400, size=0)
+        if linked:
+            upload("start", "link/new.txt", secrets.token_hex(16), expect=400, size=0)
+            assert not (outside / "new.txt").exists()
+        upload_id = secrets.token_hex(16)
+        upload("start", "cancelled.bin", upload_id, size=1)
+        upload("chunk", "cancelled.bin", upload_id, offset=0, data="YQ==")
+        upload("cancel", "cancelled.bin", upload_id)
+        assert not (project / "cancelled.bin").exists()
+        assert not list(project.rglob(".remoteai-upload-*.tmp"))
 
         top = files("file_list")
         names = {e["name"]: e for e in top["entries"]}
         assert names["figures"]["dir"] and not names["analysis.py"]["dir"] and names["analysis.py"]["size"] == (project / "analysis.py").stat().st_size, names
         assert names[".git"]["hidden"] and not names["README.md"]["hidden"] and abs(names["README.md"]["modified"] / 1000 - time.time()) < 600
-        assert [e["name"] for e in files("file_list", "data")["entries"]][0] == "cohort.csv"
+        assert "cohort.csv" in [e["name"] for e in files("file_list", "data")["entries"]]
         # a file larger than one piece arrives whole
         whole, at = b"", 0
         while True:
@@ -310,6 +338,48 @@ def main():
                          "unknown": "!!document.querySelector('.unknown')"}
                 shot(base + "/?project=cohort-study", "project.png", "!document.getElementById('project').hidden")
                 shot(base + "/files/?dir=cohort-study", "folder.png", "document.querySelectorAll('#entries li').length > 5")
+                # A real browser File input, including multiple files and a zero-byte document.
+                local = Path(temp.name) / "本地文件.bin"
+                local.write_bytes(contents)
+                empty = Path(temp.name) / "空文件.txt"
+                empty.write_bytes(b"")
+                ask("Page.setInterceptFileChooserDialog", enabled=True)
+                ask("Runtime.evaluate", expression="document.getElementById('upload').click()")
+                document = ask("DOM.getDocument")
+                node = ask("DOM.querySelector", nodeId=document["root"]["nodeId"], selector="#upload-input")
+                ask("DOM.setFileInputFiles", nodeId=node["nodeId"], files=[str(local), str(empty)])
+                deadline = time.time() + 45
+                while time.time() < deadline:
+                    status = ask("Runtime.evaluate", expression="document.getElementById('transfer-text').textContent", returnByValue=True).get("result", {}).get("value", "")
+                    if status.startswith("已上传"):
+                        break
+                    time.sleep(.2)
+                assert "已上传 2/2" in status, status
+                assert (project / local.name).read_bytes() == contents
+                assert (project / empty.name).read_bytes() == b""
+                geometry = []
+                for width in (320, 390, 430, 1440):
+                    ask("Emulation.setDeviceMetricsOverride", width=width, height=844, deviceScaleFactor=1, mobile=width < 500)
+                    time.sleep(.2)
+                    metrics = ask("Runtime.evaluate", expression="[innerWidth, document.documentElement.clientWidth, document.documentElement.scrollWidth, document.body.scrollWidth]", returnByValue=True)["result"]["value"]
+                    assert metrics[0] == width and max(metrics[2:]) <= metrics[1] + 1, metrics
+                    geometry.append(metrics)
+                    (out / ("upload-%s.png" % width)).write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
+                report["upload_viewports"] = geometry
+                report["uploaded_bytes"] = len(contents)
+                assert not said, said
+                # A duplicate selected through the UI must show a persistent error and keep the existing bytes.
+                ask("Runtime.evaluate", expression="document.getElementById('upload').click()")
+                ask("DOM.setFileInputFiles", nodeId=node["nodeId"], files=[str(local)])
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    status = ask("Runtime.evaluate", expression="document.getElementById('transfer-text').textContent", returnByValue=True).get("result", {}).get("value", "")
+                    if "同名" in status:
+                        break
+                    time.sleep(.2)
+                assert "同名" in status and (project / local.name).read_bytes() == contents, status
+                (out / "upload-conflict.png").write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
+                ask("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=1, mobile=True)
                 for kind, path in sorted(made.items()):
                     shot(view(path), kind + ".png", drawn[kind], seconds=60 if kind in ("word", "slides") else 20)
                 # Saving inside the app: the page hands the file to the phone piece by piece. A stand-in for the app
@@ -317,7 +387,7 @@ def main():
                 stand_in = ask("Page.addScriptToEvaluateOnNewDocument", source="window.RemoteCliNative = { got: [], saveStart(n) { this.name = n; this.got = []; return ''; }, "
                                "savePiece(d) { this.got.push(d); return ''; }, saveEnd() { this.done = true; return '下载 / RemoteAI'; }, saveCancel() { this.cancelled = true; }, openSaved() {}, chrome() {}, pref() { return ''; }, setPref() {} };")
                 shot(view("bundle.zip"), "save.png", "!!document.querySelector('.unknown button')")
-                ask("Runtime.evaluate", expression="document.querySelector('.unknown button').click()")
+                ask("Runtime.evaluate", expression="document.getElementById('download').click()")
                 deadline = time.time() + 30
                 while time.time() < deadline and ask("Runtime.evaluate", expression="window.RemoteCliNative.done === true", returnByValue=True).get("result", {}).get("value") is not True:
                     time.sleep(0.3)
@@ -326,6 +396,28 @@ def main():
                 assert digest == "bundle.zip 3 " + hashlib.sha256((project / "bundle.zip").read_bytes()).hexdigest(), digest
                 time.sleep(0.5)
                 (out / "save.png").write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
+                for mode in ("cancel", "changed"):
+                    shot(view("bundle.zip"), "download-" + mode + ".png", "!!document.querySelector('.unknown button')")
+                    if mode == "changed":
+                        ask("Runtime.evaluate", expression="""window.originalFetch = window.fetch;
+                            window.fetch = async (...args) => {
+                              const response = await originalFetch(...args), payload = args[1] && JSON.parse(args[1].body);
+                              if (payload && payload.action === 'file_read' && payload.offset > 0) {
+                                const body = await response.json(); body.modified++;
+                                return new Response(JSON.stringify(body), {status: 200});
+                              }
+                              return response;
+                            };""")
+                    ask("Runtime.evaluate", expression="document.getElementById('download').click();" + ("document.getElementById('transfer-cancel').click();" if mode == "cancel" else ""))
+                    deadline = time.time() + 30
+                    while time.time() < deadline:
+                        state = ask("Runtime.evaluate", expression="({cancelled: RemoteCliNative.cancelled, done: RemoteCliNative.done, text: document.getElementById('transfer-text').textContent})", returnByValue=True)["result"]["value"]
+                        if state.get("cancelled"):
+                            break
+                        time.sleep(.2)
+                    assert state.get("cancelled") and not state.get("done"), (mode, state)
+                    assert ("已取消" if mode == "cancel" else "已变化") in state["text"], state
+                    (out / ("download-" + mode + ".png")).write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
                 ask("Page.removeScriptToEvaluateOnNewDocument", identifier=stand_in["identifier"])
                 report["saved_in_pieces"] = 3
                 pipe.close()
@@ -337,7 +429,8 @@ def main():
         agent.kill()
         relay.kill()
         time.sleep(1)
-        subprocess.run(["cmd", "/c", "rmdir", str(project / "link")], capture_output=True)       # the link, not what it leads to
+        if linked:
+            os.rmdir(project / "link")       # only the junction, never its target
         try:
             temp.cleanup()
         except OSError:

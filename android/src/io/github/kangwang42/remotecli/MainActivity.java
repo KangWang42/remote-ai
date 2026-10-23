@@ -262,7 +262,7 @@ public final class MainActivity extends Activity {
         ticker.removeCallbacks(watch);
         bench.stop();
         computerManagement.stop();
-        if (web != null) { root.removeView(web); web.destroy(); web = null; }
+        if (web != null) { root.removeView(web); filePicker.cancel(); web.destroy(); web = null; }
         root.removeAllViews();
         bars(kit.BG);
         ScrollView scroll = new ScrollView(this);
@@ -525,7 +525,7 @@ public final class MainActivity extends Activity {
         currentOrigin = address;
         connectionHealth = new ConnectionHealth();
         prefs.edit().putString("server", address).apply();
-        if (web != null) { root.removeView(web); web.destroy(); }
+        if (web != null) { root.removeView(web); filePicker.cancel(); web.destroy(); }
         root.removeAllViews();
         screen = "web";
         web = new WebView(this);
@@ -540,7 +540,7 @@ public final class MainActivity extends Activity {
         final String origin = address;
         web.addJavascriptInterface(new Bridge(), "RemoteCliNative");
         // Without a chrome client a page's confirm() and prompt() are answered "no" without being shown.
-        web.setWebChromeClient(new android.webkit.WebChromeClient());
+        web.setWebChromeClient(filePicker);
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return !request.getUrl().toString().startsWith(origin + "/");       // the pages of this computer only
@@ -638,7 +638,9 @@ public final class MainActivity extends Activity {
     // (and, kept the same way for every computer: the kind of conversation its owner begins, "newkind")
     private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "renderer", "readfont", "readsize", "readline", "newkind");
     private final Saver saver = new Saver(this);
+    private final FilePicker filePicker = new FilePicker(this);
     private final class Bridge {
+        @JavascriptInterface public boolean canUploadFiles() { return true; }
         @JavascriptInterface public void reminders() { runOnUiThread(MainActivity.this::reminderSettings); }
         @JavascriptInterface public String reminderStatus() { return MainActivity.this.reminderStatus(); }
         /** The system's speech recognizer; what was said goes into the page's message box. */
@@ -749,6 +751,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == FilePicker.REQUEST) { filePicker.result(result, data); return; }
         if (request != SPEECH || result != RESULT_OK || data == null || web == null) return;
         ArrayList<String> heard = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
         if (heard != null && !heard.isEmpty()) web.evaluateJavascript("window.RemoteCliDictated&&RemoteCliDictated(" + JSONObject.quote(heard.get(0)) + ")", null);
@@ -765,5 +768,5 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
     @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("computer".equals(screen)) computerManagement.refresh(); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
-    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { web.destroy(); web = null; } super.onDestroy(); }
+    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { filePicker.cancel(); web.destroy(); web = null; } super.onDestroy(); }
 }

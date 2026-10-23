@@ -259,6 +259,32 @@ to the project folder, with `/`.
 A refusal is `400 {"error": "..."}`. The computer answers only for paths inside the project folder and refuses a
 path whose real location, after links and junctions, is outside it. The relay keeps nothing of an answer.
 
+Uploads use the same authenticated endpoint and require both `files` and `file-upload` capabilities (currently
+Windows). Every request has a fresh operation `id`, the fixed workspace `dir`, destination `path` including the
+filename, and a client-generated 32-character lowercase hex `upload` ID. Only these operations are accepted:
+
+- `file_upload_start` adds integer `size` (0 through 314,572,800 bytes), returning `{"offset": 0}`.
+- `file_upload_chunk` adds integer `offset` and base64 `data` (1 through 737,280 decoded bytes). The offset must
+  equal the bytes already written; the reply's `offset` is the new byte count. Chunks cannot exceed the declared size.
+- `file_upload_finish` publishes the complete file, returning `{"offset": <size>}`. It refuses incomplete files.
+- `file_upload_cancel` removes this upload's temporary file. Cancelling an unknown ID is harmless.
+
+The Windows agent owns at most four uploads per instance. Each holds its destination directory and ancestors
+against rename, rejects reparse-point subdirectories, absolute/traversal paths, alternate streams and reserved
+Windows names. It writes a temporary file in the destination directory and atomically renames it after flushing.
+Existing files and folders are never replaced, including a name created while uploading. Cancellation and sessions
+idle for ten minutes remove temporary files; forcibly terminating the computer process can leave hidden
+`.remoteai-upload-*.tmp` files that may be removed when no upload is active. Uploads are not resumable after restart.
+The relay validates size, offset and base64 bounds and forwards only operation-specific fields; it does not persist
+file contents. An older relay or agent refuses upload operations without affecting file reads.
+
+Android implements `WebChromeClient.onShowFileChooser` with `ACTION_OPEN_DOCUMENT`, `CATEGORY_OPENABLE`, local
+files and optional multiple selection. Only granted `content:` URIs from external providers are returned to the
+requesting WebView; cancellation, replacement of the page or Activity destruction clears the callback. No broad
+storage permission is requested. See the [Android file chooser API](https://developer.android.com/reference/android/webkit/WebChromeClient#onShowFileChooser(android.webkit.WebView,%20android.webkit.ValueCallback%3Candroid.net.Uri[]%3E,%20android.webkit.WebChromeClient.FileChooserParams)).
+Downloads continue using `file_read` and the native Saver bridge, with size, offset and modification-time checks
+across chunks. The browser fallback uses an ordinary download; the Android app saves through its existing Saver.
+
 ### A conversation that is open on the computer
 
 `POST /api/conversation` `{"id": "<16 to 32 hex digits>", "session": "<uuid>"}` is held like `/api/files` and needs the

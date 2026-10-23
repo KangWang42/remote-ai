@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="files.css">
   <script defer src="../terminal/skins.js"></script>
   <script defer src="kinds.js"></script>
+  <script defer src="transfers.js"></script>
   <script defer src="files.js"></script>
 </head>
 <body>
@@ -23,6 +24,17 @@
       </div>
       <button type="button" class="icon" id="more" aria-label="更多"></button>
     </header>
+
+    <div id="file-actions">
+      <button type="button" class="quiet" id="upload">上传文件</button>
+      <button type="button" class="quiet" id="download" hidden>下载文件</button>
+      <input type="file" id="upload-input" aria-label="选择要上传的本地文件" multiple hidden>
+    </div>
+    <section id="transfer" hidden aria-label="文件传输">
+      <p id="transfer-text" role="status" aria-live="polite"></p>
+      <progress id="transfer-bar" max="100" value="0" aria-label="传输进度"></progress>
+      <button type="button" class="quiet" id="transfer-cancel">取消传输</button>
+    </section>
 
     <!-- a folder -->
     <div id="folder" hidden>

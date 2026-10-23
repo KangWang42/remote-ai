@@ -1,6 +1,6 @@
 /* The files of a project: its folders as lists, and a file shown the way its kind is read: code with its colours,
    Markdown and Word as a document, a workbook as tables, slides, a PDF, a picture. The computer reads the files;
-   this page only shows them and changes nothing. */
+   uploads add files to the selected folder without replacing existing files. */
 (() => {
   'use strict';
   const K = window.RemoteCliKinds, $ = id => document.getElementById(id), native = window.RemoteCliNative || null;
@@ -72,11 +72,15 @@
 
   // ---- asking the computer
   let run = 0;        // what is shown now; an answer for something left behind is dropped
-  async function ask(action, path, offset) {
-    const reply = await fetch('../api/files', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: newId(), action, dir, path, offset: offset || 0 }) });
-    let body = {};
-    try { body = await reply.json(); } catch (error) { /* not JSON */ }
+  async function ask(action, path, offset, extra) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 35000);
+    let reply, body = {};
+    try {
+      reply = await fetch('../api/files', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify(Object.assign({ id: newId(), action, dir, path, offset: offset || 0 }, extra)) });
+      try { body = await reply.json(); } catch (error) { /* not JSON */ }
+    } catch (error) { throw new Error(error.name === 'AbortError' ? '传输超时，请检查连接后重试' : '连接中断，请检查网络后重试'); }
+    finally { clearTimeout(timer); }
     if (reply.status === 401) { location.replace('../'); throw new Error('请重新登录'); }
     if (!reply.ok) throw new Error(body.error || '请求失败（' + reply.status + '）');
     return body;
@@ -152,6 +156,8 @@
   function leave() { if (from && history.length > 1) history.back(); else location.href = '../?project=' + encodeURIComponent(dir); }
   function show() {
     run++;
+    $('download').hidden = !place.file;
+    $('upload').hidden = !!place.file;
     $('problem').hidden = true; $('progress').hidden = true;
     for (const url of handed.splice(0)) URL.revokeObjectURL(url);
     if (place.file) showFile(run); else showFolder(run);
@@ -391,34 +397,90 @@
   // The file is fetched from the computer again, piece by piece, and kept on this device: inside the app in the
   // phone's Download folder, each piece handed on as it arrives; in a browser as an ordinary download.
   const SAVE_LIMIT = 300 * 1024 * 1024;
-  let saving = false;
+  let saving = false, uploading = null, cancelled = false, pickedFolder = '';
+  function transfer(text, at, size) {
+    $('transfer').hidden = false;
+    $('transfer-text').textContent = text;
+    $('transfer-bar').hidden = false;
+    $('transfer-bar').value = Math.round(100 * at / Math.max(1, size));
+    $('transfer-cancel').hidden = false;
+    $('upload').disabled = $('download').disabled = true;
+  }
+  function transferDone(text) {
+    $('transfer').hidden = false;
+    $('transfer-text').textContent = text;
+    $('transfer-bar').hidden = $('transfer-cancel').hidden = true;
+    $('upload').disabled = $('download').disabled = false;
+  }
+  $('transfer-cancel').onclick = () => {
+    cancelled = true;
+    if (uploading) uploading.cancel();
+    $('transfer-cancel').disabled = true;
+    $('transfer-text').textContent = '正在取消传输…';
+  };
+  $('upload').onclick = () => {
+    if (native && !native.canUploadFiles) return toast('请先更新手机 App，再上传文件');
+    pickedFolder = place.path; $('upload-input').value = ''; $('upload-input').click();
+  };
+  $('upload-input').onchange = async () => {
+    const files = Array.from($('upload-input').files || []), folder = pickedFolder;
+    if (!files.length || saving || uploading) return;
+    cancelled = false; $('transfer-cancel').disabled = false;
+    let done = 0, failure = '';
+    uploading = new window.RemoteCliUpload(ask, newId, (at, size) => transfer('正在上传 ' + (done + 1) + '/' + files.length + '：' + files[done].name + ' · ' + K.size(at) + ' / ' + K.size(size), at, size));
+    try {
+      for (const file of files) {
+        await uploading.send(file, join(folder, file.name));
+        done++;
+      }
+    } catch (error) { failure = error.message; }
+    finally {
+      uploading = null;
+      folders.delete(folder);
+      if (!place.file && place.path === folder) show();
+      transferDone('已上传 ' + done + '/' + files.length + ' 个文件到 ' + join(dir, folder) + (failure ? '。' + failure : '。'));
+    }
+  };
+  $('download').onclick = save;
+  window.addEventListener('beforeunload', event => {
+    if (saving || uploading) { event.preventDefault(); event.returnValue = ''; }
+  });
   async function save() {
-    if (saving) return toast('正在保存上一个文件');
+    if (saving || uploading) return toast('请等待当前传输完成');
     if (native && !native.saveStart) return toast('请先更新手机 App，再保存文件');
     const path = join(place.path, place.file), name = place.file, parts = [];
-    saving = true;
+    saving = true; cancelled = false; $('transfer-cancel').disabled = false;
+    transfer('正在准备下载 ' + name, 0, 1);
+    let outcome = '';
     try {
       let piece = await ask('file_read', path, 0), at = 0;
+      const size = piece.size, modified = piece.modified;
       if (piece.size > SAVE_LIMIT) throw new Error('文件有 ' + K.size(piece.size) + '，超过了保存的上限 ' + K.size(SAVE_LIMIT));
       if (native) { const refused = native.saveStart(name); if (refused) throw new Error(refused); }
       for (;;) {
+        if (cancelled) throw new Error('已取消下载');
+        if (piece.offset !== at || piece.size !== size || piece.modified !== modified) throw new Error('电脑上的文件已变化，请重新下载');
         if (native) { const refused = native.savePiece(piece.data); if (refused) throw new Error(refused); } else parts.push(bytesOf(piece.data));
         at += Math.floor(piece.data.length * 3 / 4) - (piece.data.endsWith('==') ? 2 : piece.data.endsWith('=') ? 1 : 0);
-        $('progress').hidden = false;
-        $('progress-text').textContent = '正在保存 ' + name + '  ' + K.size(Math.min(at, piece.size)) + ' / ' + K.size(piece.size);
-        $('progress-bar').style.width = Math.round(100 * Math.min(at, piece.size) / Math.max(1, piece.size)) + '%';
-        if (piece.end || !piece.data.length) break;
+        transfer('正在下载 ' + name + ' · ' + K.size(at) + ' / ' + K.size(size), at, size);
+        if (piece.end) { if (at !== size) throw new Error('文件未完整下载，请重试'); break; }
+        if (!piece.data.length || at >= size) throw new Error('下载进度不一致，请重试');
         piece = await ask('file_read', path, at);
       }
       if (native) {
         const where = native.saveEnd();
         if (!where) throw new Error('没有保存成功，请检查手机的存储空间');
         choose('已保存到手机', [{ label: '打开', sub: '用手机上的应用打开 ' + name, act: () => native.openSaved() }, { label: '知道了', sub: '文件在：' + where, act: () => {} }]);
-      } else { el('a', { href: hand(new Blob(parts), 'application/octet-stream'), download: name }).click(); toast('已交给浏览器保存'); }
+      } else {
+        const url = URL.createObjectURL(new Blob(parts, { type: 'application/octet-stream' }));
+        el('a', { href: url, download: name }).click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }
+      outcome = native ? '已保存到手机：' + name : '已交给浏览器下载：' + name;
     } catch (error) {
       if (native && native.saveCancel) native.saveCancel();
-      toast(error.message || '没有保存');
-    } finally { saving = false; $('progress').hidden = true; }
+      outcome = error.message || '没有保存';
+    } finally { saving = false; transferDone(outcome); }
   }
 
   // ---- the menu

@@ -4,6 +4,8 @@ The computer makes outbound HTTPS requests. Operation IDs and output sequence nu
 make retrying a dropped response safe; input is never silently executed twice.
 """
 import collections
+import base64
+import binascii
 import copy
 import json
 import os
@@ -300,7 +302,8 @@ def _public_session(session, terminal=""):
     return shown
 
 
-FILE_ACTIONS = ("file_list", "file_read")
+UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish", "file_upload_cancel")
+FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_SECONDS = 25
 WAKE_SECONDS = 85       # a message that is handed to a conversation where it sits idle takes a short run of its tool on the computer
 # What the program on the computer is asked about itself: a few of its settings, and the line it is reached by.
@@ -863,6 +866,26 @@ class Relay:
             raise RemoteError("路径无效")
         if type(payload.get("offset", 0)) is not int or payload.get("offset", 0) < 0:
             raise RemoteError("位置无效")
+        question = {"id": op_id, "action": action, "dir": folder, "path": where, "offset": payload.get("offset", 0)}
+        if action in UPLOAD_ACTIONS:
+            upload = payload.get("upload")
+            if not isinstance(upload, str) or not re.fullmatch(r"[a-f0-9]{32}", upload):
+                raise RemoteError("上传编号无效")
+            question["upload"] = upload
+            if action == "file_upload_start":
+                size = payload.get("size")
+                if type(size) is not int or not 0 <= size <= 300 * 1024 * 1024:
+                    raise RemoteError("单个文件上传上限为 300 MB")
+                question["size"] = size
+            if action == "file_upload_chunk":
+                data = payload.get("data")
+                if not isinstance(data, str) or not 0 < len(data) <= 983040:
+                    raise RemoteError("上传分块大小无效")
+                try:
+                    base64.b64decode(data, validate=True)
+                except (ValueError, binascii.Error):
+                    raise RemoteError("上传内容无效")
+                question["data"] = data
         with self._changed:
             self._expire(now)
             if op_id in self._pending:
@@ -871,9 +894,11 @@ class Relay:
                 raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
             if "files" not in self._device.get("features", []):
                 raise RemoteError("电脑端版本不支持查看文件，请更新电脑端")
+            if action in UPLOAD_ACTIONS and "file-upload" not in self._device.get("features", []):
+                raise RemoteError("这台电脑暂不支持上传文件，请更新 Windows 电脑端")
             if folder not in self._device["workspaces"]:
                 raise RemoteError("没有这个项目")
-            return self._held({"id": op_id, "action": action, "dir": folder, "path": where, "offset": payload.get("offset", 0)}, now, wait)
+            return self._held(question, now, wait)
 
     def _held(self, question, now, wait):
         """Passes a question on to the computer and waits for its answer. Called with self._changed held."""
@@ -1187,7 +1212,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "codex-desktop-control", "chat") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "codex-desktop-control", "chat") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "opencode", "qoder", "cline", "shell")],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))

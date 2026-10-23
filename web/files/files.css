@@ -8,6 +8,11 @@
 #where { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .note { color: var(--muted); font-size: .86rem; text-align: center; margin: 18px 8px; }
 .tick { margin-left: auto; font-style: normal; font-weight: 700; color: var(--accent); }
+#file-actions { display: flex; gap: 10px; margin: 4px 0 12px; }
+#file-actions button, #transfer-cancel { min-height: 44px; padding: 0 16px; border: 1px solid var(--line); color: var(--accent); }
+#transfer { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+#transfer-text { overflow-wrap: anywhere; margin: 0 0 8px; font-size: .9rem; }
+#transfer-bar { display: block; width: 100%; height: 8px; accent-color: var(--accent); margin-bottom: 8px; }
 
 /* ---- where we are */
 #crumbs { display: flex; align-items: center; gap: 2px; margin: 6px -16px 12px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; white-space: nowrap; }
