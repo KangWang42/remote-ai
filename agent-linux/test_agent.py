@@ -1119,7 +1119,10 @@ class EndToEnd(unittest.TestCase):
         view = self.poll(lambda: self.overview(),
                          lambda v: any(t["id"] == new and t.get("session") == named.group(1) for t in v["terminals"]))
 
-        # 9. a saved conversation is listed with its name and continued by its id
+        # 9. a saved conversation is listed with its name and continued by its id (waited for:
+        # the agent's first scan of the tools' stores may still be under way)
+        self.poll(lambda: self.overview(), lambda v: any(s["id"] == self.saved for s in v.get("sessions", [])))
+        view = self.overview()
         self.assertEqual([(s["id"], s["title"], s["tool"], s["dir"]) for s in view["sessions"]],
                          [(self.saved, "上次的对话", "claude", "项目")])
         self.assertIn("peek", device.get("features", []))
