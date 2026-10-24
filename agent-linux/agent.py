@@ -77,10 +77,15 @@ PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 FILE_ACTIONS = ("file_list", "file_read")
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "peek", "marks", "delete", "work", "chat"]
-# What the phone asks about its owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
-# ("chains") needs the tools' hooks, which only the Windows program has.
-WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff")
+FEATURES = ["terminal-exit", "files", "peek", "marks", "delete", "work", "chat", "chains"]
+# What the phone asks about the owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
+# ("chains") is seen by watching the conversation's record grow and then go quiet — the tools' own hooks, which
+# tell the Windows program of it at once, are not there on Linux.
+WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff",
+                "work_chains", "work_chain_set", "work_chain_remove")
+CHAIN_TOOLS = ("claude", "codex", "opencode", "qoder", "cline")   # the conversations the phone can pass between
+CHAIN_QUIET = 45.0     # a turn is over once the source's record has been quiet this long after growing
+MAX_CHAINS = 20
 LONGEST_TURN, LONGEST_WAIT = 3 * 3600, 600      # a turn is counted for no longer; a first answer later than this is none
 MAX_SCHEDULES = 30
 MARKS = ("pinned", "hidden")     # what the owner says of single conversations from the phone
@@ -2739,6 +2744,123 @@ class Schedules:
                 self._save()
 
 
+class Chains:
+    """Work passed on from one conversation to another when the first has done its part: "when this one stops, give
+    what it said last to that one, with these words of mine". The Windows program hears that a conversation has
+    stopped from the tools' own hooks; on Linux there are none, so a finished turn is seen by watching the source
+    conversation's record: it grows while the tool works, and once it has been quiet for a while after growing,
+    the turn is over. (As Chains.cs of the Windows program, where the words are also kept encrypted for the
+    Windows account; here the file is only readable by its owner.)"""
+
+    def __init__(self, path):
+        self.path, self.items = path, []
+        self.seen = {}       # chain id -> {"updated": the record's stamp last seen, "armed": stamp or None}
+        try:
+            with open(path, encoding="utf-8") as stream:
+                kept = json.load(stream)
+            self.items = [item for item in kept if isinstance(item, dict) and ID_RE.match(str(item.get("id") or ""))]
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save(self):
+        try:
+            write_private(self.path, json.dumps(self.items, ensure_ascii=False))
+        except OSError:
+            pass
+
+    @staticmethod
+    def shown(item):
+        """As the phone is told of one."""
+        out = {key: item[key] for key in ("id", "from", "from_tool", "from_title", "to", "to_tool", "to_title",
+                                          "text", "left", "rounds", "runs")}
+        out["last"] = {"at": item["last_at"], "ok": item["last_ok"], "note": item["last_note"]} if item["last_at"] else None
+        return out
+
+    def all(self):
+        return [self.shown(item) for item in self.items]
+
+    def set(self, given, found):
+        """Sets one: a new one under a new number, or the one of that number anew (its rounds begin again). Both
+        conversations must be among those this computer lists."""
+        word = lambda name: given.get(name) if isinstance(given.get(name), str) else ""
+        listed = lambda session: next((s for s in found if s["id"] == session), None)
+        item = {"id": word("id"), "from": word("from"), "from_tool": word("from_tool"), "from_title": "",
+                "to": word("to"), "to_tool": word("to_tool"), "to_title": "",
+                "text": word("text").strip(), "left": 0, "rounds": 0, "runs": 0, "last_at": 0, "last_ok": False, "last_note": ""}
+        source, taker = listed(item["from"]), listed(item["to"])
+        if not ID_RE.match(item["id"]):
+            raise OpError("编号无效")
+        for tool in (item["from_tool"], item["to_tool"]):
+            if tool not in CHAIN_TOOLS:
+                raise OpError("工具无效")
+        for which, pick in (("from", source), ("to", taker)):
+            if pick is None or pick["tool"] != item[which + "_tool"]:
+                raise OpError("电脑上没有找到这个对话，请刷新后重试")
+            item[which + "_title"] = pick["title"][:80]
+        if (item["from_tool"], item["from"]) == (item["to_tool"], item["to"]):
+            raise OpError("不能接力给同一段对话")
+        if not 0 < len(item["text"]) <= 1000:
+            raise OpError("要说的话需为 1 至 1000 字")
+        rounds = given.get("rounds")
+        if isinstance(rounds, bool) or not isinstance(rounds, int) or not 1 <= rounds <= 10:
+            raise OpError("次数需在 1 到 10 之间")
+        item["rounds"] = item["left"] = rounds
+        known = next((one for one in self.items if one["id"] == item["id"]), None)
+        if known is None and len(self.items) >= MAX_CHAINS:
+            raise OpError("最多保存 %d 条接力" % MAX_CHAINS)
+        if known is not None:
+            self.items[self.items.index(known)] = item
+        else:
+            self.items.append(item)
+        self.seen.pop(item["id"], None)
+        self._save()
+        return item
+
+    def remove(self, key):
+        left = [item for item in self.items if item["id"] != key]
+        gone = len(left) != len(self.items)
+        if gone:
+            self.items = left
+            self.seen.pop(key, None)
+            self._save()
+        return gone
+
+    def step(self, found, now):
+        """Yields (item, source) for each chain whose source conversation has finished a turn. A finished turn is
+        one whose record grew since the last look and has now been quiet past CHAIN_QUIET; the stamp it was fired
+        for is remembered, so the same turn does not fire twice and a record that was quiet all along (also after
+        a restart) never does."""
+        for item in self.items:
+            if item["left"] <= 0:
+                continue
+            source = next((s for s in found if s["tool"] == item["from_tool"] and s["id"] == item["from"]), None)
+            if source is None:
+                self.seen.pop(item["id"], None)
+                continue
+            updated = int(source.get("updated") or 0)
+            seen = self.seen.setdefault(item["id"], {})
+            if "updated" not in seen:
+                seen.update(updated=updated, armed=None)        # first sight: a baseline, nothing to pass on
+            elif seen["updated"] != updated:
+                seen.update(updated=updated, armed=updated)     # the record grew: a turn is under way
+            elif seen["armed"] is not None and updated and now - updated / 1000.0 >= CHAIN_QUIET:
+                seen["armed"] = None                            # quiet after growing: the turn is over
+                yield item, source
+
+    def done(self, key, ok, note, now):
+        """Notes how a passing-on went and takes one of its rounds; a rule with none left is dropped."""
+        for item in self.items:
+            if item["id"] != key:
+                continue
+            item["left"] = max(0, item["left"] - 1)
+            item["runs"] += 1
+            item["last_at"], item["last_ok"], item["last_note"] = int(now * 1000), ok, note[:300]
+            if item["left"] <= 0:
+                self.items.remove(item)
+            self._save()
+            return
+
+
 def handover(source, messages, note):
     """What a conversation is handed over with: what its owner asked first and last, what the tool answered last
     and did last, taken from its record. Written as its owner's own words to the conversation that takes over.
@@ -2747,7 +2869,7 @@ def handover(source, messages, note):
     asked = [m["text"] for m in messages if m.get("role") == "user"]
     answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
     steps = [m["text"] for m in messages if m.get("role") == "tool"]
-    label = "Claude Code" if source["tool"] == "claude" else "Codex"
+    label = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline"}.get(source["tool"], source["tool"])
     brief = "【对话交接】下面是我在另一段对话里的进展（%s，“%s”%s），请接着处理。\n" % (label, source["title"], "，项目 " + source["dir"] if source["dir"] else "")
     if asked:
         brief += "\n我最初的要求：\n" + cut(asked[0], 800) + "\n"
@@ -2762,6 +2884,21 @@ def handover(source, messages, note):
     return brief.rstrip()
 
 
+def chain_brief(source, messages, note):
+    """What a chain hands over when its source has finished a turn: what the tool answered last, and the words
+    the owner set with the rule. (Lighter than a hand-over: the conversation that takes it keeps its own thread.)"""
+    cut = lambda text, most: text.strip() if len(text.strip()) <= most else text.strip()[:most] + "…"
+    answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
+    brief = "【接力】%s“%s”完成了一轮，把它的进展转给你。\n" % (
+        {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline"}.get(source["tool"], source["tool"]),
+        source["title"])
+    if answered:
+        brief += "\n它最后的回答：\n" + cut(answered, 2000) + "\n"
+    if note.strip():
+        brief += "\n我的要求：\n" + cut(note, 1000) + "\n"
+    return brief.rstrip()
+
+
 class Agent:
     def __init__(self, data, password):
         self.data = data
@@ -2773,6 +2910,7 @@ class Agent:
         # the owner's work: in numbers, and the questions asked at a set time
         self.stats = Stats(self.sessions.claude_home, lambda: os.environ.get("CODEX_HOME") or os.path.join(self.sessions.home, ".codex"))
         self.schedules = Schedules(os.path.join(data, "schedules.json"))
+        self.chains = Chains(os.path.join(data, "chains.json"))
         self.next_asking = 0.0
         self.sessions_sent = (0, 0.0)   # the version of the list the relay was last told, and when
         self.tools = (["shell"], 0.0)
@@ -2892,6 +3030,14 @@ class Agent:
             if enabled and now >= self.next_asking:
                 self.next_asking = now + 15
                 self.ask(now)
+            if enabled:
+                for due, source in self.chains.step(self.sessions.found, now):
+                    try:
+                        read = self.sessions.read(source["id"], source["tool"], source["dir"], dirs)
+                        self.chains.done(due["id"], True, self.tell(due["to_tool"], due["to"],
+                                                                    chain_brief(source, read.get("messages", []), due["text"])), now)
+                    except (OpError, OSError, ValueError) as failed:
+                        self.chains.done(due["id"], False, str(failed), now)
             payload = {
                 "info": {"instance": self.instance, "enabled": enabled, "tools": self.tools[0],
                          "features": FEATURES, "version": VERSION, "newer": "",
@@ -3121,6 +3267,17 @@ class Agent:
         if action == "work_schedule_remove":
             if not self.schedules.remove(str(op.get("schedule") or "")):
                 raise OpError("没有找到这个定时提问")
+            return {}
+        if action == "work_chains":
+            return {"chains": self.chains.all()}
+        if action == "work_chain_set":
+            item = op.get("item")
+            if not isinstance(item, dict):
+                raise OpError("接力无效")
+            return {"chain": Chains.shown(self.chains.set(item, self.sessions.found))}
+        if action == "work_chain_remove":
+            if not self.chains.remove(str(op.get("chain") or "")):
+                raise OpError("没有找到这条接力")
             return {}
         source, taker = listed(op.get("from_tool"), op.get("from")), listed(op.get("to_tool"), op.get("to"))
         if source is None:

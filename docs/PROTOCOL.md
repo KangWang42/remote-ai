@@ -459,9 +459,10 @@ switches ignore repeated taps while saving; a requested refresh is queued if one
 
 `POST /api/work` `{"id": "<16 to 32 hex digits>", "action": "..."}` is held like `/api/files` and needs the `work`
 capability, which the Windows program and the Linux agent have. The three actions that begin with `chain` need
-`chains` besides, which only the Windows program has: they depend on the tools' hooks. The computer keeps and does
-all of it; the relay checks the shape of the question, passes it on as the operation `work_<action>` and keeps
-nothing.
+`chains` besides. The Windows program hears that a conversation has stopped from the tools' own hooks; the Linux
+agent has none, and sees a finished turn by watching the source conversation's record grow and then stay quiet
+for a little while. The computer keeps and does all of it; the relay checks the shape of the question, passes it
+on as the operation `work_<action>` and keeps nothing.
 
 | `action` | Fields | Answer |
 | --- | --- | --- |
