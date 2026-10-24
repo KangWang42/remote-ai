@@ -1235,6 +1235,95 @@ class EndToEnd(unittest.TestCase):
                 after = chunk["seq"]
         return plain(text)
 
+    def test_file_upload(self):
+        # the whole phone flow through /api/files: start, one or two chunks, finish, and
+        # the content is read back by file_read; the refusals the docs promise hold
+        device = self.overview()["device"]
+        if "file-upload" not in device.get("features", []):
+            self.skipTest("the agent under test does not take uploads yet")
+
+        def call(action, **extra):
+            payload = {"id": secrets.token_hex(16), "action": action, "dir": "项目",
+                       "path": extra.pop("path", "上传样例.txt"), "upload": secrets.token_hex(16)}
+            payload.update(extra)
+            return request("POST", self.base + "/api/files", payload, token=self.token)
+
+        content = "上传的内容 e2e — ünïcode\n".encode("utf-8")
+        half = len(content) // 2
+        encoded = base64.b64encode(content).decode("ascii")
+        upload = secrets.token_hex(16)
+        status, answer = call("file_upload_start", path="上传样例.txt", size=len(content), upload=upload)
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer, {"offset": 0})
+        status, answer = call("file_upload_chunk", path="上传样例.txt", upload=upload, offset=0,
+                              data=base64.b64encode(content[:half]).decode("ascii"))
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer, {"offset": half})
+        status, answer = call("file_upload_chunk", path="上传样例.txt", upload=upload, offset=half,
+                              data=base64.b64encode(content[half:]).decode("ascii"))
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer, {"offset": len(content)})
+        status, answer = call("file_upload_finish", path="上传样例.txt", upload=upload)
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer, {"offset": len(content)})
+        status, piece = request("POST", self.base + "/api/files",
+                                {"id": secrets.token_hex(16), "action": "file_read", "dir": "项目",
+                                 "path": "上传样例.txt", "offset": 0}, token=self.token)
+        self.assertEqual(status, 200, piece)
+        self.assertEqual(base64.b64decode(piece["data"]), content)
+        self.assertTrue(piece["end"])
+
+        # an existing file is refused at the start; a name that appears while the upload
+        # is in flight is never replaced at the last moment either
+        status, refused = call("file_upload_start", path="上传样例.txt", size=4)
+        self.assertEqual(status, 400, refused)
+        self.assertIn("已有同名", refused["error"])
+        upload2 = secrets.token_hex(16)
+        status, answer = call("file_upload_start", path="后来出现的.txt", size=3, upload=upload2)
+        self.assertEqual(status, 200, answer)
+        status, answer = call("file_upload_chunk", path="后来出现的.txt", upload=upload2, offset=0, data="YWJj")
+        self.assertEqual(status, 200, answer)
+        with open(os.path.join(self.project, "后来出现的.txt"), "w", encoding="utf-8") as stream:
+            stream.write("别人先写了")
+        status, refused = call("file_upload_finish", path="后来出现的.txt", upload=upload2)
+        self.assertEqual(status, 400, refused)
+        self.assertIn("已有同名", refused["error"])
+        status, kept = request("POST", self.base + "/api/files",
+                               {"id": secrets.token_hex(16), "action": "file_read", "dir": "项目",
+                                "path": "后来出现的.txt", "offset": 0}, token=self.token)
+        self.assertEqual(base64.b64decode(kept["data"]).decode("utf-8"), "别人先写了")
+
+        # shape and progress are checked: offset mismatch, an incomplete finish, a bad
+        # path, a missing folder; cancelling frees the name and removes the temp file,
+        # and cancelling an unknown id is harmless
+        upload3 = secrets.token_hex(16)
+        status, answer = call("file_upload_start", path="错位.bin", size=8, upload=upload3)
+        self.assertEqual(status, 200, answer)
+        status, refused = call("file_upload_chunk", path="错位.bin", upload=upload3, offset=4, data="AAAA")
+        self.assertEqual(status, 400, refused)
+        self.assertIn("上传位置或长度不一致", refused["error"])
+        status, refused = call("file_upload_finish", path="错位.bin", upload=upload3)
+        self.assertEqual(status, 400, refused)
+        self.assertIn("文件尚未完整上传", refused["error"])
+        status, refused = call("file_upload_start", path="../逃逸.txt", size=4)
+        self.assertEqual(status, 400, refused)
+        status, refused = call("file_upload_start", path="没有的文件夹/内.txt", size=4)
+        self.assertEqual(status, 400, refused)
+        self.assertIn("目标文件夹", refused["error"])
+        status, answer = call("file_upload_cancel", path="错位.bin", upload=upload3)
+        self.assertEqual(status, 200, answer)
+        status, answer = call("file_upload_cancel", path="错位.bin", upload=secrets.token_hex(16))
+        self.assertEqual(status, 200, answer)
+        status, answer = call("file_upload_start", path="错位.bin", size=8, upload=secrets.token_hex(16))
+        self.assertEqual(status, 200, answer)
+        listing = request("POST", self.base + "/api/files",
+                          {"id": secrets.token_hex(16), "action": "file_list", "dir": "项目",
+                           "path": "", "offset": 0}, token=self.token)[1]
+        temps = [e["name"] for e in listing["entries"] if e["name"].startswith(".remoteai-upload-")]
+        # the upload that was just started still holds exactly one temp file; the cancelled
+        # and refused ones have left nothing behind
+        self.assertEqual(len(temps), 1, temps)
+
 
 class InputNeverHolds(unittest.TestCase):
     """A program that has stopped reading must not hold the agent: input is refused after
