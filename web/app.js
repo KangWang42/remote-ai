@@ -33,7 +33,7 @@
   // The views of 协作 and 我的, by the name of their tab: each draws itself into its own part of the page.
   const views = {};
   // Project detail starts as a compact index. Each long section opens only when the user asks for it.
-  const projectFolds = { active: false, live: false, history: false };
+  const projectFolds = { active: false, live: false, history: false, ended: false };
   // The first list is asked for while the sign-in is still being checked: over a tunnel each answer takes a
   // quarter of a second, and waiting for one before asking for the other doubled the time to the first picture.
   let early = null;
@@ -1032,8 +1032,9 @@
     head.classList.toggle('folded', !open);
     head.setAttribute('aria-expanded', String(open));
     Array.from(section.children).slice(1).forEach(child => {
-      // Keep the recovery action for hidden conversations reachable even while the history body is folded.
-      if (child.id !== 'hidden-history') child.hidden = !open;
+      // The recovery action for hidden conversations stays reachable even folded, and the
+      // "more" buttons belong to draw(): their visibility says whether anything is left.
+      if (child.id !== 'hidden-history' && !child.id.startsWith('more-')) child.hidden = !open;
     });
   }
   function toggleProjectFold(key) { projectFolds[key] = !projectFolds[key]; applyProjectFold(key); }
@@ -1182,6 +1183,7 @@
     $('p-ended').hidden = !ended.length;
     show($('p-ended').querySelector('ul'), ended.slice(0, endedShown), [stamp(5), ready]);
     $('more-ended').hidden = ended.length <= endedShown;
+    applyProjectFold('ended');
     $('empty').hidden = inside.length > 0;
   }
 
