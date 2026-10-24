@@ -276,6 +276,21 @@ python tools/relay_list.py hide "线路 1" https://relay.example.com 口令
 
 `hidden` 只是让地址不以明文出现，防的是随手翻看、搜索和按地址扫描的程序，不是加密：电脑端要连接就必须知道地址，读过源码的人同样可以把它还原出来。电脑端窗口和 App 都不显示公共中转的地址。要让扫到地址的人不能随意申请空间，安装时用 `--key` 设一个口令，并把它一起放进 `hidden`。电脑端启动时和之后每 6 小时读一次清单，所以增加、更换或撤掉一个中转只需要改这个文件，不需要发新版本；清单为空时，电脑端只显示使用者自己的中转。想用自己的清单时，给电脑端设置环境变量 `REMOTECLI_RELAYS`，值为清单的地址或本机文件路径。
 
+### 广州公共中转的维护
+
+“广州公共中转”使用上述公共空间机制，最多容纳 100 台电脑。空间申请口令单独生成，与服务器登录密码无关；清单采用 `hidden` 字段保存连接信息。
+
+服务器上的 `remote-cli-relay` 是开机自启的 systemd 服务，只监听 `127.0.0.1:8722`。HTTPS 由 Docker 容器 `remote-cli-proxy` 提供，对外端口为 8443；80 端口用于证书签发和续期，两者都需在云安全组中保持放行。
+
+IP 证书由 Let's Encrypt 签发。`remote-cli-cert-renew.timer` 每 6 小时检查一次续期，证书配置为每 3 天续期，成功后自动检查并重载 nginx。可用以下命令查看服务与续期状态：
+
+```bash
+systemctl status remote-cli-relay remote-cli-cert-renew.timer
+systemctl list-timers remote-cli-cert-renew.timer
+journalctl -u remote-cli-cert-renew.service --since '7 days ago'
+docker exec remote-cli-proxy nginx -t
+```
+
 ## 手动运行
 
 不用安装脚本时，中转就是一个命令：
