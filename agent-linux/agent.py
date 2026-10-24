@@ -24,6 +24,8 @@ Besides a shell, the phone can start Claude Code and Codex when they are install
 this user, continue their saved conversations, and look at the files of a project.
 """
 import base64
+import binascii
+import errno
 import calendar
 import codecs
 import datetime
@@ -74,10 +76,11 @@ def private_address(url):
     except ValueError:
         return False
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
-FILE_ACTIONS = ("file_list", "file_read")
+UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish", "file_upload_cancel")
+FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "peek", "marks", "delete", "work", "chat"]
+FEATURES = ["terminal-exit", "files", "file-upload", "peek", "marks", "delete", "work", "chat"]
 # What the phone asks about its owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
 # ("chains") needs the tools' hooks, which only the Windows program has.
 WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff")
@@ -389,6 +392,212 @@ def files(root, relative, action, offset):
         raise OpError("没有权限读取")
     except OSError:
         raise OpError("读取失败")
+
+
+class Uploads:
+    """Bounded uploads owned by this agent (docs/PROTOCOL.md, "Uploads"). A destination is
+    published only after all bytes arrive, and an existing file or folder is never replaced.
+    The destination directory is held open as a file descriptor for the upload's lifetime:
+    every write and the final publish happen through that descriptor, so a folder swapped
+    for a link mid-upload changes nothing — the bytes land in the directory that was
+    checked at the start. The temporary file is published with a hard link, which fails
+    rather than replaces on POSIX, where a rename would silently overwrite."""
+
+    LIMIT = 300 * 1024 * 1024
+    MAX_PENDING = 4
+    IDLE_SECONDS = 600.0   # an upload nothing has arrived for is removed with its temp file
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.pending = {}   # upload id -> {"fd", "tmp", "stream", "root", "path", "size", "written", "touched"}
+
+    @staticmethod
+    def _key(op):
+        key = str(op.get("upload") or "")
+        if not re.fullmatch(r"[a-f0-9]{32}", key):
+            raise OpError("上传编号无效")
+        return key
+
+    @staticmethod
+    def _parts(relative):
+        parts = [p for p in str(relative or "").replace("\\", "/").strip("/").split("/") if p != ""]
+        if not parts or any(p in (".", "..") or any(ord(c) < 32 for c in p) for p in parts):
+            raise OpError("文件名或路径无效，请重命名后再上传")
+        return parts
+
+    def _drop(self, key):
+        current = self.pending.pop(key, None)
+        if current is None:
+            return
+        try:
+            current["stream"].close()
+        except OSError:
+            pass
+        try:
+            os.unlink(current["tmp"], dir_fd=current["fd"])
+        except OSError:
+            pass
+        try:
+            os.close(current["fd"])
+        except OSError:
+            pass
+
+    def expire(self):
+        """Removes uploads nothing has arrived for in ten minutes, with their temp files."""
+        with self.lock:
+            self._expire_locked()
+
+    def _expire_locked(self):
+        cutoff = time.time() - self.IDLE_SECONDS
+        for key in [k for k, u in self.pending.items() if u["touched"] < cutoff]:
+            self._drop(key)
+
+    def dispose(self):
+        with self.lock:
+            for key in list(self.pending):
+                self._drop(key)
+
+    def run(self, root, op):
+        action = str(op.get("action") or "")
+        with self.lock:
+            self._expire_locked()
+            key = self._key(op)
+            if action == "file_upload_start":
+                return self._start(key, root, op)
+            current = self.pending.get(key)
+            if current is None:
+                if action == "file_upload_cancel":
+                    return {"offset": 0}    # cancelling an unknown id is harmless
+                raise OpError("上传已过期，请重新选择文件")
+            if current["root"] != root or current["path"] != str(op.get("path") or ""):
+                raise OpError("上传目标不一致")
+            current["touched"] = time.time()
+            if action == "file_upload_cancel":
+                self._drop(key)
+                return {"offset": 0}
+            if action == "file_upload_chunk":
+                return self._chunk(key, current, op)
+            if action == "file_upload_finish":
+                return self._finish(key, current)
+            raise OpError("不支持此操作")
+
+    def _start(self, key, root, op):
+        if key in self.pending:
+            raise OpError("上传编号已使用")
+        if len(self.pending) >= self.MAX_PENDING:
+            raise OpError("同时上传的文件过多，请稍后重试")
+        size = op.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= self.LIMIT:
+            raise OpError("单个文件上传上限为 300 MB")
+        relative = str(op.get("path") or "")
+        parts = self._parts(relative)
+        root = os.path.normpath(root)
+        full = os.path.normpath(os.path.join(root, *parts))
+        inside = root.rstrip("/") + "/"
+        if full != root and not full.startswith(inside):
+            raise OpError("路径不在项目文件夹内")
+        real_root = os.path.realpath(root)
+        real_dir = os.path.realpath(os.path.dirname(full) or root)
+        if real_dir != real_root and not real_dir.startswith(real_root.rstrip("/") + "/"):
+            raise OpError("这个位置链接到项目文件夹之外，不能打开")
+        try:
+            fd = os.open(real_dir, os.O_RDONLY | os.O_DIRECTORY)
+        except OSError:
+            raise OpError("目标文件夹不存在或无法写入")
+        stream, tmp = None, None
+        try:
+            target = parts[-1]
+            try:
+                os.stat(target, dir_fd=fd, follow_symlinks=False)
+                raise OpError("已有同名文件或文件夹，请重命名后再上传")
+            except FileNotFoundError:
+                pass
+            tmp = ".remoteai-upload-" + secrets.token_hex(16) + ".tmp"
+            stream = os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd), "wb")
+        except OpError:
+            os.close(fd)
+            raise
+        except OSError:
+            os.close(fd)
+            raise OpError("目标文件夹不存在或无法写入")
+        self.pending[key] = {"fd": fd, "tmp": tmp, "stream": stream, "root": root, "name": parts[-1],
+                             "path": relative, "size": size, "written": 0, "touched": time.time()}
+        return {"offset": 0}
+
+    def _chunk(self, key, current, op):
+        encoded = op.get("data")
+        if not isinstance(encoded, str) or not encoded or len(encoded) > FILE_PIECE * 4 // 3:
+            raise OpError("上传分块过大")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            raise OpError("上传内容无效")
+        offset = op.get("offset")
+        if isinstance(offset, bool) or not isinstance(offset, int) \
+                or offset != current["written"] or not data \
+                or current["written"] + len(data) > current["size"]:
+            raise OpError("上传位置或长度不一致")
+        try:
+            current["stream"].write(data)
+        except OSError:
+            self._drop(key)
+            raise OpError("写入临时文件失败")
+        current["written"] += len(data)
+        return {"offset": current["written"]}
+
+    def _finish(self, key, current):
+        if current["written"] != current["size"]:
+            raise OpError("文件尚未完整上传")
+        fd, tmp, name = current["fd"], current["tmp"], current["name"]
+        try:
+            current["stream"].flush()
+            os.fsync(current["stream"].fileno())
+            current["stream"].close()
+        except OSError:
+            self._drop(key)
+            raise OpError("写入临时文件失败")
+        try:
+            try:
+                os.stat(name, dir_fd=fd, follow_symlinks=False)
+                raise OpError("已有同名文件或文件夹，请重命名后再上传")
+            except FileNotFoundError:
+                pass
+            try:
+                os.link(tmp, name, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
+            except OSError as error:
+                if error.errno in (errno.EXDEV, errno.EPERM, errno.EMLINK, errno.ENOSYS):
+                    # a filesystem without hard links: check and rename, the small window be told
+                    try:
+                        os.stat(name, dir_fd=fd, follow_symlinks=False)
+                        raise OpError("已有同名文件或文件夹，请重命名后再上传")
+                    except FileNotFoundError:
+                        pass
+                    os.replace(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+                else:
+                    raise
+        except OpError:
+            self.pending.pop(key, None)
+            try:
+                os.unlink(tmp, dir_fd=fd)
+            except OSError:
+                pass
+            os.close(fd)
+            raise
+        except OSError:
+            self.pending.pop(key, None)
+            try:
+                os.unlink(tmp, dir_fd=fd)
+            except OSError:
+                pass
+            os.close(fd)
+            raise OpError("发布文件失败")
+        self.pending.pop(key, None)
+        try:
+            os.unlink(tmp, dir_fd=fd)
+        except OSError:
+            pass
+        os.close(fd)
+        return {"offset": current["size"]}
 
 
 def read_part(path, tail, limit):
@@ -2770,6 +2979,7 @@ class Agent:
         self.projects = Projects(data)
         self.marks = Marks(data)
         self.sessions = Sessions(self.marks)
+        self.uploads = Uploads()
         # the owner's work: in numbers, and the questions asked at a set time
         self.stats = Stats(self.sessions.claude_home, lambda: os.environ.get("CODEX_HOME") or os.path.join(self.sessions.home, ".codex"))
         self.schedules = Schedules(os.path.join(data, "schedules.json"))
@@ -2887,6 +3097,7 @@ class Agent:
             now = time.time()
             if now - self.tools[1] > 30:
                 self.tools = ([t for t in ("claude", "codex", "opencode", "qoder", "cline") if find_tool(t)] + ["shell"], now)
+            self.uploads.expire()               # uploads nothing has arrived for lose their temp files
             # what the conversation lookup works on: its own thread takes it from here
             self.scan_want = (dirs, list(self.terminals.values()))
             if enabled and now >= self.next_asking:
@@ -2983,7 +3194,10 @@ class Agent:
                 root = dirs.get(str(op.get("dir") or ""))
                 if root is None:
                     raise OpError("没有这个项目")
-                result = files(root, op.get("path", ""), action, op.get("offset", 0))
+                if action in UPLOAD_ACTIONS:
+                    result = self.uploads.run(root, op)
+                else:
+                    result = files(root, op.get("path", ""), action, op.get("offset", 0))
             elif action == "session_read":
                 result = self.sessions.read(str(op.get("session") or ""), str(op.get("tool") or ""),
                                             str(op.get("dir") or ""), dirs, str(op.get("since") or ""))
@@ -3273,6 +3487,7 @@ class Agent:
             if not live.closed:
                 live.kill()
             live.dispose()
+        self.uploads.dispose()
         self.http.close()
         self.pull_http.close()
         return 0
