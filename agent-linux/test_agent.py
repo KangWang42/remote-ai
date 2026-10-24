@@ -1079,9 +1079,12 @@ class EndToEnd(unittest.TestCase):
         status, numbers = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "stats", "days": 7}, token=self.token, timeout=40)
         self.assertEqual((status, numbers.get("ready"), len(numbers.get("days", [])), len(numbers.get("hours", []))), (200, True, 7, 24), numbers)
         self.assertEqual(numbers["days"][-1]["date"], time.strftime("%Y-%m-%d"))
-        # and passing on when a conversation stops is not offered here: this program has no hooks of the tools
-        status, refused = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "chains"}, token=self.token)
-        self.assertEqual((status, "不支持接力" in refused.get("error", "")), (400, True), refused)
+        # and passing on when a conversation stops is offered here too: without the tools' hooks a
+        # finished turn is seen by the source's record growing and then going quiet (the rule set,
+        # fired and taken down is its own test below)
+        self.assertIn("chains", self.overview()["device"]["features"])
+        status, offered = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "chains"}, token=self.token)
+        self.assertEqual((status, offered.get("chains")), (200, []), offered)
 
         # 6. a folder that is not a project never becomes a terminal: the relay refuses it
         # at the door (the agent checks again itself, but this request cannot even reach it)
@@ -1234,6 +1237,97 @@ class EndToEnd(unittest.TestCase):
                 text += chunk["data"]
                 after = chunk["seq"]
         return plain(text)
+
+    def test_a_chain_passes_work_on(self):
+        # the whole phone flow through /api/work: a rule is set between two conversations the
+        # computer lists, the source's record grows and goes quiet, and what it said last, with
+        # the owner's words, is typed into the conversation that takes over — run in one of our
+        # terminals. The shape errors the relay checks are asked for as well.
+        if "chains" not in self.overview()["device"].get("features", []):
+            self.skipTest("the agent under test does not pass work on yet")
+
+        def work(action, **extra):
+            payload = {"id": secrets.token_hex(16), "action": action}
+            payload.update(extra)
+            return request("POST", self.base + "/api/work", payload, token=self.token)
+
+        # the taker: the fixture's saved conversation, running in a terminal of ours
+        self.poll(lambda: self.overview(), lambda v: any(s["id"] == self.saved for s in v.get("sessions", [])))
+        started = self.op({"action": "start", "tool": "claude", "dir": "项目", "session": self.saved})
+        taker_terminal = started["terminal"]
+        def tidy():
+            # the fixture is shared with the other tests of the class: what this one made up
+            # is taken away again, also when an assertion below fails
+            try:
+                self.op({"action": "close", "terminal": taker_terminal})
+                self.poll(lambda: self.overview(),
+                          lambda v: any(t["id"] == taker_terminal and t["state"] == "closed" for t in v["terminals"]),
+                          seconds=15)
+            except AssertionError:
+                pass
+            for rule in work("chains")[1].get("chains", []):
+                work("chain_remove", chain=rule["id"])
+        self.addCleanup(tidy)
+        self.poll(lambda: self.overview(),
+                  lambda v: any(t["id"] == taker_terminal and t["state"] == "running" for t in v["terminals"]))
+        # the source: a second saved conversation of the same project
+        source = "0b1c2d3e-1111-2222-3333-444455556666"
+        folder = os.path.join(self.home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", self.project))
+        record = os.path.join(folder, source + ".jsonl")
+        def write_record(rows):
+            with open(record, "w", encoding="utf-8") as stream:
+                for row in rows:
+                    stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+        write_record([{"type": "user", "message": {"role": "user", "content": "实现功能"}},
+                      {"type": "assistant", "message": {"role": "assistant", "content": "实现完成，共三处改动"}}])
+        self.addCleanup(os.remove, record)
+        self.poll(lambda: self.overview(), lambda v: any(s["id"] == source for s in v.get("sessions", [])))
+
+        # shape errors: a conversation that is not there, and one passed to itself
+        status, refused = work("chain_set", item={"id": secrets.token_hex(16), "from": "0c1d2e3f-1111-2222-3333-444455556666",
+                                                  "to": self.saved, "text": "审查", "rounds": 1})
+        self.assertEqual(status, 400, refused)
+        status, refused = work("chain_set", item={"id": secrets.token_hex(16), "from": self.saved, "to": self.saved,
+                                                  "text": "审查", "rounds": 1})
+        self.assertEqual(status, 400, refused)
+        # the rule itself
+        rule = secrets.token_hex(16)
+        status, answer = work("chain_set", item={"id": rule, "from": source, "to": self.saved,
+                                                 "text": "审查上述改动", "rounds": 2})
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer["chain"]["left"], 2)
+        status, listed = work("chains")
+        self.assertEqual(status, 200, listed)
+        self.assertTrue(any(c["id"] == rule for c in listed["chains"]))
+
+        # the source's turn: the record grows, then stays quiet (its stamp is set just past the
+        # agent's quiet window, so the waiting is the scan's, not the clock's). The agent must
+        # have taken its first look at the rule before the growth, or the grown state would be
+        # its baseline: two report cycles are enough for that.
+        time.sleep(2.5)
+        write_record([{"type": "user", "message": {"role": "user", "content": "实现功能"}},
+                      {"type": "assistant", "message": {"role": "assistant", "content": "实现完成，共三处改动"}},
+                      {"type": "assistant", "message": {"role": "assistant", "content": "又补充了一处改动"}}])
+        older = time.time() - (agent.CHAIN_QUIET + 10)
+        os.utime(record, (older, older))
+
+        # what the taker's screen shows: the passing-on, typed into its terminal
+        after, seen = 0, ""
+        deadline = time.time() + 40
+        while time.time() < deadline and "【接力】" not in plain(seen):
+            status, view = request("GET", "%s/api/terminal?terminal=%s&after=%d&wait=2"
+                                   % (self.base, taker_terminal, after), token=self.token)
+            for chunk in view.get("chunks", []):
+                seen += chunk["data"]
+                after = chunk["seq"]
+        self.assertIn("【接力】", plain(seen), "the passing-on never reached the taker's terminal")
+        self.assertIn("审查上述改动", plain(seen))
+        # one round is spent, one is left; the rule tells how the passing-on went
+        self.poll(lambda: work("chains")[1], lambda w: any(c["id"] == rule and c["runs"] == 1 and c["left"] == 1
+                                                           and c["last"] and c["last"]["ok"] for c in w["chains"]))
+        status, gone = work("chain_remove", chain=rule)
+        self.assertEqual(status, 200, gone)
+        self.assertFalse(any(c["id"] == rule for c in work("chains")[1]["chains"]))
 
 
 class InputNeverHolds(unittest.TestCase):
