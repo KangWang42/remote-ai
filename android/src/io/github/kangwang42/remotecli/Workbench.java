@@ -493,7 +493,7 @@ final class Workbench {
         List<String> tools = new ArrayList<>(board.tools), sources = new ArrayList<>(board.sources);
         // (a project whose folder is used by an app or in a terminal is told apart too, also while nothing of it is listed)
         for (Snapshot snapshot : snapshots.values()) for (AggregateSessions.Project project : snapshot.projects) {
-            for (String known : new String[]{"claude", "codex", "opencode", "qoder", "cline"}) if (project.tools.contains(known) && !tools.contains(known)) tools.add(known);
+            for (String known : new String[]{"claude", "codex", "opencode", "qoder", "cline", "pi"}) if (project.tools.contains(known) && !tools.contains(known)) tools.add(known);
             for (String known : new String[]{"term", "app"}) if (project.sources.contains(known) && !sources.contains(known)) sources.add(known);
         }
         if (!tool.isEmpty() && !tools.contains(tool)) tools.add(tool);

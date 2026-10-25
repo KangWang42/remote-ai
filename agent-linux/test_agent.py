@@ -299,6 +299,11 @@ class Pure(unittest.TestCase):
                          ["/b/cline", "--id", "1792116013202_ffehs"])
         self.assertEqual(agent.tool_argv("cline", "/b/cline", "", False, "read", False), ["/b/cline", "--plan"])
         self.assertEqual(agent.tool_argv("cline", "/b/cline", "", False, "", False), ["/b/cline"])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", sid, False, "", True), ["/b/pi", "--session-id", sid])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", sid, False, "", False), ["/b/pi", "--session", sid])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", "", True, "", False), ["/b/pi", "--continue"])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", "", False, "", False), ["/b/pi"])
+        self.assertTrue(agent.session_id_ok("pi", sid))
         self.assertTrue(agent.session_id_ok("opencode", "ses_ebd8614d0ffe4Z18FfuXFMXIFJ"))
         self.assertTrue(agent.session_id_ok("qoder", sid))
         self.assertTrue(agent.session_id_ok("cline", "1792116013202_ffehs"))
@@ -524,6 +529,41 @@ class Pure(unittest.TestCase):
         got = sessions.read("aaaaaaaa-0000-0000-0000-000000000001", "qoder", "项目", {"项目": project})
         self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
                          [("user", "第一行\n第二行"), ("thought", "想"), ("assistant", "部署好了"), ("tool", "Bash：ls")])
+
+    def test_pi_sessions(self):
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp() + "/项目"
+        os.makedirs(project)
+        session = "aaaaaaaa-0000-0000-8000-000000000001"     # a UUIDv7-shaped id no real pi of this machine holds
+        saved = os.path.join(home, ".pi", "agent", "sessions", re.sub("[^a-zA-Z0-9]", "-", project))
+        os.makedirs(saved)
+        def row(what):
+            return json.dumps(dict(what, timestamp="2026-10-24T03:04:05.000Z")) + "\n"
+        with open(os.path.join(saved, "2026-10-24T03-04-05-000Z_%s.jsonl" % session), "w", encoding="utf-8") as stream:
+            stream.write(row({"type": "session", "version": 3, "id": session, "cwd": project}))
+            stream.write(row({"type": "message", "message": {"role": "user", "content": [
+                {"type": "text", "text": "第一行\n第二行"}]}}))
+            stream.write(row({"type": "message", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "想"},
+                {"type": "text", "text": "部署好了"},
+                {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "ls"}}]}}))
+            stream.write(row({"type": "message", "message": {"role": "toolResult", "toolCallId": "c1", "content": [
+                {"type": "text", "text": "一个文件"}]}}))
+            stream.write(row({"type": "message", "message": {"role": "system", "content": "pi 自己的话"}}))
+        other = "bbbbbbbb-0000-0000-8000-000000000002"
+        with open(os.path.join(saved, "2026-10-24T04-04-05-000Z_%s.jsonl" % other), "w", encoding="utf-8") as stream:
+            stream.write(row({"type": "session", "version": 3, "id": other, "cwd": project}))
+        sessions = agent.Sessions()
+        sessions.home = home
+        found = {s["id"]: s for s in sessions.scan({"项目": project}, [])}
+        self.assertEqual(found[session]["tool"], "pi")
+        self.assertEqual(found[session]["title"], "第一行")
+        self.assertEqual(found[session]["dir"], "项目")
+        self.assertTrue(found[other]["title"].startswith("Pi 对话 "))
+        got = sessions.read(session, "pi", "项目", {"项目": project})
+        self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
+                         [("user", "第一行\n第二行"), ("thought", "想"), ("assistant", "部署好了"), ("tool", "bash：ls")])
+        self.assertEqual(got["messages"][-1]["result"], "一个文件")
 
     def test_cline_sessions(self):
         home = tempfile.mkdtemp()

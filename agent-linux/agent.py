@@ -83,7 +83,7 @@ FEATURES = ["terminal-exit", "files", "peek", "marks", "delete", "work", "chat",
 # tell the Windows program of it at once, are not there on Linux.
 WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff",
                 "work_chains", "work_chain_set", "work_chain_remove")
-CHAIN_TOOLS = ("claude", "codex", "opencode", "qoder", "cline")   # the conversations the phone can pass between
+CHAIN_TOOLS = ("claude", "codex", "opencode", "qoder", "cline", "pi")   # the conversations the phone can pass between
 CHAIN_QUIET = 45.0     # a turn is over once the source's record has been quiet this long after growing
 MAX_CHAINS = 20
 LONGEST_TURN, LONGEST_WAIT = 3 * 3600, 600      # a turn is counted for no longer; a first answer later than this is none
@@ -191,7 +191,7 @@ def session_id_ok(tool, session):
         return bool(OPENCODE_RE.match(session))
     if tool == "cline":
         return bool(CLINE_RE.match(session))
-    return bool(UUID_RE.match(session))       # claude, codex and qoder name theirs a UUID
+    return bool(UUID_RE.match(session))   # claude, codex, qoder and pi name theirs a UUID
 
 
 def iso_ms(stamp):
@@ -304,6 +304,75 @@ def said_cline(session):
     return {"messages": out[-SAID_MESSAGES:], "more": False, "updated": updated}
 
 
+def said_pi(path):
+    """What was last said in a pi conversation, the same shape as said(). pi keeps one message
+    to a line: what the person said and what the tool answered are its text, and its work is
+    the calls and results written under it."""
+    limit = 4 * 1024 * 1024
+    out, steps, asked = [], {}, [0]
+
+    def add(role, text):
+        text = " ".join(text.split()) if role == "tool" else text.strip()
+        room = SAID_NOTED if role == "thought" else SAID_CHARS
+        if text:
+            out.append({"role": role, "text": text if len(text) <= room else text[:room - 1] + "…"})
+
+    def step(text, detail=""):
+        before = len(out)
+        add("tool", text)
+        if len(out) == before:
+            return None
+        detail = (detail or "").strip()
+        if detail and detail[:40] not in text:
+            out[-1]["detail"] = detail if len(detail) <= 400 else detail[:400] + "…"
+        return out[-1]
+
+    for row in rows(read_part(path, True, limit)):
+        if row.get("type") != "message" or not isinstance(row.get("message"), dict):
+            continue
+        message = row["message"]
+        role = message.get("role")
+        parts = message.get("content") if isinstance(message.get("content"), list) else []
+        if role == "user":
+            stamp = iso_ms(row.get("timestamp"))
+            if stamp:
+                asked[0] = stamp
+            for part in parts:
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str) \
+                        and not part["text"].lstrip().startswith("<"):
+                    add("user", part["text"])
+        elif role == "assistant":
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    add("assistant", part["text"])
+                elif part.get("type") == "thinking" and isinstance(part.get("thinking"), str):
+                    add("thought", part["thinking"])     # what it says of its work between the steps
+                elif part.get("type") == "toolCall":
+                    given = part.get("arguments") if isinstance(part.get("arguments"), dict) else {}
+                    about = next((given[k] for k in ("description", "command", "file_path", "path", "pattern", "query", "url")
+                                  if isinstance(given.get(k), str) and given[k]), "")
+                    name = str(part.get("name") or "").strip()
+                    made = step((name + ("：" + about[:160] if about else "")).strip(),
+                                given.get("command") if isinstance(given.get("command"), str) else "")
+                    if made is not None and isinstance(part.get("id"), str):
+                        steps[part["id"]] = made
+        elif role == "toolResult":
+            made = steps.get(message.get("toolCallId"))
+            if made is not None:
+                made["result"] = first("\n".join(one.get("text") or "" for one in parts if isinstance(one, dict)))
+    kept = talk(out, SAID_MESSAGES, SAID_RUN)
+    with_result = 0
+    for entry in reversed(kept):
+        if "result" in entry:
+            with_result += 1
+            if with_result > SAID_RESULTS:
+                del entry["result"]
+    more = len(kept) < len(out) or os.path.getsize(path) > limit
+    return {"messages": kept, "more": more, "updated": int(os.path.getmtime(path) * 1000), "asked": asked[0]}
+
+
 def find_tool(name):
     """The program `claude` or `codex` of this user, or None."""
     home = os.path.expanduser("~")
@@ -333,6 +402,10 @@ def tool_argv(tool, launcher, session, history, mode, fresh):
         args = ["--session-id" if fresh else "--resume", session] if session else ["--continue"] if history else []
         args += ["--permission-mode", "plan"] if mode == "read" else \
             ["--permission-mode", "accept_edits"] if mode == "edit" else []
+    elif tool == "pi":
+        # --session-id names a conversation that does not exist yet, --session takes the one it says
+        args = ["--session-id" if fresh else "--session", session] if session else ["--continue"] if history else []
+        # no read-only mode of its own, and every step runs as asked
     elif tool == "cline":
         # --id only continues; a new conversation is named by cline itself, like codex's
         args = ["--id", session] if session else []
@@ -785,6 +858,11 @@ class Sessions:
         QODER_HOME names."""
         return os.environ.get("QODER_HOME") or os.path.join(self.home, ".qoder")
 
+    def pi_home(self):
+        """Where pi keeps its conversations: its agent folder in the person's home, or the
+        one PI_HOME names."""
+        return os.environ.get("PI_HOME") or os.path.join(self.home, ".pi", "agent")
+
     def known(self, session, tool, name):
         return next((s for s in self.found if s["id"] == session and s["tool"] == tool and s["dir"] == name), None)
 
@@ -808,6 +886,14 @@ class Sessions:
                 stamp = "u%d" % answer["updated"]
                 return dict({"same": True} if since and since == stamp else answer, stamp=stamp,
                             title=saved["title"], status=saved.get("status", ""))
+            if tool == "pi":
+                # one file to a conversation, under the folder it was worked in, named by pi itself
+                found = glob.glob(os.path.join(self.pi_home(), "sessions",
+                                               re.sub(r"[^a-zA-Z0-9]", "-", folder), "*_%s.jsonl" % session))
+                info = os.stat(found[0])
+                stamp = "%d.%d" % (info.st_size, info.st_mtime_ns)
+                answer = {"same": True} if since and since == stamp else said_pi(found[0])
+                return dict(answer, stamp=stamp, title=saved["title"], status=saved.get("status", ""))
             if tool == "claude":
                 found = [os.path.join(self.claude_home(), "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder), session + ".jsonl")]
             elif tool == "qoder":
@@ -937,6 +1023,10 @@ class Sessions:
             found += self._qoder(dirs, terminals)
         except (OSError, ValueError):
             pass                # the store is qoder's own; a miss here is never fatal
+        try:
+            found += self._pi(dirs, terminals)
+        except OSError:
+            pass                # the store is pi's own; a miss here is never fatal
         try:
             found += self._cline(dirs, terminals)
         except (OSError, sqlite3.Error, ValueError):
@@ -1250,6 +1340,72 @@ class Sessions:
             message = row.get("message") if isinstance(row.get("message"), dict) else {}
             content = message.get("content")
             parts = content if isinstance(content, list) else []
+            for part in parts:
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                    return tidy(part["text"].split("\n")[0])[:60]
+        return ""
+
+    def _pi(self, dirs, terminals):
+        """Conversations pi kept under its sessions, in a folder named for the one they were
+        worked in, and the ones a pi of this user holds open: such a program writes away its
+        own command line, so the newest conversation of the folder it works in stands for it."""
+        held = {}
+        for cmd in glob.glob("/proc/[0-9]*/cmdline"):
+            try:
+                with open(cmd, "rb") as stream:
+                    parts = stream.read().split(b"\0")
+            except OSError:
+                continue
+            # a pi calls itself pi; one started as `node .../pi-coding-agent/...` says so by its script
+            if not (parts[0] == b"pi" or parts[0].endswith(b"/pi")
+                    or any(b"pi-coding-agent" in p for p in parts[:2])):
+                continue
+            try:
+                pid = int(os.path.basename(os.path.dirname(cmd)))
+                cwd = os.readlink(os.path.join(os.path.dirname(cmd), "cwd"))
+            except (OSError, ValueError):
+                continue
+            held[re.sub(r"[^a-zA-Z0-9]", "-", cwd)] = pid
+        root = os.path.join(self.pi_home(), "sessions")
+        found, counts = [], {}
+        for name, folder in dirs.items():
+            saved = os.path.join(root, re.sub(r"[^a-zA-Z0-9]", "-", folder))
+            recent = []
+            for path in glob.glob(os.path.join(saved, "*.jsonl")):
+                try:
+                    recent.append((os.stat(path), path))
+                except OSError:
+                    pass
+            recent.sort(key=lambda item: item[0].st_mtime, reverse=True)
+            for rank, (info, path) in enumerate(recent[:60]):
+                session = os.path.basename(path)[:-6].rsplit("_", 1)[-1]
+                if not UUID_RE.match(session):
+                    continue
+                pid = held.get(os.path.basename(saved)) if rank == 0 else None
+                owner = owner_of(pid, terminals) if pid else None
+                if owner is not None and owner.tool == "pi" and not owner.session:
+                    owner.session = session
+                live = pid is not None and owner is None
+                if not live and counts.get(name, 0) >= 15:
+                    continue
+                if not live:
+                    counts[name] = counts.get(name, 0) + 1
+                title = self._pi_title(path) \
+                    or "Pi 对话 " + time.strftime("%m-%d %H:%M", time.localtime(info.st_mtime))
+                found.append(self._entry(session, "pi", name, title, info, live, folder))
+        return found
+
+    def _pi_title(self, path):
+        """The first thing the person said in a pi conversation, like claude's own title."""
+        try:
+            head = read_part(path, False, 64 * 1024)
+        except OSError:
+            return ""
+        for row in rows(head):
+            if row.get("type") != "message" or not isinstance(row.get("message"), dict) \
+                    or row["message"].get("role") != "user":
+                continue
+            parts = row["message"].get("content") if isinstance(row["message"].get("content"), list) else []
             for part in parts:
                 if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
                     return tidy(part["text"].split("\n")[0])[:60]
@@ -2683,7 +2839,7 @@ class Schedules:
                 "next": 0, "runs": 0, "last_at": 0, "last_ok": False, "last_note": ""}
         if not ID_RE.match(item["id"]):
             raise OpError("编号无效")
-        if item["tool"] not in ("claude", "codex", "opencode", "qoder", "cline"):
+        if item["tool"] not in ("claude", "codex", "opencode", "qoder", "cline", "pi"):
             raise OpError("工具无效")
         if not session_id_ok(item["tool"], item["session"]):
             raise OpError("请选择要提问的对话")
@@ -2869,7 +3025,7 @@ def handover(source, messages, note):
     asked = [m["text"] for m in messages if m.get("role") == "user"]
     answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
     steps = [m["text"] for m in messages if m.get("role") == "tool"]
-    label = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline"}.get(source["tool"], source["tool"])
+    label = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}.get(source["tool"], source["tool"])
     brief = "【对话交接】下面是我在另一段对话里的进展（%s，“%s”%s），请接着处理。\n" % (label, source["title"], "，项目 " + source["dir"] if source["dir"] else "")
     if asked:
         brief += "\n我最初的要求：\n" + cut(asked[0], 800) + "\n"
@@ -2890,7 +3046,7 @@ def chain_brief(source, messages, note):
     cut = lambda text, most: text.strip() if len(text.strip()) <= most else text.strip()[:most] + "…"
     answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
     brief = "【接力】%s“%s”完成了一轮，把它的进展转给你。\n" % (
-        {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline"}.get(source["tool"], source["tool"]),
+        {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}.get(source["tool"], source["tool"]),
         source["title"])
     if answered:
         brief += "\n它最后的回答：\n" + cut(answered, 2000) + "\n"
@@ -3024,7 +3180,7 @@ class Agent:
                     break
             now = time.time()
             if now - self.tools[1] > 30:
-                self.tools = ([t for t in ("claude", "codex", "opencode", "qoder", "cline") if find_tool(t)] + ["shell"], now)
+                self.tools = ([t for t in ("claude", "codex", "opencode", "qoder", "cline", "pi") if find_tool(t)] + ["shell"], now)
             # what the conversation lookup works on: its own thread takes it from here
             self.scan_want = (dirs, list(self.terminals.values()))
             if enabled and now >= self.next_asking:
@@ -3294,7 +3450,7 @@ class Agent:
         if terminal in self.terminals:
             return                              # already started; the operation is a repeat
         tool = str(op.get("tool") or "")
-        if tool not in ("claude", "codex", "opencode", "qoder", "cline", "shell"):
+        if tool not in ("claude", "codex", "opencode", "qoder", "cline", "pi", "shell"):
             raise OpError("电脑没有这个工具")
         name = str(op.get("dir") or "")
         if name not in dirs:
@@ -3332,7 +3488,7 @@ class Agent:
                     raise OpError("电脑上没有找到这个对话，请刷新后重试")
                 if saved["live"] or any(t.session == session and not t.closed for t in self.terminals.values()):
                     raise OpError("这个对话正在被使用，请先结束使用它的程序")
-            fresh = tool in ("claude", "opencode", "qoder") and not session and not history
+            fresh = tool in ("claude", "opencode", "qoder", "pi") and not session and not history
             if fresh:
                 # named by us, so the terminal knows its conversation at once — in the
                 # shape the tool itself names them, or it refuses the id and exits
