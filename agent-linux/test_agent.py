@@ -578,8 +578,9 @@ class Pure(unittest.TestCase):
         deadline = time.time() + 5
         while time.time() < deadline:
             try:
-                if open("/proc/%d/cmdline" % proc.pid, "rb").read().split(b"\0")[0] == b"pi":
-                    return True
+                with open("/proc/%d/cmdline" % proc.pid, "rb") as stream:
+                    if stream.read().split(b"\0")[0] == b"pi":
+                        return True
             except OSError:
                 pass
             time.sleep(0.05)

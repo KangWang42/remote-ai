@@ -259,8 +259,8 @@ to the project folder, with `/`.
 A refusal is `400 {"error": "..."}`. The computer answers only for paths inside the project folder and refuses a
 path whose real location, after links and junctions, is outside it. The relay keeps nothing of an answer.
 
-Uploads use the same authenticated endpoint and require both `files` and `file-upload` capabilities (currently
-Windows). Every request has a fresh operation `id`, the fixed workspace `dir`, destination `path` including the
+Uploads use the same authenticated endpoint and require both `files` and `file-upload` capabilities (the
+Windows program and the Linux Python agent). Every request has a fresh operation `id`, the fixed workspace `dir`, destination `path` including the
 filename, and a client-generated 32-character lowercase hex `upload` ID. Only these operations are accepted:
 
 - `file_upload_start` adds integer `size` (0 through 314,572,800 bytes), returning `{"offset": 0}`.
@@ -277,6 +277,12 @@ idle for ten minutes remove temporary files; forcibly terminating the computer p
 `.remoteai-upload-*.tmp` files that may be removed when no upload is active. Uploads are not resumable after restart.
 The relay validates size, offset and base64 bounds and forwards only operation-specific fields; it does not persist
 file contents. An older relay or agent refuses upload operations without affecting file reads.
+
+The Linux Python agent keeps the same limits and refusals. It opens the destination directory once its real
+location is checked and writes and publishes through that descriptor, so the directory swapped for a link
+mid-upload changes nothing. The temporary file (mode 600) is published with a hard link, which fails rather than
+replaces an existing name; on a filesystem without hard links it checks the name and renames. Temporary files
+are removed after ten idle minutes and when the agent stops.
 
 Android implements `WebChromeClient.onShowFileChooser` with `ACTION_OPEN_DOCUMENT`, `CATEGORY_OPENABLE`, local
 files and optional multiple selection. Only granted `content:` URIs from external providers are returned to the

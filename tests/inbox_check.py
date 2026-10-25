@@ -414,7 +414,7 @@ def main():
 
         # ---- in its project: the pinned first, the hidden only when asked for
         page_value("(() => { Array.from(document.querySelectorAll('#project-list .card b')).find(b => b.textContent === 'thesis').closest('button').click(); return 1; })()")
-        HISTORY = "(() => document.getElementById('project').hidden ? null : { saved: Array.from(document.querySelectorAll('#p-history .card b')).map(b => b.textContent), folded: document.querySelector('#p-history > ul').hidden, put: document.getElementById('hidden-history').hidden ? '' : document.getElementById('hidden-history').textContent })()"
+        HISTORY = "(() => document.getElementById('project').hidden ? null : { saved: Array.from(document.querySelectorAll('#p-history .card b')).map(b => b.textContent), folded: getComputedStyle(document.querySelector('#p-history > ul')).display === 'none', put: document.getElementById('hidden-history').hidden ? '' : document.getElementById('hidden-history').textContent })()"
         inside = until(lambda: page_value(HISTORY), 5, "the project's page")
         assert inside == {"saved": ["画流程图", "整理第三章的参考文献"], "folded": True, "put": "已隐藏 1 段 · 显示"}, inside
         page_value("(() => { document.querySelector('#p-history .section-head').click(); return 1; })()")

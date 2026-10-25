@@ -162,8 +162,8 @@
       return !id || open.some(c => c.id === id) ? open : open.concat(conversations().find(c => c.id === id) || { id, title: known[side + '_title'] || '原对话', where: '当前未打开', unavailable: true });
     };
     if (!known && open.length < 2) {
-      const with_tools = ((page.data || {}).device || {}).tools || [];
-      return toast('先在这台电脑上打开两段对话' + (with_tools.length ? '（' + with_tools.filter(t => t !== 'shell').join('、') + '）' : '') + '，再回来添加接力');
+      const tools = (((page.data || {}).device || {}).tools || []).filter(t => t !== 'shell').map(t => TOOLS[t] || t);
+      return toast('先在这台电脑上打开两段对话' + (tools.length ? '（' + tools.join('、') + '）' : '') + '，再回来添加接力');
     }
     const itemId = known ? known.id : newId();
     let rounds = known ? known.rounds : 1;

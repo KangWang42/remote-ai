@@ -1029,14 +1029,11 @@
   function applyProjectFold(key) {
     const head = document.querySelector('#project .section-head[data-fold="' + key + '"]');
     if (!head) return;
-    const section = head.parentElement, open = projectFolds[key];
+    const open = projectFolds[key];
+    // A folded head hides the rest of its section by style (app.css), so what draw() shows or hides there, the
+    // search box and the "more" buttons, stays its own; the way back to hidden conversations stays in reach.
     head.classList.toggle('folded', !open);
     head.setAttribute('aria-expanded', String(open));
-    Array.from(section.children).slice(1).forEach(child => {
-      // The recovery action for hidden conversations stays reachable even folded, and the
-      // "more" buttons belong to draw(): their visibility says whether anything is left.
-      if (child.id !== 'hidden-history' && !child.id.startsWith('more-')) child.hidden = !open;
-    });
   }
   function toggleProjectFold(key) { projectFolds[key] = !projectFolds[key]; applyProjectFold(key); }
   // one list of things: its cards, and what they are known by

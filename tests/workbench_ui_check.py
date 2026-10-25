@@ -6,6 +6,7 @@ workbench = (ROOT / "android/src/io/github/kangwang42/remotecli/Workbench.java")
 kit = (ROOT / "android/src/io/github/kangwang42/remotecli/Kit.java").read_text(encoding="utf-8")
 web = (ROOT / "web/app.js").read_text(encoding="utf-8")
 index_html = (ROOT / "web/index.html").read_text(encoding="utf-8")
+css = (ROOT / "web/app.css").read_text(encoding="utf-8")
 agent = (ROOT / "agent-windows/RemoteCliAgent.cs").read_text(encoding="utf-8")
 activity = (ROOT / "android/src/io/github/kangwang42/remotecli/MainActivity.java").read_text(encoding="utf-8")
 app_pages = (ROOT / "android/src/io/github/kangwang42/remotecli/AppPages.java").read_text(encoding="utf-8")
@@ -17,7 +18,7 @@ assert "view.setMaxLines(2)" in kit, "the title view must retain two lines befor
 assert "shown = 2" in web and "projectFolds = { active: false, live: false, history: false, ended: false }" in web, "project pages must start compact, the ended terminals folded with the rest"
 assert 'id="p-ended"' in index_html and 'data-fold="ended"' in index_html and 'aria-expanded="false"' in index_html, "历史终端 folds away like 历史对话"
 assert "applyProjectFold('ended')" in web, "the ended fold is applied when the project page is drawn"
-assert "!child.id.startsWith('more-')" in web, "an open section unhides its body but leaves the more buttons to draw()"
+assert ".section-head[data-fold].folded ~ :not(#hidden-history) { display: none; }" in css and "child.hidden = !open" not in web, "folding hides a section's body by style and leaves what draw() shows, the more buttons too, to draw()"
 # one rule for both tools says which of the conversations a program holds are in use now (tests/in_use_check.py checks the rule itself)
 assert "public static bool InUse(" in agent and "held.Now = InUse(held.Host, held.Origin, held.Status, Reach.Of(held.Tool, held.Id)" in agent, "Claude Code and Codex must share the rule for what is in use"
 print("Workbench UI checks passed: compact sections, two recent conversations, and two-line titles")

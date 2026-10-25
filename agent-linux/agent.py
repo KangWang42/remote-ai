@@ -3219,8 +3219,8 @@ class Chains:
         """Yields (item, source) for each chain whose source conversation has finished a turn. A finished turn is
         one whose record grew since the last look and has now been quiet past CHAIN_QUIET; the stamp it was fired
         for is remembered, so the same turn does not fire twice and a record that was quiet all along (also after
-        a restart) never does."""
-        for item in self.items:
+        a restart) never does. (A copy is walked: passing one on can drop a rule that has no rounds left.)"""
+        for item in list(self.items):
             if item["left"] <= 0:
                 continue
             source = next((s for s in found if s["tool"] == item["from_tool"] and s["id"] == item["from"]), None)
