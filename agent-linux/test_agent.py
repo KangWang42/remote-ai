@@ -299,6 +299,11 @@ class Pure(unittest.TestCase):
                          ["/b/cline", "--id", "1792116013202_ffehs"])
         self.assertEqual(agent.tool_argv("cline", "/b/cline", "", False, "read", False), ["/b/cline", "--plan"])
         self.assertEqual(agent.tool_argv("cline", "/b/cline", "", False, "", False), ["/b/cline"])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", sid, False, "", True), ["/b/pi", "--session-id", sid])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", sid, False, "", False), ["/b/pi", "--session", sid])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", "", True, "", False), ["/b/pi", "--continue"])
+        self.assertEqual(agent.tool_argv("pi", "/b/pi", "", False, "", False), ["/b/pi"])
+        self.assertTrue(agent.session_id_ok("pi", sid))
         self.assertTrue(agent.session_id_ok("opencode", "ses_ebd8614d0ffe4Z18FfuXFMXIFJ"))
         self.assertTrue(agent.session_id_ok("qoder", sid))
         self.assertTrue(agent.session_id_ok("cline", "1792116013202_ffehs"))
@@ -524,6 +529,120 @@ class Pure(unittest.TestCase):
         got = sessions.read("aaaaaaaa-0000-0000-0000-000000000001", "qoder", "项目", {"项目": project})
         self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
                          [("user", "第一行\n第二行"), ("thought", "想"), ("assistant", "部署好了"), ("tool", "Bash：ls")])
+
+    def test_pi_slug(self):
+        # the folder names as found on a machine that runs pi
+        self.assertEqual(agent.pi_slug("/home/doro"), "--home-doro--")
+        self.assertEqual(agent.pi_slug("/data/tmp/opencode"), "--data-tmp-opencode--")
+        self.assertEqual(agent.pi_slug("/tmp"), "--tmp--")
+
+    def test_pi_sessions(self):
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp() + "/项目"
+        os.makedirs(project)
+        session = "aaaaaaaa-0000-0000-8000-000000000001"     # a UUIDv7-shaped id no real pi of this machine holds
+        # the folder is named the way pi names it: leading slash gone, only slashes and colons
+        # become single dashes, wrapped in double dashes -- anything else, like 项目, stays put
+        saved = os.path.join(home, ".pi", "agent", "sessions", agent.pi_slug(project))
+        os.makedirs(saved)
+        def row(what):
+            return json.dumps(dict(what, timestamp="2026-10-24T03:04:05.000Z")) + "\n"
+        with open(os.path.join(saved, "2026-10-24T03-04-05-000Z_%s.jsonl" % session), "w", encoding="utf-8") as stream:
+            stream.write(row({"type": "session", "version": 3, "id": session, "cwd": project}))
+            stream.write(row({"type": "message", "message": {"role": "user", "content": [
+                {"type": "text", "text": "第一行\n第二行"}]}}))
+            stream.write(row({"type": "message", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "想"},
+                {"type": "text", "text": "部署好了"},
+                {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "ls"}}]}}))
+            stream.write(row({"type": "message", "message": {"role": "toolResult", "toolCallId": "c1", "content": [
+                {"type": "text", "text": "一个文件"}]}}))
+            stream.write(row({"type": "message", "message": {"role": "system", "content": "pi 自己的话"}}))
+        other = "bbbbbbbb-0000-0000-8000-000000000002"
+        with open(os.path.join(saved, "2026-10-24T04-04-05-000Z_%s.jsonl" % other), "w", encoding="utf-8") as stream:
+            stream.write(row({"type": "session", "version": 3, "id": other, "cwd": project}))
+        sessions = agent.Sessions()
+        sessions.home = home
+        found = {s["id"]: s for s in sessions.scan({"项目": project}, [])}
+        self.assertEqual(found[session]["tool"], "pi")
+        self.assertEqual(found[session]["title"], "第一行")
+        self.assertEqual(found[session]["dir"], "项目")
+        self.assertTrue(found[other]["title"].startswith("Pi 对话 "))
+        got = sessions.read(session, "pi", "项目", {"项目": project})
+        self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
+                         [("user", "第一行\n第二行"), ("thought", "想"), ("assistant", "部署好了"), ("tool", "bash：ls")])
+        self.assertEqual(got["messages"][-1]["result"], "一个文件")
+
+    def wait_pi_argv0(self, proc):
+        """the stand-in pi is python execing sleep under the name pi; wait for that to show"""
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                if open("/proc/%d/cmdline" % proc.pid, "rb").read().split(b"\0")[0] == b"pi":
+                    return True
+            except OSError:
+                pass
+            time.sleep(0.05)
+        return False
+
+    def test_pi_holds_named_conversation(self):
+        # a pi that was told which conversation to take (`pi --session <id>`) holds exactly that
+        # one, and never the newest of its folder; before this, a bare pi on the computer stole
+        # the newest -- the phone's own fresh conversation -- and left it unusable to the phone
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp()
+        saved = os.path.join(home, ".pi", "agent", "sessions", agent.pi_slug(project))
+        os.makedirs(saved)
+        named, latest = "cccccccc-0000-0000-8000-000000000001", "cccccccc-0000-0000-8000-000000000002"
+        for at, session in enumerate((named, latest)):
+            path = os.path.join(saved, "2026-10-24T03-04-05-00%dZ_%s.jsonl" % (at, session))
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"type": "session", "version": 3, "id": session, "cwd": project}) + "\n")
+            os.utime(path, (time.time() - 100 + at * 60,) * 2)
+        proc = subprocess.Popen(["python3", "-c",
+                                 "import os; os.execv('/usr/bin/python3', "
+                                 "['pi', '-c', 'import time; time.sleep(600)', '--session', %r])" % named],
+                                stdout=subprocess.DEVNULL)
+        try:
+            self.assertTrue(self.wait_pi_argv0(proc), "the stand-in pi did not start")
+            sessions = agent.Sessions()
+            sessions.home = home
+            found = {s["id"]: s for s in sessions.scan({"p": project}, [])}
+            self.assertTrue(found[named]["live"], "the pi naming a conversation holds it")
+            self.assertFalse(found[latest]["live"], "the folder's newest is not the naming pi's conversation")
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_pi_bare_takes_only_what_it_opened(self):
+        # a bare pi (started without naming one) stands for a conversation of its folder only
+        # where that was worked on after the pi itself started -- not for older kept ones
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp()
+        saved = os.path.join(home, ".pi", "agent", "sessions", agent.pi_slug(project))
+        os.makedirs(saved)
+        old = "dddddddd-0000-0000-8000-000000000001"
+        path = os.path.join(saved, "2026-10-24T03-04-05-000Z_%s.jsonl" % old)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"type": "session", "version": 3, "id": old, "cwd": project}) + "\n")
+        os.utime(path, (time.time() - 1000,) * 2)
+        proc = subprocess.Popen(["python3", "-c", "import os; os.execvp('sleep', ['pi', 'infinity'])"], cwd=project)
+        try:
+            self.assertTrue(self.wait_pi_argv0(proc), "the stand-in pi did not start")
+            sessions = agent.Sessions()
+            sessions.home = home
+            found = {s["id"]: s for s in sessions.scan({"p": project}, [])}
+            self.assertFalse(found[old]["live"], "a bare pi does not claim a conversation older than itself")
+            fresh = "dddddddd-0000-0000-8000-000000000002"
+            path = os.path.join(saved, "2026-10-24T03-04-06-000Z_%s.jsonl" % fresh)
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"type": "session", "version": 3, "id": fresh, "cwd": project}) + "\n")
+            found = {s["id"]: s for s in sessions.scan({"p": project}, [])}
+            self.assertTrue(found[fresh]["live"], "the bare pi took up the newest conversation of its folder")
+            self.assertFalse(found[old]["live"])
+        finally:
+            proc.kill()
+            proc.wait()
 
     def test_cline_sessions(self):
         home = tempfile.mkdtemp()
@@ -1079,9 +1198,12 @@ class EndToEnd(unittest.TestCase):
         status, numbers = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "stats", "days": 7}, token=self.token, timeout=40)
         self.assertEqual((status, numbers.get("ready"), len(numbers.get("days", [])), len(numbers.get("hours", []))), (200, True, 7, 24), numbers)
         self.assertEqual(numbers["days"][-1]["date"], time.strftime("%Y-%m-%d"))
-        # and passing on when a conversation stops is not offered here: this program has no hooks of the tools
-        status, refused = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "chains"}, token=self.token)
-        self.assertEqual((status, "不支持接力" in refused.get("error", "")), (400, True), refused)
+        # and passing on when a conversation stops is offered here too: without the tools' hooks a
+        # finished turn is seen by the source's record growing and then going quiet (the rule set,
+        # fired and taken down is its own test below)
+        self.assertIn("chains", self.overview()["device"]["features"])
+        status, offered = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "chains"}, token=self.token)
+        self.assertEqual((status, offered.get("chains")), (200, []), offered)
 
         # 6. a folder that is not a project never becomes a terminal: the relay refuses it
         # at the door (the agent checks again itself, but this request cannot even reach it)
@@ -1116,7 +1238,10 @@ class EndToEnd(unittest.TestCase):
         view = self.poll(lambda: self.overview(),
                          lambda v: any(t["id"] == new and t.get("session") == named.group(1) for t in v["terminals"]))
 
-        # 9. a saved conversation is listed with its name and continued by its id
+        # 9. a saved conversation is listed with its name and continued by its id (waited for:
+        # the agent's first scan of the tools' stores may still be under way)
+        self.poll(lambda: self.overview(), lambda v: any(s["id"] == self.saved for s in v.get("sessions", [])))
+        view = self.overview()
         self.assertEqual([(s["id"], s["title"], s["tool"], s["dir"]) for s in view["sessions"]],
                          [(self.saved, "上次的对话", "claude", "项目")])
         self.assertIn("peek", device.get("features", []))
@@ -1323,6 +1448,97 @@ class EndToEnd(unittest.TestCase):
         # the upload that was just started still holds exactly one temp file; the cancelled
         # and refused ones have left nothing behind
         self.assertEqual(len(temps), 1, temps)
+
+    def test_a_chain_passes_work_on(self):
+        # the whole phone flow through /api/work: a rule is set between two conversations the
+        # computer lists, the source's record grows and goes quiet, and what it said last, with
+        # the owner's words, is typed into the conversation that takes over — run in one of our
+        # terminals. The shape errors the relay checks are asked for as well.
+        if "chains" not in self.overview()["device"].get("features", []):
+            self.skipTest("the agent under test does not pass work on yet")
+
+        def work(action, **extra):
+            payload = {"id": secrets.token_hex(16), "action": action}
+            payload.update(extra)
+            return request("POST", self.base + "/api/work", payload, token=self.token)
+
+        # the taker: the fixture's saved conversation, running in a terminal of ours
+        self.poll(lambda: self.overview(), lambda v: any(s["id"] == self.saved for s in v.get("sessions", [])))
+        started = self.op({"action": "start", "tool": "claude", "dir": "项目", "session": self.saved})
+        taker_terminal = started["terminal"]
+        def tidy():
+            # the fixture is shared with the other tests of the class: what this one made up
+            # is taken away again, also when an assertion below fails
+            try:
+                self.op({"action": "close", "terminal": taker_terminal})
+                self.poll(lambda: self.overview(),
+                          lambda v: any(t["id"] == taker_terminal and t["state"] == "closed" for t in v["terminals"]),
+                          seconds=15)
+            except AssertionError:
+                pass
+            for rule in work("chains")[1].get("chains", []):
+                work("chain_remove", chain=rule["id"])
+        self.addCleanup(tidy)
+        self.poll(lambda: self.overview(),
+                  lambda v: any(t["id"] == taker_terminal and t["state"] == "running" for t in v["terminals"]))
+        # the source: a second saved conversation of the same project
+        source = "0b1c2d3e-1111-2222-3333-444455556666"
+        folder = os.path.join(self.home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", self.project))
+        record = os.path.join(folder, source + ".jsonl")
+        def write_record(rows):
+            with open(record, "w", encoding="utf-8") as stream:
+                for row in rows:
+                    stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+        write_record([{"type": "user", "message": {"role": "user", "content": "实现功能"}},
+                      {"type": "assistant", "message": {"role": "assistant", "content": "实现完成，共三处改动"}}])
+        self.addCleanup(os.remove, record)
+        self.poll(lambda: self.overview(), lambda v: any(s["id"] == source for s in v.get("sessions", [])))
+
+        # shape errors: a conversation that is not there, and one passed to itself
+        status, refused = work("chain_set", item={"id": secrets.token_hex(16), "from": "0c1d2e3f-1111-2222-3333-444455556666",
+                                                  "to": self.saved, "text": "审查", "rounds": 1})
+        self.assertEqual(status, 400, refused)
+        status, refused = work("chain_set", item={"id": secrets.token_hex(16), "from": self.saved, "to": self.saved,
+                                                  "text": "审查", "rounds": 1})
+        self.assertEqual(status, 400, refused)
+        # the rule itself
+        rule = secrets.token_hex(16)
+        status, answer = work("chain_set", item={"id": rule, "from": source, "to": self.saved,
+                                                 "text": "审查上述改动", "rounds": 2})
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer["chain"]["left"], 2)
+        status, listed = work("chains")
+        self.assertEqual(status, 200, listed)
+        self.assertTrue(any(c["id"] == rule for c in listed["chains"]))
+
+        # the source's turn: the record grows, then stays quiet (its stamp is set just past the
+        # agent's quiet window, so the waiting is the scan's, not the clock's). The agent must
+        # have taken its first look at the rule before the growth, or the grown state would be
+        # its baseline: two report cycles are enough for that.
+        time.sleep(2.5)
+        write_record([{"type": "user", "message": {"role": "user", "content": "实现功能"}},
+                      {"type": "assistant", "message": {"role": "assistant", "content": "实现完成，共三处改动"}},
+                      {"type": "assistant", "message": {"role": "assistant", "content": "又补充了一处改动"}}])
+        older = time.time() - (agent.CHAIN_QUIET + 10)
+        os.utime(record, (older, older))
+
+        # what the taker's screen shows: the passing-on, typed into its terminal
+        after, seen = 0, ""
+        deadline = time.time() + 40
+        while time.time() < deadline and "【接力】" not in plain(seen):
+            status, view = request("GET", "%s/api/terminal?terminal=%s&after=%d&wait=2"
+                                   % (self.base, taker_terminal, after), token=self.token)
+            for chunk in view.get("chunks", []):
+                seen += chunk["data"]
+                after = chunk["seq"]
+        self.assertIn("【接力】", plain(seen), "the passing-on never reached the taker's terminal")
+        self.assertIn("审查上述改动", plain(seen))
+        # one round is spent, one is left; the rule tells how the passing-on went
+        self.poll(lambda: work("chains")[1], lambda w: any(c["id"] == rule and c["runs"] == 1 and c["left"] == 1
+                                                           and c["last"] and c["last"]["ok"] for c in w["chains"]))
+        status, gone = work("chain_remove", chain=rule)
+        self.assertEqual(status, 200, gone)
+        self.assertFalse(any(c["id"] == rule for c in work("chains")[1]["chains"]))
 
 
 class InputNeverHolds(unittest.TestCase):

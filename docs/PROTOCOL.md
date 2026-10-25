@@ -72,7 +72,7 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
 `GET /api/terminal` →
 
 ```json
-{"device": {"online": true, "enabled": true, "workspaces": ["demo"], "tools": ["claude", "codex", "opencode", "qoder", "cline", "shell"],
+{"device": {"online": true, "enabled": true, "workspaces": ["demo"], "tools": ["claude", "codex", "opencode", "qoder", "cline", "pi", "shell"],
             "projects": [{"name": "demo", "path": "D:\\demo", "fixed": true, "exists": true, "tools": ["codex"], "kinds": ["Codex 桌面版", "终端"]}],
             "candidates": [{"name": "notes", "path": "D:\\notes", "updated": 1700000000000, "live": false, "tools": ["claude"], "kinds": ["Claude 桌面版", "终端"]}]},
  "terminals": [{"id": "...", "tool": "shell", "dir": "demo", "title": "PowerShell", "state": "running", "status": "idle", "seq": 12, "cols": 80, "rows": 24, "session": ""}],
@@ -229,7 +229,7 @@ to held requests. Switching to the background cancels the active reader; returni
 
 | `action` | Fields |
 | --- | --- |
-| `start` | `tool` (`claude`, `codex`, `opencode`, `qoder`, `cline`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list), `form: "chat"` (a conversation run through its tool's structured mode, see "Chats"; `claude` and `codex` only, needs the `chat` capability, not with `history` or `fork`) with optional `text` (the first thing to say, at most 8,000 characters) |
+| `start` | `tool` (`claude`, `codex`, `opencode`, `qoder`, `cline`, `pi`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list), `form: "chat"` (a conversation run through its tool's structured mode, see "Chats"; `claude` and `codex` only, needs the `chat` capability, not with `history` or `fork`) with optional `text` (the first thing to say, at most 8,000 characters) |
 | `input` | `terminal`, `data` (at most 16,000 characters) |
 | `say` | `terminal`, `text` (at most 8,000 characters, no control characters but line breaks and tabs). A message for a running terminal from where the terminal is not on the screen (a list, the app's workbench): what the box of the terminal's page sends, the text and then Enter. The relay knows from the program's output whether it takes pasted text in brackets (`ESC [ ? 2004 h`): it then gives the computer `input` with the text between `ESC [ 200 ~` and `ESC [ 201 ~` and `\r`, and otherwise the text on one line and `\r`. Refused while the terminal's phase is `confirm`: Enter would answer its question |
 | `resize` | `terminal`, `cols` (20–240), `rows` (6–100). Not for a chat |
@@ -242,9 +242,9 @@ to held requests. Switching to the background cancels the active reader; returni
 | `project_remove` | `name`. The folder and what is in it stay. A project that stands in the computer's own settings (`fixed`) is renamed or removed from the phone only where the computer says it does that (the `projects` capability: the Windows program, for the projects added in its window); else the relay refuses |
 | `update` | none. The program on the computer looks for a newer release of itself and installs it; needs the `update` capability |
 
-Linux Python agents also offer OpenCode, Qoder and Cline when installed; Windows continues to offer Claude Code, Codex and shell. Conversation IDs are validated by tool: UUID for Claude Code/Codex/Qoder, `ses_` plus 10–40 alphanumeric characters for OpenCode, and 10–16 digits plus `_` and 4–10 alphanumeric characters for Cline. The same shapes apply to conversation reads and marks, terminal resumes and agent reports. The relay resolves the tool and workspace from its reported session list, not from client-supplied values.
+Linux Python agents also offer OpenCode, Qoder, Cline and Pi when installed; Windows continues to offer Claude Code, Codex and shell. Conversation IDs are validated by tool: UUID for Claude Code/Codex/Qoder/Pi, `ses_` plus 10–40 alphanumeric characters for OpenCode, and 10–16 digits plus `_` and 4–10 alphanumeric characters for Cline. The same shapes apply to conversation reads and marks, terminal resumes and agent reports. The relay resolves the tool and workspace from its reported session list, not from client-supplied values.
 
-Linux `RemoteMaxMode=read` starts Qoder with `--permission-mode plan` and Cline with `--plan`; Qoder `edit` uses `--permission-mode accept_edits`. OpenCode uses its own default permissions for `read` and `--auto` for `edit`; it does not provide a separate read-only flag. These modes remain the tools' own interactive permission modes. Qoder startup parameters follow its [CLI reference](https://docs.qoder.com/cli/cli-reference) and [Plan mode](https://docs.qoder.com/cli/plan-mode) documentation.
+Linux `RemoteMaxMode=read` starts Qoder with `--permission-mode plan` and Cline with `--plan`; Qoder `edit` uses `--permission-mode accept_edits`. OpenCode uses its own default permissions for `read` and `--auto` for `edit`; it does not provide a separate read-only flag. Pi has no permission modes of its own: it is started the same way whichever `RemoteMaxMode` says, and every step runs as asked. These modes remain the tools' own interactive permission modes. Qoder startup parameters follow its [CLI reference](https://docs.qoder.com/cli/cli-reference) and [Plan mode](https://docs.qoder.com/cli/plan-mode) documentation.
 
 ### Files
 
@@ -459,9 +459,10 @@ switches ignore repeated taps while saving; a requested refresh is queued if one
 
 `POST /api/work` `{"id": "<16 to 32 hex digits>", "action": "..."}` is held like `/api/files` and needs the `work`
 capability, which the Windows program and the Linux agent have. The three actions that begin with `chain` need
-`chains` besides, which only the Windows program has: they depend on the tools' hooks. The computer keeps and does
-all of it; the relay checks the shape of the question, passes it on as the operation `work_<action>` and keeps
-nothing.
+`chains` besides. The Windows program hears that a conversation has stopped from the tools' own hooks; the Linux
+agent has none, and sees a finished turn by watching the source conversation's record grow and then stay quiet
+for a little while. The computer keeps and does all of it; the relay checks the shape of the question, passes it
+on as the operation `work_<action>` and keeps nothing.
 
 | `action` | Fields | Answer |
 | --- | --- | --- |

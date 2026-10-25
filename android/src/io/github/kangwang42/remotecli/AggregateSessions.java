@@ -18,6 +18,7 @@ final class AggregateSessions {
         if ("opencode".equals(tool)) return "OpenCode";
         if ("qoder".equals(tool)) return "Qoder";
         if ("cline".equals(tool)) return "Cline";
+        if ("pi".equals(tool)) return "Pi";
         return "终端";
     }
 
@@ -197,7 +198,7 @@ final class AggregateSessions {
         List<String> words = new ArrayList<>();
         for (String word : query.trim().toLowerCase(java.util.Locale.ROOT).split("\\s+")) if (!word.isEmpty()) words.add(word);
         board.searched = !words.isEmpty();
-        for (String known : new String[]{"claude", "codex", "opencode", "qoder", "cline", "shell"}) for (Thing thing : things) if (known.equals(thing.entry.tool)) { board.tools.add(known); break; }
+        for (String known : new String[]{"claude", "codex", "opencode", "qoder", "cline", "pi", "shell"}) for (Thing thing : things) if (known.equals(thing.entry.tool)) { board.tools.add(known); break; }
         for (String known : new String[]{"term", "app"}) for (Thing thing : things) if (known.equals(thing.entry.source())) { board.sources.add(known); break; }
         for (Thing thing : things) {
             Entry entry = thing.entry;

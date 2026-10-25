@@ -14,9 +14,9 @@ public final class AggregateSessionsCheck {
     }
     private static void require(boolean ok, String reason) { if (!ok) throw new AssertionError(reason); }
     public static void main(String[] args) {
-        for (String name : new String[]{"opencode", "qoder", "cline"}) {
+        for (String name : new String[]{"opencode", "qoder", "cline", "pi"}) {
             AggregateSessions.Entry entry = new AggregateSessions.Entry(false, "session", "project", "", name, "", "", "", false, "", "", "", false, 1L);
-            String label = "opencode".equals(name) ? "OpenCode" : "qoder".equals(name) ? "Qoder" : "Cline";
+            String label = "opencode".equals(name) ? "OpenCode" : "qoder".equals(name) ? "Qoder" : "pi".equals(name) ? "Pi" : "Cline";
             require(label.equals(entry.toolName()) && label.equals(entry.shownTitle()), "Linux tools retain their names on native cards");
             java.util.List<AggregateSessions.Thing> things = java.util.Arrays.asList(new AggregateSessions.Thing("pc", "Computer", entry, "history"));
             require(AggregateSessions.board(things, "", "", "").tools.contains(name), "Linux tools can be selected in native filters");
