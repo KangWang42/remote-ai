@@ -62,6 +62,12 @@ OPENCODE_RE = re.compile(r"\Ases_[A-Za-z0-9]{10,40}\Z")   # opencode names its o
 CLINE_RE = re.compile(r"\A[0-9]{10,16}_[A-Za-z0-9]{4,10}\Z")   # cline: a stamp and a short tail
 
 
+def pi_slug(cwd):
+    """The folder name pi gives the conversations of a working path: its own leading slash
+    gone, the slashes and colons left turned to single dashes, all wrapped in double dashes."""
+    return "--" + re.sub(r"[/\\:]", "-", re.sub(r"^[/\\]", "", cwd)) + "--"
+
+
 def private_address(url):
     """Whether an address is one of this computer's own networks: a literal of the private
     ranges or the loopback, or a name that means this machine. A name that goes elsewhere is
@@ -889,7 +895,7 @@ class Sessions:
             if tool == "pi":
                 # one file to a conversation, under the folder it was worked in, named by pi itself
                 found = glob.glob(os.path.join(self.pi_home(), "sessions",
-                                               re.sub(r"[^a-zA-Z0-9]", "-", folder), "*_%s.jsonl" % session))
+                                               pi_slug(folder), "*_%s.jsonl" % session))
                 info = os.stat(found[0])
                 stamp = "%d.%d" % (info.st_size, info.st_mtime_ns)
                 answer = {"same": True} if since and since == stamp else said_pi(found[0])
@@ -1347,9 +1353,10 @@ class Sessions:
 
     def _pi(self, dirs, terminals):
         """Conversations pi kept under its sessions, in a folder named for the one they were
-        worked in, and the ones a pi of this user holds open: such a program writes away its
-        own command line, so the newest conversation of the folder it works in stands for it."""
-        held = {}
+        worked in, and the ones a pi of this user holds open: a pi that was told which
+        conversation to take names it in its own command line, and only a bare one stands
+        for the newest conversation of its folder -- one it began or resumed after starting."""
+        held_ids, held_dir = {}, {}
         for cmd in glob.glob("/proc/[0-9]*/cmdline"):
             try:
                 with open(cmd, "rb") as stream:
@@ -1365,11 +1372,25 @@ class Sessions:
                 cwd = os.readlink(os.path.join(os.path.dirname(cmd), "cwd"))
             except (OSError, ValueError):
                 continue
-            held[re.sub(r"[^a-zA-Z0-9]", "-", cwd)] = pid
+            args = [p.decode("utf-8", "replace") for p in parts if p]
+            named = [args[at + 1] for at, arg in enumerate(args[:-1])
+                     if arg in ("--session", "--session-id", "--resume", "-r")
+                     and UUID_RE.match(args[at + 1])]
+            if named:
+                for session in named:
+                    held_ids[session] = pid
+            else:
+                # where it names no conversation, its own start tells which one it took up:
+                # the bare pi that opened a phone conversation later than it started is not it
+                try:
+                    born = os.stat(os.path.dirname(cmd)).st_ctime
+                except OSError:
+                    born = 0
+                held_dir[pi_slug(cwd)] = (pid, born)
         root = os.path.join(self.pi_home(), "sessions")
         found, counts = [], {}
         for name, folder in dirs.items():
-            saved = os.path.join(root, re.sub(r"[^a-zA-Z0-9]", "-", folder))
+            saved = os.path.join(root, pi_slug(folder))
             recent = []
             for path in glob.glob(os.path.join(saved, "*.jsonl")):
                 try:
@@ -1381,7 +1402,11 @@ class Sessions:
                 session = os.path.basename(path)[:-6].rsplit("_", 1)[-1]
                 if not UUID_RE.match(session):
                     continue
-                pid = held.get(os.path.basename(saved)) if rank == 0 else None
+                pid = held_ids.get(session)
+                if pid is None and rank == 0:
+                    bare = held_dir.get(os.path.basename(saved))
+                    if bare and info.st_mtime >= bare[1] - 2.0:
+                        pid = bare[0]
                 owner = owner_of(pid, terminals) if pid else None
                 if owner is not None and owner.tool == "pi" and not owner.session:
                     owner.session = session

@@ -530,12 +530,20 @@ class Pure(unittest.TestCase):
         self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
                          [("user", "第一行\n第二行"), ("thought", "想"), ("assistant", "部署好了"), ("tool", "Bash：ls")])
 
+    def test_pi_slug(self):
+        # the folder names as found on a machine that runs pi
+        self.assertEqual(agent.pi_slug("/home/doro"), "--home-doro--")
+        self.assertEqual(agent.pi_slug("/data/tmp/opencode"), "--data-tmp-opencode--")
+        self.assertEqual(agent.pi_slug("/tmp"), "--tmp--")
+
     def test_pi_sessions(self):
         home = tempfile.mkdtemp()
         project = tempfile.mkdtemp() + "/项目"
         os.makedirs(project)
         session = "aaaaaaaa-0000-0000-8000-000000000001"     # a UUIDv7-shaped id no real pi of this machine holds
-        saved = os.path.join(home, ".pi", "agent", "sessions", re.sub("[^a-zA-Z0-9]", "-", project))
+        # the folder is named the way pi names it: leading slash gone, only slashes and colons
+        # become single dashes, wrapped in double dashes -- anything else, like 项目, stays put
+        saved = os.path.join(home, ".pi", "agent", "sessions", agent.pi_slug(project))
         os.makedirs(saved)
         def row(what):
             return json.dumps(dict(what, timestamp="2026-10-24T03:04:05.000Z")) + "\n"
@@ -564,6 +572,77 @@ class Pure(unittest.TestCase):
         self.assertEqual([(m["role"], m["text"]) for m in got["messages"]],
                          [("user", "第一行\n第二行"), ("thought", "想"), ("assistant", "部署好了"), ("tool", "bash：ls")])
         self.assertEqual(got["messages"][-1]["result"], "一个文件")
+
+    def wait_pi_argv0(self, proc):
+        """the stand-in pi is python execing sleep under the name pi; wait for that to show"""
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                if open("/proc/%d/cmdline" % proc.pid, "rb").read().split(b"\0")[0] == b"pi":
+                    return True
+            except OSError:
+                pass
+            time.sleep(0.05)
+        return False
+
+    def test_pi_holds_named_conversation(self):
+        # a pi that was told which conversation to take (`pi --session <id>`) holds exactly that
+        # one, and never the newest of its folder; before this, a bare pi on the computer stole
+        # the newest -- the phone's own fresh conversation -- and left it unusable to the phone
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp()
+        saved = os.path.join(home, ".pi", "agent", "sessions", agent.pi_slug(project))
+        os.makedirs(saved)
+        named, latest = "cccccccc-0000-0000-8000-000000000001", "cccccccc-0000-0000-8000-000000000002"
+        for at, session in enumerate((named, latest)):
+            path = os.path.join(saved, "2026-10-24T03-04-05-00%dZ_%s.jsonl" % (at, session))
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"type": "session", "version": 3, "id": session, "cwd": project}) + "\n")
+            os.utime(path, (time.time() - 100 + at * 60,) * 2)
+        proc = subprocess.Popen(["python3", "-c",
+                                 "import os; os.execv('/usr/bin/python3', "
+                                 "['pi', '-c', 'import time; time.sleep(600)', '--session', %r])" % named],
+                                stdout=subprocess.DEVNULL)
+        try:
+            self.assertTrue(self.wait_pi_argv0(proc), "the stand-in pi did not start")
+            sessions = agent.Sessions()
+            sessions.home = home
+            found = {s["id"]: s for s in sessions.scan({"p": project}, [])}
+            self.assertTrue(found[named]["live"], "the pi naming a conversation holds it")
+            self.assertFalse(found[latest]["live"], "the folder's newest is not the naming pi's conversation")
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_pi_bare_takes_only_what_it_opened(self):
+        # a bare pi (started without naming one) stands for a conversation of its folder only
+        # where that was worked on after the pi itself started -- not for older kept ones
+        home = tempfile.mkdtemp()
+        project = tempfile.mkdtemp()
+        saved = os.path.join(home, ".pi", "agent", "sessions", agent.pi_slug(project))
+        os.makedirs(saved)
+        old = "dddddddd-0000-0000-8000-000000000001"
+        path = os.path.join(saved, "2026-10-24T03-04-05-000Z_%s.jsonl" % old)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"type": "session", "version": 3, "id": old, "cwd": project}) + "\n")
+        os.utime(path, (time.time() - 1000,) * 2)
+        proc = subprocess.Popen(["python3", "-c", "import os; os.execvp('sleep', ['pi', 'infinity'])"], cwd=project)
+        try:
+            self.assertTrue(self.wait_pi_argv0(proc), "the stand-in pi did not start")
+            sessions = agent.Sessions()
+            sessions.home = home
+            found = {s["id"]: s for s in sessions.scan({"p": project}, [])}
+            self.assertFalse(found[old]["live"], "a bare pi does not claim a conversation older than itself")
+            fresh = "dddddddd-0000-0000-8000-000000000002"
+            path = os.path.join(saved, "2026-10-24T03-04-06-000Z_%s.jsonl" % fresh)
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"type": "session", "version": 3, "id": fresh, "cwd": project}) + "\n")
+            found = {s["id"]: s for s in sessions.scan({"p": project}, [])}
+            self.assertTrue(found[fresh]["live"], "the bare pi took up the newest conversation of its folder")
+            self.assertFalse(found[old]["live"])
+        finally:
+            proc.kill()
+            proc.wait()
 
     def test_cline_sessions(self):
         home = tempfile.mkdtemp()
