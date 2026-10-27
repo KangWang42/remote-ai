@@ -200,7 +200,7 @@ def main():
             value("dispatchEvent(new Event('pagehide'))")
             assert value("fixturePond.frame") == 0
             value("dispatchEvent(new Event('pageshow'))")
-            until("fixturePond.frame > 0", "resume")
+            until("fixturePond.frame > 0 || fixturePond.timer > 0", "resume")
             value("fixturePond.setEnabled(false)")
             browser.ask("Page.addScriptToEvaluateOnNewDocument", source="localStorage.setItem('rcli-renderer','webgl')")
             # Match headless Chrome's physical scale; CDP-only DPR emulation reports inconsistent device pixel boxes to WebGL.

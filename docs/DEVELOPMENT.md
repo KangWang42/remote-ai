@@ -2,6 +2,8 @@
 
 锦鲤池塘主题位于 `web/themes/`，仅在选择该主题时加载；上游来源、生命周期和性能限制见该目录的 README。运行 `python tests/pond_ui_check.py <chrome.exe> <输出目录>` 检查终端、对话和设置的主题行为与布局。
 
+终端交互采用与探针项目实时面板相同的原则：交互时推迟装饰计算，同一帧合并重复状态检查，已建立的增量传输继续复用。`follow()` 合并滚动和输出完成触发的重复检查；终端完成绘制时取消待执行检查，立即更新状态，再复制滚动图层，保证提示行与画面一致。终端输出与输入不做丢弃、缓存替代或按最新值覆盖。性能测量与浏览器触控回归入口为 `python tests/pond_performance_check.py <chrome.exe> <输出目录>`。
+
 Android 构建同时把 `web/` 打进 APK，`EmbeddedPages` 按 `PageAssets` 解析结果提供页面，数据仍走原中转。运行 `python tests/android_pages_check.py --jdk <JDK目录> --apk dist/RemoteCli-Android.apk --output <输出目录>` 核对打包内容与地址边界；给 `pond_ui_check.py` 追加 APK 路径可检查 APK 内页面在公共中转路径下的主题菜单和 App 外观同步。
 
 [← 回到首页](../README.md)

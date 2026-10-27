@@ -136,8 +136,12 @@
   // That row is no row of the conversation any more: the rows above it are shown a row lower, over it (TerminalSlide,
   // `hole`), so that nothing stands between the conversation and the program's message box. Where there is no strip
   // to show them from, the row is covered instead.
-  let offered = '', hole = -1, pinAfter = 0;
+  let offered = '', hole = -1, pinAfter = 0, followFrame = 0;
   function follow() {
+    if (!followFrame) followFrame = requestAnimationFrame(updateFollow);
+  }
+  function updateFollow() {
+    followFrame = 0;
     const buffer = term.buffer.active, row = scrollRouter.offered(), now = row + ' ' + term.rows;
     hole = row;
     if (now !== offered) {
@@ -154,7 +158,6 @@
   }
   function covered() { const hidden = hole < 0 || strip.shown; if (offer.hidden !== hidden) offer.hidden = hidden; }
   term.onScroll(follow);
-  term.onRender(follow);
   const scrollRouter = new TerminalScrollRouter(term, send, () => tool);
   latest.addEventListener('click', () => {
     scroller.stop(); unslide();
@@ -169,11 +172,10 @@
   const over = document.createElement('div');
   over.id = 'slid'; over.hidden = true;
   holder.querySelector('.xterm-screen').appendChild(over);
-  const strip = new TerminalStrip(over, TerminalSlide.KEPT, () => (term.options.theme && term.options.theme.background) || '#000');
+  // An opaque surface under the moving rows hides the original text even when the live terminal is translucent.
+  const strip = new TerminalStrip(over, TerminalSlide.KEPT, () => SKINS[skin].t.background);
   // the picture the terminal draws on the graphics card; drawn as plain elements, it has none to copy from
-  // A translucent terminal cannot be copied over its old rows without showing both sets of text.
-  // The pond uses the existing row-scroll fallback, keeping the water behind the live terminal.
-  const picture = () => drawing === 'webgl' && skin !== 'pond' ? holder.querySelector('.xterm-screen > canvas:not(.xterm-link-layer)') : null;
+  const picture = () => drawing === 'webgl' ? holder.querySelector('.xterm-screen > canvas:not(.xterm-link-layer)') : null;
   let slideFrame = 0;
   const slide = new TerminalSlide({
     cell: () => tall / Math.max(1, term.rows),
@@ -194,7 +196,12 @@
   function sliding(at) { slideFrame = slide.frame(at, resting()) ? requestAnimationFrame(sliding) : 0; }
   // (a hole that is still there has the picture shown over it again at the next frame)
   function unslide() { if (slideFrame) cancelAnimationFrame(slideFrame); slideFrame = 0; slide.cancel(); pinAfter = 0; requestAnimationFrame(follow); }
-  term.onRender(() => slide.drawn());
+  term.onRender(() => {
+    // The strip must see the current offer row before copying the newly drawn text.
+    if (followFrame) cancelAnimationFrame(followFrame);
+    updateFollow();
+    slide.drawn();
+  });
   // Touch movement scrolls local history or the program's fullscreen view, according to the active terminal mode.
   const scroller = new TerminalScroller({
     request: callback => requestAnimationFrame(callback), cancel: id => cancelAnimationFrame(id),
@@ -205,6 +212,7 @@
     owing: () => scrollRouter.owing(),
     slide: pixels => slide.moved(pixels),
     scroll(lines, mode) {
+      if (skin === 'pond') document.dispatchEvent(new Event('rcli-terminal-motion'));
       const moved = scrollRouter.scroll(lines, mode);
       slide.ask(scrollRouter.asked, performance.now());
       follow(); return moved;
