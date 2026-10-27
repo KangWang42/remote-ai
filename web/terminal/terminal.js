@@ -232,6 +232,198 @@
   document.querySelectorAll('.keys button, #slash, #send, #latest, #voice').forEach(keepFocus);
   document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => send(KEYS[button.dataset.key])));
 
+  // ---- 自定义按键：本机存 localStorage（每台电脑各自一套），编辑器在按键条下展开。
+  // 组合键编译成标准控制字节/转义序列；转义序列支持 \xNN \e \r \n \t；命令片段按原文发送。
+  const KEYS_STORE = 'rcli-term-keys';
+  const BASE_BYTES = { enter: '\r', tab: '\t', esc: '\x1b', space: ' ', backspace: '\x7f' };
+  const CSI_LETTER = { up: 'A', down: 'B', right: 'C', left: 'D', home: 'H', end: 'F' };
+  const CSI_TILDE = { pgup: 5, pagedown: 6, delete: 3, insert: 2 };
+  const FKEYS = { f1: 'P', f2: 'Q', f3: 'R', f4: 'S', f5: '15~', f6: '17~', f7: '18~', f8: '19~', f9: '20~', f10: '21~', f11: '23~', f12: '24~' };
+  const BASE_LABELS = { enter: '⏎', tab: 'Tab', esc: 'Esc', space: '空格', backspace: '⌫' };
+  let customKeys = loadKeys(), editingKey = null, keyPanel = false;
+
+  function loadKeys() {
+    try {
+      const list = JSON.parse(localStorage.getItem(KEYS_STORE) || '[]');
+      return Array.isArray(list) ? list.filter(item => item && typeof item.label === 'string' && typeof item.bytes === 'string').slice(0, 12) : [];
+    } catch (error) { return []; }
+  }
+  function saveKeys() { try { localStorage.setItem(KEYS_STORE, JSON.stringify(customKeys)); } catch (error) { } }
+
+  function comboBytes(mods, base) {
+    const m = (mods.shift ? 1 : 0) + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0);   // xterm 修饰位:shift=1, alt=2, ctrl=4
+    if (FKEYS[base]) {
+      const code = FKEYS[base];
+      return m ? '\x1b[1;' + (m + 1) + code : (code.length === 1 ? '\x1bO' + code : '\x1b[' + code);
+    }
+    if (CSI_LETTER[base]) return m ? '\x1b[1;' + (m + 1) + CSI_LETTER[base] : '\x1b[' + CSI_LETTER[base];
+    if (CSI_TILDE[base]) return m ? '\x1b[' + CSI_TILDE[base] + ';' + (m + 1) + '~' : '\x1b[' + CSI_TILDE[base] + '~';
+    const ch = base === 'space' ? ' ' : base;
+    if (ch.length !== 1) return null;
+    let byte = mods.shift && /[a-z]/.test(ch) ? ch.toUpperCase() : ch;
+    if (mods.ctrl) {
+      if (/[2-8]/.test(byte)) byte = String.fromCharCode({ 2: 0, 3: 27, 4: 28, 5: 29, 6: 30, 7: 31, 8: 127 }[byte]);
+      else if (/[a-zA-Z@\[\\\]\^_ ]/.test(byte)) byte = String.fromCharCode(byte === ' ' ? 0 : byte.toUpperCase().charCodeAt(0) & 0x1f);
+      else return null;                                            // 其余字符没有控制码
+    }
+    return (mods.alt ? '\x1b' : '') + byte;
+  }
+  function parseSeq(text) {
+    if (typeof text !== 'string' || !text || text.length > 128) return null;
+    let out = '', rest = text;
+    while (rest.length) {
+      const m = rest.match(/^\\x[0-9a-fA-F]{2}|^\\e|^\\r|^\\n|^\\t|^[\s\S]/);
+      if (!m) return null;
+      const token = m[0];
+      rest = rest.slice(token.length);
+      if (token === '\\e' || token === '\\E') out += '\x1b';
+      else if (token === '\\r') out += '\r';
+      else if (token === '\\n') out += '\n';
+      else if (token === '\\t') out += '\t';
+      else if (/^\\x/i.test(token)) out += String.fromCharCode(parseInt(token.slice(2), 16));
+      else out += token;
+    }
+    return out;
+  }
+  function bytesOf(item) {
+    if (item.kind === 'combo') return comboBytes(item.mods || {}, item.base);
+    if (item.kind === 'seq') return item.bytes;
+    return item.text + (item.enter ? '\r' : '');
+  }
+  function describe(item) {
+    if (item.kind === 'combo') {
+      const mods = ['ctrl', 'alt', 'shift'].filter(k => item.mods[k]).map(k => k[0].toUpperCase() + k.slice(1));
+      const base = BASE_LABELS[item.base] || item.base.toUpperCase();
+      return (mods.length ? mods.join('+') + '+' : '') + base;
+    }
+    if (item.kind === 'seq') return '转义序列 ' + item.source;
+    return '发送 ' + item.text;
+  }
+
+  function renderKeys() {
+    const host = document.querySelector('#custom-keys');
+    if (!host) return;
+    host.replaceChildren();
+    for (const item of customKeys) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'custom';
+      button.textContent = item.label;
+      button.title = describe(item);
+      button.addEventListener('click', () => {
+        if (keyPanel) { openEditor(item); return; }
+        send(bytesOf(item));
+      });
+      keepFocus(button);
+      host.append(button);
+      if (keyPanel) {
+        const cross = document.createElement('button');
+        cross.type = 'button';
+        cross.className = 'custom-delete';
+        cross.textContent = '✕';
+        cross.setAttribute('aria-label', '删除 ' + item.label);
+        cross.addEventListener('click', () => { customKeys = customKeys.filter(one => one.id !== item.id); saveKeys(); renderKeys(); });
+        host.append(cross);
+      }
+    }
+  }
+
+  const BASE_CHOICES = [];
+  for (let i = 0; i < 26; i++) BASE_CHOICES.push(['abcdefghijklmnopqrstuvwxyz'[i], String.fromCharCode(65 + i)]);
+  for (let d = 0; d < 10; d++) BASE_CHOICES.push([String(d), String(d)]);
+  [['enter', '⏎ 回车'], ['tab', 'Tab'], ['esc', 'Esc'], ['space', '空格'], ['backspace', '⌫ 退格'],
+   ['up', '↑'], ['down', '↓'], ['left', '←'], ['right', '→'], ['home', 'Home'], ['end', 'End'],
+   ['pgup', 'PgUp'], ['pgdn', 'PgDn'], ['delete', 'Del'], ['insert', 'Ins']].forEach(pair => BASE_CHOICES.push(pair));
+  for (let f = 1; f <= 12; f++) BASE_CHOICES.push(['f' + f, 'F' + f]);
+
+  function openEditor(item) {
+    editingKey = item ? item.id : null;
+    const form = document.querySelector('#key-editor');
+    form.querySelector('#key-delete').hidden = !item;
+    const kind = item ? item.kind : 'combo';
+    form.querySelector('#key-kind').value = kind;
+    form.querySelector('#key-label').value = item ? item.label : '';
+    const mods = item && item.mods || { ctrl: false, alt: false, shift: false };
+    form.querySelector('#key-ctrl').setAttribute('aria-pressed', String(!!mods.ctrl));
+    form.querySelector('#key-alt').setAttribute('aria-pressed', String(!!mods.alt));
+    form.querySelector('#key-shift').setAttribute('aria-pressed', String(!!mods.shift));
+    if (item && item.kind === 'seq') form.querySelector('#key-seq').value = item.source;
+    if (item && item.kind === 'text') {
+      form.querySelector('#key-text').value = item.text;
+      form.querySelector('#key-enter').checked = !!item.enter;
+    }
+    form.querySelector('#key-error').textContent = '';
+    rowVisibility(kind);
+    form.hidden = false;
+  }
+  function rowVisibility(kind) {
+    const form = document.querySelector('#key-editor');
+    form.querySelector('#key-combo-row').hidden = kind !== 'combo';
+    form.querySelector('#key-seq-row').hidden = kind !== 'seq';
+    form.querySelector('#key-text-row').hidden = kind !== 'text';
+  }
+  function closeEditor() {
+    document.querySelector('#key-editor').hidden = true;
+    editingKey = null;
+  }
+
+  function wireKeyEditor() {
+    const form = document.querySelector('#key-editor');
+    if (!form) return;
+    const base = form.querySelector('#key-base');
+    for (const [value, label] of BASE_CHOICES) base.append(new Option(label, value));
+    form.querySelector('#key-kind').addEventListener('change', () => rowVisibility(form.querySelector('#key-kind').value));
+    for (const id of ['key-ctrl', 'key-alt', 'key-shift']) {
+      const button = form.querySelector('#' + id);
+      button.addEventListener('click', () => button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true')));
+    }
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const kind = form.querySelector('#key-kind').value;
+      const label = form.querySelector('#key-label').value.trim();
+      const error = form.querySelector('#key-error');
+      let item = { id: editingKey || Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join(''), kind, label };
+      if (!label) { error.textContent = '请填写标签'; return; }
+      if (kind === 'combo') {
+        item.mods = { ctrl: form.querySelector('#key-ctrl').getAttribute('aria-pressed') === 'true',
+                      alt: form.querySelector('#key-alt').getAttribute('aria-pressed') === 'true',
+                      shift: form.querySelector('#key-shift').getAttribute('aria-pressed') === 'true' };
+        item.base = form.querySelector('#key-base').value;
+        item.bytes = comboBytes(item.mods, item.base);
+        if (item.bytes === null) { error.textContent = '这个组合键没有对应的控制码，请换一个基础键'; return; }
+      } else if (kind === 'seq') {
+        item.source = form.querySelector('#key-seq').value;
+        item.bytes = parseSeq(item.source);
+        if (item.bytes === null) { error.textContent = '转义序列无效（支持 \\xNN \\e \\r \\n \\t）'; return; }
+      } else {
+        item.text = form.querySelector('#key-text').value;
+        item.enter = form.querySelector('#key-enter').checked;
+        item.bytes = item.text + (item.enter ? '\r' : '');
+        if (!item.text) { error.textContent = '请填写要发送的内容'; return; }
+      }
+      if (bytesOf(item).length > 32 && kind !== 'text') { error.textContent = '序列过长'; return; }
+      const known = customKeys.find(one => one.id === item.id);
+      if (known) customKeys[customKeys.indexOf(known)] = item; else customKeys.push(item);
+      saveKeys();
+      closeEditor();
+      keyPanel = true;
+      renderKeys();
+    });
+    form.querySelector('#key-delete').addEventListener('click', () => {
+      customKeys = customKeys.filter(one => one.id !== editingKey);
+      saveKeys(); closeEditor(); renderKeys();
+    });
+    form.querySelector('#key-cancel').addEventListener('click', closeEditor);
+  }
+  const keyAdd = document.querySelector('#key-add');
+  if (keyAdd) keyAdd.addEventListener('click', () => {
+    keyPanel = !keyPanel;
+    keyAdd.setAttribute('aria-expanded', String(keyPanel));
+    if (keyPanel) openEditor(null); else { closeEditor(); renderKeys(); }
+  });
+  wireKeyEditor();
+  renderKeys();
+
   // The box is measured only when its text may have wrapped differently, once per frame: measuring on every key
   // press made the whole page lay itself out again while typing.
   let boxHeight = 44, boxLength = 0, boxFrame = 0, boxFilled = null;

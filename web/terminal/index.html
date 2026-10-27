@@ -67,7 +67,38 @@
       <button type="button" data-key="right" aria-label="向右移动">→</button>
       <button type="button" data-key="pageup" aria-label="向上翻一页">PgUp</button>
       <button type="button" data-key="pagedown" aria-label="向下翻一页">PgDn</button>
+      <span id="custom-keys"></span>
+      <button type="button" id="key-add" aria-label="添加自定义按键" aria-expanded="false">＋</button>
     </nav>
+    <form id="key-editor" hidden>
+      <div class="key-row">
+        <input id="key-label" maxlength="8" placeholder="标签" aria-label="按键标签">
+        <select id="key-kind" aria-label="按键类型">
+          <option value="combo">组合键</option>
+          <option value="seq">转义序列</option>
+          <option value="text">命令片段</option>
+        </select>
+      </div>
+      <div class="key-row" id="key-combo-row">
+        <button type="button" id="key-ctrl" aria-pressed="false">Ctrl</button>
+        <button type="button" id="key-alt" aria-pressed="false">Alt</button>
+        <button type="button" id="key-shift" aria-pressed="false">Shift</button>
+        <select id="key-base" aria-label="基础键"></select>
+      </div>
+      <div class="key-row" id="key-seq-row" hidden>
+        <input id="key-seq" placeholder='转义序列，如 \x1b[1;5C 或 \x12' aria-label="转义序列">
+      </div>
+      <div class="key-row" id="key-text-row" hidden>
+        <input id="key-text" maxlength="200" placeholder="要发送的命令或文字" aria-label="命令片段内容">
+        <label class="key-enter"><input type="checkbox" id="key-enter" checked>发送后回车</label>
+      </div>
+      <div class="key-row">
+        <button type="submit" id="key-save">保存</button>
+        <button type="button" id="key-delete" hidden>删除</button>
+        <button type="button" id="key-cancel">取消</button>
+        <span id="key-error" aria-live="polite"></span>
+      </div>
+    </form>
     <form id="composer">
       <button type="button" id="slash" aria-label="常用命令" aria-expanded="false">/</button>
       <div class="field">
