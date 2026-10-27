@@ -22,7 +22,7 @@ namespace RemoteCli {
 /// The program on the computer: a small window and a tray icon around the relay, the optional tunnel and the
 /// terminal agent. Everything it starts ends when it exits.
 public sealed partial class App : Form {
-    const string Version = "1.7.5";
+    const string Version = "1.7.6";
     // cloudflared pinned to one release, checked against the sha256 Cloudflare publishes
     // for the artifact (the digest field of the release API, cross-checked 2026-10-12).
     const string TunnelDownload = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-windows-amd64.exe";
