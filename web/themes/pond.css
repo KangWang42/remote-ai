@@ -1,0 +1,14 @@
+/* One quiet background beneath the existing page layout; controls and text keep their own surfaces. */
+html[data-skin="pond"] body { isolation: isolate; }
+.pond-background { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; opacity: .42; pointer-events: none; }
+.pond-toggle { display: grid; place-items: center; flex: none; width: 36px; height: 40px; padding: 0; border: 0; border-radius: 10px; color: var(--muted); background: var(--bg); cursor: pointer; }
+.pond-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pond-toggle:hover { color: var(--accent); }
+.pond-toggle:disabled { opacity: .6; cursor: default; }
+html[data-skin="pond"] #said .text,
+html[data-skin="pond"] .said,
+html[data-skin="pond"] header,
+html[data-skin="pond"] #composer { background-color: rgb(16 25 27 / .88); }
+html[data-skin="pond"] #said .text { border-radius: 8px; }
+html[data-skin="pond"] .xterm-viewport { background-color: transparent !important; }
+@media (forced-colors: active) { .pond-background, .pond-toggle { display: none; } }

@@ -29,10 +29,11 @@ final class Kit {
         {0x1e2326, 0x272e33, 0x323c41, 0x343f44, 0xd3c6aa, 0x859289, 0xa7c080, 0x1a2023, 0xa7c080, 0xdbbc7f, 0xe67e80},
         {0x1e1e2e, 0x262637, 0x313244, 0x313244, 0xcdd6f4, 0x8c8fa8, 0xcba6f7, 0x181825, 0xa6e3a1, 0xf9e2af, 0xf38ba8},
         {0xfbfbfc, 0xf0f1f4, 0xe4e6eb, 0xd5d8df, 0x2b2f3a, 0x666b78, 0x2f6fe4, 0xffffff, 0x3d8a3a, 0xa36a00, 0xc93c37},
-        {0xfaf4ed, 0xf4ede4, 0xebe1d5, 0xddd3c6, 0x4a4566, 0x7a7089, 0x286983, 0xffffff, 0x3b7d5c, 0xb9781a, 0xb4506a}
+        {0xfaf4ed, 0xf4ede4, 0xebe1d5, 0xddd3c6, 0x4a4566, 0x7a7089, 0x286983, 0xffffff, 0x3b7d5c, 0xb9781a, 0xb4506a},
+        {0x10191b, 0x1b292b, 0x27383a, 0x3b5052, 0xe2ece9, 0xa4b7b6, 0xedbb83, 0x10191b, 0xa8c99a, 0xe7c58b, 0xf39188}
     };
-    static final String[] NAMES = {"night", "slate", "pine", "dusk", "paper", "dawn"};
-    static final String[] TITLES = {"夜航", "墨岩", "松林", "暮紫", "纸白 · 明亮", "晨光 · 明亮"};
+    static final String[] NAMES = {"night", "slate", "pine", "dusk", "paper", "dawn", "pond"};
+    static final String[] TITLES = {"夜航", "墨岩", "松林", "暮紫", "纸白 · 明亮", "晨光 · 明亮", "锦鲤池塘"};
     /** The background of the skin with this name; an unknown name gives the default. */
     static int shade(String name) {
         for (int i = 0; i < NAMES.length; i++) if (NAMES[i].equals(name)) return 0xff000000 | SKINS[i][0];

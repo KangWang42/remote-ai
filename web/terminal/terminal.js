@@ -20,12 +20,13 @@
   if (!sizes.includes(fontSize)) fontSize = 13;
   const term = new Terminal({ fontSize, fontFamily: FAMILY, cursorBlink: false, lineHeight: SPACING[spacing][1],
     // No per-row accessibility tree: on a phone it is rebuilt on every refresh and makes typing stutter.
-    scrollback: 5000, screenReaderMode: false, allowProposedApi: false, theme: SKINS[skin].t, ...window.RemoteCliLook });
+    scrollback: 5000, screenReaderMode: false, allowProposedApi: false, allowTransparency: true, theme: SKINS[skin].t, ...window.RemoteCliLook });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(holder);
   // Drawing on the graphics card keeps a busy screen smooth; a phone that cannot do it falls back to plain elements.
   let drawing = 'dom';
+  let resetThemeScroll = null;
   if (window.WebglAddon && !(bridge && bridge.renderer() === 'dom')) {
     try {
       const gl = new WebglAddon.WebglAddon();
@@ -37,8 +38,9 @@
   function applySkin(name) {
     if (!SKINS[name]) return;
     skin = name;
+    if (resetThemeScroll) resetThemeScroll();
     const s = window.RemoteCliPaint(name);
-    term.options.theme = s.t;
+    term.options.theme = name === 'pond' ? { ...s.t, background: '#10191b66' } : s.t;
     if (bridge) bridge.chrome(s.t.background);
   }
   applySkin(skin);
@@ -169,7 +171,9 @@
   holder.querySelector('.xterm-screen').appendChild(over);
   const strip = new TerminalStrip(over, TerminalSlide.KEPT, () => (term.options.theme && term.options.theme.background) || '#000');
   // the picture the terminal draws on the graphics card; drawn as plain elements, it has none to copy from
-  const picture = () => drawing === 'webgl' ? holder.querySelector('.xterm-screen > canvas:not(.xterm-link-layer)') : null;
+  // A translucent terminal cannot be copied over its old rows without showing both sets of text.
+  // The pond uses the existing row-scroll fallback, keeping the water behind the live terminal.
+  const picture = () => drawing === 'webgl' && skin !== 'pond' ? holder.querySelector('.xterm-screen > canvas:not(.xterm-link-layer)') : null;
   let slideFrame = 0;
   const slide = new TerminalSlide({
     cell: () => tall / Math.max(1, term.rows),
@@ -406,6 +410,7 @@
     terminal: term,
     slide, strip          // for the checks
   };
+  resetThemeScroll = () => { scroller.stop(); unslide(); slide.forget(); strip.forget(); };
   grow();
   layout();
   if (bridge) bridge.ready();

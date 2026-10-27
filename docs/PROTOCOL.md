@@ -1,5 +1,9 @@
 # Protocol
 
+## Pond appearance (1.7.4)
+
+The existing Android appearance bridge accepts `pond` in `look-skin` and `look-termskin`. Native screens use the matching palette; the computer's embedded pages lazily load the local ASCII pond assets. Older computer pages fall back to their default palette for this unknown name. No relay message or terminal input contract changes. Animation pause is local to the page origin (`rcli-pond-paused`), and does not affect terminal execution. The vendored `Pond`, `PondRenderer` and `koi` API and pinned source are documented in `web/themes/README.md`.
+
 ## Optional UU desktop access (Android 1.6.6)
 
 This adapter opens the installed `com.netease.uuremote` app (4.42.0 or newer). It does not route video through
