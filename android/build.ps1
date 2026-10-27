@@ -38,6 +38,19 @@ if (!(Test-Path -LiteralPath $zxing)) {
 if ((Get-FileHash -LiteralPath $zxing -Algorithm SHA256).Hash.ToLower() -ne '8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82') { throw "unexpected content: $zxing" }
 $compiled = Join-Path $build 'resources.zip'
 $unsigned = Join-Path $build 'unsigned.apk'
+# Bundle the same page sources as the Windows installer. Public relays may still serve an older UI.
+$webRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'web'
+$webFiles = @(Get-ChildItem -LiteralPath $webRoot -File -Recurse)
+$mime = @{ '.html'='text/html'; '.js'='text/javascript'; '.css'='text/css'; '.woff2'='font/woff2'; '.bcmap'='application/octet-stream'; '.json'='application/json' }
+$entries = @($webFiles | ForEach-Object {
+    if ($mime.ContainsKey($_.Extension)) {
+        $name = $_.FullName.Substring($webRoot.Length + 1).Replace('\', '/')
+        if ($name -notmatch '^[a-zA-Z0-9_./-]+$') { throw "Unsupported page asset name: $name" }
+        $name + '=' + $mime[$_.Extension]
+    }
+})
+$assetManifest = Join-Path $build 'web-assets.properties'
+[System.IO.File]::WriteAllLines($assetManifest, $entries, [System.Text.UTF8Encoding]::new($false))
 Invoke-Tool (Join-Path $buildTools 'aapt2.exe') @('compile', '--dir', 'res', '-o', $compiled)
 Invoke-Tool (Join-Path $buildTools 'aapt2.exe') @('link', '-o', $unsigned, '-I', $androidJar, '--manifest', 'AndroidManifest.xml', '--java', $generated, $compiled)
 $sources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter '*.java' -Recurse | ForEach-Object FullName)
@@ -49,7 +62,14 @@ Invoke-Tool $java @('-cp', (Join-Path $buildTools 'lib/d8.jar'), 'com.android.to
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
 $zip = [System.IO.Compression.ZipFile]::Open($unsigned, [System.IO.Compression.ZipArchiveMode]::Update)
-try { [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $dex 'classes.dex'), 'classes.dex') | Out-Null }
+try {
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $dex 'classes.dex'), 'classes.dex') | Out-Null
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $assetManifest, 'assets/web-assets.properties') | Out-Null
+    foreach ($file in $webFiles) {
+        $name = $file.FullName.Substring($webRoot.Length + 1).Replace('\', '/')
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, ('assets/web/' + $name)) | Out-Null
+    }
+}
 finally { $zip.Dispose() }
 $aligned = Join-Path $build 'aligned.apk'
 Invoke-Tool (Join-Path $buildTools 'zipalign.exe') @('-f', '-p', '4', $unsigned, $aligned)

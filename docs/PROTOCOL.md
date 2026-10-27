@@ -4,6 +4,10 @@
 
 The existing Android appearance bridge accepts `pond` in `look-skin` and `look-termskin`. Native screens use the matching palette; the computer's embedded pages lazily load the local ASCII pond assets. Older computer pages fall back to their default palette for this unknown name. No relay message or terminal input contract changes. Animation pause is local to the page origin (`rcli-pond-paused`), and does not affect terminal execution. The vendored `Pond`, `PondRenderer` and `koi` API and pinned source are documented in `web/themes/README.md`.
 
+## Android bundled pages (1.7.5)
+
+Android packages `web/` and its licenses as APK assets. `EmbeddedPages` intercepts GET requests for manifest-listed page files at the selected connection's exact scheme, host, port and `/c/<id>/` prefix, and serves the APK copy with `no-store` and the same CSP as the relay. Relative module, font and viewer paths retain the original HTTP(S) URL. API, downloads, WebSockets, POST requests, other origins and other computer spaces remain network requests; no credentials are copied to a new origin. Unknown files are not intercepted, while a missing listed asset fails instead of mixing server and APK versions. `PageAssets` rejects encoded paths and dot segments. Updating the App therefore updates its terminal theme menu even when a public relay serves older pages. Browsers outside the App continue to use server pages.
+
 ## Optional UU desktop access (Android 1.6.6)
 
 This adapter opens the installed `com.netease.uuremote` app (4.42.0 or newer). It does not route video through

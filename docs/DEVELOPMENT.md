@@ -2,6 +2,8 @@
 
 锦鲤池塘主题位于 `web/themes/`，仅在选择该主题时加载；上游来源、生命周期和性能限制见该目录的 README。运行 `python tests/pond_ui_check.py <chrome.exe> <输出目录>` 检查终端、对话和设置的主题行为与布局。
 
+Android 构建同时把 `web/` 打进 APK，`EmbeddedPages` 按 `PageAssets` 解析结果提供页面，数据仍走原中转。运行 `python tests/android_pages_check.py --jdk <JDK目录> --apk dist/RemoteCli-Android.apk --output <输出目录>` 核对打包内容与地址边界；给 `pond_ui_check.py` 追加 APK 路径可检查 APK 内页面在公共中转路径下的主题菜单和 App 外观同步。
+
 [← 回到首页](../README.md)
 
 给想读代码、自己构建或参与修改的人。
@@ -18,7 +20,7 @@
 | `agent-linux/` | Linux 电脑端：`agent.py`（终端、对话扫描、查看文件），一个文件，只用 Python 标准库；`install.sh` 一条命令装好中转和电脑端；`remote-cli-agent.service` 是 systemd 用户服务 |
 | `relay/` | 中转：`server.py`（登录、HTTP，以及公共中转里每台电脑各自的空间）、`relay.py`（终端状态与输出的转发：一台电脑一个 `Relay` 对象）。只用 Python 标准库；`install.sh` 把它装成服务器上的系统服务 |
 | `android/` | 安卓 App：`MainActivity`（各界面之间的跳转、扫码回调、语音识别）、`Tabs`（底部四个栏目，与电脑页面的底栏同样的图标和尺寸）、`Workbench`（“任务”和“项目”两页）、`AppPages`（“协作”和“我的”两页）、`Kit`（配色和界面部件）、`AggregateSessions`（任务分组与排序，不依赖 Android，可单独检查） |
-| `web/` | App 里一台电脑的列表页和终端页（xterm.js），由中转提供、嵌在 App 内显示；随电脑端一起更新。列表页由 `app.js` 提供公共部分，各部分是登记到它上面的模块：`begin.js`（新建对话：应用或终端）、`together.js`（协作）、`me.js`（我的） |
+| `web/` | App 里一台电脑的列表页和终端页（xterm.js），同时随 App 和电脑端打包。App 使用 APK 内的页面，浏览器使用中转提供的页面。列表页由 `app.js` 提供公共部分，各部分是登记到它上面的模块：`begin.js`（新建对话：应用或终端）、`together.js`（协作）、`me.js`（我的） |
 | `tools/` | `package_windows.py`（安装程序）、`window_pictures.py`（文档里的电脑端截图）、`readme_pictures.py`（README 里的手机页面截图和带说明的图：用真实页面和编造的示例对话截图，再把 `docs/images/src/` 里的各页画成图）、`relay_list.py`（生成公共中转清单里不以明文出现的条目） |
 | `docs/PROTOCOL.md` | 三方之间的接口，想写别的客户端或别的系统的电脑端看这里 |
 
