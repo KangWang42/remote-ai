@@ -23,6 +23,8 @@ def main():
         assert b'Copyright (c) 2026 stqfdyr' in apk.read('assets/web/themes/vendor/ascii-pond/LICENSE')
         for name in ('terminal/index.html', 'chat/index.html', 'files/index.html', 'computer/index.html', 'themes/pond.js', 'themes/pond.css'):
             assert name in entries, name
+        for name in ('themes/assets/koi-amber.png', 'themes/assets/koi-pearl.png'):
+            assert entries[name] == 'image/png', name
     manifest_path = out / 'web-assets.properties'
     manifest_path.write_text(manifest, encoding='utf-8')
     with tempfile.TemporaryDirectory(prefix='java-', dir=out) as classes:

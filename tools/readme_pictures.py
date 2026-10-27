@@ -215,10 +215,16 @@ class Browser:
                                          "--user-data-dir=" + str(Path(temporary) / "browser"), "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         active = Path(temporary) / "browser" / "DevToolsActivePort"
         for _ in range(100):
-            if active.exists():
+            try:
+                port = int(active.read_text().splitlines()[0])
                 break
+            except (OSError, IndexError, ValueError):
+                pass  # Chrome creates/locks this file before both lines have been written on Windows.
             time.sleep(0.1)
-        port = int(active.read_text().splitlines()[0])
+        else:
+            self.process.terminate()
+            self.process.wait(timeout=10)
+            raise RuntimeError('Chrome did not expose its debugging port')
         connection = http.client.HTTPConnection("127.0.0.1", port)
         connection.request("PUT", "/json/new?about:blank")
         page = json.loads(connection.getresponse().read()); connection.close()

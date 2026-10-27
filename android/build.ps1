@@ -41,7 +41,7 @@ $unsigned = Join-Path $build 'unsigned.apk'
 # Bundle the same page sources as the Windows installer. Public relays may still serve an older UI.
 $webRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'web'
 $webFiles = @(Get-ChildItem -LiteralPath $webRoot -File -Recurse)
-$mime = @{ '.html'='text/html'; '.js'='text/javascript'; '.css'='text/css'; '.woff2'='font/woff2'; '.bcmap'='application/octet-stream'; '.json'='application/json' }
+$mime = @{ '.html'='text/html'; '.js'='text/javascript'; '.css'='text/css'; '.png'='image/png'; '.woff2'='font/woff2'; '.bcmap'='application/octet-stream'; '.json'='application/json' }
 $entries = @($webFiles | ForEach-Object {
     if ($mime.ContainsKey($_.Extension)) {
         $name = $_.FullName.Substring($webRoot.Length + 1).Replace('\', '/')

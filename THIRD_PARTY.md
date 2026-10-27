@@ -2,7 +2,7 @@
 
 | Component | Version | License | Where |
 | --- | --- | --- | --- |
-| [ascii-pond](https://github.com/stqfdyr/ascii-pond) | `822a3c95167f79f0905720a2e6793cb4a64eda55` | MIT, Copyright (c) 2026 stqfdyr | `web/themes/vendor/ascii-pond/` (unmodified simulation and renderer; license included) |
+| [ascii-pond](https://github.com/stqfdyr/ascii-pond) | `822a3c95167f79f0905720a2e6793cb4a64eda55` | MIT, Copyright (c) 2026 stqfdyr | `web/themes/vendor/ascii-pond/` (unmodified simulation and renderer; license included); `web/themes/assets/koi-*.png` generated with that renderer |
 | xterm.js (`@xterm/xterm`) | 5.5.0 | MIT | `web/terminal/vendor/xterm.js`, `xterm.css` |
 | `@xterm/addon-fit` | 0.10.0 | MIT | `web/terminal/vendor/addon-fit.js` |
 | `@xterm/addon-webgl` | 0.18.0 | MIT | `web/terminal/vendor/addon-webgl.js` |

@@ -47,7 +47,7 @@ void main() { colour = texture(rows, at); }`;
       this.forget();
     }
     // Another size of terminal, or of its picture: the strip is cut again when rows are next kept.
-    forget() { this.cut = ''; this.top = -1; this.bottom = -1; this.moved = NaN; this.fresh = false; this.first = 0; this.last = -1; if (this.held) this.held.fill(NONE); }
+    forget() { this.capture = ''; this.cut = ''; this.top = -1; this.bottom = -1; this.moved = NaN; this.fresh = false; this.first = 0; this.last = -1; if (this.held) this.held.fill(NONE); }
     open() {
       if (this.gl) return true;
       // Where nothing has been drawn the canvas shows what lies under it, the terminal itself: should a phone ever
@@ -131,8 +131,10 @@ void main() { colour = texture(rows, at); }`;
     // `rows` rows of the terminal's picture `source`, from its row `row` on, are kept under the places `place` and
     // on. `total`: the rows of the whole picture. To be called as the terminal has drawn: its picture is there to
     // be taken only until it has been shown. Says false when nothing could be kept.
-    keep(source, total, row, place, rows) {
+    keep(source, total, row, place, rows, revision) {
       if (!this.fit(source, total)) return false;
+      const capture = revision === undefined ? '' : `${revision}:${row}:${place}:${rows}`;
+      if (capture && capture === this.capture) return true;
       const gl = this.gl, high = this.high, began = performance.now();
       gl.bindTexture(gl.TEXTURE_2D, this.picture);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
@@ -148,6 +150,7 @@ void main() { colour = texture(rows, at); }`;
         done += run;
       }
       this.base = place - row; this.fresh = true;
+      this.capture = capture;
       // The first copies make room on the card and are not counted. After that the average says what a copy costs
       // here; one that took long for another reason counts for no more than twice SLOW, so only copies that stay
       // slow bring the average over it.
@@ -197,6 +200,7 @@ void main() { colour = texture(rows, at); }`;
     }
     // The terminal is seen as it draws itself, and no row is held.
     hide() {
+      this.capture = '';
       if (this.shown) { this.shown = false; this.box.hidden = true; }
       this.place = null; this.first = 0; this.last = -1;
       if (this.held) this.held.fill(NONE);

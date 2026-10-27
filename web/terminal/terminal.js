@@ -20,7 +20,7 @@
   if (!sizes.includes(fontSize)) fontSize = 13;
   const term = new Terminal({ fontSize, fontFamily: FAMILY, cursorBlink: false, lineHeight: SPACING[spacing][1],
     // No per-row accessibility tree: on a phone it is rebuilt on every refresh and makes typing stutter.
-    scrollback: 5000, screenReaderMode: false, allowProposedApi: false, allowTransparency: true, theme: SKINS[skin].t, ...window.RemoteCliLook });
+    scrollback: 5000, screenReaderMode: false, allowProposedApi: false, allowTransparency: skin === 'pond', theme: SKINS[skin].t, ...window.RemoteCliLook });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(holder);
@@ -40,6 +40,9 @@
     skin = name;
     if (resetThemeScroll) resetThemeScroll();
     const s = window.RemoteCliPaint(name);
+    term.options.allowTransparency = name === 'pond';
+    // xterm halves this threshold for SGR dim text; keep that text readable on light surfaces too.
+    term.options.minimumContrastRatio = s.light ? 9 : 4.5;
     term.options.theme = name === 'pond' ? { ...s.t, background: '#10191b66' } : s.t;
     if (bridge) bridge.chrome(s.t.background);
   }
@@ -174,6 +177,13 @@
   holder.querySelector('.xterm-screen').appendChild(over);
   // An opaque surface under the moving rows hides the original text even when the live terminal is translucent.
   const strip = new TerminalStrip(over, TerminalSlide.KEPT, () => SKINS[skin].t.background);
+  // A paint notification is not necessarily new content. Reuse the last copied pixels until data,
+  // selection or viewport changes; ANSI-only writes still invalidate through the parser event.
+  let pictureRevision = 0;
+  term.onWriteParsed(() => { pictureRevision++; });
+  term.onSelectionChange(() => { pictureRevision++; });
+  window.addEventListener('focus', () => { pictureRevision++; });
+  window.addEventListener('blur', () => { pictureRevision++; });
   // the picture the terminal draws on the graphics card; drawn as plain elements, it has none to copy from
   const picture = () => drawing === 'webgl' ? holder.querySelector('.xterm-screen > canvas:not(.xterm-link-layer)') : null;
   let slideFrame = 0;
@@ -187,7 +197,10 @@
       return rows;
     },
     draw() { if (!picture()) return false; term.refresh(0, term.rows - 1); return true; },
-    keep(row, place, rows) { const source = picture(); return !!source && strip.keep(source, term.rows, row, place, rows); },
+    keep(row, place, rows) {
+      const source = picture(), buffer = term.buffer.active;
+      return !!source && strip.keep(source, term.rows, row, place, rows, `${pictureRevision}:${buffer.type}:${buffer.viewportY}`);
+    },
     show(place, top, bottom, first, last) { if (place === null) strip.hide(); else strip.show(place, top, bottom, first, last); covered(); },
     hole: () => hole,
     nudge: rows => scroller.nudge(rows)

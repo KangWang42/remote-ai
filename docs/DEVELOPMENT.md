@@ -6,6 +6,8 @@
 
 Android 构建同时把 `web/` 打进 APK，`EmbeddedPages` 按 `PageAssets` 解析结果提供页面，数据仍走原中转。运行 `python tests/android_pages_check.py --jdk <JDK目录> --apk dist/RemoteCli-Android.apk --output <输出目录>` 核对打包内容与地址边界；给 `pond_ui_check.py` 追加 APK 路径可检查 APK 内页面在公共中转路径下的主题菜单和 App 外观同步。
 
+`python tests/terminal_render_check.py <chrome.exe> <输出目录>` 检查纸白/夜航/池塘的 DOM 与 WebGL 渲染。触屏使用稳定的终端容器承接手势，避免 DOM 行被替换后丢失后续触摸。滚动快照以解析修订、选择、视口和行范围判定复用；尺寸、主题、显卡状态变化清空缓存，不按文本相等跳过 ANSI 颜色变化。浅色终端关闭透明绘制，并提高最低对比度以覆盖弱化文字。池塘图片在构建准备阶段生成，同一页面只解码一次，无运行时模拟循环。
+
 [← 回到首页](../README.md)
 
 给想读代码、自己构建或参与修改的人。

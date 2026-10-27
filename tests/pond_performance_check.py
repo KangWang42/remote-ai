@@ -33,39 +33,38 @@ def main():
             browser.ask('Page.addScriptToEvaluateOnNewDocument', source="localStorage.setItem('rcli-skin','pond');localStorage.setItem('rcli-renderer','dom');Math.random=()=>.42;")
             browser.open(played.origin + '/computer/', '!!window.RemoteCliSkins', 'page', width=390, height=844, deviceScaleFactor=1, mobile=True)
             value("RemoteCliPaint('night');import('../themes/pond.js').then(({PondTheme})=>{window.measuredPond=new PondTheme();measuredPond.setEnabled(true)})")
-            browser.until('!!window.measuredPond?.renderer', 'pond')
+            browser.until('window.measuredPond?.ready', 'decoded pond textures')
             # Isolate one instance; the production page theme remains covered by pond_ui_check.
-            value('measuredPond.stop()')
-            timings = value("""(() => {
-                const p=measuredPond, result={};
-                for(const method of ['step','depositWake','diffuse','render']) {
-                    const obj=method==='step'?p.pond:p.renderer;
-                    const samples=[];
-                    for(let i=0;i<35;i++) { const start=performance.now();obj[method](method==='step'||method==='diffuse'?1/60:p.pond);samples.push(performance.now()-start); }
-                    samples.sort((a,b)=>a-b);result[method]={median:samples[17],p95:samples[33]};
-                }
-                return result;
-            })()""")
-            assert value("(() => {const grid=measuredPond.renderer.grid;measuredPond.resize();return grid===measuredPond.renderer.grid})()"), 'unchanged viewport reallocates the grid'
+            assert value("document.querySelectorAll('canvas.pond-background').length") == 0
+            assert not value("performance.getEntriesByType('resource').some(r=>r.name.includes('vendor/ascii-pond'))"), 'runtime simulation was loaded'
+            value('window.keptFish=measuredPond.background.firstElementChild')
+            browser.ask('Performance.enable')
+            metrics = lambda: {m['name']:m['value'] for m in browser.ask('Performance.getMetrics')['metrics']}
+            before = metrics()
+            time.sleep(3)
+            after = metrics()
+            timings = {'idleSeconds':3,'scriptSeconds':after['ScriptDuration']-before['ScriptDuration'],'taskSeconds':after['TaskDuration']-before['TaskDuration']}
             value("measuredPond.paused=false;measuredPond.sync()")
             time.sleep(.3)
             value("document.dispatchEvent(new TouchEvent('touchstart',{touches:[new Touch({identifier:1,target:document.body,clientX:100,clientY:100})]}))")
-            frozen = value('measuredPond.pond.time')
+            value('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+            frozen = value('getComputedStyle(keptFish).transform')
             time.sleep(1.5)
-            assert value('measuredPond.pond.time') == frozen, 'held touch must stop all simulation'
+            assert value('getComputedStyle(keptFish).transform') == frozen, 'held touch must stop movement'
             value("document.dispatchEvent(new TouchEvent('touchend',{touches:[]}))")
             time.sleep(.5)
-            assert value('measuredPond.pond.time') == frozen, 'inertia grace period'
-            browser.until('measuredPond.pond.time > ' + str(frozen), 'resume after idle')
+            assert value('getComputedStyle(keptFish).transform') == frozen, 'inertia grace period'
+            browser.until("measuredPond.background.dataset.running === 'true'", 'resume after idle')
             value("document.dispatchEvent(new Event('input'));dispatchEvent(new Event('pagehide'))")
             time.sleep(1.4)
-            assert value('measuredPond.frame === 0 && measuredPond.timer === 0'), 'idle timer restarted a departed page'
+            assert value("measuredPond.background.dataset.running === 'false' && measuredPond.idleTimer === 0"), 'idle timer restarted a departed page'
             value("dispatchEvent(new Event('pageshow'))")
             value("document.dispatchEvent(new Event('input'));measuredPond.setEnabled(false)")
             time.sleep(1.4)
-            assert value('measuredPond.frame === 0 && measuredPond.timer === 0 && measuredPond.pond === null'), 'disabled theme restarted'
+            assert value("measuredPond.background.dataset.running === 'false' && measuredPond.idleTimer === 0 && !measuredPond.background.isConnected"), 'disabled theme restarted'
             value('measuredPond.setEnabled(true)')
-            browser.until('measuredPond.pond.time > 0', 'theme enabled again after input')
+            browser.until("measuredPond.background.dataset.running === 'true'", 'theme enabled again after input')
+            assert value('keptFish === measuredPond.background.firstElementChild'), 'decoded image was discarded'
             value('measuredPond.setEnabled(false)')
             # Use the real terminal page with a simulated shell and enough history to exercise scrolling.
             terminal = played.relay.command({'action':'start','id':'a'*32,'tool':'shell','dir':'web-shop'})['terminal']
@@ -77,23 +76,24 @@ def main():
                 time.sleep(.3)
                 before = value('TerminalUI.terminal.buffer.active.viewportY')
                 browser.ask('Input.dispatchTouchEvent', type='touchStart', touchPoints=[{'x':180,'y':260}])
-                frozen = value("document.querySelector('.pond-background').toDataURL()")
+                value('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+                frozen = value("getComputedStyle(document.querySelector('.pond-fish')).transform")
                 smooth = False
                 for y in range(280, 621, 20):
                     browser.ask('Input.dispatchTouchEvent', type='touchMove', touchPoints=[{'x':180,'y':y}])
                     time.sleep(.016)
                     smooth |= bool(value('TerminalUI.strip.shown'))
                 during = value('TerminalUI.terminal.buffer.active.viewportY')
-                assert value("document.querySelector('.pond-background').toDataURL()") == frozen, 'pond paints during scroll'
+                assert value("getComputedStyle(document.querySelector('.pond-fish')).transform") == frozen, 'pond moves during scroll'
                 browser.picture(out / ('terminal-scrolled-' + renderer + '.png'))
                 browser.ask('Input.dispatchTouchEvent', type='touchEnd', touchPoints=[])
                 time.sleep(.2)
-                assert during < before, (renderer, before, during)
+                assert before - during >= 15, (renderer, before, during)
                 if renderer == 'webgl':
                     assert smooth, 'pond disabled the smooth scrolling layer'
                 scrolls.append({'renderer':renderer,'before':before,'during':during,'smooth':smooth})
             assert not browser.problems, browser.problems
-            result = {'cpuSlowdown':4,'timingsMs':timings,'scroll':scrolls}
+            result = {'cpuSlowdown':4,'idle':timings,'scroll':scrolls}
             (out / 'report.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
             print(json.dumps(result))
         finally:

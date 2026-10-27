@@ -153,18 +153,19 @@ def main():
                                     ("chat/?id=" + chat, "document.querySelector('#said .text')?.textContent.includes('formatPrice')"),
                                     ("computer/", "!!document.querySelector('#skins button[data-key=pond]')")):
                     browser.open(played.origin + "/" + page, ready, page, width=width, height=844, deviceScaleFactor=1, mobile=width < 500)
-                    until("document.querySelector('.pond-background')?.width > 0", "pond canvas")
+                    until("document.querySelector('.pond-fish')?.naturalWidth > 0", "decoded pond textures")
                     time.sleep(.3)
                     geometry = value("(() => {const m=document.querySelector('main').getBoundingClientRect();return {inner:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth,left:m.left,right:innerWidth-m.right,h1:document.querySelectorAll('h1').length,duplicates:[...document.querySelectorAll('[id]')].map(n=>n.id).filter((id,i,a)=>a.indexOf(id)!==i),broken:[...document.images].filter(i=>!i.complete||!i.naturalWidth).length}})()")
                     assert geometry["inner"] == width and max(geometry["scroll"], geometry["body"]) <= width, geometry
                     assert abs(geometry["left"] - geometry["right"]) <= 1 and not geometry["duplicates"] and not geometry["broken"], geometry
-                    before = value("document.querySelector('.pond-background').toDataURL()")
+                    before = value("getComputedStyle(document.querySelector('.pond-fish')).transform")
                     time.sleep(.25)
-                    assert value("document.querySelector('.pond-background').toDataURL()") != before, "pond is not animated"
+                    assert value("getComputedStyle(document.querySelector('.pond-fish')).transform") != before, "pond is not animated"
                     value("document.querySelector('.pond-toggle').click()")
-                    before = value("document.querySelector('.pond-background').toDataURL()")
+                    value('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+                    before = value("getComputedStyle(document.querySelector('.pond-fish')).transform")
                     time.sleep(.2)
-                    assert value("document.querySelector('.pond-background').toDataURL()") == before, "pause"
+                    assert value("getComputedStyle(document.querySelector('.pond-fish')).transform") == before, "pause"
                     browser.picture(out / (page.split('/')[0] + "-%d.png" % width))
                     value("document.querySelector('.pond-toggle').click()")
                     report.append({"page": page.split('/')[0], "width": width, **geometry})
@@ -182,30 +183,30 @@ def main():
             value("document.querySelector('#skins button[data-key=paper]').click()")
             assert value("document.querySelector('.pond-background') === null")
             value("document.querySelector('#skins button[data-key=pond]').click()")
-            until("document.querySelector('.pond-background')?.width > 0", "restart")
+            until("document.querySelector('.pond-fish')?.naturalWidth > 0", "restart")
             assert value("document.querySelectorAll('.pond-background').length") == 1
             browser.ask("Emulation.setEmulatedMedia", features=[{"name": "prefers-reduced-motion", "value": "reduce"}])
             browser.ask("Page.captureScreenshot", format="png")
             until("document.querySelector('.pond-toggle').disabled", "reduced motion state")
             time.sleep(.2)
-            before = value("document.querySelector('.pond-background').toDataURL()")
+            before = value("getComputedStyle(document.querySelector('.pond-fish')).transform")
             time.sleep(.25)
-            assert value("document.querySelector('.pond-background').toDataURL()") == before
+            assert value("getComputedStyle(document.querySelector('.pond-fish')).transform") == before
             assert value("document.querySelector('.pond-toggle').disabled"), value("({reduce:matchMedia('(prefers-reduced-motion: reduce)').matches,buttons:[...document.querySelectorAll('.pond-toggle')].map(b=>({label:b.title,disabled:b.disabled})),canvas:document.querySelectorAll('.pond-background').length})")
             browser.ask("Emulation.setEmulatedMedia", features=[{"name": "forced-colors", "value": "active"}])
             until("document.querySelector('.pond-background').hidden", "forced colors")
             browser.ask("Emulation.setEmulatedMedia", features=[])
-            # Lifecycle is exercised through the class directly with observable simulation time.
+            # Lifecycle is exercised through the class directly with observable animation state.
             value("import('../themes/pond.js').then(({PondTheme})=>{window.fixturePond=new PondTheme();fixturePond.setEnabled(true)})")
             value("dispatchEvent(new Event('pagehide'))")
-            assert value("fixturePond.frame") == 0
+            assert value("fixturePond.background.dataset.running") == 'false'
             value("dispatchEvent(new Event('pageshow'))")
-            until("fixturePond.frame > 0 || fixturePond.timer > 0", "resume")
+            until("fixturePond.background.dataset.running === 'true'", "resume")
             value("fixturePond.setEnabled(false)")
             browser.ask("Page.addScriptToEvaluateOnNewDocument", source="localStorage.setItem('rcli-renderer','webgl')")
             # Match headless Chrome's physical scale; CDP-only DPR emulation reports inconsistent device pixel boxes to WebGL.
             browser.open(played.origin + '/terminal/?id=' + terminal, "window.TerminalUI?.screenText().includes('formatPrice')", "WebGL terminal", width=390, height=844, deviceScaleFactor=1, mobile=True)
-            until("document.querySelector('.pond-background')?.width > 0", "WebGL pond")
+            until("document.querySelector('.pond-fish')?.naturalWidth > 0", "WebGL pond")
             assert value("TerminalUI.drawing()") == 'webgl'
             time.sleep(.4)
             browser.picture(out / 'terminal-webgl-before.png')
@@ -219,7 +220,7 @@ def main():
             value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='更换外观').click()")
             assert value("[...document.querySelectorAll('#rcli-menu button')].some(b=>b.textContent==='锦鲤池塘')")
             value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='锦鲤池塘').click()")
-            until("document.querySelector('.pond-background')?.width > 0", 'menu selection')
+            until("document.querySelector('.pond-fish')?.naturalWidth > 0", 'menu selection')
             if bundled:
                 assert value("RemoteCliNative.pref('termskin')") == 'pond'
                 value("RemoteCliNative.setPref('termskin','night')")
@@ -228,14 +229,14 @@ def main():
                 value("document.getElementById('menu').click()")
                 value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='更换外观').click()")
                 value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='跟随 App 外观').click()")
-                until("document.querySelector('.pond-background')?.width > 0", 'follow app pond')
+                until("document.querySelector('.pond-fish')?.naturalWidth > 0", 'follow app pond')
                 assert value("RemoteCliNative.pref('termskin')") == ''
             # Palette contrast, including the maximum possible white pond pixel at .42 opacity behind terminal .4 tint.
             contrast = value("(() => {const p=RemoteCliSkins.pond;const rgb=h=>h.slice(1).match(/../g).map(v=>parseInt(v,16));const lum=c=>c.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);const ratio=(a,b)=>(Math.max(lum(a),lum(b))+.05)/(Math.min(lum(a),lum(b))+.05);const bg=rgb(p.t.background);return {text:ratio(rgb(p.t.foreground),bg.map(v=>v+(255-v)*.42*.6)),muted:ratio(rgb(p.muted),rgb(p.raised)),button:ratio(rgb(p.onAccent),rgb(p.accent))}})()")
             assert min(contrast.values()) >= 4.5, contrast
             assert not browser.problems, browser.problems
             if bundled:
-                assert {'terminal/skins.js', 'terminal/index.html', 'themes/pond.js', 'themes/vendor/ascii-pond/koi.js', 'chat/index.html'} <= browser.intercepted, browser.intercepted
+                assert {'terminal/skins.js', 'terminal/index.html', 'themes/pond.js', 'themes/assets/koi-amber.png', 'themes/assets/koi-pearl.png', 'chat/index.html'} <= browser.intercepted, browser.intercepted
             (out / "report.json").write_text(json.dumps({"layouts": report, "contrast": contrast, "errors": browser.problems}, ensure_ascii=False, indent=2), encoding="utf-8")
             print("Pond checks passed: 12 layouts; real terminal text/input; animation/pause; switching; reduced motion; forced colors; lifecycle; contrast; no script/HTTP errors.")
         finally:

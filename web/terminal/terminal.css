@@ -34,6 +34,8 @@ button:disabled { opacity: .45; cursor: default; }
 /* The terminal's own layers are ordered among themselves only (isolation): the layer for links has a z-index, and
    would otherwise lie over what is laid over the terminal here, and take the taps meant for "回到最新". */
 #terminal { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 10px; isolation: isolate; }
+/* DOM rows are replaced while scrolling. Keep a touch anchored to the stable screen instead of a removed span. */
+@media (pointer: coarse) { .xterm-rows { pointer-events: none; } }
 /* While a finger scrolls, the rows that move are shown here, over the terminal's picture (terminal-strip.js): a canvas
    that is moved by a transform, which costs a frame no painting, and is shown pixel for pixel, never smoothed, so
    its text stays sharp wherever it is moved to. Above the terminal's layer for links. */
