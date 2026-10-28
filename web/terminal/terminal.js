@@ -242,13 +242,25 @@
   const BASE_LABELS = { enter: '⏎', tab: 'Tab', esc: 'Esc', space: '空格', backspace: '⌫' };
   let customKeys = loadKeys(), editingKey = null, keyPanel = false;
 
+  function nativeKeys(raw) {
+    // App 的桥(RemoteCliNative,android6 分支起提供)把键存进应用偏好:升级与换线路都不丢
+    try { return window.RemoteCliNative && typeof window.RemoteCliNative.termKeys === 'function'; } catch (error) { return false; }
+  }
   function loadKeys() {
     try {
+      if (nativeKeys()) {
+        const list = JSON.parse(window.RemoteCliNative.termKeys() || '[]');
+        return Array.isArray(list) ? list.filter(item => item && typeof item.label === 'string' && typeof item.bytes === 'string').slice(0, 12) : [];
+      }
       const list = JSON.parse(localStorage.getItem(KEYS_STORE) || '[]');
       return Array.isArray(list) ? list.filter(item => item && typeof item.label === 'string' && typeof item.bytes === 'string').slice(0, 12) : [];
     } catch (error) { return []; }
   }
-  function saveKeys() { try { localStorage.setItem(KEYS_STORE, JSON.stringify(customKeys)); } catch (error) { } }
+  function saveKeys() {
+    const json = JSON.stringify(customKeys);
+    try { if (nativeKeys()) { window.RemoteCliNative.termKeys(json); return; } } catch (error) { }
+    try { localStorage.setItem(KEYS_STORE, json); } catch (error) { }
+  }
 
   function comboBytes(mods, base) {
     const m = (mods.shift ? 1 : 0) + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0);   // xterm 修饰位:shift=1, alt=2, ctrl=4
@@ -258,6 +270,13 @@
     }
     if (CSI_LETTER[base]) return m ? '\x1b[1;' + (m + 1) + CSI_LETTER[base] : '\x1b[' + CSI_LETTER[base];
     if (CSI_TILDE[base]) return m ? '\x1b[' + CSI_TILDE[base] + ';' + (m + 1) + '~' : '\x1b[' + CSI_TILDE[base] + '~';
+    if (BASE_BYTES[base]) {
+      // Shift+Tab 的回退序列 ESC[Z 是这一组里唯一有独立历史的组合；其余按历史行为原样发送
+      if (base === 'tab' && mods.shift && !mods.ctrl && !mods.alt) return '\x1b[Z';
+      if (base === 'enter' && mods.ctrl && !mods.alt) return '\n';
+      const plain = BASE_BYTES[base];
+      return mods.alt ? '\x1b' + plain : plain;
+    }
     const ch = base === 'space' ? ' ' : base;
     if (ch.length !== 1) return null;
     let byte = mods.shift && /[a-z]/.test(ch) ? ch.toUpperCase() : ch;
