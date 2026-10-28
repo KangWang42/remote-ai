@@ -124,3 +124,16 @@ header .who #status { grid-column: 1 / -1; }
   .keys, #composer { display: none; }
   #screen { padding-bottom: 8px; }
 }
+
+/* 自定义按键：条上追加的按钮与编辑器面板。 */
+#custom-keys { display: contents; }
+.keys button.custom { border: 1px dashed var(--line); }
+#key-add { min-width: 34px; color: var(--muted); font-size: 15px; }
+#key-editor { display: grid; gap: 6px; padding: 8px 10px 10px; background: var(--panel); border-top: 1px solid var(--line); }
+#key-editor[hidden] { display: none; }
+.key-row { display: flex; gap: 6px; align-items: center; }
+.key-row button { background: var(--raised); color: var(--ink); border: 0; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; white-space: nowrap; }
+.key-row button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.key-row input, .key-row select { flex: 1; min-width: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 13px; }
+.key-enter { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+#key-error { color: #f7768e; font-size: 12px; }
