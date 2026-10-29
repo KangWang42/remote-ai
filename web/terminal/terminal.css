@@ -128,7 +128,8 @@ header .who #status { grid-column: 1 / -1; }
 /* 自定义按键：条上追加的按钮与编辑器面板。 */
 #custom-keys { display: contents; }
 .keys button.custom { border: 1px dashed var(--line); }
-#key-add { min-width: 34px; color: var(--muted); font-size: 15px; }
+/* 钉在滚动条右缘：条内静态键已超出一屏，滚动条又不可见，「＋」不钉住就无从发现。 */
+#key-add { position: sticky; right: 0; min-width: 34px; color: var(--muted); font-size: 15px; background: var(--bg); box-shadow: -10px 0 8px -8px var(--bg); }
 #key-editor { display: grid; gap: 6px; padding: 8px 10px 10px; background: var(--panel); border-top: 1px solid var(--line); }
 #key-editor[hidden] { display: none; }
 .key-row { display: flex; gap: 6px; align-items: center; }

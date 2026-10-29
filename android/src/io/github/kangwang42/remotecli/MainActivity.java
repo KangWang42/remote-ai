@@ -641,6 +641,12 @@ public final class MainActivity extends Activity {
     private final FilePicker filePicker = new FilePicker(this);
     private final class Bridge {
         @JavascriptInterface public boolean canUploadFiles() { return true; }
+        // 终端按键条的自定义键：存应用偏好，App 升级与换连接线路都不丢（web 端有 localStorage 回退）。
+        @JavascriptInterface public String termKeys() { return prefs.getString("term-keys", "[]"); }
+        @JavascriptInterface public void termKeys(String json) {
+            if (json == null || json.length() > 20000) return;
+            prefs.edit().putString("term-keys", json).apply();
+        }
         @JavascriptInterface public void reminders() { runOnUiThread(MainActivity.this::reminderSettings); }
         @JavascriptInterface public String reminderStatus() { return MainActivity.this.reminderStatus(); }
         /** The system's speech recognizer; what was said goes into the page's message box. */
