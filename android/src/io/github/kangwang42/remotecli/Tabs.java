@@ -66,7 +66,7 @@ final class Tabs {
             both.setGravity(Gravity.CENTER_HORIZONTAL);
             both.addView(kit.icon(ICONS[i], shade, 24));
             TextView label = kit.text(LABELS[i], 11, shade);
-            label.setTextSize(TypedValue.COMPLEX_UNIT_DIP, .7f * root());
+            label.setTextSize(TypedValue.COMPLEX_UNIT_SP, .7f * root());
             label.setTypeface(Build.VERSION.SDK_INT >= 28 ? Typeface.create(Typeface.DEFAULT, 600, false) : Typeface.DEFAULT_BOLD);
             label.setIncludeFontPadding(false); label.setLineSpacing(0, 1f); label.setSingleLine(true);
             LinearLayout.LayoutParams under = new LinearLayout.LayoutParams(-2, -2);
@@ -76,7 +76,7 @@ final class Tabs {
             if (i == 0) {
                 // how many wait for an answer: at the upper right of the mark, its left edge 6dp right of the middle
                 count = kit.bold("", 10, 0xffffffff);
-                count.setTextSize(TypedValue.COMPLEX_UNIT_DIP, .66f * root());
+                count.setTextSize(TypedValue.COMPLEX_UNIT_SP, .66f * root());
                 count.setGravity(Gravity.CENTER); count.setIncludeFontPadding(false); count.setSingleLine(true);
                 count.setMinWidth(kit.dp(17)); count.setMinHeight(kit.dp(17)); count.setPadding(kit.dp(5), 0, kit.dp(5), 0);
                 count.setBackground(kit.shape(kit.BAD, 0, 9));

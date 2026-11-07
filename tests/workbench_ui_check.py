@@ -31,3 +31,12 @@ print("App shell guards passed: aggregate default, fixed navigation, unregistere
 aggregate = (ROOT / "tests/android_aggregate_check.py").read_text(encoding="utf-8")
 assert 'os.name == "nt"' in aggregate, "the JDK tools must be named for the runner's platform, not Windows only"
 print("Android check runner guards passed: JDK tools are named for the host")
+tabs = (ROOT / "android/src/io/github/kangwang42/remotecli/Tabs.java").read_text(encoding="utf-8")
+assert 'if (web != null) { root.removeView(web); filePicker.cancel(); web.destroy();' not in activity, \
+    "navigating away must not destroy the WebView: keep its session, bridge and scroll"
+assert "onSaveInstanceState" in activity and "connectionBanner" in activity, \
+    "a transient disconnect offers an inline retry, and process death restores the tab"
+assert "new JSONArray(json)" in activity, "the custom key bridge must validate what the page sends"
+assert "dp(44)" not in kit and "COMPLEX_UNIT_DIP, .7f * root()" not in tabs, \
+    "touch targets are at least 48dp and tab labels follow the system font scale"
+print("Android UI guards passed: one WebView, inline retry, state restore, 48dp and SP text")
