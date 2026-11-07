@@ -42,3 +42,5 @@ assert "detachWeb()" in activity and "getParent() instanceof ViewGroup" in activ
 assert "dp(44)" not in kit and "COMPLEX_UNIT_DIP, .7f * root()" not in tabs, \
     "touch targets are at least 48dp and tab labels follow the system font scale"
 print("Android UI guards passed: one WebView, inline retry, state restore, 48dp and SP text")
+assert (ROOT / "android/res/mipmap/ic_launcher.xml").is_file(), \
+    "the launcher icon needs a default configuration, not only mipmap-anydpi-v26"
