@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", ".github/workflows/ci.yml"]
   pull_request:
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", ".github/workflows/ci.yml"]
   workflow_dispatch:
 
 jobs:
@@ -39,3 +39,47 @@ jobs:
           ruff check --select E9,F63,F7,F82 relay agent-linux tools
       - name: agent-linux tests (unit + e2e against the real relay, Python and Rust binaries)
         run: python -m unittest discover -s agent-linux -p "test_*.py"
+
+  android-checks:
+    runs-on: ubuntu-latest
+    name: android source checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: source-level checks and the JVM fixtures
+        run: |
+          python tests/workbench_ui_check.py
+          python tests/android_update_check.py
+          python tests/android_aggregate_check.py --jdk "$JAVA_HOME"
+
+  android-compile:
+    runs-on: ubuntu-latest
+    name: compile the app's Java sources
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install the SDK pieces the runner may miss
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0" "platforms;android-36" >/dev/null
+      - name: Compile every app source against the SDK (no APK, no signing)
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          jar="$ANDROID_HOME/platforms/android-36/android.jar"
+          build="$(mktemp -d)"
+          mkdir -p "$build/classes" "$build/generated" .cache
+          zxing=".cache/zxing-core-3.5.3.jar"
+          curl -fsSL --retry 2 -o "$zxing" 'https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar'
+          echo '8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82  '"$zxing" | sha256sum -c - >/dev/null
+          (cd android && "$tools/aapt2" compile --dir res -o "$build/resources.zip")
+          (cd android && "$tools/aapt2" link -o "$build/unsigned.apk" -I "$jar" --manifest AndroidManifest.xml --java "$build/generated" "$build/resources.zip")
+          mapfile -t sources < <(find android/src "$build/generated" -name '*.java')
+          javac -J-Duser.language=en -Xlint:-options --release 8 -encoding UTF-8 -classpath "$jar:$zxing" -d "$build/classes" "${sources[@]}"
