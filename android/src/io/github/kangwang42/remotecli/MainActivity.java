@@ -279,7 +279,7 @@ public final class MainActivity extends Activity {
         computerManagement.stop();
         // Detach only: the WebView is kept for the next page of this computer, so its
         // session, scroll position and the app's bridge are not thrown away on every tab.
-        if (web != null) { root.removeView(web); filePicker.cancel(); }
+        detachWeb();
         connectionBanner = null; bannerText = null;
         root.removeAllViews();
         bars(kit.BG);
@@ -536,6 +536,14 @@ public final class MainActivity extends Activity {
         try { openPage(address, "", AggregateSessions.terminalPath(terminal, chat) + "&from=bench"); }
         catch (IllegalArgumentException invalid) { android.widget.Toast.makeText(this, invalid.getMessage(), android.widget.Toast.LENGTH_SHORT).show(); }
     }
+    /** The WebView sits under the retry banner's LinearLayout, not directly under root:
+     * detach it from whatever holds it now, or the next openPage cannot add it again. */
+    private void detachWeb() {
+        if (web == null) return;
+        if (web.getParent() instanceof ViewGroup) ((ViewGroup) web.getParent()).removeView(web);
+        filePicker.cancel();
+    }
+
     /** The one WebView, made once: moving between screens only detaches it, so the page's
      * session, its scroll and the app's bridge are not thrown away on every tab change. */
     private WebView ensureWeb() {
@@ -562,7 +570,7 @@ public final class MainActivity extends Activity {
         currentOrigin = address;
         connectionHealth = new ConnectionHealth();
         prefs.edit().putString("server", address).apply();
-        if (web != null) { root.removeView(web); filePicker.cancel(); }
+        detachWeb();
         root.removeAllViews();
         screen = "web";
         bars(kit.BG);
@@ -849,5 +857,5 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
     @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("computer".equals(screen)) computerManagement.refresh(); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
-    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { filePicker.cancel(); web.destroy(); web = null; } super.onDestroy(); }
+    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { detachWeb(); web.destroy(); web = null; } super.onDestroy(); }
 }

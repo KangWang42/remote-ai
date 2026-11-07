@@ -37,6 +37,8 @@ assert 'if (web != null) { root.removeView(web); filePicker.cancel(); web.destro
 assert "onSaveInstanceState" in activity and "connectionBanner" in activity, \
     "a transient disconnect offers an inline retry, and process death restores the tab"
 assert "new JSONArray(json)" in activity, "the custom key bridge must validate what the page sends"
+assert "detachWeb()" in activity and "getParent() instanceof ViewGroup" in activity, \
+    "the reusable WebView must be detached from its real parent, not from root"
 assert "dp(44)" not in kit and "COMPLEX_UNIT_DIP, .7f * root()" not in tabs, \
     "touch targets are at least 48dp and tab labels follow the system font scale"
 print("Android UI guards passed: one WebView, inline retry, state restore, 48dp and SP text")
