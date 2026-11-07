@@ -28,3 +28,6 @@ assert 'if (!project.name.isEmpty() && project.passes(' not in workbench, "unreg
 assert 'request != generation' in app_pages and 'CookieManager.getInstance().getCookie(url)' in app_pages, "late responses must not replace a new screen or share another computer's cookie"
 assert '"未连接电脑未计入"' in app_pages or '未连接电脑未计入' in app_pages, "partial aggregate statistics must say what is missing"
 print("App shell guards passed: aggregate default, fixed navigation, unregistered groups, scoped requests and partial totals")
+aggregate = (ROOT / "tests/android_aggregate_check.py").read_text(encoding="utf-8")
+assert 'os.name == "nt"' in aggregate, "the JDK tools must be named for the runner's platform, not Windows only"
+print("Android check runner guards passed: JDK tools are named for the host")
