@@ -71,7 +71,7 @@ final class AppPages {
             card.setBackground(kit.shape(kit.PANEL, kit.LINE, 16));
             // (its name leads to that computer's own page of this tab, where everything of it is seen and changed)
             LinearLayout name = kit.row();
-            name.setMinimumHeight(kit.dp(32));
+            name.setMinimumHeight(kit.dp(48));
             name.addView(kit.line(computer.optString("name", MainActivity.host(url)), 17, kit.INK, true), new LinearLayout.LayoutParams(0, -2, 1));
             name.addView(kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 16));
             kit.press(name, () -> activity.computerPage(url, tab));

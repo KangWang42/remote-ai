@@ -206,7 +206,7 @@ final class Kit {
         FrameLayout box = new FrameLayout(activity);
         box.addView(icon(drawable, color, 22), new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
         box.setContentDescription(says);
-        box.setLayoutParams(new LinearLayout.LayoutParams(dp(44), dp(44)));
+        box.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         press(box, action);
         return box;
     }
@@ -217,7 +217,7 @@ final class Kit {
         disc.addView(icon(drawable, MUTED, 16), new FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER));
         box.addView(disc, new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER));
         box.setContentDescription(says);
-        box.setLayoutParams(new LinearLayout.LayoutParams(dp(44), dp(44)));
+        box.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         press(box, action);
         return box;
     }

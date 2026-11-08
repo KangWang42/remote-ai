@@ -23,6 +23,23 @@ public final class ConnectionHealthCheck {
         expect(!fresh.sample(true, 200), "new scan starts healthy");
         for (int n = 1; n < ConnectionHealth.PATIENCE; n++) expect(!fresh.sample(false, 200), "invalid service response is retried");
         expect(fresh.sample(false, 200), "repeated HTML response returns to pairing");
+        ConnectionHealth oldPage = new ConnectionHealth();
+        expect(oldPage.beginCheck(), "first check starts");
+        expect(!oldPage.beginCheck(), "overlapping check is suppressed");
+        oldPage.retire();
+        ConnectionHealth nextPage = new ConnectionHealth();
+        expect(nextPage.beginCheck(), "new page does not wait for old request");
+        expect(!oldPage.isActive(), "late WebView error cannot affect new page");
+        expect(!oldPage.sample(false, 530), "late failed check cannot disconnect new page");
+        expect(!oldPage.beginCheck(), "retired page cannot restart polling");
+        expect(!nextPage.beginCheck(), "old response does not release new page's pending check");
+        expect(!nextPage.sample(true, 200), "new connection completes normally");
+        expect(nextPage.beginCheck(), "monitoring continues after a successful check");
+        nextPage.retire();
+        ConnectionHealth retry = new ConnectionHealth();
+        expect(retry.beginCheck(), "retry starts a fresh monitor even at the same address");
+        expect(!nextPage.sample(false, 530), "old attempt cannot interrupt retry");
+        expect(!retry.sample(false, 0), "retry gets a fresh failure allowance");
         System.out.println("Connection health: tunnel HTTP errors, failure recovery, login and resource isolation passed");
     }
 }

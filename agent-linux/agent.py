@@ -34,6 +34,7 @@ import glob
 import http.client
 import ipaddress
 import json
+import math
 import os
 import pty
 import re
@@ -70,17 +71,99 @@ def pi_slug(cwd):
     return "--" + re.sub(r"[/\\:]", "-", re.sub(r"^[/\\]", "", cwd)) + "--"
 
 
+CHAIN_KEYS = ("id", "from", "from_tool", "from_title", "to", "to_tool", "to_title", "text",
+              "left", "rounds", "runs", "last_at", "last_ok", "last_note")
+CHAIN_NUMBERS, CHAIN_FLAGS = ("left", "rounds", "runs", "last_at"), ("last_ok",)
+SCHEDULE_KEYS = ("id", "tool", "session", "title", "text", "kind", "time", "at", "minutes",
+                 "on", "next", "runs", "last_at", "last_ok", "last_note")
+SCHEDULE_NUMBERS = ("at", "minutes", "next", "runs", "last_at")
+SCHEDULE_FLAGS = ("on", "last_ok")
+
+
+def kept_rules(read, keys, numbers, flags):
+    """Rules read from disk: one that is old or hand-edited and missing a field is dropped,
+    rather than taking the whole feature down the first time it is shown or run."""
+    kept = []
+    for item in read if isinstance(read, list) else []:
+        if not isinstance(item, dict) or not ID_RE.match(str(item.get("id") or "")):
+            continue
+        if any(key not in item for key in keys):
+            continue
+        if any(isinstance(item[key], bool) or not isinstance(item[key], int) for key in numbers):
+            continue
+        if any(not isinstance(item[key], bool) for key in flags):
+            continue
+        if any(not isinstance(item[key], str) for key in keys if key not in numbers and key not in flags):
+            continue
+        kept.append(item)
+    return kept
+
+
+def reply_object(body):
+    """A reply from the relay as an object: a list, null or broken JSON is nothing at all.
+    A proxy, a restart or a captive page can answer with any of them."""
+    try:
+        value = json.loads(body.decode("utf-8") if isinstance(body, bytes) else (body or "{}"))
+    except (AttributeError, TypeError, UnicodeDecodeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def operations(body):
+    """The operations one reply brought, whatever else it said."""
+    given = reply_object(body).get("operations")
+    return [op for op in given if isinstance(op, dict)] if isinstance(given, list) else []
+
+
+def pts_device(fd):
+    """The device of a terminal's screen, for finding what keeps it open. Some containers do
+    not expose /dev/pts/N: the terminal still works, only the sweep of leftovers is lost."""
+    try:
+        number = struct.unpack("I", fcntl.ioctl(fd, 0x80045430, struct.pack("I", 0)))[0]
+        return os.stat("/dev/pts/%d" % number).st_rdev
+    except (OSError, ValueError, struct.error):
+        return None
+
+
+def started_at(pid):
+    """When a process began, as the kernel tells it in /proc: a pid that was used again has
+    another one. None if it is already gone."""
+    try:
+        with open("/proc/%d/stat" % pid, encoding="utf-8", errors="replace") as stream:
+            fields = stream.read().rsplit(")", 1)[-1].split()
+    except OSError:
+        return None
+    # The suffix starts at field 3 (state); starttime is field 22, not vsize (23).
+    return fields[19] if len(fields) > 19 else None
+
+
+def kill_if_started(pid, at):
+    """Kills the process we looked at, not an unrelated one that now has its number."""
+    if at is None or started_at(pid) != at:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass                    # it left between the looking and the killing
+
+
 def private_address(url):
     """Whether an address is one of this computer's own networks: a literal of the private
     ranges or the loopback, or a name that means this machine. A name that goes elsewhere is
     not: where it points is not this computer's to know."""
-    host = url.split("//", 1)[-1].split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0].strip("[]").lower()
+    host = url.split("//", 1)[-1].split("/", 1)[0].rsplit("@", 1)[-1]
+    if host.startswith("["):                # an IPv6 literal keeps its colons inside brackets
+        host = host[1:host.find("]")] if "]" in host else ""
+    else:
+        host = host.split(":", 1)[0]
+    host = host.lower()
     if not host or host == "localhost" or host.endswith(".local"):
         return True
     try:
-        return ipaddress.ip_address(host).is_private
+        address = ipaddress.ip_address(host)
     except ValueError:
         return False
+    return address.is_private or address.is_loopback or address.is_link_local
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish", "file_upload_cancel")
 FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
@@ -111,6 +194,7 @@ MAX_OWN_PROJECTS = 30
 OP_TTL = 150            # seconds an operation may travel before it is refused
 CHUNK_CHARS = 12000
 OUTPUT_FLOOR_BYTES = 2 * 1024 * 1024  # unsent output is dropped past this; the relay dedups by seq
+PENDING_BYTES = OUTPUT_FLOOR_BYTES  # the reader's buffer is bounded too, not only the sealed one
 RECORDS_BYTES = 64 * 1024 * 1024     # room the work records may take before the oldest are dropped
 WRITE_WAIT = 1.0        # seconds input may wait for a program that is not reading
 BATCH_BYTES = 512 * 1024
@@ -478,6 +562,36 @@ def files(root, relative, action, offset):
         raise OpError("读取失败")
 
 
+def publish_upload(tmp, name, fd):
+    """Publishes a finished upload without ever replacing a file that is already there. A
+    hard link is the atomic 'create only if absent'; where the filesystem has none, an
+    exclusive placeholder is created first, and only that placeholder is then replaced."""
+    try:
+        os.stat(name, dir_fd=fd, follow_symlinks=False)
+        raise OpError("已有同名文件或文件夹，请重命名后再上传")
+    except FileNotFoundError:
+        pass
+    try:
+        os.link(tmp, name, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
+        return
+    except OSError as error:
+        if error.errno not in (errno.EXDEV, errno.EPERM, errno.EMLINK, errno.ENOSYS):
+            raise
+    try:
+        handle = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd)
+        os.close(handle)
+    except FileExistsError:
+        raise OpError("已有同名文件或文件夹，请重命名后再上传")
+    try:
+        os.replace(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+    except OSError:
+        try:
+            os.unlink(name, dir_fd=fd)
+        except OSError:
+            pass
+        raise
+
+
 class Uploads:
     """Bounded uploads owned by this agent (docs/PROTOCOL.md, "Uploads"). A destination is
     published only after all bytes arrive, and an existing file or folder is never replaced.
@@ -641,24 +755,7 @@ class Uploads:
             self._drop(key)
             raise OpError("写入临时文件失败")
         try:
-            try:
-                os.stat(name, dir_fd=fd, follow_symlinks=False)
-                raise OpError("已有同名文件或文件夹，请重命名后再上传")
-            except FileNotFoundError:
-                pass
-            try:
-                os.link(tmp, name, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
-            except OSError as error:
-                if error.errno in (errno.EXDEV, errno.EPERM, errno.EMLINK, errno.ENOSYS):
-                    # a filesystem without hard links: check and rename, the small window be told
-                    try:
-                        os.stat(name, dir_fd=fd, follow_symlinks=False)
-                        raise OpError("已有同名文件或文件夹，请重命名后再上传")
-                    except FileNotFoundError:
-                        pass
-                    os.replace(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
-                else:
-                    raise
+            publish_upload(tmp, name, fd)
         except OpError:
             self.pending.pop(key, None)
             try:
@@ -1198,7 +1295,9 @@ class Sessions:
             program = find_tool("codex")
             if not program:
                 raise OpError("电脑上没有找到 Codex，对话没有删除")
-            archive = archive or (lambda: subprocess.run([program, "archive", session], stdin=subprocess.DEVNULL, capture_output=True, timeout=30))
+            # This runs while the agent's state lock is held: a tool that never answers must
+            # not hold every report and every other phone operation for half a minute.
+            archive = archive or (lambda: subprocess.run([program, "archive", session], stdin=subprocess.DEVNULL, capture_output=True, timeout=10))
             try:
                 done = archive()
             except (OSError, subprocess.TimeoutExpired):
@@ -1221,31 +1320,23 @@ class Sessions:
         if len(self.folders) > 3000 or len(self.spoken) > 500:
             # (what the folders are used by is read with the folders, and forgotten with them)
             self.folders.clear(), self.spoken.clear(), self.used.clear()
-        try:
-            found += self._claude(dirs, terminals, offers)
-            self._claude_folders(dirs, offers)
-        except OSError:
-            pass
-        try:
-            found += self._codex(dirs, terminals, offers)
-        except OSError:
-            pass
-        try:
-            found += self._opencode(dirs, terminals)
-        except (OSError, sqlite3.Error, ValueError):
-            pass                # the store is opencode's own; a miss here is never fatal
-        try:
-            found += self._qoder(dirs, terminals)
-        except (OSError, ValueError):
-            pass                # the store is qoder's own; a miss here is never fatal
-        try:
-            found += self._pi(dirs, terminals)
-        except OSError:
-            pass                # the store is pi's own; a miss here is never fatal
-        try:
-            found += self._cline(dirs, terminals)
-        except (OSError, sqlite3.Error, ValueError):
-            pass                # the stores are cline's own; a miss here is never fatal
+        # Each store is a tool's own: a broken one must not hide what the others found.
+        # Anything can be wrong in them (a list where an object is expected, a number where
+        # a string is), so each is read in its own try and the rest still gets published.
+        broken = []
+        for look in (lambda: self._claude(dirs, terminals, offers),
+                     lambda: self._claude_folders(dirs, offers),
+                     lambda: self._codex(dirs, terminals, offers),
+                     lambda: self._opencode(dirs, terminals),
+                     lambda: self._qoder(dirs, terminals),
+                     lambda: self._pi(dirs, terminals),
+                     lambda: self._cline(dirs, terminals)):
+            try:
+                found += look() or []
+            except Exception as exc:        # never fatal: one tool's store is unreadable
+                broken.append(type(exc).__name__)
+        if broken:
+            say("对话列表读取失败：%s" % ", ".join(broken))
         # the ones a project can still be made of: no project yet, no folder of the system's, and there
         candidates = [dict(c, tools=" ".join(c["tools"])) for c in sorted(
             (c for c in offers.values() if elsewhere(c["path"]) and c["path"] not in dirs.values() and self.exists(c["path"])),
@@ -1731,7 +1822,8 @@ def check_op(op, need_terminal=True):
             at = float(at)
         except ValueError:
             at = None
-    if isinstance(at, bool) or not isinstance(at, (int, float)) or abs(time.time() - at) > OP_TTL:
+    if isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(at) \
+            or abs(time.time() - at) > OP_TTL:
         raise OpError("操作已过期")
     return op_id, terminal if isinstance(terminal, str) else ""
 
@@ -1798,11 +1890,13 @@ class Live:
         self.wake = wake
         self.lock = threading.Lock()
         self.pending = []               # read from the program, not yet numbered
+        self.pending_bytes = 0          # the reader's own buffer is bounded, like `output`
         self.output = []                # numbered, not yet acknowledged by the relay
         self.out_bytes = 0              # bytes in `output`, maintained by seal/trim
         self.seq = 0
         self.closing_at = None          # TERM sent; KILL follows if this lapses three seconds
         self.swept = False              # the tasks that hold the screen have been killed once
+        self.needs_sweep = False        # asked for outside the state lock, taken once by report()
         self.closed = False             # the process has been reaped
         self.drained = False            # the reader delivered everything
         self.exit_code = None
@@ -1836,11 +1930,26 @@ class Live:
         self.fd = fd
         # the screen's own device (TIOCGPTN names the slave; the master's name is the shared
         # /dev/ptmx): who has it open is who would keep this terminal from ever ending
-        self.tty = os.stat("/dev/pts/%d" % struct.unpack("I", fcntl.ioctl(fd, 0x80045430, struct.pack("I", 0)))[0]).st_rdev
+        self.tty = pts_device(fd)       # None where the pts cannot be named: the terminal still works
         os.set_blocking(fd, False)      # input never waits on a program that is not reading
         self.resize(cols, rows)         # the kernel sends SIGWINCH to the foreground group
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._wait, daemon=True).start()
+
+    def add_pending(self, text):
+        """Keeps the newest text the reader has: a report that is stalled (the relay is away,
+        an operation is slow) must not let a noisy program grow this buffer without bound."""
+        with self.lock:
+            self.pending.append(text)
+            self.pending_bytes += len(text)
+            while self.pending_bytes > PENDING_BYTES and len(self.pending) > 1:
+                self.pending_bytes -= len(self.pending[0])
+                del self.pending[0]
+
+    def take_sweep(self):
+        """The report loop takes the request once, to do the /proc work outside its lock."""
+        wanted, self.needs_sweep = self.needs_sweep, False
+        return wanted
 
     def _read(self):
         try:
@@ -1861,16 +1970,15 @@ class Live:
                     break
                 text = self.decoder.decode(data)
                 if text:
-                    with self.lock:
-                        self.pending.append(text)
+                    self.add_pending(text)
                     self.wake()
         except (OSError, ValueError):
             pass                        # the terminal was closed or the program left
         finally:
             tail = self.decoder.decode(b"", final=True)
+            if tail:
+                self.add_pending(tail)
             with self.lock:
-                if tail:
-                    self.pending.append(tail)
                 self.drained = True
             self.wake()
 
@@ -1948,37 +2056,36 @@ class Live:
                     fields = stream.read().rsplit(")", 1)[-1].split()
             except (OSError, ValueError):
                 continue
-            if len(fields) > 20:
+            if len(fields) > 19:
                 try:
-                    born[int(path.split("/")[2])] = int(fields[1])       # pid -> ppid
+                    born[int(path.split("/")[2])] = (int(fields[1]), fields[19])   # pid -> (ppid, began at)
                 except ValueError:
                     continue
-        walked, mine = [self.pid], set()
+        walked, mine = [self.pid], {}
         while walked:
             parent = walked.pop()
-            for pid, ppid in born.items():
+            for pid, (ppid, at) in born.items():
                 if ppid == parent and pid not in mine:
-                    mine.add(pid)
+                    mine[pid] = at
                     walked.append(pid)
-        for entry in os.listdir("/proc"):
-            if not entry.isdigit() or int(entry) == self.pid:
-                continue
-            try:
-                ones = os.listdir("/proc/%s/fd" % entry)
-            except OSError:
-                continue                    # not ours to look into
-            for one in ones:
+        if self.tty is not None:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit() or int(entry) == self.pid:
+                    continue
                 try:
-                    if os.stat(os.path.join("/proc", entry, "fd", one)).st_rdev == self.tty:
-                        mine.add(int(entry))
-                        break
+                    ones = os.listdir("/proc/%s/fd" % entry)
                 except OSError:
-                    continue                # it closed that one while we looked
-        for pid in mine:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass                        # it left between the looking and the killing
+                    continue                    # not ours to look into
+                for one in ones:
+                    try:
+                        if os.stat(os.path.join("/proc", entry, "fd", one)).st_rdev == self.tty:
+                            pid = int(entry)
+                            mine[pid] = started_at(pid)
+                            break
+                    except OSError:
+                        continue                # it closed that one while we looked
+        for pid, at in mine.items():
+            kill_if_started(pid, at)        # not a pid that someone else has since taken over
 
     def escalate(self):
         """Three seconds after TERM: KILL, and the program's own background tasks with it. It
@@ -1994,7 +2101,7 @@ class Live:
             except (ProcessLookupError, PermissionError, OSError):
                 pass
         self.swept = True
-        self.kill_leftovers()
+        self.needs_sweep = True          # report() does the /proc work outside the state lock
 
     def kill(self):
         try:
@@ -2045,6 +2152,7 @@ def seal(live):
     with live.lock:
         text = "".join(live.pending)
         live.pending = []
+        live.pending_bytes = 0
         while text:
             live.seq += 1
             chunk = text[:CHUNK_CHARS]
@@ -2112,6 +2220,7 @@ class Chat(Live):
         self.id, self.project, self.dir, self.tool, self.session, self.status = terminal_id, project, cwd, tool, session, "starting"
         self.wake, self.lock = wake, threading.Lock()
         self.pending, self.output, self.out_bytes, self.seq = [], [], 0, 0
+        self.pending_bytes, self.needs_sweep = 0, False
         self.closing_at, self.swept, self.closed, self.drained, self.exit_code, self.closed_at, self.told_closed = None, False, False, False, None, None, False
         self.stopping, self.fd, self.tty, self.cols, self.rows = False, -1, None, 80, 24
         self.said_last, self.gate = "", threading.RLock()
@@ -2299,7 +2408,7 @@ class Chat(Live):
         if self.swept or self.closing_at is None or time.time() - self.closing_at <= 3:
             return
         self.swept = True
-        self.kill_leftovers()
+        self.needs_sweep = True
 
     def kill_leftovers(self):
         try:
@@ -3028,7 +3137,7 @@ class Schedules:
         try:
             with open(path, encoding="utf-8") as stream:
                 kept = json.load(stream)
-            self.items = [item for item in kept if isinstance(item, dict) and ID_RE.match(str(item.get("id") or ""))]
+            self.items = kept_rules(kept, SCHEDULE_KEYS, SCHEDULE_NUMBERS, SCHEDULE_FLAGS)
         except (OSError, ValueError, TypeError):
             pass
 
@@ -3048,7 +3157,10 @@ class Schedules:
             return item["at"] if item["at"] > now * 1000 else 0
         if item["kind"] == "every":
             return int((now + item["minutes"] * 60) * 1000)
-        hour, minute = (int(part) for part in item["time"].split(":"))
+        try:
+            hour, minute = (int(part) for part in item["time"].split(":"))
+        except (ValueError, AttributeError, TypeError):
+            return 0                        # a hand-edited time must not take the report down
         at = datetime.datetime.fromtimestamp(now).replace(hour=hour, minute=minute, second=0, microsecond=0)
         if at.timestamp() <= now:
             at += datetime.timedelta(days=1)
@@ -3148,7 +3260,7 @@ class Chains:
         try:
             with open(path, encoding="utf-8") as stream:
                 kept = json.load(stream)
-            self.items = [item for item in kept if isinstance(item, dict) and ID_RE.match(str(item.get("id") or ""))]
+            self.items = kept_rules(kept, CHAIN_KEYS, CHAIN_NUMBERS, CHAIN_FLAGS)
         except (OSError, ValueError, TypeError):
             pass
 
@@ -3238,15 +3350,18 @@ class Chains:
                 yield item, source
 
     def done(self, key, ok, note, now):
-        """Notes how a passing-on went and takes one of its rounds; a rule with none left is dropped."""
+        """Notes how a passing-on went. Only one that arrived takes a round: a transient
+        'this conversation is not open in a terminal' must not spend the owner's rounds."""
         for item in self.items:
             if item["id"] != key:
                 continue
-            item["left"] = max(0, item["left"] - 1)
             item["runs"] += 1
             item["last_at"], item["last_ok"], item["last_note"] = int(now * 1000), ok, note[:300]
+            if ok:
+                item["left"] = max(0, item["left"] - 1)
             if item["left"] <= 0:
                 self.items.remove(item)
+                self.seen.pop(key, None)
             self._save()
             return
 
@@ -3314,6 +3429,7 @@ class Agent:
         self.scan_want = ({}, [])       # what the conversation lookup last looked at (projects, terminals)
         self.scan_wake = threading.Event()
         self.scanned = threading.Condition()
+        self.scan_done = 0              # a look is over, whether or not it changed anything
         self.http = Http()
         self.pull_http = Http()
         self.server = ""
@@ -3339,6 +3455,11 @@ class Agent:
         return shell if os.path.isfile(shell) else "/bin/bash"
 
     # ---- protocol
+    def lost_token(self):
+        """The relay forgot this sign-in: the next report must be allowed to sign in at once."""
+        self.token = ""
+        self.next_login = 0.0
+
     def login(self):
         if not SERVER_RE.match(self.server):
             return False
@@ -3348,7 +3469,7 @@ class Agent:
         self.next_login = time.time() + 60
         try:
             status, body = self.http.post(self.server + "/api/login", {"password": self.password})
-            token = json.loads(body.decode("utf-8")).get("token") if status == 200 else None
+            token = reply_object(body).get("token") if status == 200 else None
         except (OSError, http.client.HTTPException, ValueError):
             self.next_login = time.time() + 5
             if not self.unreachable:
@@ -3460,7 +3581,7 @@ class Agent:
         except (OSError, http.client.HTTPException):
             return
         if status == 401:
-            self.token = ""
+            self.lost_token()
             return
         if status != 200:
             return
@@ -3470,6 +3591,7 @@ class Agent:
             return
         if not isinstance(result, dict):
             return
+        sweep, forgotten = [], []
         with self.work:
             if listing:
                 self.sessions_sent = (listed, now)
@@ -3494,9 +3616,19 @@ class Agent:
                 for key in list(self.completed)[:1000]:
                     del self.completed[key]
                     self.reported.discard(key)
+            for live in self.terminals.values():
+                if live.take_sweep() and live not in sweep:
+                    sweep.append(live)
             for key in [k for k, live in self.terminals.items() if live.can_forget()]:
-                live.kill_leftovers()      # a task the program left behind, before it is forgotten
-                self.terminals.pop(key).dispose()
+                live = self.terminals.pop(key)
+                if live not in sweep:
+                    sweep.append(live)
+                forgotten.append(live)
+        # the /proc walks, the kills and the closes belong to no state lock
+        for live in sweep:
+            live.kill_leftovers()
+        for live in forgotten:
+            live.dispose()
 
     def execute(self, op, cfg, dirs):
         """Carries out one operation. Called with self.work held, from the report loop or
@@ -3718,9 +3850,9 @@ class Agent:
                     # a conversation this computer has only just had is not listed yet: ask for
                     # a look now and wait for it, rather than tell the phone to refresh
                     self.scan_wake.set()
-                    seen, deadline = self.sessions.version, time.time() + 2.0
+                    seen, deadline = self.scan_done, time.time() + 3.5
                     with self.scanned:
-                        while self.sessions.version == seen and time.time() < deadline:
+                        while self.scan_done == seen and time.time() < deadline:
                             self.scanned.wait(deadline - time.time())
                     saved = self.sessions.known(session, tool, name)
                 if saved is None:
@@ -3760,15 +3892,17 @@ class Agent:
                 self.scan_once()
 
     def scan_once(self):
-        dirs, terminals = self.scan_want
-        if not dirs:
-            return
         try:
-            self.sessions.scan(dirs, terminals)
+            dirs, terminals = self.scan_want
+            if dirs:
+                self.sessions.scan(dirs, terminals)
         except Exception as exc:            # a store that cannot be read is never fatal
             say("对话列表读取失败：%s" % type(exc).__name__)
         finally:
+            # waiters ask whether a look has FINISHED, not whether the list changed: a look
+            # that found nothing new is still the answer, and one with no projects still is one
             with self.scanned:
+                self.scan_done += 1
                 self.scanned.notify_all()
 
     def listen(self):
@@ -3786,19 +3920,17 @@ class Agent:
                     self.server + "/api/terminal/agent/pull",
                     {"instance": self.instance, "wait": 12}, token, timeout=20)
                 if status == 401:
-                    self.token = ""
+                    self.lost_token()
                 elif status == 200:
                     waiting = True
-                    result = json.loads(body.decode("utf-8") or "{}")
-                    ops = result.get("operations")
-                    if isinstance(ops, list) and ops:
+                    ops = operations(body)
+                    if ops:
                         brought = True
                         cfg = read_config(self.data)
                         with self.work:
                             dirs = self.projects.all(cfg)
                             for op in ops:
-                                if isinstance(op, dict):
-                                    self.execute(op, cfg, dirs)
+                                self.execute(op, cfg, dirs)
                         self.wake()
             except (OSError, http.client.HTTPException, ValueError):
                 waiting = False
@@ -3821,7 +3953,10 @@ class Agent:
                 self.wakeup.clear()
                 if time.time() - self.last_input < 0.15:
                     time.sleep(0.012)
-        for live in self.terminals.values():
+        with self.work:                     # a held pull may still be carrying out an operation
+            closing = list(self.terminals.values())
+            self.terminals.clear()
+        for live in closing:
             if not live.closed:
                 live.kill()
             live.dispose()
