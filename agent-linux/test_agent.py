@@ -168,6 +168,41 @@ class Pure(unittest.TestCase):
             agent.kill_if_started(os.getpid(), agent.started_at(os.getpid()))
             self.assertEqual(killed.call_count, 1)
 
+    def test_process_identity_uses_starttime_not_virtual_memory_size(self):
+        # Fields 1..23: pid, comm, state ... starttime, vsize. Include ')' in comm.
+        original = "4242 (fixture ) process) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 111 4096"
+        with mock.patch("builtins.open", mock.mock_open(read_data=original)):
+            self.assertEqual(agent.started_at(4242), "111")
+        for stat, should_kill in ((original.replace("111 4096", "222 4096"), False),
+                                  (original.replace("111 4096", "111 8192"), True)):
+            with self.subTest(stat=stat), mock.patch("builtins.open", mock.mock_open(read_data=stat)), \
+                    mock.patch.object(agent.os, "kill") as killed:
+                agent.kill_if_started(4242, "111")
+                self.assertEqual(killed.called, should_kill)
+
+    def test_descendant_sweep_records_starttime(self):
+        live = agent.Live.__new__(agent.Live)
+        live.pid, live.tty = 4241, None
+        stat = "4242 (child) S 4241 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 111 4096"
+        with mock.patch.object(agent.glob, "glob", return_value=["/proc/4242/stat"]), \
+                mock.patch("builtins.open", mock.mock_open(read_data=stat)), \
+                mock.patch.object(agent.os, "kill") as killed:
+            live.kill_leftovers()
+            killed.assert_called_once_with(4242, agent.signal.SIGKILL)
+
+    def test_chat_sweep_is_initialized_and_deferred(self):
+        # The external CLI is not started; use the real Chat constructor and lifecycle.
+        with mock.patch.object(agent.Chat, "start", create=True):
+            chat = agent.Chat("c" * 32, "p", "/tmp", "claude", "unused", lambda: None, "", False, "full")
+        agent.seal(chat)
+        self.assertFalse(chat.take_sweep())
+        chat.closing_at = time.time() - 4
+        with mock.patch.object(agent.Chat, "kill_leftovers") as killed:
+            chat.escalate()
+            killed.assert_not_called()
+        self.assertTrue(chat.take_sweep())
+        self.assertFalse(chat.take_sweep())
+
     def test_a_noisy_terminal_drops_its_oldest_pending_text(self):
         live = agent.Live.__new__(agent.Live)
         live.lock, live.pending, live.pending_bytes = threading.Lock(), [], 0

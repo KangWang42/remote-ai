@@ -133,7 +133,8 @@ def started_at(pid):
             fields = stream.read().rsplit(")", 1)[-1].split()
     except OSError:
         return None
-    return fields[20] if len(fields) > 20 else None
+    # The suffix starts at field 3 (state); starttime is field 22, not vsize (23).
+    return fields[19] if len(fields) > 19 else None
 
 
 def kill_if_started(pid, at):
@@ -2055,9 +2056,9 @@ class Live:
                     fields = stream.read().rsplit(")", 1)[-1].split()
             except (OSError, ValueError):
                 continue
-            if len(fields) > 20:
+            if len(fields) > 19:
                 try:
-                    born[int(path.split("/")[2])] = (int(fields[1]), fields[20])   # pid -> (ppid, began at)
+                    born[int(path.split("/")[2])] = (int(fields[1]), fields[19])   # pid -> (ppid, began at)
                 except ValueError:
                     continue
         walked, mine = [self.pid], {}
@@ -2219,6 +2220,7 @@ class Chat(Live):
         self.id, self.project, self.dir, self.tool, self.session, self.status = terminal_id, project, cwd, tool, session, "starting"
         self.wake, self.lock = wake, threading.Lock()
         self.pending, self.output, self.out_bytes, self.seq = [], [], 0, 0
+        self.pending_bytes, self.needs_sweep = 0, False
         self.closing_at, self.swept, self.closed, self.drained, self.exit_code, self.closed_at, self.told_closed = None, False, False, False, None, None, False
         self.stopping, self.fd, self.tty, self.cols, self.rows = False, -1, None, 80, 24
         self.said_last, self.gate = "", threading.RLock()
@@ -2406,7 +2408,7 @@ class Chat(Live):
         if self.swept or self.closing_at is None or time.time() - self.closing_at <= 3:
             return
         self.swept = True
-        self.kill_leftovers()
+        self.needs_sweep = True
 
     def kill_leftovers(self):
         try:

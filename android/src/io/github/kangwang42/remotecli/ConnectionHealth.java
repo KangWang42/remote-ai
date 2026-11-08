@@ -7,7 +7,17 @@ package io.github.kangwang42.remotecli;
 final class ConnectionHealth {
     static final int PATIENCE = 10;      // checks three seconds apart, each waiting up to three more
     private int failures;
+    private boolean active = true, checking;
+    boolean isActive() { return active; }
+    void retire() { active = false; }
+    boolean beginCheck() {
+        if (!active || checking) return false;
+        checking = true;
+        return true;
+    }
     boolean sample(boolean reachable, int status) {
+        checking = false;
+        if (!active) return false;
         if (reachable) { failures = 0; return false; }
         return status == 530 || ++failures >= PATIENCE;
     }

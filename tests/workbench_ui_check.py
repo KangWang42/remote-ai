@@ -44,3 +44,9 @@ assert "dp(44)" not in kit and "COMPLEX_UNIT_DIP, .7f * root()" not in tabs, \
 print("Android UI guards passed: one WebView, inline retry, state restore, 48dp and SP text")
 assert (ROOT / "android/res/mipmap/ic_launcher.xml").is_file(), \
     "the launcher icon needs a default configuration, not only mipmap-anydpi-v26"
+assert "reconnect(view, origin, health)" in activity and "reconnect(checked, origin, health)" in activity, \
+    "WebView errors and asynchronous checks must retain their own page's health state"
+assert 'if (!health.isActive() || web != failed || !"web".equals(screen)) return;' in activity, \
+    "a queued reconnect from a retired page cannot stop the current page"
+assert "again.setOnClickListener(v -> openPage(address, password, path))" in activity, \
+    "retry must restart connection monitoring as well as reload the page"

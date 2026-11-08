@@ -97,13 +97,12 @@ public final class MainActivity extends Activity {
     private WebView web;                        // one WebView for the whole activity: its session, bridge and scroll survive a tab change
     private View connectionBanner;              // an inline retry when a computer's pages cannot be reached
     private TextView bannerText;
-    private String webTarget = "";
     private EditText nameBox, addressBox, passwordBox;
     private GithubUpdater updater;
     private Scanner scanner;
     private String screen = "";                 // one of the tabs ("home", "projects", "together", "me"), "add", "scan" or "web"
     private final Runnable watch = this::checkConnection;
-    private boolean foreground, checkingConnection;
+    private boolean foreground;
     private String currentOrigin = "";
     private String movedFrom = "", movedTo = "";       // a computer that is turning to another line: where it was, and where its page was sent
     private ConnectionHealth connectionHealth = new ConnectionHealth();
@@ -280,6 +279,7 @@ public final class MainActivity extends Activity {
         // Detach only: the WebView is kept for the next page of this computer, so its
         // session, scroll position and the app's bridge are not thrown away on every tab.
         detachWeb();
+        connectionHealth.retire();
         connectionBanner = null; bannerText = null;
         root.removeAllViews();
         bars(kit.BG);
@@ -568,7 +568,9 @@ public final class MainActivity extends Activity {
         bench.stop();
         computerManagement.stop();
         currentOrigin = address;
+        connectionHealth.retire();
         connectionHealth = new ConnectionHealth();
+        final ConnectionHealth health = connectionHealth;
         prefs.edit().putString("server", address).apply();
         detachWeb();
         root.removeAllViews();
@@ -577,21 +579,26 @@ public final class MainActivity extends Activity {
         WebView view = ensureWeb();
         final String origin = address;
         view.setWebViewClient(new WebViewClient() {
+            private boolean firstPage = true;
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return !request.getUrl().toString().startsWith(origin + "/");       // the pages of this computer only
             }
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { if (url.startsWith(origin + "/")) view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), false), null); }
-            @Override public void onPageFinished(WebView view, String url) { if (url.startsWith(origin + "/")) view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), true), null); }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { if (health.isActive() && url.startsWith(origin + "/")) view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), false), null); }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (!health.isActive() || !url.startsWith(origin + "/")) return;
+                // Clear only after the new page commits, so the previous computer is not retained.
+                if (firstPage) { view.clearHistory(); firstPage = false; }
+                view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), true), null);
+            }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) reconnect(view, origin);
+                if (request.isForMainFrame()) reconnect(view, origin, health);
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
                 String url = request.getUrl().toString();
                 boolean relayRequest = url.startsWith(origin + "/api/");
-                if (ConnectionHealth.httpError(request.isForMainFrame(), relayRequest, response.getStatusCode())) reconnect(view, origin);
+                if (ConnectionHealth.httpError(request.isForMainFrame(), relayRequest, response.getStatusCode())) reconnect(view, origin, health);
             }
         });
-        view.clearHistory();                // no going back into another computer's pages
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         LinearLayout banner = new LinearLayout(this);
@@ -605,7 +612,7 @@ public final class MainActivity extends Activity {
         again.setText("重试");
         again.setMinHeight(kit.dp(48));
         again.setMinimumWidth(kit.dp(64));
-        again.setOnClickListener(v -> { banner.setVisibility(View.GONE); view.loadUrl(webTarget); });
+        again.setOnClickListener(v -> openPage(address, password, path));
         banner.addView(again, new LinearLayout.LayoutParams(-2, -2));
         Button back = new Button(this);
         back.setText("返回");
@@ -618,7 +625,7 @@ public final class MainActivity extends Activity {
         page.addView(banner, new LinearLayout.LayoutParams(-1, -2));
         page.addView(view, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(page, new FrameLayout.LayoutParams(-1, -1));
-        webTarget = address + path;
+        String webTarget = address + path;
         if (!password.isEmpty()) webTarget += "#p=" + Uri.encode(password);
         view.loadUrl(webTarget);
         if (foreground) ticker.post(watch);
@@ -628,11 +635,11 @@ public final class MainActivity extends Activity {
     private void checkConnection() {
         ticker.removeCallbacks(watch);
         if (!foreground || web == null || !"web".equals(screen)) return;
-        if (checkingConnection) { ticker.postDelayed(watch, 1000); return; }
+        if (!connectionHealth.isActive()) return;
+        if (!connectionHealth.beginCheck()) { ticker.postDelayed(watch, 1000); return; }
         final WebView checked = web;
         final String origin = currentOrigin;
         final ConnectionHealth health = connectionHealth;
-        checkingConnection = true;
         net.execute(() -> {
             boolean reachable = false, whole = false;       // whole: read to its end, so the connection serves the next check too
             int status = 0;
@@ -660,18 +667,18 @@ public final class MainActivity extends Activity {
             final boolean ok = reachable;
             final int code = status;
             runOnUiThread(() -> {
-                checkingConnection = false;
-                if (!foreground || web != checked || !"web".equals(screen)) return;
-                if (health.sample(ok, code)) reconnect(checked, origin);
+                boolean failed = health.sample(ok, code);
+                if (!foreground || !health.isActive() || web != checked || !"web".equals(screen)) return;
+                if (failed) reconnect(checked, origin, health);
                 else ticker.postDelayed(watch, 3000);
             });
         });
     }
 
-    private void reconnect(WebView failed, String origin) {
+    private void reconnect(WebView failed, String origin, ConnectionHealth health) {
         root.post(() -> {
-            // A late error from a destroyed page must not close a newly scanned connection.
-            if (web != failed || !"web".equals(screen)) return;
+            // The same WebView may now show another page; only its active connection may stop it.
+            if (!health.isActive() || web != failed || !"web".equals(screen)) return;
             failed.stopLoading();
             // The line the computer was asked to turn to cannot be reached from here: the computer finds that out by
             // the phone's absence and goes back, and it is still listed under the address it had.

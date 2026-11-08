@@ -28,6 +28,8 @@ def main():
                         str(root / "android/src/io/github/kangwang42/remotecli/ComputerUpdate.java"),
                         str(root / "android/src/io/github/kangwang42/remotecli/DesktopProtocol.java"),
                         str(root / "android/src/io/github/kangwang42/remotecli/ComputerIdentity.java"),
+                        str(root / "android/src/io/github/kangwang42/remotecli/ConnectionHealth.java"),
+                        str(root / "tests/ConnectionHealthCheck.java"),
                         str(root / "tests/DesktopProtocolCheck.java"),
                         str(root / "tests/AggregateSessionsCheck.java"), str(root / "tests/WatchCheck.java"),
                         str(root / "tests/ComputerUpdateCheck.java")], check=True)
@@ -35,6 +37,7 @@ def main():
         subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.WatchCheck"], check=True)
         subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.ComputerUpdateCheck"], check=True)
         subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.DesktopProtocolCheck"], check=True)
+        subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.ConnectionHealthCheck"], check=True)
 
 
 if __name__ == "__main__":
