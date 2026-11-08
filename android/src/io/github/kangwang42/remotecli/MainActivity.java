@@ -24,6 +24,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -37,6 +38,7 @@ import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
@@ -92,13 +94,15 @@ public final class MainActivity extends Activity {
     private Tabs tabs;
     private String appTab = "home";                 // the tab the app's lists were left at
     private FrameLayout root;
-    private WebView web;
+    private WebView web;                        // one WebView for the whole activity: its session, bridge and scroll survive a tab change
+    private View connectionBanner;              // an inline retry when a computer's pages cannot be reached
+    private TextView bannerText;
     private EditText nameBox, addressBox, passwordBox;
     private GithubUpdater updater;
     private Scanner scanner;
     private String screen = "";                 // one of the tabs ("home", "projects", "together", "me"), "add", "scan" or "web"
     private final Runnable watch = this::checkConnection;
-    private boolean foreground, checkingConnection;
+    private boolean foreground;
     private String currentOrigin = "";
     private String movedFrom = "", movedTo = "";       // a computer that is turning to another line: where it was, and where its page was sent
     private ConnectionHealth connectionHealth = new ConnectionHealth();
@@ -190,10 +194,20 @@ public final class MainActivity extends Activity {
         root = new FrameLayout(this);
         setContentView(root);
         bars(kit.BG);
-        if (!external(getIntent(), true) && !linked(getIntent())) {
-            home("");
+        boolean opened = external(getIntent(), true) || linked(getIntent());
+        if (!opened && state != null) {
+            appTab = state.getString("appTab", "home");
+            currentOrigin = state.getString("origin", "");
         }
+        if (!opened) home("");
         updater.checkIfDue();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        // Process death should reopen the tab the owner was on, not always 任务.
+        out.putString("appTab", appTab);
+        out.putString("origin", currentOrigin);
     }
 
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); if (!external(intent, false)) linked(intent); }
@@ -262,7 +276,11 @@ public final class MainActivity extends Activity {
         ticker.removeCallbacks(watch);
         bench.stop();
         computerManagement.stop();
-        if (web != null) { root.removeView(web); filePicker.cancel(); web.destroy(); web = null; }
+        // Detach only: the WebView is kept for the next page of this computer, so its
+        // session, scroll position and the app's bridge are not thrown away on every tab.
+        detachWeb();
+        connectionHealth.retire();
+        connectionBanner = null; bannerText = null;
         root.removeAllViews();
         bars(kit.BG);
         ScrollView scroll = new ScrollView(this);
@@ -354,7 +372,7 @@ public final class MainActivity extends Activity {
     private LinearLayout step(String title, String about) {
         LinearLayout page = kit.page(14);
         TextView back = kit.text("‹  返回", 15, kit.MUTED);
-        back.setGravity(Gravity.CENTER_VERTICAL); back.setMinHeight(kit.dp(44));
+        back.setGravity(Gravity.CENTER_VERTICAL); back.setMinHeight(kit.dp(48));
         kit.press(back, () -> { endScan(); home(""); });
         page.addView(back, new LinearLayout.LayoutParams(-2, -2));
         page.addView(kit.bold(title, 23, kit.INK), kit.below(8));
@@ -518,48 +536,98 @@ public final class MainActivity extends Activity {
         try { openPage(address, "", AggregateSessions.terminalPath(terminal, chat) + "&from=bench"); }
         catch (IllegalArgumentException invalid) { android.widget.Toast.makeText(this, invalid.getMessage(), android.widget.Toast.LENGTH_SHORT).show(); }
     }
+    /** The WebView sits under the retry banner's LinearLayout, not directly under root:
+     * detach it from whatever holds it now, or the next openPage cannot add it again. */
+    private void detachWeb() {
+        if (web == null) return;
+        if (web.getParent() instanceof ViewGroup) ((ViewGroup) web.getParent()).removeView(web);
+        filePicker.cancel();
+    }
+
+    /** The one WebView, made once: moving between screens only detaches it, so the page's
+     * session, its scroll and the app's bridge are not thrown away on every tab change. */
+    private WebView ensureWeb() {
+        if (web != null) return web;
+        web = new WebView(this);
+        web.setBackgroundColor(kit.BG);
+        WebSettings settings = web.getSettings();
+        settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
+        settings.setTextZoom(100); settings.setSupportZoom(false);
+        settings.setBuiltInZoomControls(false); settings.setDisplayZoomControls(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        CookieManager.getInstance().setAcceptCookie(true);
+        web.addJavascriptInterface(new Bridge(), "RemoteCliNative");
+        // Without a chrome client a page's confirm() and prompt() are answered "no" without being shown.
+        web.setWebChromeClient(filePicker);
+        return web;
+    }
+
     private void openPage(String address, String password, String path) {
         ticker.removeCallbacks(watch);
         bench.stop();
         computerManagement.stop();
         currentOrigin = address;
+        connectionHealth.retire();
         connectionHealth = new ConnectionHealth();
+        final ConnectionHealth health = connectionHealth;
         prefs.edit().putString("server", address).apply();
-        if (web != null) { root.removeView(web); filePicker.cancel(); web.destroy(); }
+        detachWeb();
         root.removeAllViews();
         screen = "web";
-        web = new WebView(this);
-        web.setBackgroundColor(kit.BG);
         bars(kit.BG);
-        WebSettings settings = web.getSettings();
-        settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
-        settings.setTextZoom(100); settings.setSupportZoom(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        CookieManager.getInstance().setAcceptCookie(true);
+        WebView view = ensureWeb();
         final String origin = address;
-        web.addJavascriptInterface(new Bridge(), "RemoteCliNative");
-        // Without a chrome client a page's confirm() and prompt() are answered "no" without being shown.
-        web.setWebChromeClient(filePicker);
-        web.setWebViewClient(new WebViewClient() {
+        view.setWebViewClient(new WebViewClient() {
+            private boolean firstPage = true;
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return !request.getUrl().toString().startsWith(origin + "/");       // the pages of this computer only
             }
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { if (url.startsWith(origin + "/")) view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), false), null); }
-            @Override public void onPageFinished(WebView view, String url) { if (url.startsWith(origin + "/")) view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), true), null); }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { if (health.isActive() && url.startsWith(origin + "/")) view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), false), null); }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (!health.isActive() || !url.startsWith(origin + "/")) return;
+                // Clear only after the new page commits, so the previous computer is not retained.
+                if (firstPage) { view.clearHistory(); firstPage = false; }
+                view.evaluateJavascript(lookScript(url.startsWith(origin + "/terminal/"), true), null);
+            }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) reconnect(view, origin);
+                if (request.isForMainFrame()) reconnect(view, origin, health);
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
                 String url = request.getUrl().toString();
                 boolean relayRequest = url.startsWith(origin + "/api/");
-                if (ConnectionHealth.httpError(request.isForMainFrame(), relayRequest, response.getStatusCode())) reconnect(view, origin);
+                if (ConnectionHealth.httpError(request.isForMainFrame(), relayRequest, response.getStatusCode())) reconnect(view, origin, health);
             }
         });
-        root.addView(web, new FrameLayout.LayoutParams(-1, -1));
-        String target = address + path;
-        if (!password.isEmpty()) target += "#p=" + Uri.encode(password);
-        web.loadUrl(target);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout banner = new LinearLayout(this);
+        banner.setOrientation(LinearLayout.HORIZONTAL);
+        banner.setBackgroundColor(kit.PANEL);
+        banner.setGravity(Gravity.CENTER_VERTICAL);
+        banner.setPadding(kit.dp(14), kit.dp(6), kit.dp(14), kit.dp(6));
+        bannerText = kit.text("", 13, kit.INK);
+        banner.addView(bannerText, new LinearLayout.LayoutParams(0, -2, 1));
+        Button again = new Button(this);
+        again.setText("重试");
+        again.setMinHeight(kit.dp(48));
+        again.setMinimumWidth(kit.dp(64));
+        again.setOnClickListener(v -> openPage(address, password, path));
+        banner.addView(again, new LinearLayout.LayoutParams(-2, -2));
+        Button back = new Button(this);
+        back.setText("返回");
+        back.setMinHeight(kit.dp(48));
+        back.setMinimumWidth(kit.dp(64));
+        back.setOnClickListener(v -> home(""));
+        banner.addView(back, new LinearLayout.LayoutParams(-2, -2));
+        banner.setVisibility(View.GONE);
+        connectionBanner = banner;
+        page.addView(banner, new LinearLayout.LayoutParams(-1, -2));
+        page.addView(view, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(page, new FrameLayout.LayoutParams(-1, -1));
+        String webTarget = address + path;
+        if (!password.isEmpty()) webTarget += "#p=" + Uri.encode(password);
+        view.loadUrl(webTarget);
         if (foreground) ticker.post(watch);
     }
 
@@ -567,11 +635,11 @@ public final class MainActivity extends Activity {
     private void checkConnection() {
         ticker.removeCallbacks(watch);
         if (!foreground || web == null || !"web".equals(screen)) return;
-        if (checkingConnection) { ticker.postDelayed(watch, 1000); return; }
+        if (!connectionHealth.isActive()) return;
+        if (!connectionHealth.beginCheck()) { ticker.postDelayed(watch, 1000); return; }
         final WebView checked = web;
         final String origin = currentOrigin;
         final ConnectionHealth health = connectionHealth;
-        checkingConnection = true;
         net.execute(() -> {
             boolean reachable = false, whole = false;       // whole: read to its end, so the connection serves the next check too
             int status = 0;
@@ -599,23 +667,33 @@ public final class MainActivity extends Activity {
             final boolean ok = reachable;
             final int code = status;
             runOnUiThread(() -> {
-                checkingConnection = false;
-                if (!foreground || web != checked || !"web".equals(screen)) return;
-                if (health.sample(ok, code)) reconnect(checked, origin);
+                boolean failed = health.sample(ok, code);
+                if (!foreground || !health.isActive() || web != checked || !"web".equals(screen)) return;
+                if (failed) reconnect(checked, origin, health);
                 else ticker.postDelayed(watch, 3000);
             });
         });
     }
 
-    private void reconnect(WebView failed, String origin) {
+    private void reconnect(WebView failed, String origin, ConnectionHealth health) {
         root.post(() -> {
-            // A late error from a destroyed page must not close a newly scanned connection.
-            if (web != failed || !"web".equals(screen)) return;
+            // The same WebView may now show another page; only its active connection may stop it.
+            if (!health.isActive() || web != failed || !"web".equals(screen)) return;
             failed.stopLoading();
             // The line the computer was asked to turn to cannot be reached from here: the computer finds that out by
             // the phone's absence and goes back, and it is still listed under the address it had.
-            if (origin.equals(movedTo)) { movedFrom = movedTo = ""; home("新线路没有连上。电脑会在 2 分钟内回到原来的线路，之后可以从这里重新打开它。"); return; }
-            home("电脑连接已断开。请确认电脑上的 Remote AI 已打开，然后重新扫码连接；局域网直连时请检查是否在同一个 Wi-Fi。");
+            String text = origin.equals(movedTo)
+                    ? "新线路没有连上。电脑会在 2 分钟内回到原来的线路，之后可以从这里重新打开它。"
+                    : "电脑连接已断开。请确认电脑上的 Remote AI 已打开，然后重试；局域网直连时请检查是否在同一个 Wi-Fi。";
+            if (origin.equals(movedTo)) movedFrom = movedTo = "";
+            // A transient error leaves the page where it is, with a retry of its own: being
+            // thrown back to the home screen loses the terminal that was open.
+            if (connectionBanner != null && bannerText != null) {
+                bannerText.setText(text);
+                connectionBanner.setVisibility(View.VISIBLE);
+                return;
+            }
+            home(text);
         });
     }
 
@@ -645,7 +723,19 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public String termKeys() { return prefs.getString("term-keys", "[]"); }
         @JavascriptInterface public void termKeys(String json) {
             if (json == null || json.length() > 20000) return;
-            prefs.edit().putString("term-keys", json).apply();
+            try {
+                // The page is not the owner of this store: keep only a small array of keys,
+                // and write it at once so a pause or a process death cannot lose it.
+                JSONArray keys = new JSONArray(json);
+                if (keys.length() > 12) return;
+                for (int i = 0; i < keys.length(); i++) {
+                    Object key = keys.get(i);
+                    if (!(key instanceof JSONObject) && !(key instanceof String)) return;
+                }
+                prefs.edit().putString("term-keys", json).commit();
+            } catch (JSONException invalid) {
+                // a page that sends something else keeps the keys it had
+            }
         }
         @JavascriptInterface public void reminders() { runOnUiThread(MainActivity.this::reminderSettings); }
         @JavascriptInterface public String reminderStatus() { return MainActivity.this.reminderStatus(); }
@@ -758,7 +848,7 @@ public final class MainActivity extends Activity {
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == FilePicker.REQUEST) { filePicker.result(result, data); return; }
-        if (request != SPEECH || result != RESULT_OK || data == null || web == null) return;
+        if (request != SPEECH || result != RESULT_OK || data == null || web == null || !"web".equals(screen)) return;
         ArrayList<String> heard = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
         if (heard != null && !heard.isEmpty()) web.evaluateJavascript("window.RemoteCliDictated&&RemoteCliDictated(" + JSONObject.quote(heard.get(0)) + ")", null);
     }
@@ -767,12 +857,12 @@ public final class MainActivity extends Activity {
         if ("computer".equals(screen)) { home(""); return; }
         if ("reminders".equals(screen)) { appPage("me"); return; }
         if ("scan".equals(screen) || "add".equals(screen)) { endScan(); home(""); return; }
-        if (web != null && web.canGoBack()) { web.goBack(); return; }
-        if (web != null) { home(""); return; }
+        if ("web".equals(screen) && web != null && web.canGoBack()) { web.goBack(); return; }
+        if ("web".equals(screen) && web != null) { home(""); return; }
         if (Tabs.has(screen) && !"home".equals(screen)) { appPage("home"); return; }
         super.onBackPressed();
     }
     @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
     @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("computer".equals(screen)) computerManagement.refresh(); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
-    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { filePicker.cancel(); web.destroy(); web = null; } super.onDestroy(); }
+    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { detachWeb(); web.destroy(); web = null; } super.onDestroy(); }
 }

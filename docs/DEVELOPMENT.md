@@ -4,6 +4,10 @@
 
 给想读代码、自己构建或参与修改的人。
 
+Linux 终端和对话模式都在报告锁外执行延迟清理；进程身份使用 `/proc/<pid>/stat` 的第 22 项 `starttime`，不使用会变化的内存大小。`agent-linux/test_agent.py` 覆盖对话对象初始化、清理请求只取一次、PID 复用和进程内存变化。
+
+Android 复用 WebView，但每次打开或重试页面都建立新的 `ConnectionHealth`；离开页面后旧对象失效，延迟返回的网络检查和错误回调不能中断新页面。`tests/android_aggregate_check.py` 运行连接生命周期等 Java 检查，`tests/workbench_ui_check.py` 检查 Activity 中的调用连接。CI 的 Python 3.9、3.11、3.13 测试固定使用 Ubuntu 22.04，避免运行器升级后旧版 Python 无法安装。
+
 ## 组成
 
 ```

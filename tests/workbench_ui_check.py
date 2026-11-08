@@ -28,3 +28,25 @@ assert 'if (!project.name.isEmpty() && project.passes(' not in workbench, "unreg
 assert 'request != generation' in app_pages and 'CookieManager.getInstance().getCookie(url)' in app_pages, "late responses must not replace a new screen or share another computer's cookie"
 assert '"未连接电脑未计入"' in app_pages or '未连接电脑未计入' in app_pages, "partial aggregate statistics must say what is missing"
 print("App shell guards passed: aggregate default, fixed navigation, unregistered groups, scoped requests and partial totals")
+aggregate = (ROOT / "tests/android_aggregate_check.py").read_text(encoding="utf-8")
+assert 'os.name == "nt"' in aggregate, "the JDK tools must be named for the runner's platform, not Windows only"
+print("Android check runner guards passed: JDK tools are named for the host")
+tabs = (ROOT / "android/src/io/github/kangwang42/remotecli/Tabs.java").read_text(encoding="utf-8")
+assert 'if (web != null) { root.removeView(web); filePicker.cancel(); web.destroy();' not in activity, \
+    "navigating away must not destroy the WebView: keep its session, bridge and scroll"
+assert "onSaveInstanceState" in activity and "connectionBanner" in activity, \
+    "a transient disconnect offers an inline retry, and process death restores the tab"
+assert "new JSONArray(json)" in activity, "the custom key bridge must validate what the page sends"
+assert "detachWeb()" in activity and "getParent() instanceof ViewGroup" in activity, \
+    "the reusable WebView must be detached from its real parent, not from root"
+assert "dp(44)" not in kit and "COMPLEX_UNIT_DIP, .7f * root()" not in tabs, \
+    "touch targets are at least 48dp and tab labels follow the system font scale"
+print("Android UI guards passed: one WebView, inline retry, state restore, 48dp and SP text")
+assert (ROOT / "android/res/mipmap/ic_launcher.xml").is_file(), \
+    "the launcher icon needs a default configuration, not only mipmap-anydpi-v26"
+assert "reconnect(view, origin, health)" in activity and "reconnect(checked, origin, health)" in activity, \
+    "WebView errors and asynchronous checks must retain their own page's health state"
+assert 'if (!health.isActive() || web != failed || !"web".equals(screen)) return;' in activity, \
+    "a queued reconnect from a retired page cannot stop the current page"
+assert "again.setOnClickListener(v -> openPage(address, password, path))" in activity, \
+    "retry must restart connection monitoring as well as reload the page"

@@ -5,6 +5,7 @@ to it, the way the phone does.
     python3 -m unittest discover -s agent-linux -p "test_*.py"
 """
 import base64
+import errno
 import json
 import os
 import re
@@ -14,8 +15,10 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 import uuid
@@ -101,6 +104,165 @@ class Pure(unittest.TestCase):
         # project operations carry no terminal
         self.assertEqual(agent.check_op({"id": secrets.token_hex(8), "at": time.time()},
                                         need_terminal=False)[1], "")
+
+    def test_a_nan_stamp_is_not_a_fresh_operation(self):
+        with self.assertRaises(agent.OpError):
+            agent.check_op({"id": secrets.token_hex(16), "at": float("nan")}, need_terminal=False)
+
+    def test_a_failed_handoff_does_not_burn_a_round(self):
+        path = os.path.join(tempfile.mkdtemp(), "chains.json")
+        chains = agent.Chains(path)
+        key = secrets.token_hex(16)
+        chains.items = [{"id": key, "from": "a" * 32, "from_tool": "claude", "from_title": "one",
+                         "to": "b" * 32, "to_tool": "codex", "to_title": "two", "text": "接着",
+                         "left": 3, "rounds": 3, "runs": 0, "last_at": 0, "last_ok": False, "last_note": ""}]
+        chains.seen[key] = {"updated": 1, "armed": None}
+        chains.done(key, False, "这段对话没有在手机打开的终端里运行", time.time())
+        self.assertEqual(chains.items[0]["left"], 3)
+        self.assertEqual(chains.items[0]["runs"], 1)
+        chains.items[0]["left"] = 1
+        chains.done(key, True, "", time.time())
+        self.assertNotIn(key, chains.seen)      # an exhausted rule leaves nothing behind
+
+    def test_rules_saved_without_their_fields_are_ignored(self):
+        folder = tempfile.mkdtemp()
+        with open(os.path.join(folder, "chains.json"), "w", encoding="utf-8") as stream:
+            json.dump([{"id": secrets.token_hex(16)}, 3], stream)
+        self.assertEqual(agent.Chains(os.path.join(folder, "chains.json")).items, [])
+        with open(os.path.join(folder, "schedules.json"), "w", encoding="utf-8") as stream:
+            json.dump([{"id": secrets.token_hex(16), "time": "ab"}], stream)
+        self.assertEqual(agent.Schedules(os.path.join(folder, "schedules.json")).items, [])
+
+    def test_an_upload_never_replaces_a_file_created_in_between(self):
+        folder = tempfile.mkdtemp()
+        fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            tmp = ".remoteai-upload-test.tmp"
+            with open(os.path.join(folder, tmp), "wb") as stream:
+                stream.write(b"fresh")
+            with mock.patch.object(agent.os, "link", side_effect=OSError(errno.EXDEV, "no hard links")):
+                agent.publish_upload(tmp, "name.txt", fd)
+                with open(os.path.join(folder, tmp), "wb") as stream:
+                    stream.write(b"second")
+                with self.assertRaises(agent.OpError):
+                    agent.publish_upload(tmp, "name.txt", fd)
+            with open(os.path.join(folder, "name.txt"), "rb") as stream:
+                self.assertEqual(stream.read(), b"fresh")
+        finally:
+            os.close(fd)
+
+    def test_a_sweep_is_marked_under_the_lock_and_taken_once(self):
+        live = agent.Live.__new__(agent.Live)
+        live.swept, live.needs_sweep = False, False
+        live.closing_at, live.closed, live.fd = time.time() - 4, False, -1
+        with mock.patch.object(agent.Live, "kill_leftovers") as swept:
+            live.escalate()
+            self.assertEqual(swept.call_count, 0)   # the sweep belongs outside the state lock
+        self.assertTrue(live.take_sweep())
+        self.assertFalse(live.take_sweep())
+
+    def test_a_pid_that_was_reused_is_not_killed(self):
+        with mock.patch.object(agent.os, "kill") as killed:
+            agent.kill_if_started(os.getpid(), "0")     # a number that is somebody else's now
+            self.assertEqual(killed.call_count, 0)
+            agent.kill_if_started(os.getpid(), agent.started_at(os.getpid()))
+            self.assertEqual(killed.call_count, 1)
+
+    def test_process_identity_uses_starttime_not_virtual_memory_size(self):
+        # Fields 1..23: pid, comm, state ... starttime, vsize. Include ')' in comm.
+        original = "4242 (fixture ) process) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 111 4096"
+        with mock.patch("builtins.open", mock.mock_open(read_data=original)):
+            self.assertEqual(agent.started_at(4242), "111")
+        for stat, should_kill in ((original.replace("111 4096", "222 4096"), False),
+                                  (original.replace("111 4096", "111 8192"), True)):
+            with self.subTest(stat=stat), mock.patch("builtins.open", mock.mock_open(read_data=stat)), \
+                    mock.patch.object(agent.os, "kill") as killed:
+                agent.kill_if_started(4242, "111")
+                self.assertEqual(killed.called, should_kill)
+
+    def test_descendant_sweep_records_starttime(self):
+        live = agent.Live.__new__(agent.Live)
+        live.pid, live.tty = 4241, None
+        stat = "4242 (child) S 4241 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 111 4096"
+        with mock.patch.object(agent.glob, "glob", return_value=["/proc/4242/stat"]), \
+                mock.patch("builtins.open", mock.mock_open(read_data=stat)), \
+                mock.patch.object(agent.os, "kill") as killed:
+            live.kill_leftovers()
+            killed.assert_called_once_with(4242, agent.signal.SIGKILL)
+
+    def test_chat_sweep_is_initialized_and_deferred(self):
+        # The external CLI is not started; use the real Chat constructor and lifecycle.
+        with mock.patch.object(agent.Chat, "start", create=True):
+            chat = agent.Chat("c" * 32, "p", "/tmp", "claude", "unused", lambda: None, "", False, "full")
+        agent.seal(chat)
+        self.assertFalse(chat.take_sweep())
+        chat.closing_at = time.time() - 4
+        with mock.patch.object(agent.Chat, "kill_leftovers") as killed:
+            chat.escalate()
+            killed.assert_not_called()
+        self.assertTrue(chat.take_sweep())
+        self.assertFalse(chat.take_sweep())
+
+    def test_a_noisy_terminal_drops_its_oldest_pending_text(self):
+        live = agent.Live.__new__(agent.Live)
+        live.lock, live.pending, live.pending_bytes = threading.Lock(), [], 0
+        for _ in range(40):
+            live.add_pending("字" * 100000)
+        self.assertLessEqual(live.pending_bytes, agent.PENDING_BYTES + 100000)
+        self.assertLess(len(live.pending), 40)
+
+    def test_a_reply_that_is_not_an_object_is_nothing(self):
+        self.assertEqual(agent.reply_object(b"[]"), {})
+        self.assertEqual(agent.reply_object(b"null"), {})
+        self.assertEqual(agent.reply_object(b"not json"), {})
+        self.assertEqual(agent.reply_object(b'{"token": "abc"}'), {"token": "abc"})
+        self.assertEqual(agent.operations(b'{"operations": [{"id": "a"}, 3]}'), [{"id": "a"}])
+
+    def test_login_ignores_a_reply_that_is_not_an_object(self):
+        agent_ = agent.Agent.__new__(agent.Agent)
+        agent_.server = "http://127.0.0.1:8722"
+        agent_.password = "x"
+        agent_.http = type("FakeHttp", (), {"post": lambda self, url, payload: (200, b"[]")})()
+        agent_.next_login, agent_.unreachable, agent_.warned_plain, agent_.token = 0.0, False, True, ""
+        self.assertFalse(agent_.login())
+
+    def test_a_lost_token_can_log_in_at_once(self):
+        agent_ = agent.Agent.__new__(agent.Agent)
+        agent_.token, agent_.next_login = "t" * 40, time.time() + 60
+        agent_.lost_token()
+        self.assertEqual(agent_.token, "")
+        self.assertLessEqual(agent_.next_login, time.time())
+
+    def test_a_broken_tool_store_does_not_hide_the_other_conversations(self):
+        sessions = agent.Sessions()
+        entry = {"id": "a" * 32, "tool": "claude", "dir": "", "folder": "/tmp", "kind": "终端",
+                 "title": "one", "updated": int(time.time() * 1000), "live": False, "pinned": False}
+        sessions._claude = lambda dirs, terminals, offers: [dict(entry)]
+        sessions._claude_folders = lambda dirs, offers: None
+        sessions._codex = lambda dirs, terminals, offers: []
+        sessions._opencode = lambda dirs, terminals: []
+        sessions._qoder = lambda dirs, terminals: (_ for _ in ()).throw(AttributeError("bad store"))
+        sessions._pi = lambda dirs, terminals: []
+        sessions._cline = lambda dirs, terminals: []
+        self.assertEqual([s["id"] for s in sessions.scan({}, [])], [entry["id"]])
+        self.assertEqual(sessions.version, 1)
+
+    def test_a_scan_with_nothing_to_look_at_still_wakes_the_waiters(self):
+        agent_ = agent.Agent.__new__(agent.Agent)
+        agent_.scan_want, agent_.scan_done = ({}, []), 0
+        agent_.scanned, agent_.sessions = threading.Condition(), agent.Sessions()
+        agent_.scan_once()
+        self.assertEqual(agent_.scan_done, 1)
+
+    def test_the_terminal_still_works_when_the_pts_cannot_be_named(self):
+        with tempfile.NamedTemporaryFile() as stream:
+            self.assertIsNone(agent.pts_device(stream.fileno()))
+
+    def test_private_address_reads_ipv6_literals(self):
+        self.assertTrue(agent.private_address("http://[::1]:8722"))
+        self.assertTrue(agent.private_address("http://[fc00::1]:8722"))
+        self.assertTrue(agent.private_address("http://[fe80::1]:8722"))
+        self.assertFalse(agent.private_address("http://[2001:4860:4860::8888]:8722"))
 
     def test_seal_chunks(self):
         live = agent.Live.__new__(agent.Live)     # no process: only the buffer parts

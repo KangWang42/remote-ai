@@ -16,8 +16,11 @@ def main():
     if not args.jdk:
         parser.error("Pass --jdk with the existing JDK directory")
     root = Path(__file__).resolve().parents[1]
-    javac = Path(args.jdk) / "bin/javac.exe"
-    java = Path(args.jdk) / "bin/java.exe"
+    # The CI runner is Linux; the official build machine is Windows. Name the JDK tools
+    # for the host instead of assuming the .exe suffix of the latter.
+    suffix = ".exe" if os.name == "nt" else ""
+    javac = Path(args.jdk) / ("bin/javac" + suffix)
+    java = Path(args.jdk) / ("bin/java" + suffix)
     with tempfile.TemporaryDirectory(prefix="remote-cli-aggregate-") as output:
         subprocess.run([str(javac), "-J-Duser.language=en", "-Xlint:-options", "--release", "8", "-encoding", "UTF-8", "-d", output,
                         str(root / "android/src/io/github/kangwang42/remotecli/AggregateSessions.java"),
@@ -25,6 +28,8 @@ def main():
                         str(root / "android/src/io/github/kangwang42/remotecli/ComputerUpdate.java"),
                         str(root / "android/src/io/github/kangwang42/remotecli/DesktopProtocol.java"),
                         str(root / "android/src/io/github/kangwang42/remotecli/ComputerIdentity.java"),
+                        str(root / "android/src/io/github/kangwang42/remotecli/ConnectionHealth.java"),
+                        str(root / "tests/ConnectionHealthCheck.java"),
                         str(root / "tests/DesktopProtocolCheck.java"),
                         str(root / "tests/AggregateSessionsCheck.java"), str(root / "tests/WatchCheck.java"),
                         str(root / "tests/ComputerUpdateCheck.java")], check=True)
@@ -32,6 +37,7 @@ def main():
         subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.WatchCheck"], check=True)
         subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.ComputerUpdateCheck"], check=True)
         subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.DesktopProtocolCheck"], check=True)
+        subprocess.run([str(java), "-cp", output, "io.github.kangwang42.remotecli.ConnectionHealthCheck"], check=True)
 
 
 if __name__ == "__main__":

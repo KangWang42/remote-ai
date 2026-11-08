@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The default icon. An adaptive icon under mipmap-anydpi-v26 alone leaves no
+     default configuration, and some installers cannot parse the APK's icon.
+     API 26+ still uses the adaptive layer; this one is the same design as a
+     plain layer-list for everything that asks for the unqualified resource. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

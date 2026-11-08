@@ -144,7 +144,7 @@ final class Workbench {
             // one search over every computer's terminals and conversations, and what to tell them apart by
             page.setFocusable(true); page.setFocusableInTouchMode(true);      // the box is written in when it is touched, not as the screen opens
             android.widget.EditText find = kit.field("搜索对话、终端和项目", android.text.InputType.TYPE_CLASS_TEXT);
-            find.setMinHeight(kit.dp(46)); find.setTextSize(15); find.setText(query);
+            find.setMinHeight(kit.dp(48)); find.setTextSize(15); find.setText(query);
             find.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
             find.addTextChangedListener(new android.text.TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) { }
@@ -211,7 +211,7 @@ final class Workbench {
     /** The heading of a section that folds away: the whole row is pressed, and the line beside the title stays. */
     private View heading(String title, String note, boolean folded, Runnable toggle) {
         LinearLayout row = (LinearLayout) heading(title, note);
-        row.setMinimumHeight(kit.dp(40));
+        row.setMinimumHeight(kit.dp(48));
         View chevron = kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 16);
         ((LinearLayout.LayoutParams) chevron.getLayoutParams()).leftMargin = kit.dp(6);
         chevron.setRotation(folded ? 0 : 90);
@@ -447,7 +447,7 @@ final class Workbench {
         section(recent, "最近", board.recent.size() + " 个", board.recent, shown, several, "recent");
         if (!board.recent.isEmpty() && !folded("recent") && board.recent.size() > RECENT) {
             TextView toggle = kit.text(recentOpen ? "只显示前 " + RECENT + " 个" : "其余 " + (board.recent.size() - shown) + " 个", 13, kit.MUTED);
-            toggle.setGravity(Gravity.CENTER); toggle.setMinHeight(kit.dp(44));
+            toggle.setGravity(Gravity.CENTER); toggle.setMinHeight(kit.dp(48));
             kit.press(toggle, () -> { recentOpen = !recentOpen; draw(); });
             recent.addView(toggle, kit.below(2));
             if (recentOpen && board.recent.size() > shown) recent.addView(kit.text("另外 " + (board.recent.size() - shown) + " 个可以搜索到，也在对应的项目里。", 12.5f, kit.MUTED), kit.below(4));
@@ -518,7 +518,7 @@ final class Workbench {
     }
     private View chip(String label, boolean on, Runnable action) {
         TextView chip = on ? kit.bold(label, 13, kit.ON_ACCENT) : kit.text(label, 13, kit.MUTED);
-        chip.setSingleLine(true); chip.setGravity(Gravity.CENTER); chip.setMinHeight(kit.dp(34)); chip.setPadding(kit.dp(13), 0, kit.dp(13), 0);
+        chip.setSingleLine(true); chip.setGravity(Gravity.CENTER); chip.setMinHeight(kit.dp(48)); chip.setPadding(kit.dp(13), 0, kit.dp(13), 0);
         chip.setBackground(kit.shape(on ? kit.ACCENT : kit.PANEL, on ? 0 : kit.LINE, 17));
         chip.setContentDescription(label + (on ? "，已选" : ""));
         kit.press(chip, action);
@@ -862,13 +862,13 @@ final class Workbench {
             // (a project is added on the computer's own page of projects, which lists the folders that have conversations)
             card.addView(rule());
             TextView fresh = kit.bold(order.isEmpty() ? "＋ 添加项目" : "＋ 新建对话", 13.5f, kit.ACCENT);
-            fresh.setGravity(Gravity.CENTER); fresh.setMinHeight(kit.dp(46));
+            fresh.setGravity(Gravity.CENTER); fresh.setMinHeight(kit.dp(48));
             kit.press(fresh, order.isEmpty() ? () -> activity.open(url, "") : () -> activity.startNew(url));
             card.addView(fresh);
             if (order.size() > Math.max(busy, SHOWN) || all && order.size() > SHOWN) {
                 card.addView(rule());
                 TextView toggle = kit.text(all ? "收起" : "其余 " + (order.size() - shown) + " 个项目", 13, kit.MUTED);
-                toggle.setGravity(Gravity.CENTER); toggle.setMinHeight(kit.dp(44));
+                toggle.setGravity(Gravity.CENTER); toggle.setMinHeight(kit.dp(48));
                 kit.press(toggle, () -> { if (!expanded.remove(url)) expanded.add(url); drawComputer(computer); });
                 card.addView(toggle);
             }
@@ -878,7 +878,7 @@ final class Workbench {
             help.setPadding(kit.dp(16), kit.dp(10), kit.dp(12), kit.dp(12));
             help.addView(kit.text("key".equals(snapshot.state) ? "登录已过期。" : "请确认电脑已开机且 Remote AI 正在运行。退出电脑端或重启电脑后，公网隧道的地址会变更。", 12.5f, kit.MUTED), new LinearLayout.LayoutParams(0, -2, 1));
             TextView again = kit.bold("重新扫码", 13.5f, kit.ACCENT);
-            again.setGravity(Gravity.CENTER); again.setMinHeight(kit.dp(40)); again.setPadding(kit.dp(14), 0, kit.dp(14), 0);
+            again.setGravity(Gravity.CENTER); again.setMinHeight(kit.dp(48)); again.setPadding(kit.dp(14), 0, kit.dp(14), 0);
             again.setBackground(kit.shape(Kit.tint(kit.ACCENT, 34), 0, 12));
             kit.press(again, activity::scan);
             LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(-2, -2);
@@ -960,7 +960,7 @@ final class Workbench {
         int rest = saved.size() - historyShown, hiddenEnded = project.ended.size() - endedShown;
         String more = project.name.isEmpty() ? "查看这台电脑的全部对话" : rest + hiddenEnded > 0 ? "新建对话 · 查看更多记录" : "新建对话 · 进入项目";
         TextView enter = kit.bold(more, 13.5f, kit.ACCENT);
-        enter.setGravity(Gravity.CENTER_VERTICAL); enter.setMinHeight(kit.dp(46)); enter.setPadding(kit.dp(8), 0, kit.dp(8), 0);
+        enter.setGravity(Gravity.CENTER_VERTICAL); enter.setMinHeight(kit.dp(48)); enter.setPadding(kit.dp(8), 0, kit.dp(8), 0);
         kit.press(enter, () -> activity.open(url, "", project.name));
         inside.addView(enter);
         LinearLayout.LayoutParams inset = new LinearLayout.LayoutParams(-1, -2);
