@@ -39,4 +39,5 @@ assert "user-select: none" in css and "touch-action: manipulation" in css, \
 
 if shutil.which("node"):
     subprocess.run(["node", "--check", str(ROOT / "web/terminal/terminal.js")], check=True)
+    subprocess.run(["node", str(ROOT / "tests/terminal_keys_behaviour_check.js")], check=True)
 print("Custom key strip checks passed: tap sends, long press edits, combos marked")
