@@ -410,6 +410,7 @@
     form.querySelector('#key-alt').setAttribute('aria-pressed', String(!!mods.alt));
     form.querySelector('#key-shift').setAttribute('aria-pressed', String(!!mods.shift));
     if (item && item.kind === 'seq') form.querySelector('#key-seq').value = item.source;
+    if (item && item.kind === 'combo') form.querySelector('#key-base').value = item.base;
     if (item && item.kind === 'text') {
       form.querySelector('#key-text').value = item.text;
       form.querySelector('#key-enter').checked = !!item.enter;

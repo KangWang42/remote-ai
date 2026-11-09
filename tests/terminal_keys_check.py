@@ -33,6 +33,12 @@ assert "keyPanel = true;\n      renderKeys();" not in js, \
     "saving a key must not leave the strip in edit mode"
 assert "keyPanel = false;" in js, "closeEditor() resets the edit mode"
 
+# Editing a combination key must load the base it was saved with, not the
+# select's first option (found on the phone: long press offered "A" for a
+# Shift+Tab key, and saving would have silently rewritten the key).
+assert "querySelector('#key-base').value = item.base" in js, \
+    "the editor must restore the key's own base key when editing a combination"
+
 # Long pressing a button must not start a text selection or a callout.
 assert "user-select: none" in css and "touch-action: manipulation" in css, \
     "the custom key buttons need long-press friendly styles"
