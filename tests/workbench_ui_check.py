@@ -50,3 +50,8 @@ assert 'if (!health.isActive() || web != failed || !"web".equals(screen)) return
     "a queued reconnect from a retired page cannot stop the current page"
 assert "again.setOnClickListener(v -> openPage(address, password, path))" in activity, \
     "retry must restart connection monitoring as well as reload the page"
+assert "catch (IllegalStateException" in activity, \
+    "a missing page bundle must answer with a message, not crash the app"
+assert 'if (web == null || !"web".equals(screen)) return; bars(shade);' in activity, \
+    "a detached page's late chrome() must not recolour the app's own bars"
+print("Shell robustness guards passed: page health retained, missing bundle degrades, late chrome is screened")

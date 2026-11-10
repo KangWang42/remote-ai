@@ -352,10 +352,28 @@
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'custom';
-      button.textContent = item.label;
-      button.title = describe(item);
-      button.addEventListener('click', () => {
-        if (keyPanel) { openEditor(item); return; }
+      // A star marks a key that sends a control sequence, not plain text.
+      const combo = item.kind !== 'text';
+      button.textContent = item.label + (combo ? '*' : '');
+      button.title = describe(item) + ' · 点击发送，长按编辑';
+      button.setAttribute('aria-label', (combo ? '组合键 ' : '命令片段 ') + item.label + '，点击发送，长按编辑');
+      // A tap always sends; only a long press opens the editor. The synthetic
+      // click that follows a long press must not send the key a second time.
+      let pressTimer = 0, longPressed = false;
+      const cancelPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = 0; } };
+      button.addEventListener('pointerdown', () => {
+        longPressed = false;
+        cancelPress();
+        pressTimer = setTimeout(() => { longPressed = true; pressTimer = 0; openEditor(item); }, 500);
+      });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach(name => button.addEventListener(name, cancelPress));
+      button.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        if (longPressed) return;
+        cancelPress(); longPressed = true; openEditor(item);
+      });
+      button.addEventListener('click', event => {
+        if (longPressed) { longPressed = false; event.preventDefault(); return; }
         send(bytesOf(item));
       });
       keepFocus(button);
@@ -392,6 +410,7 @@
     form.querySelector('#key-alt').setAttribute('aria-pressed', String(!!mods.alt));
     form.querySelector('#key-shift').setAttribute('aria-pressed', String(!!mods.shift));
     if (item && item.kind === 'seq') form.querySelector('#key-seq').value = item.source;
+    if (item && item.kind === 'combo') form.querySelector('#key-base').value = item.base;
     if (item && item.kind === 'text') {
       form.querySelector('#key-text').value = item.text;
       form.querySelector('#key-enter').checked = !!item.enter;
@@ -409,6 +428,10 @@
   function closeEditor() {
     document.querySelector('#key-editor').hidden = true;
     editingKey = null;
+    // Saving or cancelling leaves the strip usable: a tap must send, not edit.
+    keyPanel = false;
+    const add = document.querySelector('#key-add');
+    if (add) add.setAttribute('aria-expanded', 'false');
   }
 
   function wireKeyEditor() {
@@ -450,7 +473,6 @@
       if (known) customKeys[customKeys.indexOf(known)] = item; else customKeys.push(item);
       saveKeys();
       closeEditor();
-      keyPanel = true;
       renderKeys();
     });
     form.querySelector('#key-delete').addEventListener('click', () => {
@@ -461,9 +483,10 @@
   }
   const keyAdd = document.querySelector('#key-add');
   if (keyAdd) keyAdd.addEventListener('click', () => {
-    keyPanel = !keyPanel;
-    keyAdd.setAttribute('aria-expanded', String(keyPanel));
-    if (keyPanel) openEditor(null); else { closeEditor(); renderKeys(); }
+    if (keyPanel) { closeEditor(); renderKeys(); return; }
+    keyPanel = true;
+    keyAdd.setAttribute('aria-expanded', 'true');
+    openEditor(null);
   });
   wireKeyEditor();
   renderKeys();

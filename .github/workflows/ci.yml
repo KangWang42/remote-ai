@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", "tests/*Check.java", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "web/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", "tests/terminal_keys_check.py", "tests/terminal_keys_behaviour_check.js", "tests/*Check.java", ".github/workflows/ci.yml"]
   pull_request:
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", "tests/*Check.java", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "web/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", "tests/terminal_keys_check.py", "tests/terminal_keys_behaviour_check.js", "tests/*Check.java", ".github/workflows/ci.yml"]
   workflow_dispatch:
 
 jobs:
@@ -56,6 +56,7 @@ jobs:
         run: |
           python tests/workbench_ui_check.py
           python tests/android_update_check.py
+          python tests/terminal_keys_check.py
           python tests/android_aggregate_check.py --jdk "$JAVA_HOME"
 
   android-compile:

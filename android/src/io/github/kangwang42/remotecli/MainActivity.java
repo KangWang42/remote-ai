@@ -579,7 +579,15 @@ public final class MainActivity extends Activity {
         bars(kit.BG);
         WebView view = ensureWeb();
         final String origin = address;
-        final EmbeddedPages pages = new EmbeddedPages(getAssets(), origin);
+        final EmbeddedPages pages;
+        try {
+            pages = new EmbeddedPages(getAssets(), origin);
+        } catch (IllegalStateException broken) {
+            // A build without its bundled pages cannot show any computer's page: say so on the
+            // workbench instead of crashing on the first tap into a terminal.
+            home(broken.getMessage());
+            return;
+        }
         view.setWebViewClient(new WebViewClient() {
             private boolean firstPage = true;
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -754,7 +762,7 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public void chrome(String color) {
             if (color == null || !color.matches("#[0-9a-fA-F]{6}")) return;
             final int shade = Color.parseColor(color);
-            runOnUiThread(() -> { if (web == null) return; bars(shade); web.setBackgroundColor(shade); });
+            runOnUiThread(() -> { if (web == null || !"web".equals(screen)) return; bars(shade); web.setBackgroundColor(shade); });
         }
         /** Looks for a newer version of the app now; the answer comes as a short notice or a question. */
         @JavascriptInterface public boolean autoUpdate() { return updater != null && updater.automatic(); }
