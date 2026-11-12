@@ -260,7 +260,12 @@ public sealed class TerminalAgent {
     // can be made a project from there.
     // Live: a program on this computer holds it. Now: it is in use (InUse); only then is it something that is going on.
     // Wakes: a message for it can be handed to it where it is even while it sits idle (ClaudeRelay, CodexQueue).
-    public sealed class SessionInfo { public bool Now, Wakes; public string Kind = ""; public string Id, Tool, Dir, Folder = "", ControlFolder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    public sealed class SessionInfo { public bool Now, Wakes, MultipleOwners; public string Kind = ""; public string Id, Tool, Dir, Folder = "", ControlFolder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    public static string ObservedStatus(SessionInfo s, Reach.Open known) {
+        // Hooks are keyed by conversation, not process: an idle copy cannot stop the busy copy.
+        if (s.MultipleOwners && s.Status == "busy" && (known == null || known.Status == "idle")) return s.Status;
+        return known != null ? known.Status : s.Status;
+    }
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
     /// the tools' settings; whether or not it has, this listens for them.
     public readonly Reach Reach;
@@ -695,6 +700,7 @@ public sealed class TerminalAgent {
         var found = new List<SessionInfo>();
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var open = new Dictionary<string, ClaudeSessions.Owner>();
+        var ownerCounts = new Dictionary<string, int>();
         // every folder a conversation is found in is noted, a project or not, with by what it is used
         folders.Begin();
         Action<string, string, DateTime, bool, string> note = folders.Note;
@@ -705,13 +711,18 @@ public sealed class TerminalAgent {
                     var source = ClaudeSessions.Inspect(file, parents);
                     if (!source.Live) continue;
                     int pid = source.Pid; string session = source.Session;
+                    int count; ownerCounts.TryGetValue(session, out count); ownerCounts[session] = count + 1;
                     LiveTerminal owner = null; int at = pid;
                     for (int depth = 0; depth < 12 && owner == null; depth++) {
                         owner = running.FirstOrDefault(t => !t.Pty.Closed && t.Pty.Id == at);
                         int parent; if (!parents.TryGetValue(at, out parent) || parent == at || parent == 0) break; at = parent;
                     }
                     if (owner != null) { owner.Session = session; if (owner.Chat == null) owner.Status = source.Status; }
-                    else { open[session] = source; note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true, Folders.Held(source.Origin, Folders.OfClaude(source.Entry))); }
+                    else {
+                        ClaudeSessions.Owner prior;
+                        open[session] = open.TryGetValue(session, out prior) ? ClaudeSessions.Preferred(new[] { prior, source }) : source;
+                        note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true, Folders.Held(source.Origin, Folders.OfClaude(source.Entry)));
+                    }
                 } catch { }
             }
         } catch { }
@@ -829,7 +840,12 @@ public sealed class TerminalAgent {
                 found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
-        foreach (SessionInfo held in found.Where(s => s.Live)) held.Now = InUse(held.Host, held.Origin, held.Status, Reach.Of(held.Tool, held.Id), held.Updated, DateTime.UtcNow);
+        foreach (SessionInfo held in found.Where(s => s.Live)) {
+            int count;
+            held.MultipleOwners = held.Tool == "claude" && ownerCounts.TryGetValue(held.Id, out count) && count > 1;
+            if (held.MultipleOwners) { held.CanTakeover = false; held.TakeoverReason = ClaudeSessions.MultipleReason; }
+            held.Now = InUse(held.Host, held.Origin, ObservedStatus(held, Reach.Of(held.Tool, held.Id)), null, held.Updated, DateTime.UtcNow);
+        }
         // Associate a phone terminal only with the verified writer process in its own process tree.
         var codexParents = Parents();
         foreach (LiveTerminal t in running.Where(t => t.Tool == "codex" && t.Session.Length == 0 && !t.Pty.Closed)) {
@@ -1344,13 +1360,14 @@ public sealed class TerminalAgent {
     }
     // End only the verified conversation writer before resuming the original session.
     void ClaudeExclusive(string session, bool takeover) {
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var parents = Parents();
         string folder = Path.Combine(ClaudeHome, "sessions");
         if (!Directory.Exists(folder)) return;
-        foreach (string file in Directory.GetFiles(folder, "*.json")) {
-            var owner = ClaudeSessions.Inspect(file);
-            if (!owner.Live || owner.Session != session) continue;
+        var owners = Directory.GetFiles(folder, "*.json").Select(file => new { File = file, Owner = ClaudeSessions.Inspect(file) })
+            .Where(item => item.Owner.Live && item.Owner.Session == session).ToArray();
+        if (owners.Length > 1) throw new InvalidOperationException(ClaudeSessions.MultipleReason);
+        foreach (var item in owners) {
+            string file = item.File; var owner = item.Owner;
             var roots = terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id });
             if (!takeover || !owner.CanTakeover || CodexSessions.Descends(owner.Pid, roots, parents)) throw new InvalidOperationException(owner.Reason);
             using (var process = Process.GetProcessById(owner.Pid)) {
@@ -1463,7 +1480,9 @@ public sealed class TerminalAgent {
                 var active = terminals.Values.Where(t => t.Pty != null && !t.Pty.Closed).ToArray();
                 var list = active.Select(t => new[] { t.Tool, t.Dir.Length > 0 ? t.Dir : Path.GetFileName(t.Folder), t.Status ?? "", t.Started.ToString("o"), sessions.Where(s => s.Id == t.Session).Select(s => s.Title).FirstOrDefault() ?? "", "手机 Remote AI", "phone", t.Id }).ToList();
                 // Held but idle conversations remain visible without being counted as executing.
-                list.AddRange(sessions.Where(s => s.Live && !active.Any(t => t.Session == s.Id)).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), s.Now ? (Reach.Of(s.Tool, s.Id) ?? new Reach.Open { Status = s.Status }).Status : "idle", s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
+                // Scan excludes this agent's Claude processes. A remaining Claude row is an
+                // independent process even when a phone terminal resumed the same conversation.
+                list.AddRange(sessions.Where(s => s.Live && (s.Tool == "claude" || !active.Any(t => t.Session == s.Id))).Select(s => new[] { s.Tool, s.Dir.Length > 0 ? s.Dir : Path.GetFileName(s.Folder), s.Now ? ObservedStatus(s, Reach.Of(s.Tool, s.Id)) : "idle", s.Created.ToString("o"), s.Title, s.Origin, s.Host }));
                 return list;
             }
         } catch (InvalidOperationException) { return null; }      // the list changed while it was read: the caller keeps what it showed

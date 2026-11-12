@@ -48,7 +48,7 @@ public sealed class Ways {
     public bool Woken { get { return Say == Wake; } }
 
     public static Ways Of(TerminalAgent.SessionInfo s, Reach.Open known, CodexDesktopSessions.State channel) {
-        var ways = new Ways { Status = known != null ? known.Status : s.Status, Now = s.Now };
+        var ways = new Ways { Status = TerminalAgent.ObservedStatus(s, known), Now = s.Now };
         if (!s.Live) { foreach (string thing in Things) ways.Why[thing] = "这段对话没有在电脑上开着"; return ways; }
         bool claude = s.Tool == "claude", desktop = s.Origin == CodexDesktop, asks = known != null && known.Status == "confirm";
         if (channel != null) {

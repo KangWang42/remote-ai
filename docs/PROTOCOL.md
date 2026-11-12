@@ -614,6 +614,15 @@ an empty session association; the source remains untouched. The agent only assoc
 when its verified writer belongs to that terminal's process tree, never by picking the first conversation in
 the same folder. A locked source cannot be resumed concurrently; choose fork or first release its writer.
 
+On Windows, multiple live Claude Code processes may report the same `sessionId` (for example,
+a Positron terminal and a resumed phone terminal). Each process is verified separately. The
+external conversation entry prefers a local owner over another remote host, then an active owner
+over an idle copy; enumeration order does not determine its origin or status. The desktop activity
+list retains that external entry alongside this agent's phone terminal. A phone-only conversation
+still appears once. With multiple owners, an idle session-level hook cannot override a verified
+busy process; permission requests retain priority. Takeover or process termination is refused
+before killing any process when multiple verified owners exist. The wire schema is unchanged.
+
 `POST /api/terminal/agent`, a few times a second while something happens and about once a second otherwise:
 
 ```json

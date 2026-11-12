@@ -101,6 +101,14 @@ public sealed class SessionOrigin {
 
 // Claude session records carry an exact Windows process start fingerprint. A PID alone is insufficient.
 public sealed class ClaudeSessions {
+    public const string MultipleReason = "这段 Claude Code 对话同时在多个终端打开，请先在电脑上关闭多余终端再接管或结束";
+    // A resumed conversation can have more than one live process. A local editor must not be
+    // replaced by a remote terminal's record just because that file was enumerated last.
+    public static Owner Preferred(IEnumerable<Owner> owners) {
+        return owners.Where(o => o.Live).OrderBy(o => o.Host == "remote")
+            .ThenByDescending(o => o.Status == "confirm" ? 3 : o.Status == "busy" ? 2 : o.Status == "waiting" ? 1 : 0)
+            .ThenByDescending(o => o.Started).ThenBy(o => o.Pid).FirstOrDefault();
+    }
     public sealed class Owner {
         public string Session = "", Dir = "", Status = "", Host = "unknown", Origin = "", Reason = "无法核实 Claude Code 会话，请先在原终端结束后重试";
         public string Socket = "";      // where it takes messages from other sessions (Claude Code's own note), "" when it says none
