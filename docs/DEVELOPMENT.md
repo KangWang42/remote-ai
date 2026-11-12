@@ -49,6 +49,8 @@ powershell -ExecutionPolicy Bypass -File android\build.ps1 -Jdk <JDK 目录> -Sd
 
 安卓构建默认要求已有签名密钥；用 `-SecretDir <密钥目录>` 指定包含 `signing.p12` 和 `signing-password.txt` 的目录。只有首次创建独立应用签名时才传 `-CreateSigningKey`，默认目录为仓库之外的 `~/.remote-cli-signing`。正式发版必须与上一版 APK 比对证书，不能用新密钥替代已有发布密钥。
 
+CI 的 `Windows session behavior` 作业在 Windows 上编译并运行会话归属、活动状态、操作能力和历史去重测试；Android 的界面源文件检查不依赖 Windows 实现中的具体调用文本。
+
 ```powershell
 # 测试
 python -m unittest discover -s relay -p "test_*.py"

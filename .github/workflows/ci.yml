@@ -3,12 +3,29 @@ name: CI
 on:
   push:
     branches: [main]
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "web/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", "tests/terminal_keys_check.py", "tests/terminal_keys_behaviour_check.js", "tests/*Check.java", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "agent-windows/**", "android/**", "web/**", "tools/**", "tests/**", ".github/workflows/ci.yml"]
   pull_request:
-    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "android/**", "web/**", "tools/**", "tests/tunnel_download_check.py", "tests/claude_permissions_cases.json", "tests/workbench_ui_check.py", "tests/android_update_check.py", "tests/android_aggregate_check.py", "tests/terminal_keys_check.py", "tests/terminal_keys_behaviour_check.js", "tests/*Check.java", ".github/workflows/ci.yml"]
+    paths: ["relay/**", "agent-linux/**", "agent-rust/**", "agent-windows/**", "android/**", "web/**", "tools/**", "tests/**", ".github/workflows/ci.yml"]
   workflow_dispatch:
 
 jobs:
+  windows-sessions:
+    runs-on: windows-latest
+    name: Windows session behavior
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: ownership, activity and conversation capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/claude_owners_check.py
+          python tests/in_use_check.py
+          python tests/ways_check.py
+          python tests/session_copies_check.py
+
   tests:
     runs-on: ubuntu-22.04
     strategy:
