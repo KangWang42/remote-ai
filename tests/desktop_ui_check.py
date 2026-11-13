@@ -227,9 +227,17 @@ def main():
             value("Array.from(document.querySelectorAll('#sheet .said button')).find(b=>b.textContent==='查询发送结果').click()")
             until("document.querySelector('#sheet .said').textContent.includes('工具已接收')")
             assert len(native_requests) == 2 and native_requests[0]['id'] == native_requests[1]['id'] and native_requests[1]['receipt'] is True, native_requests
-            value("Array.from(document.querySelectorAll('#sheet button')).find(b=>b.textContent==='停止回答').click()")
+            # Use pointer hit testing: HTMLElement.click() also activates covered controls.
+            ask('Emulation.setDeviceMetricsOverride', width=390, height=844, deviceScaleFactor=1, mobile=True)
+            value("window.RemoteCliPage.data.sessions[0].turn = ''")
+            stop_point = value("(() => { const b=document.querySelector('#sheet .halt'), r=b.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2; return {x,y,hit:b.contains(document.elementFromPoint(x,y)), disabled:b.disabled}; })()")
+            assert stop_point['hit'] and not stop_point['disabled'], stop_point
+            ask('Input.dispatchMouseEvent', type='mousePressed', x=stop_point['x'], y=stop_point['y'], button='left', clickCount=1)
+            ask('Input.dispatchMouseEvent', type='mouseReleased', x=stop_point['x'], y=stop_point['y'], button='left', clickCount=1)
             until("!document.querySelector('#sheet .write button.solid').disabled")
             assert native_requests[-1]['action'] == 'stop' and native_requests[-1]['turn'] == 'turn-1'
+            assert value("document.querySelector('#sheet .stop-note').textContent") == '已停止本次回答，可以继续对话'
+            assert value("document.querySelector('#sheet .stop-note').getClientRects().length > 0")
             assert value("document.querySelector('#sheet .write textarea').value") == '等回答结束后再问'
             assert value("document.querySelector('#sheet').open") is True
             transcript.append({'role': 'assistant', 'text': '电脑上继续回答后的新内容'})
@@ -280,6 +288,27 @@ def main():
             assert value("document.querySelector('#sheet .write').getBoundingClientRect().bottom <= innerHeight")
             assert value("document.querySelector('#sheet .said').clientHeight > 100")
             picture('native-keyboard-390.png')
+            sessions[0].update(status='busy', reach=[], turn='', queued=[],
+                               ways={'say': '', 'stop': '', 'answer': '', 'end': ''},
+                               why={'stop': '当前执行目标只能在电脑上停止'})
+            report()
+            ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, sid))
+            until("document.querySelector('#sheet .halt') && !document.querySelector('#sheet .halt').hidden")
+            before_stop = len(native_requests)
+            point = value("(() => { const r=document.querySelector('#sheet .halt').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()")
+            ask('Input.dispatchMouseEvent', type='mousePressed', **point, button='left', clickCount=1)
+            ask('Input.dispatchMouseEvent', type='mouseReleased', **point, button='left', clickCount=1)
+            until("document.querySelector('#sheet .stop-note')?.textContent === '当前执行目标只能在电脑上停止' && !document.querySelector('#sheet .halt').disabled")
+            assert len(native_requests) == before_stop, 'unsupported stop must not kill the application or dispatch an invalid turn'
+            assert value("document.querySelector('#sheet .stop-note').getClientRects().length > 0")
+            picture('native-stop-unavailable-390.png')
+            sessions[0].update(reach=['stop'], ways={'say': '', 'stop': 'codex-desktop', 'answer': '', 'end': ''}, why={})
+            report()
+            value("window.RemoteCliPage.refresh()")
+            value("document.querySelector('#sheet .halt').click()")
+            until("!document.querySelector('#sheet .halt').disabled && !document.querySelector('#sheet .stop-note').hidden")
+            assert '正在' not in value("document.querySelector('#sheet .stop-note').textContent"), value("document.querySelector('#sheet .stop-note').textContent")
+            assert len(native_requests) == before_stop, 'missing turn must not dispatch an unscoped interruption'
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
             # The single injected 503 is intentional; no other error-level log is acceptable.
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']

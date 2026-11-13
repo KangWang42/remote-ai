@@ -456,26 +456,41 @@
       // with a receipt that can be asked for again), or through its tool's hooks (before its next step). Where it
       // has neither, it can still be ended, if the computer can close its program: asked first, with the reason.
       let stopAttempt = null;
+      const stopNote = el('p', { className: 'stop-note', role: 'status', hidden: true });
+      const stopSays = text => { stopNote.textContent = text; stopNote.hidden = !text; };
       const stopping = el('button', { type: 'button', className: 'end halt', textContent: '停止回答', hidden: true, onclick: async () => {
-        if (stopping.disabled || !usable()) return;
-        const current = now(), way = stopAttempt ? APP : wayOf(current, 'stop');
-        if (!way) {
-          const why = whyNot(current, 'stop', '这段对话现在不能从手机停止');
-          if (!canEnd(current)) return toast(why);
-          if (await confirmEnd(current, true, why + '。')) endIt(current);
-          return;
-        }
-        if (way === APP && !stopAttempt && !current.turn) return;
-        const query = !!stopAttempt;
-        if (way === APP && !stopAttempt) stopAttempt = { id: newId(), session: current.id, action: 'stop', turn: current.turn, transport: APP };
+        if (stopping.disabled) return;
+        if (!usable()) { stopSays('电脑离线，停止请求尚未发送'); return; }
         stopping.disabled = true;
+        stopping.textContent = stopAttempt ? '正在查询…' : '正在停止…';
+        stopSays(stopAttempt ? '正在查询上次停止请求的结果…' : '正在请求停止回答…');
         try {
+          let current = now(), way = stopAttempt ? APP : wayOf(current, 'stop');
+          // A just-started turn may not yet be present in the overview. Refresh before deciding it cannot stop.
+          if (!stopAttempt && (!way || (way === APP && !current.turn))) {
+            await refresh();
+            current = now(); way = wayOf(current, 'stop');
+          }
+          if (!way) {
+            const why = whyNot(current, 'stop', '这段对话现在不能从手机停止，请在电脑上停止');
+            stopSays(why);
+            if (canEnd(current) && await confirmEnd(current, true, why + '。')) await endIt(current);
+            return;
+          }
+          if (way === APP && !stopAttempt && !current.turn) {
+            stopSays('尚未取得当前执行轮次，停止请求未发送。请稍后重试，或在电脑上停止');
+            return;
+          }
+          const query = !!stopAttempt;
+          if (way === APP && !stopAttempt) stopAttempt = { id: newId(), session: current.id, action: 'stop', turn: current.turn, transport: APP };
           const result = await api('api/conversation', way === APP ? { ...stopAttempt, receipt: query } : { id: newId(), session: current.id, action: 'stop', transport: way });
-          if (result.status === 'confirmed') { toast(result.goal_pause_error ? '本次回答已停止，但目标未暂停，请在电脑上检查' : '已停止本次回答，可以继续对话'); stopAttempt = null; }
-          else if (result.status === 'asked') toast('已告诉它停止：它会在下一步之前停下');
-          else toast('停止结果未知，请检查电脑上的原对话');
-        } catch (error) { toast(error.message); }
-        stopping.disabled = false; stopping.textContent = stopAttempt ? '查询停止结果' : '停止回答'; refresh(); show();
+          if (result.status === 'confirmed') { stopSays(result.goal_pause_error ? '本次回答已停止，但目标未暂停，请在电脑上检查' : '已停止本次回答，可以继续对话'); stopAttempt = null; }
+          else if (result.status === 'asked') stopSays('已请求停止，将在下一次工具操作前停下；当前输出可能仍会继续');
+          else stopSays('停止结果尚未确认，请查询停止结果或检查电脑上的原对话');
+        } catch (error) { stopSays('停止结果未确认：' + error.message); }
+        finally {
+          stopping.disabled = false; stopping.textContent = stopAttempt ? '查询停止结果' : '停止回答'; refresh(); show();
+        }
       } });
       // How it stands, in one line above the box, as a terminal says it at its foot: at work and for how long, asking,
       // waiting for what its user says, or stopped and since when. Beside it, the way to end it on the computer.
@@ -552,6 +567,7 @@
       // such word; it is asked when the lists say that the conversation changed.)
       const syncNote = el('p', { className: 'quiet sync-note', role: 'status', hidden: true });
       state.before(syncNote);
+      state.after(stopNote);
       const stateKey = current => JSON.stringify([current.updated, current.status, current.last, current.turn]);
       let stamp = '', seen = '', read = false, reading = false, sending = false, stands = null, standsAt = '', readError = '', quick = 0, asked = 0, changed = 0, sawBusy = 0;
       const pendingScope = pendingKey(session);
@@ -665,6 +681,7 @@
         const text = box.value.trim();
         if (send.disabled || !usable() || !can(now(), 'say') || now().ask) return;
         if (!text) return box.focus();
+        stopSays('');
         // what is written stands in the window at once, as what the user said, while it is on its way
         const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false, createdAt: Date.now(), payload: { id: newId(), session: session.id, action: 'say', text } };
         if (wayOf(now(), 'say') === APP) mine.payload.transport = APP;
