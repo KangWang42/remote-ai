@@ -474,7 +474,6 @@
           if (!way) {
             const why = whyNot(current, 'stop', '这段对话现在不能从手机停止，请在电脑上停止');
             stopSays(why);
-            if (canEnd(current) && await confirmEnd(current, true, why + '。')) await endIt(current);
             return;
           }
           if (way === APP && !stopAttempt && !current.turn) {
@@ -717,8 +716,12 @@
         standing.textContent = !current.live ? '已在电脑上关闭' : PHASE[kind][0];
         clock.textContent = !from ? '' : kind === 'busy' ? lasted(Date.now() - from) : ago(from);
         ending.hidden = !canEnd(current);
-        // while it works it can be told to stop, whatever its tool: the press says what happens where it cannot
-        stopping.hidden = !stopAttempt && kind !== 'busy' && !can(current, 'stop');
+        // A running CLI is not necessarily interruptible. Never present ending its process as stopping one turn.
+        const stoppable = !!wayOf(current, 'stop') && (wayOf(current, 'stop') !== APP || !!current.turn);
+        stopping.hidden = !stopAttempt && !stoppable;
+        if (kind === 'busy' && !stoppable && !stopAttempt && !stopping.disabled) {
+          stopSays(whyNot(current, 'stop', '当前对话不支持从手机单独中断本轮回答，请在电脑上停止'));
+        }
         goOn.hidden = !(can(current, 'say') && !current.ask && (kind === 'stopped' || kind === 'waiting') && record.length > 0);
         if (signature === shown) return;
         shown = signature;

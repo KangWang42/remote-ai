@@ -293,22 +293,34 @@ def main():
                                why={'stop': '当前执行目标只能在电脑上停止'})
             report()
             ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, sid))
-            until("document.querySelector('#sheet .halt') && !document.querySelector('#sheet .halt').hidden")
+            until("document.querySelector('#sheet .halt') && document.querySelector('#sheet .halt').hidden && document.querySelector('#sheet .stop-note')?.textContent === '当前执行目标只能在电脑上停止'")
             before_stop = len(native_requests)
-            point = value("(() => { const r=document.querySelector('#sheet .halt').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()")
-            ask('Input.dispatchMouseEvent', type='mousePressed', **point, button='left', clickCount=1)
-            ask('Input.dispatchMouseEvent', type='mouseReleased', **point, button='left', clickCount=1)
-            until("document.querySelector('#sheet .stop-note')?.textContent === '当前执行目标只能在电脑上停止' && !document.querySelector('#sheet .halt').disabled")
             assert len(native_requests) == before_stop, 'unsupported stop must not kill the application or dispatch an invalid turn'
             assert value("document.querySelector('#sheet .stop-note').getClientRects().length > 0")
             picture('native-stop-unavailable-390.png')
             sessions[0].update(reach=['stop'], ways={'say': '', 'stop': 'codex-desktop', 'answer': '', 'end': ''}, why={})
             report()
             value("window.RemoteCliPage.refresh()")
-            value("document.querySelector('#sheet .halt').click()")
-            until("!document.querySelector('#sheet .halt').disabled && !document.querySelector('#sheet .stop-note').hidden")
-            assert '正在' not in value("document.querySelector('#sheet .stop-note').textContent"), value("document.querySelector('#sheet .stop-note').textContent")
+            until("document.querySelector('#sheet .halt').hidden && !document.querySelector('#sheet .stop-note').hidden")
             assert len(native_requests) == before_stop, 'missing turn must not dispatch an unscoped interruption'
+            # Positron's Codex CLI has no per-turn interruption channel, regardless of process ownership.
+            sessions[0].update(host='cli', origin='Positron', transport='', reach=['say'], turn='',
+                               ways={'say': 'hook', 'stop': '', 'answer': '', 'end': ''},
+                               why={'stop': 'Codex 命令行的回答不能从外面单独停止'})
+            for can_end in [False, True]:
+                sessions[0]['can_takeover'] = can_end
+                sessions[0]['ways']['end'] = 'process' if can_end else ''
+                report()
+                ask('Page.navigate', url='http://127.0.0.1:%d/?take=%s' % (port, sid))
+                until("document.querySelector('#sheet .stop-note')?.textContent === 'Codex 命令行的回答不能从外面单独停止'")
+                assert value("document.querySelector('#sheet .halt').hidden")
+                assert value("document.querySelector('#sheet .end:not(.halt)').hidden") == (not can_end)
+                if can_end:
+                    value("document.querySelector('#sheet .end:not(.halt)').click()")
+                    until("document.querySelector('#sheet .confirm')?.textContent.includes('结束电脑上的这段对话')")
+                    value("document.querySelector('#sheet .confirm button.see').click()")
+                assert len(native_requests) == before_stop, 'opening or cancelling end confirmation must not stop a process'
+                picture('positron-codex-%s.png' % ('owned' if can_end else 'unowned'))
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
             # The single injected 503 is intentional; no other error-level log is acceptable.
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']
