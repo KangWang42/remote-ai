@@ -6,6 +6,10 @@
 
 Android 构建同时把 `web/` 打进 APK，`EmbeddedPages` 按 `PageAssets` 解析结果提供页面，数据仍走原中转。运行 `python tests/android_pages_check.py --jdk <JDK目录> --apk dist/RemoteCli-Android.apk --output <输出目录>` 核对打包内容与地址边界；给 `pond_ui_check.py` 追加 APK 路径可检查 APK 内页面在公共中转路径下的主题菜单和 App 外观同步。
 
+会话窗口沿用现有主题，手机端保持全宽，宽屏正文居中限宽。输入与发送按钮共用一个容器，送达状态附在对应消息下，正式记录出现后按同文消息的出现次数移除临时气泡；即使发送回执晚于正文、后续轮询返回 `same`，也不保留重复消息。`tests/desktop_ui_check.py` 覆盖即时回显、相同提示词多次发送、回执查询和滚动；`tests/tabs_ui_check.py` 覆盖大量手机空闲会话下的电脑对话排序。
+
+界面参考：[Open WebUI 的排队消息组件](https://github.com/open-webui/open-webui/blob/main/src/lib/components/chat/MessageInput/QueuedMessageItem.svelte)用于比较正文与发送状态的层级；[LibreChat](https://github.com/LibreChat-AI/LibreChat)用于比较聊天产品的信息组织。仅借鉴交互原则，不引入其代码、素材或依赖；保留本项目的原生页面、主题和电脑连接操作。
+
 `python tests/terminal_render_check.py <chrome.exe> <输出目录>` 检查纸白/夜航/池塘的 DOM 与 WebGL 渲染。触屏使用稳定的终端容器承接手势，避免 DOM 行被替换后丢失后续触摸。滚动快照以解析修订、选择、视口和行范围判定复用；尺寸、主题、显卡状态变化清空缓存，不按文本相等跳过 ANSI 颜色变化。浅色终端关闭透明绘制，并提高最低对比度以覆盖弱化文字。池塘图片在构建准备阶段生成，同一页面只解码一次，无运行时模拟循环。
 
 [← 回到首页](../README.md)
@@ -61,7 +65,7 @@ node tests\terminal_scroll_check.js                       # 拖动、惯性、�
 python tests\fullscreen_check.py <chrome.exe>             # 占满屏幕的程序：触摸拖动逐行滚动；滑动时屏幕截图与静止时的终端画面逐像素比对（每一行都在应在的位置，没有遮挡），移动图层时不重画；手机给不出滑动图层、图层中途丢失或复制画面过慢时退回按行滚动；手指点“回到最新”回到末尾，程序自己在画面上给出回到末尾的提示时（Claude Code 的 Jump to bottom）上面的内容下移一行盖住它，不留空行，没有滑动图层时才只盖住这一行，按钮按程序的方式回去；长时间运行后重新打开只读最近的输出且画面完整。真实的中转和电脑端，Codex 用替身程序；屏幕密度按手机取 2.625（`RCLI_TEST_DENSITY` 可改）；读截图需要 Pillow
 python tests\phone_line_check.py [chrome.exe [输出文件夹]]  # 手机上切换线路和更改设置：新线路在原线路旁准备好，交接后手机到达才保留，没到则回到原线路；隧道、局域网、中转互相切换；带浏览器时在页面上实际点按，并从列表给终端发一条指令。先运行 tools\package_windows.py
 node tests\session_state_check.js                         # 运行中的会话与保留的写入锁分开显示
-python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组、排序、状态和刷新判定；按“等你确认、置顶记录、正在运行、已打开、最近”分段、搜索、按工具和运行位置筛选、未加入项目的对话
+python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组、排序、状态和刷新判定；按“等你确认、正在运行、已打开、置顶记录、最近”分段、搜索、按工具和运行位置筛选、未加入项目的对话
 python tests\workbench_ui_check.py                         # 工作台默认折叠、最近两条和标题可读性
 python tests\android_update_check.py                      # App 更新器关闭安装流的顺序
 python tests\native_owner_check.py                        # 临时进程验证归属，不操作真实 Codex 会话

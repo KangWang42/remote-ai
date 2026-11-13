@@ -196,10 +196,10 @@ dialog.window .bar .stands { color: var(--muted); font-size: .8rem; overflow: hi
 #sheet-form .control-mode.shared { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 #sheet-form .control-mode.saved { border-style: dashed; }
 dialog.window .phone-delivery { display: block; margin-top: 5px; color: var(--muted); font-size: .73rem; }
-dialog.window #sheet-form .said { max-height: none; min-height: 0; height: 100%; border: 0; background: transparent; padding: 6px 2px; }
+dialog.window #sheet-form .said { max-height: none; min-height: 0; height: 100%; border: 0; background: transparent; padding: 16px 4px 56px; gap: 20px; scrollbar-gutter: stable; }
 /* what was said fills what is left of the window; over its lower edge, the way back to what was said last */
 dialog.window .reads { position: relative; min-height: 0; }
-dialog.window .reads .latest { position: absolute; right: 6px; bottom: 8px; min-height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-size: .84rem; font-weight: 600; box-shadow: 0 4px 14px rgb(0 0 0 / .14); }
+dialog.window .reads .latest { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); white-space: nowrap; min-height: 44px; padding: 0 16px; border-radius: 22px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-size: .84rem; font-weight: 600; box-shadow: 0 4px 14px rgb(0 0 0 / .14); }
 dialog.window .reads .latest[hidden] { display: none; }
 /* how it stands, in one line above the box: at work and for how long, asking, waiting, stopped */
 dialog.window .state { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 4px 0 6px; font-size: .86rem; color: var(--muted); }
@@ -218,6 +218,13 @@ dialog.window .state .end.halt:not([hidden]) + .end { margin-left: 8px; }
 #sheet-form .said .earlier { margin: 0 0 4px; text-align: center; color: var(--muted); font-size: .8rem; }
 dialog.window .write .go { flex: none; min-height: 44px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-weight: 600; }
 dialog.window .write .go[hidden] { display: none; }
+dialog.window #sheet-form .write { padding: 6px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); }
+dialog.window #sheet-form .write:focus-within { border-color: var(--accent); }
+dialog.window #sheet-form .write textarea { border: 0; background: transparent; box-shadow: none; outline: none; }
+dialog.window #sheet-form .write button.solid { border-radius: 14px; }
+@media (min-width: 800px) {
+  dialog.window #sheet-form { max-width: 920px; margin-inline: auto; }
+}
 dialog.window .confirm { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); font-size: .9rem; }
 dialog.window .confirm p { margin: 0; }
 dialog.window .confirm .answers { display: flex; gap: 8px; }
@@ -225,7 +232,7 @@ dialog.window .confirm .answers button { flex: 1; min-height: 42px; border-radiu
 dialog.window .confirm .answers .no { color: var(--bad); }
 /* what was last said in a conversation that is open on the computer */
 #sheet-form .said { display: flex; flex-direction: column; gap: 12px; max-height: 52vh; overflow-y: auto; padding: 14px 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); overscroll-behavior: contain; font-family: var(--read-font, inherit); font-size: var(--read-size, .93rem); line-height: var(--read-line, 1.65); }
-#sheet-form .said .turn { display: grid; gap: 4px; min-width: 0; }
+#sheet-form .said .turn { display: grid; gap: 4px; min-width: 0; flex-shrink: 0; }
 #sheet-form .said .turn > b { font-size: .72rem; font-weight: 600; letter-spacing: .02em; color: var(--muted); }
 #sheet-form .said .turn.user { align-self: flex-end; max-width: 88%; padding: 8px 12px; border-radius: 14px 14px 4px 14px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
 #sheet-form .said .plain { white-space: pre-wrap; overflow-wrap: anywhere; }

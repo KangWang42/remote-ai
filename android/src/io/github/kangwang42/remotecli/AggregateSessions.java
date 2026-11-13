@@ -180,6 +180,10 @@ final class AggregateSessions {
     }
     static boolean needs(String kind) { return "confirm".equals(kind); }
     static boolean working(String kind) { return "busy".equals(kind) || "starting".equals(kind) || "pc-busy".equals(kind); }
+    static int compareOpened(Entry a, Entry b) {
+        return a.pinned != b.pinned ? (a.pinned ? -1 : 1)
+            : a.terminal != b.terminal ? (a.terminal ? 1 : -1) : Long.compare(recent(b), recent(a));
+    }
     /**
      * The workbench's lists, by what needs the owner: what waits for an answer, what is pinned, what is at work, what
      * was used lately. A conversation that is open but waiting for input belongs in opened; with words to search for there is one list instead (found): everything that has all of them,
@@ -220,9 +224,10 @@ final class AggregateSessions {
         Comparator<Thing> standing = (a, b) -> rank(a.kind) != rank(b.kind) ? rank(a.kind) - rank(b.kind) : Long.compare(recent(b.entry), recent(a.entry));
         Comparator<Thing> lately = (a, b) -> Long.compare(recent(b.entry), recent(a.entry));
         // what is open comes before what is only saved
-        Comparator<Thing> open = (a, b) -> a.running() != b.running() ? (a.running() ? -1 : 1) : a.running() ? standing.compare(a, b) : lately.compare(a, b);
+        Comparator<Thing> open = (a, b) -> a.entry.open() != b.entry.open() ? (a.entry.open() ? -1 : 1) : a.entry.open() ? standing.compare(a, b) : lately.compare(a, b);
         Comparator<Thing> pinnedFirst = (a, b) -> a.entry.pinned != b.entry.pinned ? (a.entry.pinned ? -1 : 1) : standing.compare(a, b);
-        Collections.sort(board.needs, pinnedFirst); Collections.sort(board.active, pinnedFirst); Collections.sort(board.opened, pinnedFirst);
+        Comparator<Thing> opened = (a, b) -> compareOpened(a.entry, b.entry);
+        Collections.sort(board.needs, pinnedFirst); Collections.sort(board.active, pinnedFirst); Collections.sort(board.opened, opened);
         Collections.sort(board.pinned, open); Collections.sort(board.found, open); Collections.sort(board.recent, lately);
         return board;
     }

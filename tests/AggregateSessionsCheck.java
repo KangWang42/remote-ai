@@ -169,7 +169,13 @@ public final class AggregateSessionsCheck {
         require("a".equals(ids.apply(board.needs)), "only confirmation requests enter needs");
         require("past-2".equals(ids.apply(board.pinned)), "saved pinned records remain in pinned: " + ids.apply(board.pinned));
         require("c out".equals(ids.apply(board.active)), "pinned running tasks remain in the running group");
-        require("b 看日志 desk".equals(ids.apply(board.opened)), "waiting input and retained locks are opened");
+        require("b desk 看日志".equals(ids.apply(board.opened)), "desktop conversations precede idle phone terminals");
+        held.now = false;
+        held.used = 1000;
+        require("desk b 看日志".equals(ids.apply(AggregateSessions.board(things, "", "", "").opened)), "idle desktop conversations sort by recent use");
+        shell.pinned = true;
+        require("看日志 desk b".equals(ids.apply(AggregateSessions.board(things, "", "", "").opened)), "explicit pin remains first");
+        shell.pinned = false; held.used = 0; held.now = true;
         // an ended terminal whose conversation is listed is not listed twice; hidden history is left out
         require("past-1 只有画面的终端".equals(ids.apply(board.recent)) && !board.searched && board.found.isEmpty(), "what was used lately: " + ids.apply(board.recent));
         require("[claude, codex, shell]".equals(board.tools.toString()) && "[term, app]".equals(board.sources.toString()), board.tools + " " + board.sources);

@@ -437,12 +437,12 @@ final class Workbench {
             return;
         }
         section(attention, "等你确认", board.needs.size() + " 个", board.needs, board.needs.size(), several, null);
-        section(attention, "置顶记录", board.pinned.size() + " 个", board.pinned, board.pinned.size(), several, null);
         // Folded, the heading still says how many are at work.
         section(attention, "正在运行", board.active.size() + " 个", board.active, TASKS, several, "active");
         if (!folded("active") && board.active.size() > TASKS) attention.addView(kit.text("另外 " + (board.active.size() - TASKS) + " 个在各自的项目里。", 12.5f, kit.MUTED), kit.below(8));
         section(attention, "已打开", board.opened.size() + " 个 · 等待输入或已闲置", board.opened, TASKS, several, "opened");
         if (!folded("opened") && board.opened.size() > TASKS) attention.addView(kit.text("另外 " + (board.opened.size() - TASKS) + " 个可以搜索到，也在对应的项目里。", 12.5f, kit.MUTED), kit.below(8));
+        section(attention, "置顶记录", board.pinned.size() + " 个", board.pinned, board.pinned.size(), several, null);
         int shown = Math.min(recentOpen ? RECENT_ALL : RECENT, board.recent.size());
         section(recent, "最近", board.recent.size() + " 个", board.recent, shown, several, "recent");
         if (!board.recent.isEmpty() && !folded("recent") && board.recent.size() > RECENT) {
@@ -912,6 +912,7 @@ final class Workbench {
             else if (AggregateSessions.working(kind)) { work++; running.add(entry); }
             else { opened++; waiting.add(entry); }
         }
+        waiting.sort(AggregateSessions::compareOpened);
         boolean open = unfolded.contains(key);
         LinearLayout row = kit.row();
         row.setMinimumHeight(kit.dp(52)); row.setPadding(kit.dp(16), kit.dp(8), kit.dp(12), kit.dp(8));

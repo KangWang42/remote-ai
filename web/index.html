@@ -54,15 +54,11 @@
         <ul class="cards" id="results-list"></ul>
         <button type="button" id="more-results" class="quiet wide" hidden>显示更多</button>
       </section>
-      <!-- by what needs you: what waits for an answer, what you pinned, what is at work, what was used lately -->
+      <!-- Open conversations precede saved records. -->
       <div id="sections">
         <section id="needs" hidden>
           <div class="section-head"><h2>等你确认</h2><p id="needs-summary"></p></div>
           <ul class="cards" id="needs-list"></ul>
-        </section>
-        <section id="pinned" hidden>
-          <div class="section-head"><h2>置顶记录</h2><p id="pinned-summary"></p></div>
-          <ul class="cards" id="pinned-list"></ul>
         </section>
         <section id="active" hidden>
           <div class="section-head"><h2>正在运行</h2><p id="active-summary"></p></div>
@@ -71,6 +67,10 @@
         <section id="opened" hidden>
           <div class="section-head"><h2>已打开</h2><p id="opened-summary"></p></div>
           <ul class="cards" id="opened-list"></ul>
+        </section>
+        <section id="pinned" hidden>
+          <div class="section-head"><h2>置顶记录</h2><p id="pinned-summary"></p></div>
+          <ul class="cards" id="pinned-list"></ul>
         </section>
         <section id="recent" hidden>
           <div class="section-head"><h2>最近</h2><p id="recent-summary"></p></div>
