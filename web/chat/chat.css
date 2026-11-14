@@ -33,6 +33,7 @@ header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space:
 #said { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 14px 14px 18px; display: flex; flex-direction: column; gap: 12px;
   font-family: var(--read-font, inherit); font-size: var(--read-size, .95rem); line-height: var(--read-line, 1.62); }
 #said > * { min-width: 0; }
+#said { overflow-anchor: none; }
 #latest { position: absolute; right: 12px; bottom: 10px; min-height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel); font-size: .84rem; font-weight: 600; box-shadow: 0 4px 14px rgb(0 0 0 / .14); }
 .empty { margin: auto; color: var(--muted); text-align: center; font-size: .9rem; }
 .earlier { align-self: center; color: var(--muted); font-size: .78rem; }
@@ -43,6 +44,7 @@ header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space:
 .user.going { opacity: .6; }
 .user.failed { box-shadow: inset 0 0 0 1px var(--bad); }
 .user small { display: block; margin-top: 3px; color: var(--muted); font-size: .74rem; }
+.user button { display: block; min-height: 44px; margin-top: 4px; padding: 4px 0; text-decoration: underline; font-size: .84rem; }
 .text { overflow-wrap: anywhere; }
 .text.writing::after { content: ""; display: inline-block; width: .5em; height: 1em; margin-left: 2px; vertical-align: -.12em; background: var(--accent); opacity: .7; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -53,7 +55,7 @@ header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space:
 
 /* a step, as a terminal shows it: what it is, the command, and what it printed */
 .step { display: grid; gap: 4px; padding: 7px 10px 8px; border-radius: 11px; background: var(--panel); font-size: .84rem; line-height: 1.5; }
-.step > button { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; text-align: left; }
+.step > button { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; padding: 0; text-align: left; flex-wrap: wrap; }
 .step .mark { flex: none; width: 15px; height: 15px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; }
 .step.run .mark { border: 2px solid color-mix(in srgb, var(--busy) 35%, transparent); border-top-color: var(--busy); animation: spin .9s linear infinite; }
 .step.ok .mark { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
@@ -61,8 +63,9 @@ header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space:
 .step.fail .mark { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
 .step.fail .mark::before { content: "✕"; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.step .what { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.step .more { flex: none; color: var(--muted); font-size: .76rem; }
+.step .what { flex: 1; min-width: 0; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
+.step .more { color: var(--muted); font-size: .76rem; }
+@media (max-width: 430px) { .step .more { flex-basis: 100%; padding-left: 23px; } }
 .step code { display: block; font-family: var(--mono); font-size: .92em; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
 .step pre { margin: 0; padding: 6px 9px; border-radius: 8px; background: var(--bg); font-family: var(--mono); font-size: .9em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
 .step.shut pre, .step.shut code { display: none; }
@@ -105,12 +108,13 @@ header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space:
 @keyframes working { 50% { opacity: .35; } }
 #standing { font-weight: 600; color: var(--ink); }
 #clock { font-variant-numeric: tabular-nums; }
-#stop, #again { margin-left: auto; min-height: 34px; padding: 0 16px; border-radius: 10px; font-size: .86rem; font-weight: 600; }
+#stop, #again { margin-left: auto; min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: .86rem; font-weight: 600; }
 #stop { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
 #again { background: var(--accent); color: var(--on-accent); }
 #write { display: flex; align-items: flex-end; gap: 8px; padding: 6px 12px 10px; }
 #box { flex: 1; min-width: 0; min-height: 46px; max-height: 160px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); line-height: 1.5; resize: none; }
 #box:focus { border-color: var(--accent); outline: none; }
+#box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #send { flex: none; min-height: 46px; padding: 0 18px; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
 #go { flex: none; min-height: 46px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); font-weight: 600; }
 

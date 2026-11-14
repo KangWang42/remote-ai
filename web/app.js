@@ -389,19 +389,22 @@
     const script = el('script', { src: 'files/vendor/' + name, onload: done, onerror: failed });
     document.head.append(script);
   }));
-  async function writeSaid(box, messages, toolName, phoneTexts) {
+  async function writeSaid(box, messages, toolName, phoneTexts, cache) {
     let rich = false;
     try { await Promise.all([need('marked.min.js'), need('purify.min.js')]); rich = !!(window.marked && window.DOMPurify); } catch (error) { /* plain text then */ }
     const set = text => {
+      if (cache.has(text)) return cache.get(text).cloneNode(true);
       if (!rich) return el('div', { className: 'plain', textContent: text });
       // nothing that could act or load: no links to follow, no pictures, no forms, no styles of its own
       const html = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }),
         { FORBID_TAGS: ['style', 'form', 'button', 'textarea', 'select', 'input', 'img', 'a', 'iframe', 'video', 'audio'], FORBID_ATTR: ['style', 'href', 'src'] });
       const body = el('div', { className: 'md', html });
       body.querySelectorAll('table').forEach(table => { const wrap = el('div', { className: 'wide' }); table.replaceWith(wrap); wrap.append(table); });
+      cache.set(text, body.cloneNode(true));
       return body;
     };
     let run = null, last = '';
+    const keyed = (node, value) => { node.readKey = JSON.stringify(value); return node; };
     messages.forEach(m => {
       if (m.role === 'tool') {
         // The steps stand open, each as a terminal would show it: what it is, the command itself where it is told
@@ -411,23 +414,27 @@
           m.detail ? el('code', { className: 'ran', textContent: m.detail }) : '', m.result ? el('pre', { className: 'got', textContent: m.result }) : ''));
         run.count++;
         run.box.firstChild.textContent = '做了 ' + run.count + ' 个操作';
+        run.rows = (run.rows || []).concat(m);
+        keyed(run.box, run.rows);
         return;
       }
       run = null;
       // what the tool said of its work between its steps: a quieter line of its own, under the tool's name like its answers
       if (m.role === 'thought') {
-        box.append(el('div', { className: 'turn assistant thought' }, last !== 'assistant' ? el('b', { textContent: toolName }) : '', el('div', { className: 'plain', textContent: m.text }), m.truncated ? el('small', { className: 'quiet', textContent: '这段内容超长，剩余部分请在电脑上查看' }) : ''));
+        box.append(keyed(el('div', { className: 'turn assistant thought' }, last !== 'assistant' ? el('b', { textContent: toolName }) : '', el('div', { className: 'plain', textContent: m.text }), m.truncated ? el('small', { className: 'quiet', textContent: '这段内容超长，剩余部分请在电脑上查看' }) : ''), [m, last]));
         last = 'assistant';
         return;
       }
       const mine = m.role === 'user';
       const fromPhone = mine && phoneTexts && phoneTexts.has(String(m.text || '').trim());
-      box.append(el('div', { className: 'turn ' + (mine ? 'user' : 'assistant') },
+      box.append(keyed(el('div', { className: 'turn ' + (mine ? 'user' : 'assistant') },
         !mine && last !== 'assistant' ? el('b', { textContent: toolName }) : '', set(m.text),
         m.truncated ? el('small', { className: 'quiet', textContent: '这条消息超长，剩余部分请在电脑上查看' }) : '',
-        fromPhone ? el('small', { className: 'phone-delivery', textContent: '手机消息' }) : ''));
+        fromPhone ? el('small', { className: 'phone-delivery', textContent: '手机消息' }) : ''), [m, last, !!fromPhone]));
       last = m.role;
     });
+    const texts = new Set(messages.map(m => m.text));
+    for (const key of cache.keys()) if (!texts.has(key)) cache.delete(key);
   }
   // For how long: 0:07, 3:25, 1:02:10.
   const lasted = ms => { const s = Math.max(0, Math.floor(ms / 1000)), two = n => String(n).padStart(2, '0'); return s >= 3600 ? Math.floor(s / 3600) + ':' + two(Math.floor(s / 60) % 60) + ':' + two(s % 60) : Math.floor(s / 60) + ':' + two(s % 60); };
@@ -446,10 +453,14 @@
   async function takeOver(session) {
     if (!usable()) return false;
     const canPeek = (data.device.features || []).includes('peek');
-    let watch = 0;
+    let watch = 0, readingView;
     const choice = await openSheet((form, finish) => {
       const now = () => (data.sessions || []).find(s => s.id === session.id && s.tool === session.tool) || session;
       const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
+      const reader = readingView = new RemoteConversation.Reader(said), textCache = new Map();
+      const draft = new RemoteConversation.Draft(pendingKey(session));
+      said.style.overflowAnchor = 'none';
+      said.setAttribute('aria-label', '对话内容'); said.tabIndex = 0;
       const control = el('div', { className: 'control-mode', role: 'status' });
       const phoneTexts = new Set();
       // Stopping what it is at, the same for every tool: by its application's channel (the one turn that is named,
@@ -660,14 +671,12 @@
             record = got.messages || [];
             if (typeof got.asked === 'number') asked = got.asked;
             if (typeof got.updated === 'number') changed = got.updated;
-            const end = !read || atEnd(), was = said.scrollTop;
             const fresh = el('div');
             if (got.more) fresh.append(el('p', { className: 'earlier', textContent: '更早的内容在电脑上' }));
-            await writeSaid(fresh, record, TOOLS[session.tool], phoneTexts);
-            said.replaceChildren(...fresh.childNodes);
-            waiting();
-            said.scrollTop = end ? said.scrollHeight : was;      // what was said last is what one came to see; someone reading further up is left there
-            latest.hidden = atEnd();
+            await writeSaid(fresh, record, TOOLS[session.tool], phoneTexts, textCache);
+            if (!said.isConnected) return;
+            const initial = !read;
+            reader.paint(said, () => reader.change(() => { reader.replace(fresh); waiting(); latest.hidden = atEnd(); }, initial));
           }
           stamp = typeof got.stamp === 'string' ? got.stamp : null; seen = listed; read = true;
         } catch (error) { stands = null; readError = '对话同步中断，正在重试：' + error.message; if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
@@ -675,23 +684,26 @@
       }
       // ---- how it stands, what it asks, and the box
       const box = el('textarea', { rows: 1, maxLength: 8000, placeholder: '发消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
-      box.addEventListener('input', () => { box.style.height = 'auto'; box.style.height = Math.min(140, box.scrollHeight + 2) + 'px'; });
+      box.value = draft.get();
+      box.addEventListener('input', () => { draft.set(box.value); box.style.height = 'auto'; box.style.height = Math.min(140, box.scrollHeight + 2) + 'px'; });
       const send = el('button', { type: 'button', className: 'solid', textContent: '发送', onclick: async () => {
-        const text = box.value.trim();
+        const original = box.value, text = original.trim();
         if (send.disabled || !usable() || !can(now(), 'say') || now().ask) return;
         if (!text) return box.focus();
         stopSays('');
         // what is written stands in the window at once, as what the user said, while it is on its way
         const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false, createdAt: Date.now(), payload: { id: newId(), session: session.id, action: 'say', text } };
         if (wayOf(now(), 'say') === APP) mine.payload.transport = APP;
-        pending.push(mine); savePending(); box.value = ''; box.style.height = 'auto';
+        pending.push(mine); savePending(); draft.set(original);
         phoneTexts.add(text);
         waiting(); said.scrollTop = said.scrollHeight;
         sending = true; send.disabled = true; quick = Date.now() + 45000;
         // what was not sent goes back into the box, to be sent again or changed
-        if (!await deliver(mine)) { const index = pending.indexOf(mine); if (index >= 0) pending.splice(index, 1); savePending(); phoneTexts.delete(text); if (!box.value) { box.value = text; box.dispatchEvent(new Event('input')); } }
+        if (!await deliver(mine)) { const index = pending.indexOf(mine); if (index >= 0) pending.splice(index, 1); savePending(); phoneTexts.delete(text); }
+        else { draft.clear(original); if (box.value === original) { box.value = ''; box.style.height = 'auto'; } }
         sending = false; send.disabled = false; waiting(); refresh(); seen = ''; shown = ''; show();
       } });
+      box.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); send.click(); } });
       // a conversation that has stopped is most often told to go on: one press, beside what is typed
       const goOn = el('button', { type: 'button', className: 'go', textContent: '继续', hidden: true, onclick: () => { if (!box.value.trim()) { box.value = '继续'; send.click(); } else box.focus(); } });
       write.append(goOn, box, send);
@@ -753,6 +765,7 @@
       watch = setInterval(() => { if ($('sheet').open && (++ticks % 2 === 0 || Date.now() < quick)) show(); }, 500);
     }, true);
     clearInterval(watch);
+    if (readingView) readingView.dispose();
     if (choice && choice.handoff) { await views.together.handoff(choice.handoff); return false; }
     return choice ? into(choice.session, choice.value) : false;
   }

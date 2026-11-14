@@ -21,7 +21,7 @@ def main():
             assert apk.read('assets/web/' + name) == (root / 'web' / name).read_bytes(), name
         assert b'pond:' in apk.read('assets/web/terminal/skins.js')
         assert b'Copyright (c) 2026 stqfdyr' in apk.read('assets/web/themes/vendor/ascii-pond/LICENSE')
-        for name in ('terminal/index.html', 'chat/index.html', 'files/index.html', 'computer/index.html', 'themes/pond.js', 'themes/pond.css'):
+        for name in ('conversation.js', 'terminal/index.html', 'chat/index.html', 'files/index.html', 'computer/index.html', 'themes/pond.js', 'themes/pond.css'):
             assert name in entries, name
         for name in ('themes/assets/koi-amber.png', 'themes/assets/koi-pearl.png'):
             assert entries[name] == 'image/png', name

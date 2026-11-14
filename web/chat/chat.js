@@ -61,6 +61,12 @@
   }
   let canRich = false;
   function setText(node, text, writing) {
+    reader.paint(node, () => renderText(node, text, writing));
+  }
+  function renderText(node, text, writing) {
+    const mode = canRich && !(writing && text.length > 24000);
+    if (node.readText === text && node.readRich === mode) return;
+    node.readText = text; node.readRich = mode;
     // a long answer is set as plain text while it is written, and in full once it is
     if (!canRich || (writing && text.length > 24000)) { node.className = node.className.replace(/\bmd\b/, '').trim() + ' plain'; node.style.whiteSpace = 'pre-wrap'; node.textContent = text; return; }
     node.style.whiteSpace = '';
@@ -71,9 +77,24 @@
 
   // ---- what was said: the items by their id, in the order they came
   const said = $('said');
+  const reader = new RemoteConversation.Reader(said);
+  const draft = new RemoteConversation.Draft(location.pathname + ':' + new URLSearchParams(location.search).get('id'));
+  const pendingStore = new RemoteConversation.Draft(draft.key + ':delivery');
   let terminal = null, device = { online: true }, rest = '', items = new Map(), asks = new Map();
   let state = 'starting', since = 0, lastEnd = '', writing = '', lastError = '', drawn = false;
   const mine = new Map();        // what was written here and not given back yet, by the number it was sent under
+  try {
+    const pending = JSON.parse(pendingStore.get() || '[]');
+    if (Array.isArray(pending)) pending.forEach(p => {
+      if (p && /^[a-f0-9]{32}$/.test(p.id) && typeof p.text === 'string' && typeof p.draft === 'string' && p.draft.length <= 8000) {
+        mine.set(p.id, { id: p.id, text: p.text, draft: p.draft, state: ['accepted', 'rejected'].includes(p.state) ? p.state : 'unknown', error: p.error || '', node: null });
+      }
+    });
+  } catch (error) { /* an unreadable receipt does not prevent the conversation from loading */ }
+  function saveMine() {
+    const rows = Array.from(mine.values(), ({ id, text, draft, state, error }) => ({ id, text, draft, state, error }));
+    pendingStore.set(rows.length ? JSON.stringify(rows) : '');
+  }
   const OUT_MOST = 200000;
 
   function clear() {
@@ -81,7 +102,7 @@
     said.replaceChildren();
     mine.forEach(p => { p.node = null; });
   }
-  // A step: what it is, the command, what it printed; folded to its last lines once it has done well
+  // Successful steps collapse by default; explicit reading choices survive subsequent output.
   function stepNode(item) {
     const what = el('span', { className: 'what', textContent: item.text }), more = el('span', { className: 'more' });
     const head = el('button', { type: 'button', ariaExpanded: 'true' }, el('span', { className: 'mark', ariaHidden: 'true' }), what, more);
@@ -89,18 +110,21 @@
     const code = el('code', { textContent: item.detail || '', hidden: !item.detail || item.text.includes(item.detail) });
     const out = el('pre', { hidden: true });
     const node = el('div', { className: 'step run' }, head, code, out);
-    head.onclick = () => { item.open = !item.open; drawStep(item); };
+    head.onclick = () => { item.open = !stepOpen(item); reader.change(() => drawStep(item)); };
     Object.assign(item, { node, what, more, code, outNode: out, out: item.out || '' });
     return node;
   }
+  const stepOpen = item => item.open === undefined ? item.state !== 'ok' : item.open;
   function drawStep(item) {
     const lines = item.out ? item.out.replace(/\s+$/, '').split('\n') : [];
-    const folded = !item.open && item.state === 'ok' && lines.length > 4;
-    item.node.className = 'step ' + item.state;
-    item.outNode.hidden = !lines.length;
-    item.outNode.textContent = folded ? lines.slice(-4).join('\n') : item.out.replace(/\s+$/, '');
-    item.more.textContent = folded ? '共 ' + lines.length + ' 行' : '';
-    if (item.state === 'run' && !item.outNode.hidden) item.outNode.scrollTop = item.outNode.scrollHeight;
+    const open = stepOpen(item), end = item.outNode.scrollHeight - item.outNode.scrollTop - item.outNode.clientHeight < 40;
+    item.node.className = 'step ' + item.state + (open ? '' : ' shut');
+    item.node.firstChild.setAttribute('aria-expanded', String(open));
+    item.outNode.hidden = !open || !lines.length;
+    const output = item.out.replace(/\s+$/, '');
+    reader.paint(item.outNode, () => { if (item.outNode.textContent !== output) item.outNode.textContent = output; });
+    item.more.textContent = (item.state === 'run' ? '执行中' : item.state === 'fail' ? '未完成' : '已完成') + (lines.length ? ' · ' + lines.length + ' 行' : '') + (open ? ' · 收起' : ' · 展开');
+    if (end && !reader.selected(item.outNode) && item.state === 'run' && !item.outNode.hidden) item.outNode.scrollTop = item.outNode.scrollHeight;
   }
   function add(e) {
     let node;
@@ -108,7 +132,7 @@
     if (e.kind === 'user') {
       // what this page sent comes back from the tool: the bubble that waited for it is that message now
       const waiting = e.op && mine.get(e.op);
-      if (waiting) { mine.delete(e.op); if (waiting.node) waiting.node.remove(); }
+      if (waiting) { acknowledge(waiting); mine.delete(e.op); saveMine(); if (waiting.node) waiting.node.remove(); }
       node = el('div', { className: 'user', textContent: item.text });
     } else if (e.kind === 'text') {
       node = el('div', { className: 'text md' });
@@ -142,14 +166,12 @@
   function later(item) { dirty.add(item); if (!frame) frame = requestAnimationFrame(redraw); }
   function redraw() {
     frame = 0;
-    const end = atEnd();
-    dirty.forEach(item => {
+    reader.change(() => { dirty.forEach(item => {
       if (item.kind === 'step') drawStep(item);
       else if (item.kind === 'text') setText(item.node, item.text, item.id === writing);
       else item.node.textContent = item.text;
-    });
+    }); });
     dirty.clear();
-    if (end) toEnd();
   }
   function earlier(messages, more) {
     // what was said before it was gone on with here: above, as the conversation's window shows it
@@ -243,14 +265,14 @@
   }
 
   // ---- reading: the stay at the end while one is there
-  const atEnd = () => said.scrollHeight - said.scrollTop - said.clientHeight < 80;
+  const atEnd = () => reader.atEnd();
   const toEnd = () => { said.scrollTop = said.scrollHeight; $('latest').hidden = true; };
   said.addEventListener('scroll', () => { $('latest').hidden = atEnd(); }, { passive: true });
-  $('latest').onclick = () => said.scrollTo({ top: said.scrollHeight, behavior: 'smooth' });
+  $('latest').onclick = () => said.scrollTo({ top: said.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 
   // ---- what the bridge gives: the terminal, and the pieces of its output
   function receive(item) {
-    const end = !drawn || atEnd();
+    reader.change(() => {
     if (item.device) device = item.device;
     if (item.reset) clear();
     terminal = item.terminal || terminal;
@@ -271,31 +293,49 @@
     if (!drawn && !said.children.length) said.append(el('p', { className: 'empty', textContent: '发一句话开始' }));
     else if (said.children.length > 1) said.querySelectorAll('.empty').forEach(node => node.remove());
     drawn = true;
-    if (end) toEnd();
+    }, !drawn);
   }
 
   // ---- what is written here
   const box = $('box');
+  box.value = draft.get();
   function bubble(p) {
-    return el('div', { className: 'user going' + (p.failed ? ' failed' : ''), textContent: p.text, onclick: p.failed ? () => { box.value = box.value || p.text; grow(); p.node.remove(); mine.delete(p.id); } : null },
-      el('small', { textContent: p.failed ? '没有送出：' + p.failed + ' · 点一下放回输入框' : '正在送达' }));
+    const labels = { queued: '正在送达', retrying: '连接中断，正在确认送达', accepted: '已提交，等待对话接收', unknown: '送达结果未知，请先检查对话', rejected: '没有送出：' + (p.error || '') };
+    const node = el('div', { className: 'user going' + (p.state === 'rejected' || p.state === 'unknown' ? ' failed' : ''), textContent: p.text },
+      el('small', { textContent: labels[p.state] || labels.queued }));
+    if (p.state === 'rejected' || p.state === 'unknown') node.append(el('button', { type: 'button', textContent: p.state === 'unknown' ? '检查后重新编辑' : '重新编辑', onclick: () => {
+      const restore = () => {
+        if (box.value.trim() && box.value !== p.draft) return toast('输入框里还有未发送的文字，请先处理');
+        box.value = p.draft; draft.set(box.value); grow(); box.focus(); p.node.remove(); mine.delete(p.id); saveMine(); stands();
+      };
+      if (p.state === 'unknown') sheet('重新编辑这条消息？', '电脑可能已经收到，请先检查对话。再次发送会作为一条新消息。', [['已检查，重新编辑', restore, 'solid']]);
+      else restore();
+    } }));
+    return node;
+  }
+  function acknowledge(p) {
+    draft.clear(p.draft);
+    if (box.value === p.draft) { box.value = ''; grow(); }
   }
   function say(text) {
-    text = text.trim();
+    const original = text; text = text.trim();
     if (!text || !terminal || terminal.state === 'closed') return;
-    const p = { id: newId(), text };
+    if (Array.from(mine.values()).some(p => p.text === text)) return toast('这条消息正在确认送达，请先查看它的状态');
+    const p = { id: newId(), text, draft: original, state: 'queued' };
+    draft.set(box.value);
     mine.set(p.id, p);
+    saveMine();
     said.querySelectorAll('.empty').forEach(node => node.remove());
     p.node = bubble(p); said.append(p.node); toEnd();
     bridge().send({ id: p.id, action: 'say', text });
   }
   const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(160, box.scrollHeight + 2) + 'px'; stands(); };
-  box.addEventListener('input', grow);
+  box.addEventListener('input', () => { draft.set(box.value); grow(); });
   box.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('write').requestSubmit(); } });
   $('write').addEventListener('submit', event => {
     event.preventDefault();
     if (!box.value.trim()) return box.focus();
-    say(box.value); box.value = ''; grow();
+    say(box.value); grow();
   });
   $('go').onclick = () => say('继续');
   $('stop').onclick = () => { $('stop').disabled = true; bridge().send({ action: 'stop' }); setTimeout(() => { $('stop').disabled = false; }, 2500); };
@@ -311,6 +351,7 @@
     if (fill) fill(form);
     choices.forEach(([label, act, kind]) => form.append(el('button', { type: 'button', className: kind || '', textContent: label, onclick: () => { dialog.close(); act(); } })));
     form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => dialog.close() }));
+    dialog.setAttribute('aria-label', title);
     dialog.replaceChildren(form);
     dialog.showModal();
   }
@@ -354,23 +395,30 @@
     connection(info) {
       const link = $('link');
       link.hidden = info.state === 'connected' || info.state === 'paused' || (info.state === 'connecting' && !info.reconnects);
-      link.textContent = info.state === 'offline' ? '连接已断开' : '正在重新连接…';
+      link.textContent = info.state === 'offline' ? '连接已断开，已显示的内容和草稿保留' : '正在重新连接，已显示的内容和草稿保留…';
+    },
+    inputState(state, op, message) {
+      const p = op && mine.get(op.id);
+      if (!p) { if (message) toast(message); return; }
+      p.state = state; p.error = message || '';
+      saveMine();
+      if (state === 'accepted') acknowledge(p);
+      if (p.node) reader.change(() => { const next = bubble(p); p.node.replaceWith(next); p.node = next; });
     },
     inputError(message, typed, op) {
       if (op && op.action === 'say' && mine.has(op.id)) {
-        const p = mine.get(op.id);
-        p.failed = message;
-        if (p.node) { const fresh = bubble(p); p.node.replaceWith(fresh); p.node = fresh; }
+        window.TerminalUI.inputState('rejected', op, message);
         return;
       }
       if (op && op.action === 'answer') { answering.delete(op.ask); drawAsks(); }
       toast(message);
     },
-    dictated: text => { box.value += text; grow(); },
+    dictated: text => { box.value += text; draft.set(box.value); grow(); },
     skins: () => [], spacings: () => [], screenText: () => said.innerText
   };
   setInterval(() => { if (state === 'busy') $('clock').textContent = since ? lasted(Date.now() - since) : ''; }, 1000);
   paint();
+  grow();
   document.addEventListener('DOMContentLoaded', async () => {
     canRich = await richText();
     if (bridge()) bridge().ready();

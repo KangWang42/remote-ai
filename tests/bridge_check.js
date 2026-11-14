@@ -10,7 +10,7 @@ const terminalId = 'a'.repeat(32);
 const output = { t: 'out', terminal: { id: terminalId, state: 'running' }, chunks: [], after: 7 };
 
 function page(host = 'test.trycloudflare.com') {
-  const requests = [], sockets = [], timers = new Map(), received = [], errors = [], connections = [], listeners = {};
+  const requests = [], sockets = [], timers = new Map(), received = [], errors = [], connections = [], listeners = {}, deliveries = [];
   let counter = 0, now = 0;
   class Socket {
     static OPEN = 1;
@@ -42,7 +42,8 @@ function page(host = 'test.trycloudflare.com') {
     connection: info => connections.push({ ...info }),
     error: text => errors.push(text), inputError: text => errors.push(text) };
   vm.runInNewContext(source, context);
-  return { context, requests, sockets, received, errors, connections, listeners,
+  return { context, requests, sockets, received, errors, connections, listeners, deliveries,
+    trackDelivery() { context.TerminalUI.inputState = (state, op, message) => deliveries.push({ state, id: op.id, message }); },
     advance(ms) {
       now += ms;
       for (const [id, timer] of [...timers]) if (timer.at <= now && timers.has(id)) { timers.delete(id); timer.fn(); }
@@ -92,6 +93,7 @@ async function check() {
   assert.equal(reconnecting.connections.at(-1).reconnects, 1, 'retries during one outage must count only once');
 
   const old = page();
+  old.trackDelivery();
   old.context.ProjectTerminal.ready(); old.sockets[0].close(); old.advance(0);
   assert.match(old.requests[0].url, /&wait=20$/, 'quick tunnels must bypass unsupported SSE when WebSocket fails');
   assert.equal(old.connections.at(-1).transport, 'http');
@@ -107,10 +109,14 @@ async function check() {
   let request = old.requests.find(item => item.options.method === 'POST');
   const first = JSON.parse(request.options.body);
   request.reject(new Error('lost response')); await settle();
+  assert.equal(old.deliveries.at(-1).state, 'retrying');
+  assert.equal(old.errors.length, 0, 'a retried delivery must not be presented as rejected');
   old.context.ProjectTerminal.input('second');
   request = old.requests.filter(item => item.options.method === 'POST').at(-1);
   assert.deepEqual(JSON.parse(request.options.body), first, 'new input must not change an operation already sent');
   request.resolve({ status: 200, json: async () => ({ state: 'queued' }) }); await settle();
+  assert.equal(old.deliveries.at(-1).state, 'accepted');
+  assert.equal(old.deliveries.at(-1).id, first.id);
   const next = JSON.parse(old.requests.filter(item => item.options.method === 'POST').at(-1).options.body);
   assert.notEqual(next.id, first.id);
   assert.equal(next.data, 'second');

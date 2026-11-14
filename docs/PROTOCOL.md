@@ -542,6 +542,16 @@ program encrypts their words for the Windows account.
 
 ## Chats
 
+Client delivery presentation distinguishes queueing/retry, acceptance, rejection, and unknown outcome.
+An HTTP 5xx or a lost response may retry the existing operation ID and unchanged payload; it is not a
+definitive rejection. A successful terminal-operation acknowledgment may only mean the relay queued the
+operation, not that the computer or tool received it. The UI labels this as submitted, awaiting the
+conversation. The echoed user item reconciles by `op`. When the
+retry deadline expires after an attempted send, the outcome is unknown. The UI must not invite an
+unqualified new send. Page recreation retains that uncertainty and never automatically replays stored
+messages. Acknowledgments clear only the matching draft, preserving edits made while delivery was pending.
+These presentation rules do not change the wire format or the existing operation deduplication contract.
+
 A chat is a terminal whose program is not drawn on a screen: the computer runs Claude Code or Codex through the
 tool's own structured mode, and the terminal's output is the conversation's events, one JSON object a line. It is
 what the phone shows as a conversation (`web/chat/`; the terminal page hands such a terminal over to it), begun by

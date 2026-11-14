@@ -20,6 +20,10 @@
     } };
   const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const ui = () => window.TerminalUI;
+  function inputState(state, op, message = '') {
+    if (typeof ui().inputState === 'function') ui().inputState(state, op, message);
+    else if (message) ui().inputError(message, state === 'retrying' ? '' : op.data || '', op);
+  }
   const home = () => { location.replace('../'); };      // the list is one step back, not one more page
   // Opened from the app's workbench, the back arrow leads there again rather than to this computer's list.
   const fromBench = new URLSearchParams(location.search).get('from') === 'bench';
@@ -108,7 +112,7 @@
     ui().receive(item);
   }
   function resetPending() {
-    for (const op of queue) { clearTimeout(op.timer); op.inFlight = false; }
+    for (const op of queue) { clearTimeout(op.timer); op.inFlight = false; if (op.sent) inputState('retrying', op); }
   }
   function connectSocket() {
     if (gone || !loaded || document.hidden || socket) return;
@@ -148,6 +152,7 @@
         if (item.status >= 500) { socketMode = false; channel.close(); return; }
         queue.splice(at, 1);
         if (item.status !== 200 || item.state === 'error') ui().inputError(item.error || '操作没有执行', op.data || '', op);
+        else inputState('accepted', op);
         flush();
       }
     };
@@ -238,7 +243,7 @@
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       for (const op of [...queue]) {
         if (op.inFlight) continue;
-        if (Date.now() - op.at > 110000) { queue.splice(queue.indexOf(op), 1); ui().inputError('发送超时，请确认终端画面后重试', op.data || '', op); continue; }
+        if (Date.now() - op.at > 110000) { queue.splice(queue.indexOf(op), 1); inputState(op.sent ? 'unknown' : 'rejected', op, '发送超时，请确认终端画面后重试'); continue; }
         op.sent = true; op.inFlight = true;
         const { at, sent, inFlight, timer, ...payload } = op;
         const channel = socket;
@@ -249,7 +254,7 @@
       return;
     }
     const op = queue[0];
-    if (Date.now() - op.at > 110000) { queue.shift(); ui().inputError('发送超时，请确认终端画面后重试', op.data || '', op); return flush(); }
+    if (Date.now() - op.at > 110000) { queue.shift(); inputState(op.sent ? 'unknown' : 'rejected', op, '发送超时，请确认终端画面后重试'); return flush(); }
     sending = true; op.sent = true;
     let message = '', again = false;
     try {
@@ -259,7 +264,9 @@
     } catch (error) { again = true; message = '发送失败，正在重连'; }
     sending = false;
     if (!again) queue.shift();
-    if (message) ui().inputError(message, again ? '' : op.data || '', op);
+    if (again) inputState('retrying', op, message);
+    else if (message) ui().inputError(message, op.data || '', op);
+    else inputState('accepted', op);
     if (again) setTimeout(flush, 1000); else flush();
   }
 

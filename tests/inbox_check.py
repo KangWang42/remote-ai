@@ -588,8 +588,12 @@ def main():
         assert (state["kind"], state["words"]) in (("state busy", "正在执行"), ("state stopped", "已停下"), ("state waiting", "等你的消息")) and not state["latest"], state
         assert _re.fullmatch(r"\d+:\d\d(:\d\d)?", state["clock"]) if state["kind"] == "state busy" else ("前" in state["clock"] or state["clock"] == "刚刚"), state
         assert "end" in call("/api/terminal")["device"]["features"]
-        # while it works it can be told to stop, whatever its tool; one that has stopped has nothing to stop
-        assert state["stop"] == (state["kind"] == "state busy"), state
+        # Busy is not an interruption capability: only the computer's verified channel enables Stop.
+        capability = listed(IDLE)
+        stop_way = capability.get("ways", {}).get("stop", "")
+        assert state["stop"] == bool(stop_way and (stop_way != "codex-desktop" or capability.get("turn"))), (state, capability)
+        if state["kind"] == "state busy" and not stop_way:
+            assert page_value("!document.querySelector('#sheet .stop-note').hidden && !!document.querySelector('#sheet .stop-note').textContent")
         # a short window has nothing above to go to; made low, what was said scrolls, and the way back shows
         ask("Emulation.setDeviceMetricsOverride", width=412, height=420, deviceScaleFactor=2, mobile=True)
         page_value("(() => { const s = document.querySelector('#sheet .said'); s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); return 1; })()")

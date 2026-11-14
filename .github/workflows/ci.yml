@@ -71,6 +71,8 @@ jobs:
           java-version: "17"
       - name: source-level checks and the JVM fixtures
         run: |
+          node tools/sync_palettes.js --check
+          node tests/bridge_check.js
           python tests/workbench_ui_check.py
           python tests/android_update_check.py
           python tests/terminal_keys_check.py

@@ -24,6 +24,12 @@ Android 复用 WebView，但每次打开或重试页面都建立新的 `Connecti
 
 ## 组成
 
+`web/conversation.js` 为两种对话界面提供阅读位置保持、未变化节点复用、文字选择保护和按对话保存的页面会话草稿。传输和工具控制仍由各自模块负责。`web/terminal/bridge.js` 向对话页报告排队、重试、提交、拒绝或超时未知状态；提交回执只清除匹配的旧草稿，不覆盖后续输入。中转排队回执不表示电脑或工具已收到，正式消息按 `op` 回显后合并。页面恢复后保留未确认消息，但不自动重新提交。
+
+主题颜色以 `web/terminal/skins.js` 为来源，修改后运行 `node tools/sync_palettes.js` 生成 Android 的 `Palettes.java`。`node tools/sync_palettes.js --check` 核对两端一致，CI 同样运行此检查。Android 原生控件和内嵌页面继续使用各自的渲染方式。
+
+对话交互检查使用 `tests/chat_ui_check.py`，覆盖成功步骤展开、发送回执、草稿刷新、文字选择及 320、390、430、1440 像素布局；`tests/bridge_check.js` 验证重连沿用原操作编号，且重试不会被显示为明确拒绝。
+
 ```
 手机 App  ──HTTP(S)──▶  中转 relay（电脑上自带，或你自己的服务器）  ◀──HTTP(S)──  电脑端程序（运行终端）
 ```
