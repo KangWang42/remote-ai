@@ -1107,6 +1107,19 @@ class Pure(unittest.TestCase):
         self.assertEqual(agent.Schedules(path).all()[1]["next"], int((now + 1900 + 1800) * 1000))
         self.assertEqual(stat_mode(path), 0o600)
         self.assertTrue(kept.remove("a" * 32) and not kept.remove("a" * 32))
+        # a daily one on some days of the week: the first of them from then on (1 Monday to 7 Sunday)
+        today = datetime.datetime.fromtimestamp(now).isoweekday()
+        later = [(today + 2 - 1) % 7 + 1]
+        shown = agent.Schedules.shown(kept.set(dict(item("9", "daily"), days=later + later), now))
+        self.assertEqual((shown["days"], datetime.datetime.fromtimestamp(shown["next"] / 1000).isoweekday()), (later, later[0]))
+        self.assertEqual(agent.Schedules.shown(kept.set(dict(item("9", "daily"), days=list(range(1, 8))), now))["days"], [])      # all seven: every day
+        self.assertEqual(agent.Schedules.shown(kept.set(dict(item("9", "every"), days=[1]), now))["days"], [])
+        for wrong in ([0], [8], ["x"], [True]):
+            with self.assertRaisesRegex(agent.OpError, "星期"):
+                kept.set(dict(item("9", "daily"), days=wrong), now)
+        kept.set(dict(item("9", "daily"), days=[1, 3]), now)
+        self.assertEqual(next(one for one in agent.Schedules(path).all() if one["id"] == "9" * 32)["days"], [1, 3])      # kept as it was set
+        kept.remove("9" * 32)
 
         # what is said to a conversation is typed into the terminal of the phone's that runs it
         class Typed:
@@ -1135,6 +1148,12 @@ class Pure(unittest.TestCase):
             self.assertIn(part, said)
         with self.assertRaisesRegex(agent.OpError, "同一段"):
             one.owner_work("work_handoff", {"from": session, "from_tool": "claude", "to": session, "to_tool": "claude"}, {})
+        # what a hand-over says, without saying it: to be read first, or to begin a new conversation with
+        brief = one.owner_work("work_brief", {"from": other, "from_tool": "codex", "note": "看一下边界情况"}, {})
+        self.assertEqual((brief["tool"], brief["dir"], brief["title"], len(typed.got)), ("codex", "", "乙", 1))
+        self.assertEqual(brief["text"], said[len("\x1b[200~"):-len("\x1b[201~\r")])
+        with self.assertRaisesRegex(agent.OpError, "没有找到"):
+            one.owner_work("work_brief", {"from": "99999999-7777-8888-9999-000000000000", "from_tool": "codex"}, {})
         # a question that is due is typed there too, and how it went is kept
         shown = one.owner_work("work_schedule_set", {"item": item("e", "every", title="")}, {})["schedule"]
         self.assertEqual((shown["title"], shown["on"], shown["last"]), ("甲", True, None))

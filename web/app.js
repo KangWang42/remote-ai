@@ -147,18 +147,29 @@
     }));
   }
   // A question with a few answers, optionally with fields to fill in; resolves with the answer, or null when dismissed.
+  // It rises as the sheet of ui/sheet.js: a single answer that ends or saves something is its one button at the foot;
+  // several are rows with a mark for what each does, those that end or delete something apart at the end.
+  const MARK = { pin: 'pin', hide: 'hide', finish: 'stop', end: 'stop', handoff: 'hand', add: 'folder', enter: 'enter', delete: 'trash', remove: 'trash', rename: 'pen',
+    resume: 'term', chat: 'chat', 'chat-close': 'chat', close: 'term', copy: 'copy' };
   function ask(title, text, choices, fields) {
-    return openSheet((form, finish) => {
-      form.append(el('h3', { textContent: title }), text ? el('p', { textContent: text }) : '');
+    const kit = window.RemoteSheet.ui;
+    return window.RemoteSheet.open({ title, build(p) {
       const inputs = {};
+      const answer = c => p.sheet.close(fields ? Object.assign({ choice: c.value }, ...Object.keys(inputs).map(k => ({ [k]: inputs[k].value.trim() }))) : c.value);
+      const single = choices.length === 1 && (fields || choices[0].kind === 'danger' || choices[0].kind === 'solid');
+      if (text || (single && !fields)) p.body.append(kit.summary(text || title, choices.some(c => c.kind === 'danger') ? 'bad' : '', choices.some(c => c.kind === 'danger') ? 'stop' : 'spark'));
       (fields || []).forEach(f => {
-        inputs[f.key] = el('input', { id: 'field-' + f.key, value: f.value || '', placeholder: f.placeholder || '', maxLength: f.max || 240, autocapitalize: 'off', spellcheck: false });
-        form.append(el('label', { htmlFor: 'field-' + f.key, textContent: f.label }), inputs[f.key]);
+        inputs[f.key] = kit.input({ id: 'field-' + f.key, value: f.value || '', placeholder: f.placeholder || '', max: f.max || 240, label: f.label });
+        inputs[f.key].addEventListener('keydown', event => { if (event.key === 'Enter' && single) { event.preventDefault(); answer(choices[0]); } });
+        p.body.append(kit.section(f.label, inputs[f.key]));
+        setTimeout(() => { inputs[f.key].focus(); inputs[f.key].select(); }, 280);
       });
-      choices.forEach(c => form.append(el('button', { type: 'button', className: 'choice ' + (c.kind || ''), onclick: () =>
-        finish(fields ? Object.assign({ choice: c.value }, ...Object.keys(inputs).map(k => ({ [k]: inputs[k].value.trim() }))) : c.value) },
-        el('span', null, c.label, c.sub ? el('small', { textContent: c.sub }) : ''))));
-    });
+      if (single) { p.foot.append(kit.go(choices[0].label, async () => answer(choices[0]), { kind: choices[0].kind === 'danger' ? 'danger' : '', id: 'ask-go' }).button); return; }
+      const row = c => kit.row({ icon: MARK[c.value] || 'chev', tint: c.kind === 'danger' ? '' : MARK[c.value] === 'hand' ? 'claude' : 'muted', label: c.label, detail: c.sub || '', danger: false, act: () => answer(c) });
+      const plain = choices.filter(c => c.kind !== 'danger'), danger = choices.filter(c => c.kind === 'danger');
+      if (plain.length) p.body.append(kit.group(...plain.map(row)));
+      if (danger.length) p.body.append(kit.group(...danger.map(c => { const node = row(c); node.classList.add('warn'); return node; })));
+    } }, title).result;
   }
   function showLogin() {
     clearTimeout(timer);

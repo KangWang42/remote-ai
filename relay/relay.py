@@ -310,7 +310,7 @@ WAKE_SECONDS = 85       # a message that is handed to a conversation where it si
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
 # What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
 # it, the questions set to be asked at a time, and one conversation handed over to another.
-WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "chains", "chain_set", "chain_remove")
+WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "brief", "chains", "chain_set", "chain_remove")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
 REACH = ("say", "answer", "stop")
 # What is done to a terminal that runs a conversation through its tool's structured mode (form "chat"; docs/PROTOCOL.md,
@@ -1078,7 +1078,8 @@ class Relay:
 
     def work(self, payload, now=None, wait=FILE_SECONDS):
         """The owner's work on the computer: its numbers by day ("stats"), the questions set to be asked at a time
-        ("schedules", "schedule_set", "schedule_remove"), and a conversation handed over to another ("handoff").
+        ("schedules", "schedule_set", "schedule_remove"), a conversation handed over to another ("handoff"), and what such
+        a hand-over says ("brief"), to be read first or to begin a new conversation with.
         The computer keeps and does all of it; the relay checks the question, passes it on and keeps nothing."""
         now = time.time() if now is None else now
         if not isinstance(payload, dict):
@@ -1100,6 +1101,8 @@ class Relay:
             # (passing on when a conversation stops needs its tool's own word that it has: a computer says whether it has that)
             if action.startswith("chain") and "chains" not in self._device.get("features", []):
                 raise RemoteError("这台电脑的电脑端不支持接力")
+            if action == "brief" and "brief" not in self._device.get("features", []):
+                raise RemoteError("这台电脑的电脑端不支持交给新对话，请更新电脑端")
             listed = {s["id"]: s for s in self._sessions}
             # (a conversation in one of the phone's own terminals is open too: the computer types into that terminal)
             typed = {t.get("session") for t in self._state()["threads"].values() if t["state"] == "running" and t.get("session")}
@@ -1126,6 +1129,14 @@ class Relay:
                 # (the tool is the one the computer listed the conversation with, whatever the phone says)
                 question["item"] = {"id": item["id"], "session": of["id"], "tool": of["tool"], "text": text, "kind": kind, "on": item.get("on") is not False,
                                     "at": int(item["at"]) if kind == "once" else 0, "minutes": item["minutes"] if kind == "every" else 0, "time": item["time"] if kind == "daily" else ""}
+                # a daily one on some days of the week only: 1 Monday to 7 Sunday (a computer without the days asks every day)
+                days = item.get("days", [])
+                if not isinstance(days, list) or len(days) > 7 or any(type(day) is not int or not 1 <= day <= 7 for day in days) or len(set(days)) != len(days):
+                    raise RemoteError("星期无效")
+                if days and kind == "daily":
+                    if "schedule-days" not in self._device.get("features", []):
+                        raise RemoteError("这台电脑的电脑端不支持按星期提问，请更新电脑端")
+                    question["item"]["days"] = sorted(days)
             elif action == "schedule_remove":
                 if not isinstance(payload.get("schedule"), str) or not _id.fullmatch(payload["schedule"]):
                     raise RemoteError("定时提问无效")
@@ -1162,6 +1173,13 @@ class Relay:
                 question.update({"from": given["id"], "from_tool": given["tool"], "to": taking["id"], "to_tool": taking["tool"], "note": note})
                 if wait == FILE_SECONDS:
                     wait = WAKE_SECONDS         # (the one that takes over may have to be woken first)
+            elif action == "brief":
+                given, note = listed.get(payload.get("from")), payload.get("note", "")
+                if not given:
+                    raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
+                if not isinstance(note, str) or len(note) > 1000:
+                    raise RemoteError("补充说明需在 1000 字以内")
+                question.update({"from": given["id"], "from_tool": given["tool"], "note": note})
             return self._held(question, now, wait)
 
     def pull(self, payload, now=None):
@@ -1214,7 +1232,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "codex-desktop-control", "chat") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

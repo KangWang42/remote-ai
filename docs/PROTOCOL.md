@@ -149,8 +149,8 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work` and `chains`
-(the last two: "The owner's work", below). These are forwarded
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work`, `chains`, `brief` and `schedule-days`
+(the last four: "The owner's work", below). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 An agent verifies Codex's actual writer lock and process ownership before advertising takeover, then checks
 again before terminating the selected independent CLI. Shared app servers and phone descendants are protected.
@@ -484,12 +484,13 @@ on as the operation `work_<action>` and keeps nothing.
 | --- | --- | --- |
 | `stats` | `days` (1 to 90, 14 without it) | the numbers of the last `days` days, below |
 | `schedules` | none | `{"schedules": [...]}`: the questions set to be asked at a time |
-| `schedule_set` | `item`: `id` (16 to 32 hex digits; a known one is set anew), `session`, `text` (1 to 2,000 characters), `kind`, and for `once` `at` (milliseconds since 1970, later than now, within a year), for `daily` `time` (`"09:30"`, the computer's own time), for `every` `minutes` (5 to 10,080); optional `on` | `{"schedule": {...}}` |
+| `schedule_set` | `item`: `id` (16 to 32 hex digits; a known one is set anew), `session`, `text` (1 to 2,000 characters), `kind`, and for `once` `at` (milliseconds since 1970, later than now, within a year), for `daily` `time` (`"09:30"`, the computer's own time) and optional `days` (the days of the week it is asked on, 1 Monday to 7 Sunday, each once; none or all seven for every day; needs `schedule-days`), for `every` `minutes` (5 to 10,080); optional `on` | `{"schedule": {...}}` |
 | `schedule_remove` | `schedule`: its `id` | `{}` |
 | `chains` | none | `{"chains": [...]}`: what is passed on when a conversation stops |
 | `chain_set` | `item`: `id`, `from`, `to` (two different conversations the computer lists), `text` (1 to 1,000 characters), `rounds` (1 to 10) | `{"chain": {...}}` |
 | `chain_remove` | `chain`: its `id` | `{}` |
 | `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
+| `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
 
 The tool of each conversation named is the one the computer listed it with, whatever the phone says. A conversation
 counts as open when a program on the computer has it (`live`) or one of the phone's own terminals runs it.
@@ -533,6 +534,18 @@ rules, one each way, let two conversations go back and forth until their rounds 
 **A conversation handed over** (`handoff`): the computer reads `from` as the conversation's window does and writes
 `to` one message, in its owner's words: what was asked first and last (800 characters each), what was answered
 last (2,000), the last eight steps (160 each), and the note.
+
+**What a hand-over says** (`brief`, Windows program and Linux agent since the release after 1.7.15): the same
+message, given back to the phone instead of to a conversation. The phone shows it before it is given, and hands a
+conversation to a new one with it: `start` with `form: "chat"`, the tool chosen, `from`'s `dir`, and the message as
+`text` (at most 8,000 characters; the message is at most about 6,000). The new conversation is an ordinary chat;
+`from` is left as it was. A relay without `brief` refuses the action as unsupported, a computer without it is
+refused by the relay ("请更新电脑端").
+
+**Days of the week** (`schedule-days`, the same versions): a daily question with `days` is asked at its time on
+those days only; `next` is the first of them from now on. The phone offers the days only where the computer says
+`schedule-days`; the relay refuses `days` for a computer without it rather than let it ask every day. `days` is
+given back as set (an empty list for every day), for `daily` only.
 
 **How a conversation is told** any of this: one that runs in a terminal of the phone's has it typed there, as the
 operation `say` puts a message (pasted text, then Enter; not while its tool says that it asks a question). Any

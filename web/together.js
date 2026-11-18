@@ -1,27 +1,21 @@
-/* 协作: conversations working together. One conversation is handed over to another with what was asked and done in
-   it; one question is put to several at once; when a conversation stops, what it said last goes on to another (接力);
-   and a question is asked of a conversation at a set time. The computer keeps the rules and does the passing on
-   (docs/PROTOCOL.md, `/api/work`); this draws them and asks for them to be set. */
+/* 协作: conversations working together. One conversation is handed over to another AI, a new conversation or one
+   that is open, with what was asked and done in it; one question is put to several at once; when a conversation
+   stops, what it said last goes on to another (接力); and a question is asked of a conversation at a set time. The
+   computer keeps the rules and does the passing on (docs/PROTOCOL.md, `/api/work`); this draws them, and sets them
+   in sheets (ui/sheet.js; the hand-over and the questions at a time are ui/work.js, shared with each conversation's
+   own menu). */
 (() => {
   'use strict';
-  const page = window.RemoteCliPage, { $, el, svg, ICON, TOOLS, api, newId, toast, openSheet } = page;
+  const page = window.RemoteCliPage, { $, el, svg, ICON, TOOLS, api, newId, toast } = page;
+  const kit = window.RemoteSheet.ui;
   const box = $('together'), APP = 'codex-desktop', MOST_ROUNDS = [1, 2, 3, 5, 10];
-  const EVERY = [[5, '5 分钟'], [10, '10 分钟'], [15, '15 分钟'], [30, '30 分钟'], [60, '1 小时'], [120, '2 小时'], [240, '4 小时'], [480, '8 小时'], [720, '12 小时'], [1440, '1 天'], [10080, '7 天']];
-  const CLOCK = svg('<circle cx="12" cy="12" r="8.6"/><path d="M12 7.300V12l3.1 2"/>'), PAUSE = svg('<path d="M9 7v10M15 7v10"/>', 18), PLAY = svg('<path d="M9 6.500l8.5 5.500L9 17.500z"/>', 18);
+  const CLOCK = svg('<circle cx="12" cy="12" r="8.6"/><path d="M12 7.300V12l3.1 2"/>');
   const HAND = svg('<path d="M4 8.500h11.500M12 5l3.500 3.500L12 12M20 15.500H8.500M12 12l-3.500 3.500L12 19"/>'), MANY = svg('<path d="M4.500 6.500h15M4.500 12h15M4.500 17.500h9"/><circle cx="18" cy="17.500" r="1.6"/>');
+  const TEMPLATES = [['审查改动', '审查上述改动，指出影响正确性和使用体验的问题，并给出具体修改建议。'], ['补充测试', '根据上述实现补充有意义的测试，验证关键行为和失败路径。'], ['整理文档', '根据上述工作更新使用说明，写清功能、操作步骤和必要限制。']];
   let chains = null, schedules = null, asked = 0, asking = false, reload = false;
   const failures = { chains: '', schedules: '' }, changing = new Set();
 
   const work = (action, more) => api('api/work', Object.assign({ id: newId(), action }, more));
-  const two = n => String(n).padStart(2, '0');
-  // A moment, as one says it on the day: 今天 14:30, 明天 09:00, 10月15日 09:00.
-  function when(ms) {
-    const at = new Date(ms), now = new Date(), day = date => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-    const apart = Math.round((day(at) - day(now)) / 86400000), time = two(at.getHours()) + ':' + two(at.getMinutes());
-    return (apart === 0 ? '今天 ' : apart === 1 ? '明天 ' : apart === -1 ? '昨天 ' : (at.getMonth() + 1) + '月' + at.getDate() + '日 ') + time;
-  }
-  const every = minutes => (EVERY.find(one => one[0] === minutes) || [0, minutes % 60 ? minutes + ' 分钟' : minutes / 60 + ' 小时'])[1];
-  const stamped = ms => { const at = new Date(ms); return at.getFullYear() + '-' + two(at.getMonth() + 1) + '-' + two(at.getDate()) + 'T' + two(at.getHours()) + ':' + two(at.getMinutes()); };
 
   // ---- the conversations there are to choose from
   // Every conversation the computer lists: under the name its terminal has where one of the phone's runs it, by what
@@ -32,71 +26,32 @@
     return (data.sessions || []).map(s => {
       const t = terminals[s.terminal] || null;
       return { id: s.id, tool: s.tool, s, t, open: !!t || !!s.live, title: t ? t.title : s.title, place: s.dir || page.base(s.folder),
-        where: t ? TOOLS[s.tool] + ' · 手机终端' : page.whereOf({ s, tool: s.tool, live: !!s.live }), at: t ? t.phase_at || t.created : s.updated };
+        where: t ? TOOLS[s.tool] + (t.form === 'chat' ? ' · 手机对话' : ' · 手机终端') : page.whereOf({ s, tool: s.tool, live: !!s.live }), at: t ? t.phase_at || t.created : s.updated };
     }).sort((a, b) => (b.open - a.open) || b.at - a.at);
   }
   // whether something can be said to it now: a terminal that asks nothing, a conversation its tool lets be told
   const sayable = c => c.t ? page.phaseOf(c.t) !== 'confirm' : !!page.wayOf(c.s, 'say') && !c.s.ask;
   const titled = (id, kept) => { const now = page.data ? conversations().find(c => c.id === id) : null; return now ? now.title : kept || '已不在列表里的对话'; };
-  function chooser(id, list, chosen) {
-    const select = el('select', { id });
-    if (!list.some(c => c.id === chosen)) select.append(el('option', { value: '', textContent: '选择对话' }));
-    list.forEach(c => select.append(el('option', { value: c.id, disabled: !!c.unavailable, textContent: c.title + ' · ' + c.where + (c.place ? ' · ' + c.place : '') })));
-    select.value = list.some(c => c.id === chosen) ? chosen : '';
-    return select;
-  }
-  const field = (label, control) => el('label', { className: 'field' + (control.tagName === 'TEXTAREA' ? ' text-field' : ''), htmlFor: control.id }, el('span', { textContent: label }), control);
-  const fields = (...rows) => el('div', { className: 'fields' }, ...rows);
-  // one of a few, as a row of buttons
-  function seg(label, choices, chosen, changed) {
-    const group = el('span', { className: 'seg', role: 'group', ariaLabel: label });
-    choices.forEach(([value, text]) => group.append(el('button', { type: 'button', textContent: text, ariaPressed: String(value === chosen), onclick: event => {
-      group.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === event.currentTarget)));
-      changed(value);
-    } })));
-    return group;
-  }
-  // The button of a sheet that asks the computer for something: while it asks it says so; what the computer
-  // refuses is said above it, and the sheet stays as it was filled in.
-  function asker(label, busy, act) {
-    const said = el('p', { className: 'problem', role: 'alert' }), text = el('span', { textContent: label });
-    const button = el('button', { type: 'button', className: 'choice solid', onclick: async () => {
-      if (button.disabled) return;
-      said.textContent = '';
-      button.disabled = true; text.textContent = busy;
-      try { await act(problem => { throw new Error(problem); }); }
-      catch (error) { said.textContent = error.message; }
-      button.disabled = false; text.textContent = button.dataset.done ? '完成' : label;
-    } }, text);
-    return [said, button];
-  }
+  const actions = new window.RemoteWork({ base: '', toast, data: () => page.data, reload: () => page.refresh(), list: conversations, sayable });
   const ready = what => {
     if (!page.usable()) { toast('电脑离线，暂时不能' + what); return false; }
     if (!page.has('work')) { toast('电脑端版本不支持' + what + '，请更新电脑端'); return false; }
     return true;
   };
+  const glyph = c => c && (c.tool === 'claude' || c.tool === 'codex') ? c.tool : 'chat';
+  const tint = c => c && c.tool === 'claude' ? 'claude' : 'codex';
+  const fromOf = c => ({ id: c.id, tool: c.tool, title: c.title, dir: (c.s && c.s.dir) || '' });
 
-  // ---- one conversation handed over to another
-  // The computer reads the one that is given and writes the other what was asked first and last, what was answered
-  // last and done last, with what is added here. `from`: the conversation it starts from, where it is asked for there.
+  // ---- one conversation handed over to another AI (ui/work.js): from the one given, or one chosen first
   async function handoff(from) {
     if (!ready('交接')) return;
-    const all = conversations(), takers = all.filter(c => c.open && sayable(c));
-    if (all.length < 2 || !takers.length) return toast('需要另一段开着的对话来接手');
-    const given = from ? from.id : all.length === 2 ? all[0].id : '';
-    const taken = await openSheet((form, finish) => {
-      const source = chooser('handoff-from', all, given), taker = chooser('handoff-to', takers, (takers.find(c => c.id !== given && given) || {}).id || '');
-      const note = el('textarea', { id: 'handoff-note', rows: 3, maxLength: 1000, placeholder: '补充说明（可不填）', ariaLabel: '补充说明', autocapitalize: 'off', spellcheck: false });
-      form.append(el('h3', { textContent: '交接对话' }), el('p', { className: 'hint collab-intro', textContent: '立即把来源对话的上下文交给接手对话。原对话会保留；接手对话需能接收消息。' }), fields(field('从', source), field('交给', taker)), field('补充说明（可选）', note), ...asker('交接', '正在交接…', async refuse => {
-        if (!source.value || !taker.value) refuse('请选择两段对话');
-        if (source.value === taker.value) refuse('不能交接给同一段对话');
-        await work('handoff', { from: source.value, to: taker.value, note: note.value.trim() });
-        finish(taker.value);
-      }));
-    });
-    if (!taken) return;
-    toast('已交给“' + titled(taken) + '”');
-    page.refresh();
+    if (from) {
+      const c = conversations().find(one => one.id === from.id);
+      return actions.handoff(null, c ? fromOf(c) : { id: from.id, tool: from.tool, title: from.title, dir: from.dir || '' });
+    }
+    const all = conversations();
+    if (!all.length) return toast('电脑上还没有对话');
+    window.RemoteSheet.open(actions.pickPage('交接哪段对话', all, [], (ids, sheet) => { const c = all.find(one => one.id === ids[0]); actions.handoff(sheet, fromOf(c)); }));
   }
 
   // ---- one question put to several conversations at once
@@ -114,133 +69,111 @@
     const result = await api('api/conversation', payload);
     if (result.status === 'unknown') throw new Error('结果未知，请查看这段对话');
   }
-  async function askMany() {
+  function askMany() {
     if (!page.usable()) return toast('电脑离线，暂时不能发送');
     const list = conversations().filter(c => c.open && sayable(c));
     if (!list.length) return toast('没有可以发消息的对话');
-    const sent = await openSheet((form, finish) => {
+    const state = { chosen: new Set(), text: '', results: new Map(), done: false };
+    window.RemoteSheet.open({ title: '同时提问', build(p) {
       const rows = list.map(c => {
-        const check = el('input', { type: 'checkbox', id: 'many-' + c.id }), state = el('em');
-        return { c, check, state, row: el('label', { className: 'check', htmlFor: check.id }, check,
-          el('span', { className: 'text' }, el('b', { textContent: c.title }), el('small', { textContent: c.where + (c.place ? ' · ' + c.place : '') })), state) };
+        const result = state.results.get(c.id);
+        const row = kit.row({ icon: glyph(c), tint: tint(c), label: c.title, wrap: !!result, detail: result ? result.text : c.where + (c.place ? ' · ' + c.place : ''), checked: state.chosen.has(c.id), id: 'many-' + c.id,
+          act: () => { if (state.done) return; if (state.chosen.has(c.id)) state.chosen.delete(c.id); else state.chosen.add(c.id); p.refresh(); } });
+        row.setAttribute('role', 'checkbox');
+        if (result) row.querySelector('small').className = result.ok ? 'ok' : 'failed';
+        return row;
       });
-      const text = el('textarea', { id: 'many-text', rows: 3, maxLength: 8000, placeholder: '要问的话', ariaLabel: '要问的话', autocapitalize: 'off', spellcheck: false });
-      let done = -1;
-      const count = el('p', { className: 'hint collab-intro', role: 'status', textContent: '选择要接收同一问题的对话' });
-      rows.forEach(row => row.check.addEventListener('change', () => { count.textContent = '已选 ' + rows.filter(one => one.check.checked).length + ' 段对话'; }));
-      const [said, button] = asker('发送', '正在发送…', async refuse => {
-        if (done >= 0) return finish(done);
-        const chosen = rows.filter(row => row.check.checked), words = text.value.trim();
-        if (!chosen.length) refuse('请选择要问的对话');
-        if (!words) { text.focus(); return; }
-        rows.forEach(row => { row.check.disabled = true; });
-        text.readOnly = true;
-        let fine = 0;
-        await Promise.all(chosen.map(async row => {
-          row.state.className = ''; row.state.textContent = '发送中';
-          try { await sayTo(row.c, words); row.state.textContent = '已发送'; row.state.className = 'ok'; fine++; }
-          catch (error) { row.state.textContent = error.message; row.state.className = 'failed'; }
+      const sent = [...state.results.values()].filter(r => r.ok).length;
+      p.body.append(kit.section('发给', kit.group(...rows), state.done ? '已发送 ' + sent + ' / ' + state.results.size + ' 段。没有发出的，请查看后再单独发送，避免重复。' : '已选 ' + state.chosen.size + ' 段对话'));
+      const text = kit.area({ id: 'many-text', value: state.text, placeholder: '要问的话', max: 8000, rows: 3, label: '要问的话' }, value => { state.text = value; });
+      if (state.done) text.box.readOnly = true;
+      p.body.append(kit.section('问题', text));
+      const go = kit.go(state.done ? '完成' : state.chosen.size ? '发给 ' + state.chosen.size + ' 段对话' : '发送', async () => {
+        if (state.done) return p.sheet.close(sent);
+        const chosen = list.filter(c => state.chosen.has(c.id)), words = state.text.trim();
+        if (!chosen.length) throw new Error('请选择要问的对话');
+        if (!words) { text.box.focus(); throw new Error('请写下要问的话'); }
+        await Promise.all(chosen.map(async c => {
+          try { await sayTo(c, words); state.results.set(c.id, { ok: true, text: '已发送' }); }
+          catch (error) { state.results.set(c.id, { ok: false, text: error.message }); }
         }));
-        if (fine === chosen.length) return finish(fine);
+        const fine = chosen.filter(c => state.results.get(c.id).ok).length;
+        if (fine === chosen.length) { p.sheet.close(fine); toast('已发给 ' + fine + ' 段对话'); page.refresh(); return; }
         // where one could not be told, the sheet stays to say which and why
-        done = fine; button.dataset.done = 'true';
-        count.textContent = '已发送 ' + fine + ' / ' + chosen.length + ' 段。未确认成功的对话请查看下方结果，避免重复发送。';
-      });
-      form.append(el('h3', { textContent: '同时提问' }), count, el('div', { className: 'checks' }, ...rows.map(row => row.row)), field('同一个问题', text), said, button);
-    });
-    if (sent) { toast('已发给 ' + sent + ' 段对话'); page.refresh(); }
+        state.done = true; p.refresh();
+      }, { busy: '正在发送…', id: 'many-send' });
+      p.foot.append(...go.nodes);
+    } }, '同时提问');
   }
 
   // ---- 接力: when one conversation stops, what it said last goes to another, with these words
-  async function editChain(known) {
+  function editChain(known) {
     if (!ready('设置接力')) return;
     if (!page.has('chains')) return toast('这台电脑的电脑端不支持接力');
     const open = conversations().filter(c => c.open);
-    // one that is set stays in the choice, also when its conversation is not open now
-    const offered = side => {
-      const id = known ? known[side] : '';
-      return !id || open.some(c => c.id === id) ? open : open.concat(conversations().find(c => c.id === id) || { id, title: known[side + '_title'] || '原对话', where: '当前未打开', unavailable: true });
-    };
     if (!known && open.length < 2) {
       const tools = (((page.data || {}).device || {}).tools || []).filter(t => t !== 'shell').map(t => TOOLS[t] || t);
       return toast('先在这台电脑上打开两段对话' + (tools.length ? '（' + tools.join('、') + '）' : '') + '，再回来添加接力');
     }
-    const itemId = known ? known.id : newId();
-    let rounds = known ? known.rounds : 1;
-    const result = await openSheet((form, finish) => {
-      const first = chooser('chain-from', offered('from'), known ? known.from : open.length === 2 ? open[0].id : ''), then = chooser('chain-to', offered('to'), known ? known.to : open.length === 2 ? open[1].id : '');
-      const text = el('textarea', { id: 'chain-text', rows: 3, maxLength: 1000, placeholder: '要接手的对话做什么', ariaLabel: '要接手的对话做什么', autocapitalize: 'off', spellcheck: false, value: known ? known.text : '' });
-      const instructions = field('3. 让接手对话做什么', text); instructions.classList.add('chain-instructions');
-      const templates = el('div', { className: 'collab-presets', role: 'group', ariaLabel: '接力要求示例' });
-      [['审查改动', '审查上述改动，指出影响正确性和使用体验的问题，并给出具体修改建议。'], ['补充测试', '根据上述实现补充有意义的测试，验证关键行为和失败路径。'], ['整理文档', '根据上述工作更新使用说明，写清功能、操作步骤和必要限制。']].forEach(([label, words]) => templates.append(el('button', { type: 'button', textContent: label, onclick: () => {
-        const next = text.value.trim() ? text.value.trim() + '\n' + words : words;
-        if (next.length > text.maxLength) return toast('要求最多 1000 字，请先精简已有内容');
-        text.value = next; text.focus();
-      } })));
-      const details = el('details', { className: 'collab-help' }, el('summary', { textContent: '执行条件与次数说明' }), el('p', { className: 'hint', textContent: '先打开同一台电脑上的两段对话，并在电脑端开启“手机处理电脑上的对话”。每次触发消耗一次额度，失败也会记录并消耗。单条规则是单向转交；修改保存会重新开始计数。' }));
-      form.append(el('h3', { textContent: known ? '接力' : '添加接力' }), el('p', { className: 'hint collab-intro', textContent: '来源完成一轮 → 把最后的回答和要求发给接手对话。保存不会立即发送。' }), fields(field('1. 来源对话', first), field('2. 接手对话', then)), instructions, templates,
-        fields(el('div', { className: 'field chain-rounds' }, el('span', { textContent: '最多自动转交几次' }), seg('次数', MOST_ROUNDS.map(n => [n, String(n)]), rounds, value => { rounds = value; }))),
-        details,
-        ...asker('保存', '正在保存…', async refuse => {
-          if (!first.value || !then.value) refuse('请选择两段对话');
-          if (first.value === then.value) refuse('不能接力给同一段对话');
-          if (!text.value.trim()) { text.focus(); return; }
-          await work('chain_set', { item: { id: itemId, from: first.value, to: then.value, text: text.value.trim(), rounds } });
-          finish('saved');
-        }));
-      if (known) form.append(el('button', { type: 'button', className: 'choice danger', onclick: async () => {
-        try { await work('chain_remove', { chain: known.id }); finish('removed'); } catch (error) { toast(error.message); }
-      } }, el('span', { textContent: '删除' })));
-    });
-    if (result) { toast(result === 'removed' ? '已删除' : '已保存'); load(true); }
+    // the same number when a save is tried again, so that a lost answer does not make two rules
+    const rule = known ? { id: known.id, from: known.from, to: known.to, text: known.text, rounds: known.rounds }
+      : { id: newId(), from: open.length === 2 ? open[0].id : '', to: open.length === 2 ? open[1].id : '', text: '', rounds: 1 };
+    let confirmRemove = false;
+    // one that is set stays in the choice, also when its conversation is not open now
+    const offered = side => {
+      const id = rule[side];
+      return !id || open.some(c => c.id === id) ? open : open.concat(conversations().find(c => c.id === id) || { id, title: (known && known[side + '_title']) || '原对话', where: '当前未打开', unavailable: true });
+    };
+    const named = (id, side) => { const c = conversations().find(one => one.id === id); return c ? c : id ? { id, title: (known && known[side + '_title']) || '原对话', where: '当前未打开' } : null; };
+    window.RemoteSheet.open({ title: known ? '编辑接力' : '添加接力', build(p) {
+      const side = (key, label) => {
+        const c = named(rule[key], key);
+        return kit.row({ icon: c ? glyph(c) : 'chat', tint: c ? tint(c) : 'muted', id: 'chain-' + key, label: c ? c.title : '选择' + label, detail: c ? label + ' · ' + c.where : '', wrap: true,
+          go: () => p.sheet.push(actions.pickPage(label, offered(key), [rule[key]], ids => { rule[key] = ids[0]; p.sheet.goBack(); })) });
+      };
+      p.body.append(kit.section('对话', kit.group(side('from', '来源'), side('to', '接手')), '来源完成一轮后，把它最后的回答和下面的要求发给接手的对话'));
+      const text = kit.area({ id: 'chain-text', value: rule.text, placeholder: '要接手的对话做什么', max: 1000, rows: 3, label: '要接手的对话做什么' }, value => { rule.text = value; });
+      p.body.append(kit.section('让接手的对话做什么', [text, kit.chips(TEMPLATES.map(([label, words]) => [words, label]), {}, words => {
+        const next = text.box.value.trim() ? text.box.value.trim() + '\n' + words : words;
+        if (next.length > 1000) return toast('要求最多 1000 字，请先精简已有内容');
+        text.box.value = rule.text = next; text.grow(); text.box.focus();
+      })]));
+      p.body.append(kit.section('最多自动转交', kit.seg(MOST_ROUNDS.map(n => [n, n + ' 次']), rule.rounds, value => { rule.rounds = value; }, { label: '次数', full: true }), '每次转交用掉一次；改动后保存会重新计数'));
+      if (known && known.last) p.body.append(kit.note('上次 ' + page.ago(known.last.at) + ' · ' + known.last.note, known.last.ok ? '' : 'bad'));
+      const save = kit.go('保存', async () => {
+        if (!rule.from || !rule.to) throw new Error('请选择两段对话');
+        if (rule.from === rule.to) throw new Error('不能接力给同一段对话');
+        if (!rule.text.trim()) { text.box.focus(); throw new Error('请写下要接手的对话做什么'); }
+        await work('chain_set', { item: { id: rule.id, from: rule.from, to: rule.to, text: rule.text.trim(), rounds: rule.rounds } });
+        p.sheet.close('saved'); toast('已保存'); load(true);
+      }, { busy: '正在保存…', id: 'chain-save' });
+      p.foot.append(...save.nodes);
+      if (known) {
+        const remove = kit.go('删除', async () => {
+          if (!confirmRemove) { confirmRemove = true; remove.button.relabel('再按一次删除'); setTimeout(() => { confirmRemove = false; if (remove.button.isConnected) remove.button.relabel('删除'); }, 4000); return; }
+          await work('chain_remove', { chain: known.id });
+          p.sheet.close('removed'); toast('已删除'); load(true);
+        }, { busy: '正在删除…', kind: 'danger', id: 'chain-remove' });
+        p.foot.append(...remove.nodes);
+      }
+    } }, known ? '编辑接力' : '添加接力');
   }
 
-  // ---- a question asked at a set time
-  async function editSchedule(known) {
+  // ---- a question asked at a time (ui/work.js)
+  function editSchedule(known) {
     if (!ready('设置定时提问')) return;
     const open = conversations().filter(c => c.open);
-    const offered = known && !open.some(c => c.id === known.session) ? open.concat(conversations().find(c => c.id === known.session) || { id: known.session, title: known.title || '原对话', where: '当前未打开', unavailable: true }) : open;
-    if (!offered.length) return toast('需要一段开着的对话');
-    const itemId = known ? known.id : newId();
-    let kind = known ? known.kind : 'daily', on = known ? known.on : true;
-    const result = await openSheet((form, finish) => {
-      const target = chooser('schedule-session', offered, known ? known.session : offered.length === 1 ? offered[0].id : '');
-      const text = el('textarea', { id: 'schedule-text', rows: 3, maxLength: 2000, placeholder: '要问的话', ariaLabel: '要问的话', autocapitalize: 'off', spellcheck: false, value: known ? known.text : '' });
-      const once = el('input', { id: 'schedule-at', type: 'datetime-local', value: stamped(known && known.kind === 'once' && known.at > Date.now() ? known.at : Date.now() + 3600000) });
-      const daily = el('input', { id: 'schedule-time', type: 'time', value: known && known.time || '09:00' });
-      const gap = el('select', { id: 'schedule-minutes' }, ...EVERY.map(([minutes, label]) => el('option', { value: String(minutes), textContent: label })));
-      if (known && known.kind === 'every' && !EVERY.some(one => one[0] === known.minutes)) gap.append(el('option', { value: String(known.minutes), textContent: every(known.minutes) }));
-      gap.value = String(known && known.kind === 'every' ? known.minutes : 60);
-      const times = { once: field('时间', once), daily: field('时间', daily), every: field('间隔', gap) };
-      const show = () => Object.keys(times).forEach(key => { times[key].hidden = key !== kind; });
-      const flip = el('button', { type: 'button', className: 'flip', role: 'switch', ariaChecked: String(on), ariaLabel: '启用', onclick: () => { on = !on; flip.setAttribute('aria-checked', String(on)); } });
-      show();
-      form.append(el('h3', { textContent: known ? '定时提问' : '添加定时提问' }), el('p', { className: 'hint collab-intro', textContent: '到时间后由电脑发出提问，手机可以离线。电脑和目标对话须保持可用；每天的时间按电脑时区执行。' }), fields(field('对话', target)), field('要问的话', text),
-        fields(el('div', { className: 'field' }, el('span', { textContent: '重复' }), seg('重复', [['once', '一次'], ['daily', '每天'], ['every', '每隔']], kind, value => { kind = value; show(); })),
-          times.once, times.daily, times.every, known ? el('div', { className: 'field' }, el('span', { textContent: '启用' }), flip) : ''),
-        ...asker('保存', '正在保存…', async refuse => {
-          if (!target.value) refuse('请选择对话');
-          if (!text.value.trim()) { text.focus(); return; }
-          const item = { id: itemId, session: target.value, text: text.value.trim(), kind, on };
-          if (kind === 'once') { item.at = new Date(once.value).getTime(); if (!Number.isFinite(item.at)) refuse('请填写时间'); }
-          else if (kind === 'daily') { item.time = daily.value; if (!/^\d\d:\d\d$/.test(item.time)) refuse('请填写时间'); }
-          else item.minutes = Number(gap.value);
-          await work('schedule_set', { item });
-          finish('saved');
-        }));
-      if (known) form.append(el('button', { type: 'button', className: 'choice danger', onclick: async () => {
-        try { await work('schedule_remove', { schedule: known.id }); finish('removed'); } catch (error) { toast(error.message); }
-      } }, el('span', { textContent: '删除' })));
-    });
-    if (result) { toast(result === 'removed' ? '已删除' : '已保存'); load(true); }
+    if (!known && !open.length) return toast('需要一段开着的对话');
+    const only = !known && open.length === 1 ? open[0] : null;
+    window.RemoteSheet.open(actions.scheduleEditor(known || null, known ? null : { session: only ? only.id : '', title: only ? only.title : '', tool: only ? only.tool : '', choose: true }, () => load(true)));
   }
   // switched off or on from its card; a single one whose time has passed is given a new time in its sheet
-  async function flipSchedule(s) {
-    if (!ready('更改定时提问')) return;
+  async function flipSchedule(s, button) {
+    if (!ready('更改定时提问')) { button.setAttribute('aria-checked', String(s.on)); return; }
     if (changing.has(s.id)) return;
-    if (!s.on && s.kind === 'once' && s.at <= Date.now()) return editSchedule(s);
-    changing.add(s.id); draw();
-    try { await work('schedule_set', { item: { id: s.id, session: s.session, text: s.text, kind: s.kind, time: s.time, at: s.at, minutes: s.minutes, on: !s.on } }); }
+    if (!s.on && s.kind === 'once' && s.at <= Date.now()) { button.setAttribute('aria-checked', 'false'); return editSchedule(s); }
+    changing.add(s.id); button.disabled = true;
+    try { await work('schedule_set', { item: actions.itemOf(Object.assign({}, s, { on: !s.on })) }); }
     catch (error) { toast(error.message); }
     finally { changing.delete(s.id); await load(true); draw(); }
   }
@@ -267,41 +200,40 @@
   function chainCard(c) {
     const meta = el('span', { className: 'meta' }, el('span', { className: 'pill ' + (c.left > 0 ? 'starting' : 'ended'), textContent: c.left > 0 ? '还剩 ' + c.left + ' 次' : '已用完' }),
       el('span', { textContent: TOOLS[c.from_tool] + ' → ' + TOOLS[c.to_tool] }), c.last ? how(c.last) : '');
-    return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => editChain(c) },
+    return el('li', { className: 'card rule' }, el('button', { type: 'button', className: 'open', onclick: () => editChain(c) },
       el('span', { className: 'tool plain', html: ICON.together }),
       el('span', { className: 'text' }, el('b', { textContent: titled(c.from, c.from_title) + ' → ' + titled(c.to, c.to_title) }), meta, el('span', { className: 'peek', textContent: c.text })),
       el('span', { className: 'chev', html: ICON.chev })));
   }
   function scheduleCard(s) {
     const due = s.on && s.next > 0;
-    const meta = el('span', { className: 'meta' }, el('span', { className: 'pill ' + (due ? 'starting' : 'ended'), textContent: due ? '下次 ' + when(s.next) : s.kind === 'once' && s.last ? '已问过' : '已停用' }),
-      s.kind === 'once' ? '' : el('span', { textContent: s.kind === 'daily' ? '每天 ' + s.time : '每隔 ' + every(s.minutes) }),
-      el('span', { textContent: TOOLS[s.tool] + ' · ' + titled(s.session, s.title) }), s.last ? how(s.last) : '');
-    return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => editSchedule(s) },
-      el('span', { className: 'tool plain', html: CLOCK }), el('span', { className: 'text' }, el('b', { textContent: s.text }), meta)),
-      el('button', { type: 'button', className: 'side', disabled: changing.has(s.id), ariaLabel: changing.has(s.id) ? '正在保存' : s.on ? '停用' : '启用', html: s.on ? PAUSE : PLAY, onclick: () => flipSchedule(s) }));
+    const meta = el('span', { className: 'meta' }, el('span', { className: 'pill ' + (due ? 'starting' : 'ended'), textContent: due ? '下次 ' + window.RemoteWork.when(s.next) : s.kind === 'once' && s.last ? '已问过' : '已停用' }),
+      s.kind === 'once' ? '' : el('span', { textContent: window.RemoteWork.howOften(s) }));
+    const flip = kit.toggle(s.on, (on, button) => flipSchedule(s, button), s.on ? '停用' : '启用');
+    flip.disabled = changing.has(s.id);
+    return el('li', { className: 'card rule' + (due ? '' : ' off') }, el('button', { type: 'button', className: 'open', onclick: () => editSchedule(s) },
+      el('span', { className: 'tool plain', html: CLOCK }),
+      el('span', { className: 'text' }, el('b', { textContent: s.text }), meta, el('span', { className: 'peek', textContent: TOOLS[s.tool] + ' · ' + titled(s.session, s.title) + (s.last ? ' · 上次 ' + page.ago(s.last.at) + ' ' + s.last.note : '') }))),
+      el('span', { className: 'switch' }, flip));
   }
-  const adding = (label, act) => el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', onclick: act, html: ICON.plus + '<span>' + label + '</span>' }));
+  const adding = (label, act, id) => el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', id, onclick: act, html: ICON.plus + '<span>' + label + '</span>' }));
 
   const parts = {};
   function build() {
-    const act = (id, label, hint, icon, run) => el('button', { type: 'button', id, onclick: run }, el('span', { className: 'tool plain', html: icon }), el('span', { className: 'collab-action' }, el('b', { textContent: label }), el('small', { textContent: hint })));
+    const act = (id, label, hint, icon, tone, run) => el('button', { type: 'button', id, className: 'act ' + tone, onclick: run }, el('span', { className: 'tool plain', html: icon }), el('span', { className: 'collab-action' }, el('b', { textContent: label }), el('small', { textContent: hint })));
     parts.notice = el('section', { className: 'notice plain', hidden: true });
     parts.chains = el('ul', { className: 'cards' }); parts.schedules = el('ul', { className: 'cards' });
     parts.chainCount = el('p'); parts.scheduleCount = el('p');
     parts.chainStatus = el('p', { className: 'hint', role: 'status' }); parts.scheduleStatus = el('p', { className: 'hint', role: 'status' });
     parts.passing = el('section', { id: 'chains' }, el('div', { className: 'section-head' }, el('h2', { textContent: '自动接力' }), parts.chainCount), parts.chainStatus, parts.chains);
-    parts.lists = el('div', null, parts.passing,
-      el('section', { id: 'schedules' }, el('div', { className: 'section-head' }, el('h2', { textContent: '定时提问' }), parts.scheduleCount), parts.scheduleStatus, parts.schedules));
-    function actionGroup(title, first, second) {
-      return el('section', { className: 'action-group' }, el('h2', { textContent: title }),
-        el('div', { className: 'acts collaboration-actions' }, first, second));
-    }
-    box.append(actionGroup('立即协作', act('handoff', '交接对话', '立即交出上下文', HAND, () => handoff()),
-      act('ask-many', '同时提问', '同一个问题发给多段对话', MANY, () => askMany())),
-      actionGroup('自动安排', act('add-chain', '添加接力', '完成一轮后自动转交', ICON.together, () => editChain()),
-        act('add-schedule', '定时提问', '在指定时间发起提问', CLOCK, () => editSchedule())),
-      el('p', { className: 'hint collab-context', textContent: '协作在这台电脑上执行。电脑保持运行，手机可以离线。' }), parts.notice, parts.lists);
+    parts.lists = el('div', null,
+      el('section', { id: 'schedules' }, el('div', { className: 'section-head' }, el('h2', { textContent: '定时提问' }), parts.scheduleCount), parts.scheduleStatus, parts.schedules), parts.passing);
+    box.append(el('div', { className: 'acts collaboration-actions' },
+      act('handoff', '交给另一个 AI', '新对话或开着的对话接着做', HAND, 'hand', () => handoff()),
+      act('ask-many', '同时提问', '一个问题发给几段对话', MANY, 'many', () => askMany()),
+      act('add-schedule', '定时提问', '到时间由电脑替你问', CLOCK, 'time', () => editSchedule()),
+      act('add-chain', '自动接力', '做完一轮自动转交', ICON.together, 'relay', () => editChain())),
+      parts.notice, parts.lists);
   }
   function fill(list, cards, signature) {
     if (list.dataset.signature === signature) return;
@@ -320,12 +252,13 @@
     parts.passing.hidden = !page.has('chains');
     // (the minute is part of what a card is known by: "3 分钟前" and "下次 今天 14:30" move on)
     const tick = Math.floor(Date.now() / 60000), names = (page.data.sessions || []).map(s => s.id + s.title).join();
-    fill(parts.chains, (chains || []).map(chainCard).concat(adding('添加接力', () => editChain())), JSON.stringify([chains, tick, names]));
-    fill(parts.schedules, (schedules || []).map(scheduleCard).concat(adding('添加定时提问', () => editSchedule())), JSON.stringify([schedules, tick, names, [...changing]]));
+    fill(parts.chains, (chains || []).map(chainCard).concat(adding('添加接力', () => editChain(), 'chain-new')), JSON.stringify([chains, tick, names]));
+    fill(parts.schedules, (schedules || []).map(scheduleCard).concat(adding('添加定时提问', () => editSchedule(), 'schedule-new')), JSON.stringify([schedules, tick, names, [...changing]]));
     parts.chainCount.textContent = chains && chains.length ? chains.filter(c => c.left > 0).length + ' 条待触发 / ' + chains.length + ' 条' : '';
     parts.scheduleCount.textContent = schedules && schedules.length ? schedules.filter(s => s.on && s.next > 0).length + ' 个待执行 / ' + schedules.length + ' 个' : '';
-    parts.chainStatus.textContent = failures.chains ? '读取失败，请重试；显示上次读取的规则。' : chains === null ? '正在读取接力…' : chains.length ? '来源完成一轮后自动转交，点击规则可编辑。' : '还没有接力。可以让 Claude Code 完成实现后，交给 Codex 审查。';
-    parts.scheduleStatus.textContent = failures.schedules ? '读取失败，请重试；显示上次读取的安排。' : schedules === null ? '正在读取定时提问…' : schedules.length ? '点击编辑，右侧可直接启用或停用。' : '还没有安排。添加一个问题，让电脑到时间再问。';
+    parts.chainStatus.textContent = failures.chains ? '读取失败，请重试；显示上次读取的规则。' : chains === null ? '正在读取接力…' : chains.length ? '' : '还没有接力。可以让 Claude Code 做完实现后，交给 Codex 审查。';
+    parts.scheduleStatus.textContent = failures.schedules ? '读取失败，请重试；显示上次读取的安排。' : schedules === null ? '正在读取定时提问…' : schedules.length ? '' : '还没有安排。到时间由电脑替你发出，手机可以离线。';
+    parts.chainStatus.hidden = !parts.chainStatus.textContent; parts.scheduleStatus.hidden = !parts.scheduleStatus.textContent;
     launchWanted();
   }
 

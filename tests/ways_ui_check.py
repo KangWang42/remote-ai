@@ -254,15 +254,15 @@ def main():
             overview()
             before = len(asked)
             value("document.querySelector('.end-session').click()")
-            until("document.querySelector('#sheet[open] button.danger') !== null")
+            until("document.querySelector('dialog.rs[open] .rs-go.danger') !== null")
             assert len(asked) == before
             picture('card-end-confirm.png')
-            value("document.querySelector('#sheet button.cancel').click()")
-            until("!document.getElementById('sheet').open")
-            assert len(asked) == before, 'cancel never submits an end operation'
+            value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+            until("!document.querySelector('dialog.rs')")
+            assert len(asked) == before, 'closing never submits an end operation'
             value("document.querySelector('.end-session').click()")
-            until("document.querySelector('#sheet[open] button.danger') !== null")
-            value("document.querySelector('#sheet button.danger').click()")
+            until("document.querySelector('dialog.rs[open] .rs-go.danger') !== null")
+            value("document.querySelector('dialog.rs .rs-go.danger').click()")
             until("document.querySelector('.end-session')?.disabled === true")
             value("document.querySelector('.end-session').click()")
             until("document.querySelectorAll('.end-session').length === 0")
@@ -281,8 +281,10 @@ def main():
             until("document.querySelector('#sheet .said').textContent.includes('已排队，它做完手头这一步后收到')", 'what was said is left for it')
             assert asked[-1] == {'id': asked[-1]['id'], 'session': CLAUDE, 'action': 'say', 'text': '做完这一步后看这里'}, asked[-1]
             assert not value("document.querySelector('#sheet .said').textContent.includes('查询发送结果')"), 'nothing is asked after: its hooks have said that they took it'
+            # (how a stop went is said in the line above the box, since 1.7.12)
+            stop_note = "(n => n && !n.hidden ? n.textContent : '')(document.querySelector('#sheet .stop-note'))"
             value(button('停止回答') + '.click()')
-            until(toast + ".includes('已告诉它停止')", 'told to stop through its hooks')
+            until(stop_note + ".includes('已请求停止')", 'told to stop through its hooks')
             assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': CLAUDE, 'action': 'stop', 'transport': 'hook'}, asked[-1]
             # what the computer refuses was not sent: it stands in the box again, and no line of it is left above
             refuse[0] = True
@@ -310,17 +312,18 @@ def main():
             assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': CLAUDE, 'action': 'release'}, asked[-1]
             sessions[0]['queued'] = []
 
-            # ---- Codex's command line, at work: the same line and the same buttons; stopping says why, and offers to end it
+            # ---- Codex's command line, at work: its answer cannot be stopped from outside (since 1.7.12 no stop is offered
+            # for it), and the whole conversation can be ended, asked once
             window(CLI)
-            assert shown('停止回答') and shown('结束') and not value("document.querySelector('#sheet .write').hidden"), 'the same controls as Claude Code has'
+            assert not shown('停止回答') and shown('结束') and not value("document.querySelector('#sheet .write').hidden"), 'no stop that cannot work; the end and the box'
             before = len(asked)
-            value(button('停止回答') + '.click()')
-            until("document.querySelector('#sheet-form .confirm')?.textContent.includes('Codex 命令行的回答不能从外面单独停止')", 'the reason, and the question whether to end it')
-            assert value("document.querySelector('#sheet-form .confirm').textContent.includes('结束电脑上的这段对话')") and len(asked) == before, 'nothing is done before its owner says so'
+            value(button('结束') + '.click()')
+            until("document.querySelector('#sheet-form .confirm')?.textContent.includes('结束电脑上的这段对话')", 'asked whether to end it')
+            assert len(asked) == before, 'nothing is done before its owner says so'
             picture('codex-cli-stop.png')
             value("document.querySelector('#sheet-form .confirm button.see').click()")
             assert len(asked) == before and value("document.querySelector('#sheet').open"), 'not ended when that is not wanted'
-            value(button('停止回答') + '.click()')
+            value(button('结束') + '.click()')
             until("document.querySelector('#sheet-form .confirm') !== null")
             value("document.querySelector('#sheet-form .confirm button.no').click()")
             until(toast + ".includes('已结束电脑上的这段对话')", 'ended on the computer')
@@ -333,7 +336,7 @@ def main():
             until("document.querySelector('#sheet .said').textContent.includes('已排队，它做完手头这一步后收到')")
             assert 'transport' not in asked[-1] and asked[-1]['action'] == 'say', asked[-1]
             value(button('停止回答') + '.click()')
-            until(toast + ".includes('已停止本次回答')", 'stopped by the application')
+            until(stop_note + ".includes('已停止本次回答')", 'stopped by the application')
             assert {k: v for k, v in asked[-1].items() if k != 'id'} == {'session': APP, 'action': 'stop', 'turn': 'turn-7', 'transport': 'codex-desktop', 'receipt': False}, asked[-1]
 
             # ---- one that cannot be told anything: the computer's words why, and no box
@@ -356,7 +359,7 @@ def main():
                                ways={'say': 'codex-desktop', 'stop': 'codex-desktop', 'answer': '', 'end': ''})
             window(OUTSIDE)
             value(button('停止回答') + '.click()')
-            until(toast + ".includes('已停止本次回答')")
+            until(stop_note + ".includes('已停止本次回答')")
             assert forwarded[-1]['dir'] == '' and forwarded[-1]['action'] == 'session_stop', forwarded[-1]
 
             # ---- a relay of an earlier version passes neither the ways nor the reasons on: the one way it names is taken
@@ -364,11 +367,11 @@ def main():
                 s.pop('ways'); s.pop('why')
             window(CLAUDE)
             value(button('停止回答') + '.click()')
-            until(toast + ".includes('已告诉它停止')")
+            until(stop_note + ".includes('已请求停止')")
             assert asked[-1]['transport'] == 'hook' and asked[-1]['action'] == 'stop', asked[-1]
             window(APP)
             value(button('停止回答') + '.click()')
-            until(toast + ".includes('已停止本次回答')")
+            until(stop_note + ".includes('已停止本次回答')")
             assert asked[-1]['transport'] == 'codex-desktop' and asked[-1]['turn'] == 'turn-7', asked[-1]
 
             # ---- a new conversation in a desktop application: each tool's own, offered alike

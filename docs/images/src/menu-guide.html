@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>对话右上角的菜单</title>
+<link rel="stylesheet" href="figure.css">
+<!-- The three pictures are drawn by tests/menus_ui_check.py (menu-chat.png, menu-handoff.png, menu-schedule-editor.png)
+     and kept here as menu.png, menu-handoff.png and menu-schedule.png. -->
+<style>
+  .row { display: flex; gap: 34px; align-items: flex-start; }
+  .one { display: grid; gap: 18px; width: 410px; }
+  .one p { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.65; }
+  .one b { display: block; color: var(--ink); font-size: 19px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<main data-width="1360">
+  <div class="sheet">
+    <div class="row">
+      <div class="one">
+        <div class="phone"><div class="shot"><img src="../menu.png" alt=""></div></div>
+        <p><b>一块面板，分步进入</b>对话页和终端页右上角“⋯”：顶部是这段对话，下面是交给 AI、定时提问、项目文件和复制，再往下是重命名和阅读设置，选了立刻生效。</p>
+      </div>
+      <div class="one">
+        <div class="phone"><div class="shot"><img src="../menu-handoff.png" alt=""></div></div>
+        <p><b>交给另一个 AI</b>新开一段 Claude Code 或 Codex 对话，或交给开着的对话；电脑整理好交接内容，可以先预览、加一句补充说明，手机随即进入新对话。</p>
+      </div>
+      <div class="one">
+        <div class="phone"><div class="shot"><img src="../menu-schedule.png" alt=""></div></div>
+        <p><b>定时提问</b>写下要问的话，选一次、每天或间隔；每天可以只在工作日、周末或任意几天，下方直接写出下次提问的时间。</p>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

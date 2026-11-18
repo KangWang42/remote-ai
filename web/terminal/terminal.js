@@ -13,6 +13,7 @@
   try { await Promise.race([Promise.all([document.fonts.load('13px "Terminal Mono"'), document.fonts.load('bold 13px "Terminal Mono"')]), new Promise(done => setTimeout(done, 900))]); } catch (error) { /* system monospace */ }
 
   const sizes = [11, 13, 15, 17];
+  let noticeTimer = 0;
   // Room between the lines: closer shows more of the screen, wider is easier on the eyes.
   const SPACING = { tight: ['紧凑', 1.0], cozy: ['适中', 1.12], roomy: ['宽松', 1.3] };
   let spacing = bridge && bridge.spacing && SPACING[bridge.spacing()] ? bridge.spacing() : 'cozy';
@@ -656,6 +657,11 @@
       input.value = (input.value + gap + text).slice(0, 8000);
       grow(); drawPalette();
     },
+    // a word for a moment, under the screen (what was copied, why a choice cannot be made)
+    notice(text) { notice.textContent = text; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { if (notice.textContent === text) notice.textContent = ''; }, 3500); },
+    fontSizes() { return sizes.slice(); },
+    fontSize() { return fontSize; },
+    setFontSize(size) { if (!sizes.includes(size)) return; fontSize = size; term.options.fontSize = size; if (bridge) bridge.saveFontSize(size); resize(); },
     skins() { return Object.keys(SKINS).map(key => ({ key, name: SKINS[key].name + (SKINS[key].light ? '（明亮）' : ''), current: key === skin })); },
     spacings() { return Object.keys(SPACING).map(key => ({ key, name: SPACING[key][0], current: key === spacing })); },
     setSpacing(name) { if (!SPACING[name]) return; spacing = name; term.options.lineHeight = SPACING[name][1]; resize(); },

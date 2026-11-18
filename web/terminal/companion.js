@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const id = new URLSearchParams(location.search).get('id') || '';
-  const TOOLS = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', shell: 'PowerShell' };
+  const TOOLS = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', pi: 'Pi', shell: '终端' };
   const PHASE = { confirm: ['等你确认', 0], done: ['已完成', 1], busy: ['正在执行', 2], starting: ['正在启动', 3], idle: ['等待输入', 4] };
   const load = () => { try { return JSON.parse(localStorage.getItem('rcli-seen') || '{}') || {}; } catch (error) { return {}; } };
   const save = map => { try { localStorage.setItem('rcli-seen', JSON.stringify(map)); } catch (error) { /* private window */ } };
@@ -35,27 +35,18 @@
     bar.hidden = false;
   }
 
-  // ---- the sheet for switching
+  // ---- the sheet for switching (../ui/sheet.js)
   function switcher() {
-    let dialog = document.getElementById('rcli-switch');
-    if (!dialog) { dialog = document.createElement('dialog'); dialog.id = 'rcli-switch'; dialog.className = 'sheet'; document.body.append(dialog); dialog.onclick = event => { if (event.target === dialog) dialog.close(); }; }
-    dialog.textContent = '';
-    dialog.append(Object.assign(document.createElement('h2'), { textContent: '切换终端' }));
-    const list = others();
-    if (!list.length) dialog.append(Object.assign(document.createElement('p'), { textContent: '没有别的终端在运行。回到列表可以新建或继续一段对话。' }));
-    list.forEach(t => {
-      const row = document.createElement('button');
-      row.type = 'button'; row.className = 'row';
-      const text = document.createElement('span');
-      text.append(Object.assign(document.createElement('b'), { textContent: t.title }), Object.assign(document.createElement('small'), { textContent: t.dir + ' · ' + TOOLS[t.tool] }));
-      row.append(text, Object.assign(document.createElement('span'), { className: 'pill ' + t.shows, textContent: PHASE[t.shows][0] }));
-      row.onclick = () => go(t.id);
-      dialog.append(row);
-    });
-    const all = Object.assign(document.createElement('button'), { type: 'button', className: 'cancel', textContent: '全部项目' });
-    all.onclick = () => location.replace('../');
-    dialog.append(all);
-    dialog.showModal();
+    if (!window.RemoteSheet) return;
+    const kit = window.RemoteSheet.ui;
+    window.RemoteSheet.open({ title: '切换终端', build(p) {
+      const list = others();
+      if (!list.length) p.body.append(kit.empty('没有别的终端在运行'));
+      else p.body.append(kit.group(...list.map(t => kit.row({ icon: t.tool === 'claude' || t.tool === 'codex' ? t.tool : t.form === 'chat' ? 'chat' : 'term', tint: t.tool === 'claude' ? 'claude' : t.tool === 'shell' ? 'good' : 'codex',
+        label: t.title, detail: (t.dir ? t.dir + ' · ' : '') + (TOOLS[t.tool] || t.tool), end: Object.assign(document.createElement('span'), { className: 'pill ' + t.shows, textContent: PHASE[t.shows][0] }),
+        act: () => { p.sheet.close(null, true); go(t.id); } }))));
+      p.foot.append(kit.go('全部项目', async () => { p.sheet.close(null, true); location.replace('../'); }, { kind: 'quiet', id: 'switch-all' }).button);
+    } }, '切换终端');
   }
 
   async function poll() {

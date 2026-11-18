@@ -86,27 +86,6 @@ textarea::placeholder { color: var(--muted); opacity: 1; }
 @media (max-height: 380px) { header { padding-block: 2px; } .keys { padding-block: 4px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
-/* sheets from the bottom: the menu and the terminal switcher */
-#rcli-menu, dialog.sheet { width: 100%; max-width: 560px; margin: auto auto 0; padding: 10px 16px calc(16px + env(safe-area-inset-bottom)); border: 0; border-radius: 22px 22px 0 0; background: var(--panel); color: var(--ink); max-height: 82vh; overflow-y: auto; }
-#rcli-menu::backdrop, dialog.sheet::backdrop { background: rgba(0, 0, 0, .5); }
-#rcli-menu[open], dialog.sheet[open] { animation: rise .18s ease-out; }
-@keyframes rise { from { transform: translateY(24px); opacity: 0; } }
-#rcli-menu::before, dialog.sheet::before { content: ""; display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 12px; }
-#rcli-menu h2, dialog.sheet h2 { margin: 0 4px 10px; font-size: 17px; }
-dialog.sheet p { margin: 0 4px 10px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
-#rcli-menu button, dialog.sheet button { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 50px; margin-top: 8px; padding: 8px 14px; text-align: left; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); color: var(--ink); font: inherit; font-size: 15px; line-height: 1.35; }
-#rcli-menu button:active, dialog.sheet button:active { background: var(--line); }
-#rcli-menu button[aria-current="true"] { border-color: var(--accent); color: var(--accent); }
-#rcli-menu button.cancel, dialog.sheet button.cancel { background: transparent; border-color: transparent; color: var(--muted); justify-content: center; }
-#rcli-menu p { margin: 0 4px 6px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
-#rcli-menu input { width: 100%; min-height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); font: inherit; font-size: 16px; }
-#rcli-menu input:focus { border-color: var(--accent); outline: none; }
-#rcli-menu button.solid { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; justify-content: center; }
-#rcli-menu button.danger { color: var(--bad, #f7768e); }
-dialog.sheet .row > span:first-child { min-width: 0; display: grid; gap: 2px; }
-dialog.sheet .row b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-dialog.sheet .row small { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 /* what another task is doing: the same colours as the lists */
 .pill { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 2px 9px 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.5; white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
 .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }

@@ -241,6 +241,26 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual(asked["item"], {"id": "c" * 32, "session": a, "tool": "claude", "text": "进展如何？", "kind": "daily", "on": True, "at": 0, "minutes": 0, "time": "09:30"})
         asked, got = carried({"id": "5" * 32, "action": "handoff", "from": b, "to": a, "note": "接着做"}, {"status": "accepted"})
         self.assertEqual(asked, {"id": "5" * 32, "action": "work_handoff", "from": b, "from_tool": "codex", "to": a, "to_tool": "claude", "note": "接着做"})
+        # a daily one on some days of the week, and what a hand-over says: features of their own
+        with self.assertRaisesRegex(RemoteError, "按星期"):
+            self.relay.work({"id": "f" * 32, "action": "schedule_set", "item": dict(item, days=[1, 2])}, now=1002, wait=0)
+        with self.assertRaisesRegex(RemoteError, "交给新对话"):
+            self.relay.work({"id": "f" * 32, "action": "brief", "from": b}, now=1002, wait=0)
+        info = dict(self.info, features=["peek", "work", "brief", "schedule-days"])
+        self.relay.agent({"info": info, "sessions": sessions}, now=1002)
+        for wrong, said in (({"action": "schedule_set", "item": dict(item, days=[0])}, "星期无效"), ({"action": "schedule_set", "item": dict(item, days=[1, 1])}, "星期无效"),
+                            ({"action": "schedule_set", "item": dict(item, days="1,2")}, "星期无效"), ({"action": "schedule_set", "item": dict(item, days=[True])}, "星期无效"),
+                            ({"action": "brief", "from": "zz"}, "没有找到"), ({"action": "brief", "from": a, "note": "x" * 1001}, "1000 字")):
+            with self.assertRaisesRegex(RemoteError, said):
+                self.relay.work(dict({"id": "2" * 32}, **wrong), now=1002, wait=0)
+        asked, got = carried({"id": "6" * 32, "action": "schedule_set", "item": dict(item, days=[5, 1, 3])}, {"schedule": {"id": "c" * 32}})
+        self.assertEqual(asked["item"]["days"], [1, 3, 5])
+        asked, got = carried({"id": "6" * 32 , "action": "schedule_set", "item": dict(item, kind="every", minutes=30, days=[1])}, {"schedule": {"id": "c" * 32}})
+        self.assertNotIn("days", asked["item"])            # (only a daily one has days)
+        asked, got = carried({"id": "7" * 32, "action": "brief", "from": b, "note": "换 Claude 接着做"}, {"text": "【对话交接】…", "tool": "codex", "dir": "demo"})
+        self.assertEqual((asked, got["text"]), ({"id": "7" * 32, "action": "work_brief", "from": b, "from_tool": "codex", "note": "换 Claude 接着做"}, "【对话交接】…"))
+        info = dict(self.info, features=["peek", "work"])
+        self.relay.agent({"info": info, "sessions": sessions}, now=1002)
 
         # passing on when a conversation stops is a feature of its own: the tools' hooks tell of the stop
         rule = {"id": "d" * 32, "from": a, "to": b, "text": "审查上面的改动", "rounds": 3, "from_tool": "codex"}

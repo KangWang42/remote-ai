@@ -216,10 +216,12 @@ def main():
             time.sleep(.4)
             browser.picture(out / 'terminal-webgl.png')
             # The user's exact entry: terminal top-right menu, with an independent terminal preference.
+            # (the menu is the sheet of ../ui/sheet.js: 外观 is a page of it, with a picture of each skin)
             value("document.getElementById('menu').click()")
-            value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='更换外观').click()")
-            assert value("[...document.querySelectorAll('#rcli-menu button')].some(b=>b.textContent==='锦鲤池塘')")
-            value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='锦鲤池塘').click()")
+            until("!!document.querySelector('dialog.rs[open]')", 'terminal menu')
+            value("[...document.querySelectorAll('dialog.rs .rs-row')].find(b=>b.innerText.startsWith('外观')).click()")
+            until("!!document.querySelector('dialog.rs .rs-swatch[data-value=pond]')", 'terminal skins')
+            value("document.querySelector('dialog.rs .rs-swatch[data-value=pond]').click()")
             until("document.querySelector('.pond-fish')?.naturalWidth > 0", 'menu selection')
             if bundled:
                 assert value("RemoteCliNative.pref('termskin')") == 'pond'
@@ -227,8 +229,10 @@ def main():
                 browser.ask('Page.reload')
                 until("document.documentElement.dataset.skin==='night' && window.TerminalUI?.screenText().includes('formatPrice')", 'independent terminal preference')
                 value("document.getElementById('menu').click()")
-                value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='更换外观').click()")
-                value("[...document.querySelectorAll('#rcli-menu button')].find(b=>b.textContent==='跟随 App 外观').click()")
+                until("!!document.querySelector('dialog.rs[open]')", 'terminal menu again')
+                value("[...document.querySelectorAll('dialog.rs .rs-row')].find(b=>b.innerText.startsWith('外观')).click()")
+                until("!!document.querySelector('dialog.rs .rs-swatch[data-value=app]')", 'follow app offered')
+                value("document.querySelector('dialog.rs .rs-swatch[data-value=app]').click()")
                 until("document.querySelector('.pond-fish')?.naturalWidth > 0", 'follow app pond')
                 assert value("RemoteCliNative.pref('termskin')") == ''
             # Palette contrast, including the maximum possible white pond pixel at .42 opacity behind terminal .4 tint.

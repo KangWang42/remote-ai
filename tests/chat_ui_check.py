@@ -383,12 +383,15 @@ def main():
             value("document.documentElement.style.fontSize = '15.5px'")
 
             # ---- ended from the menu: the box goes, and the way to go on with it comes
+            # (the menu is the sheet of ../ui/sheet.js: its rows, and a page that asks once before the end)
+            sheet_button = "Array.from(document.querySelectorAll('dialog.rs button')).find(b => b.innerText.trim() === %s)"
             value("document.getElementById('menu').click()")
-            until("document.getElementById('chat-sheet')?.open", "the menu")
-            assert value("Array.from(document.querySelectorAll('#chat-sheet button')).map(b => b.textContent)") == ["重命名", "在终端中打开", "结束对话", "取消"]
-            value("Array.from(document.querySelectorAll('#chat-sheet button')).find(b => b.textContent === '结束对话').click()")
-            until("Array.from(document.querySelectorAll('#chat-sheet button')).some(b => b.textContent === '结束对话' && b.className === 'danger') && document.getElementById('chat-sheet').open", "asked once")
-            value("Array.from(document.querySelectorAll('#chat-sheet button')).find(b => b.textContent === '结束对话').click()")
+            until("!!document.querySelector('dialog.rs[open]')", "the menu")
+            rows = value("Array.from(document.querySelectorAll('dialog.rs .rs-row b, dialog.rs .rs-row.danger > span')).map(b => b.textContent)")
+            assert rows[:2] == ["重命名", "在终端中打开"] and rows[-1] == "结束对话", rows
+            value(sheet_button % json.dumps("结束对话") + ".click()")
+            until("!!document.getElementById('rs-confirm') && document.getElementById('rs-confirm').classList.contains('danger')", "asked once")
+            value("document.getElementById('rs-confirm').click()")
             until("document.getElementById('standing').textContent === '对话已结束' && !document.getElementById('again').hidden && document.getElementById('write').hidden", "ended", 20)
             assert any(op["action"] == "close" for op in computer.seen)
             # going on with it starts it again, as a conversation, with the same id
@@ -413,9 +416,10 @@ def main():
             assert len(begun) == 1 and begun[0]["form"] == "chat" and begun[0]["tool"] == "claude" and begun[0]["dir"] == "web-shop" and "text" not in begun[0] and "session" not in begun[0], begun
             assert not any(op["action"] == "app_open" for op in computer.seen), "the desktop app is not opened by a press"
             value("bridge = window.ProjectTerminal; document.getElementById('menu').click()")
-            until("document.getElementById('chat-sheet')?.open", "the menu")
-            value("Array.from(document.querySelectorAll('#chat-sheet button')).find(b => b.textContent === '结束对话').click()")
-            value("Array.from(document.querySelectorAll('#chat-sheet button')).find(b => b.textContent === '结束对话').click()")
+            until("!!document.querySelector('dialog.rs[open]')", "the menu")
+            value(sheet_button % json.dumps("结束对话") + ".click()")
+            until("!!document.getElementById('rs-confirm')", "asked once")
+            value("document.getElementById('rs-confirm').click()")
             until("document.getElementById('standing').textContent === '对话已结束'", "the new one ended", 20)
             # a saved conversation in 任务 is gone on with as a conversation; a held press offers the terminal
             for terminal_id in [t["id"] for t in json.loads(http_get(port, "/api/terminal", phone.cookie))["terminals"] if t["state"] == "running"]:
@@ -427,8 +431,9 @@ def main():
             card = "Array.from(document.querySelectorAll('#recent-list .card')).find(c => c.textContent.includes('结算页的金额'))"
             until("!!" + card, "the saved conversation's card")
             value(card + ".dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))")
-            until("Array.from(document.querySelectorAll('#sheet[open] button')).some(b => b.textContent === '在手机终端继续')", "the terminal behind a held press")
-            value("document.getElementById('sheet').close()")
+            until("Array.from(document.querySelectorAll('dialog.rs[open] button')).some(b => b.innerText.trim() === '在手机终端继续')", "the terminal behind a held press")
+            value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+            until("!document.querySelector('dialog.rs')", "the sheet closed")
             before = len(computer.seen)
             value(card + ".querySelector('.open').click()")
             until("location.pathname.endsWith('/chat/') && document.getElementById('title').textContent === '结算页的金额'", "the saved conversation as a conversation", 20)

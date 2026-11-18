@@ -18,6 +18,10 @@
     if (native && native.pref && LOOK.includes(key)) { const chosen = native.pref(key); if (chosen) return chosen; }
     try { return localStorage.getItem('rcli-' + key) || fallback; } catch (error) { return fallback; }
   };
+  const keep = (key, value) => {
+    if (native && native.setPref && LOOK.includes(key)) native.setPref(key, value);
+    try { localStorage.setItem('rcli-' + key, value); } catch (error) { /* private window */ }
+  };
   const TEXT = { small: '14px', normal: '15.5px', large: '17px', larger: '19px' };
   const READ = {
     readfont: [{ sans: 'inherit', serif: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif', mono: 'ui-monospace, "Cascadia Mono", Consolas, monospace' }, 'sans', '--read-font'],
@@ -308,7 +312,7 @@
         if (box.value.trim() && box.value !== p.draft) return toast('输入框里还有未发送的文字，请先处理');
         box.value = p.draft; draft.set(box.value); grow(); box.focus(); p.node.remove(); mine.delete(p.id); saveMine(); stands();
       };
-      if (p.state === 'unknown') sheet('重新编辑这条消息？', '电脑可能已经收到，请先检查对话。再次发送会作为一条新消息。', [['已检查，重新编辑', restore, 'solid']]);
+      if (p.state === 'unknown') RemoteSheet.confirm({ title: '重新编辑这条消息', text: '电脑可能已经收到，请先检查对话。再次发送会作为一条新消息。', label: '已检查，重新编辑', act: sheet => { sheet.close(true); restore(); } });
       else restore();
     } }));
     return node;
@@ -343,18 +347,6 @@
   $('back').onclick = () => bridge().close();
   $('files').onclick = () => { if (terminal && terminal.dir) location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; };
 
-  // ---- the page's own sheet
-  function sheet(title, text, choices, fill) {
-    let dialog = $('chat-sheet');
-    if (!dialog) { dialog = el('dialog', { id: 'chat-sheet' }); document.body.append(dialog); dialog.onclick = event => { if (event.target === dialog) dialog.close(); }; }
-    const form = el('form', { method: 'dialog' }, el('h2', { textContent: title }), text ? el('p', { textContent: text }) : '');
-    if (fill) fill(form);
-    choices.forEach(([label, act, kind]) => form.append(el('button', { type: 'button', className: kind || '', textContent: label, onclick: () => { dialog.close(); act(); } })));
-    form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => dialog.close() }));
-    dialog.setAttribute('aria-label', title);
-    dialog.replaceChildren(form);
-    dialog.showModal();
-  }
   // Into a terminal of the phone's: the conversation is closed here and gone on with there, once the computer has let it go.
   async function inTerminal() {
     const { tool, dir, session } = terminal;
@@ -374,18 +366,67 @@
       location.replace('../terminal/?id=' + body.terminal + (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : ''));
     } catch (error) { toast(error.message); }
   }
+  // ---- the menu: what the conversation is, what is done with it (handed to another AI, asked at a time), its
+  // name, and how it is read. Each opens as a page of the same sheet (../ui/sheet.js, ../ui/work.js).
+  const work = RemoteWork.forPage('../', toast);
+  const skinList = () => Object.keys(window.RemoteCliSkins).map(key => { const k = window.RemoteCliSkins[key]; return { key, name: k.name, bg: k.t.background, ink: k.t.foreground, muted: k.muted, accent: k.accent, current: key === saved('skin', 'paper') }; });
+  const READING = {
+    text: ['字号', [['small', '小'], ['normal', '标准'], ['large', '大'], ['larger', '特大']], 'normal'],
+    readline: ['行距', [['tight', '紧凑'], ['normal', '标准'], ['loose', '宽松']], 'normal'],
+    readfont: ['字体', [['sans', '默认'], ['serif', '衬线'], ['mono', '等宽']], 'sans'] };
+  const STATE = { busy: ['正在执行', 'var(--busy)'], confirm: ['等你确认', 'var(--bad)'], starting: ['正在启动', 'var(--accent)'], idle: ['等你的消息', 'var(--good)'], ended: ['已结束', 'var(--muted)'] };
+  const of = () => ({ id: terminal.session || '', tool: terminal.tool, title: terminal.title || TOOLS[terminal.tool], dir: terminal.dir || '', terminal: terminal.id });
+  function menuPage() {
+    const { ui } = RemoteSheet;
+    return { title: '对话', build(p) {
+      const ended = terminal.state === 'closed', kind = ended ? 'ended' : terminal.state === 'starting' ? 'starting' : state;
+      const [standing, colour] = STATE[kind] || STATE.idle;
+      p.body.append(ui.who({ icon: terminal.tool === 'claude' ? 'claude' : 'codex', tint: terminal.tool === 'claude' ? 'claude' : 'codex', title: terminal.title || TOOLS[terminal.tool] || '对话',
+        line: (TOOLS[terminal.tool] || terminal.tool) + (terminal.dir ? ' · ' + terminal.dir : '') + ' · ' + (device.online ? standing : '电脑离线'), state: device.online ? colour : 'var(--bad)' }));
+      const noSession = terminal.session ? '' : '发出第一条消息后才能使用';
+      p.body.append(ui.tiles([
+        { id: 'menu-handoff', icon: 'hand', tint: 'claude', label: '交给 AI', why: noSession, say: toast, act: () => work.handoff(p.sheet, of()) },
+        { id: 'menu-schedule', icon: 'clock', tint: 'time', label: '定时提问', why: noSession || (ended ? '对话已结束，先继续这段对话' : ''), say: toast, act: () => work.schedules(p.sheet, of()) },
+        { id: 'menu-files', icon: 'folder', tint: 'file', label: '项目文件', why: terminal.dir ? '' : '这段对话不在项目里', say: toast, act: () => { p.sheet.close(null, true); location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; } },
+        { id: 'menu-copy', icon: 'copy', tint: 'copy', label: '复制全文', say: toast, act: async () => { p.sheet.close(null); toast(await RemoteSheet.copy(said.innerText.trim()) ? '已复制整段对话' : '没能复制，请长按选择文字'); } }]));
+      const rows = [ui.row({ icon: 'pen', tint: 'muted', label: '重命名', value: terminal.title || '', go: () => p.sheet.push(renamePage()) })];
+      if (terminal.session && terminal.dir && !ended) rows.push(ui.row({ icon: 'term', tint: 'muted', label: '在终端中打开', go: () => p.sheet.push(ui.confirm({ title: '在终端中打开', text: '这里的对话会关闭，在手机终端里继续同一段对话。', label: '在终端中打开', busy: '正在转到终端…', act: async sheet => { sheet.close(null, true); await inTerminal(); } })) }));
+      if (ended && terminal.session) rows.push(ui.row({ icon: 'play', tint: 'good', label: '继续这段对话', act: () => { p.sheet.close(null, true); bridge().again(); } }));
+      p.body.append(ui.section('对话', ui.group(...rows)));
+      const skin = window.RemoteCliSkins[saved('skin', 'paper')] || window.RemoteCliSkins.paper;
+      p.body.append(ui.section('阅读', ui.group(ui.row({ icon: 'look', tint: 'look', label: '外观', value: skin.name, go: () => p.sheet.push(lookPage()) }),
+        ...Object.keys(READING).map(key => { const [name, choices, usual] = READING[key]; return ui.row({ label: name, end: ui.seg(choices, saved(key, usual), value => { keep(key, value); reader.change(paint); }, { label: name }) }); }))));
+      if (!ended) p.body.append(ui.group(ui.row({ label: '结束对话', danger: true, act: () => p.sheet.push(ui.confirm({ title: '结束对话', text: '正在执行的会被中断。对话保存在电脑上，之后可以继续。', label: '结束对话', kind: 'danger', act: sheet => { sheet.close(null); bridge().send({ action: 'close' }); } })) })));
+    } };
+  }
+  function renamePage() {
+    const { ui } = RemoteSheet;
+    return { title: '重命名', build(p) {
+      const box = ui.input({ id: 'chat-name', value: terminal.title || '', max: 60, label: '对话名称' });
+      setTimeout(() => { box.focus(); box.select(); }, 280);
+      const save = ui.go('保存', async () => {
+        const title = box.value.trim();
+        if (!title) throw new Error('请写下名称');
+        const { status, body } = await bridge().post({ action: 'rename', id: newId(), terminal: terminal.id, title });
+        if (status !== 200) throw new Error(body.error || '没有保存');
+        terminal.title = title; header();
+        p.sheet.goBack();
+      }, { busy: '正在保存…', id: 'rename-save' });
+      box.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); save.button.click(); } });
+      p.body.append(box);
+      p.foot.append(...save.nodes);
+    } };
+  }
+  function lookPage() {
+    const { ui } = RemoteSheet;
+    return { title: '外观', build(p) {
+      p.body.append(ui.swatches(skinList(), key => { keep('skin', key); paint(); }), ui.note('对 App 的所有页面生效'));
+    } };
+  }
   $('menu').onclick = () => {
     if (!terminal) return;
-    const open = terminal.state !== 'closed', choices = [];
-    choices.push(['重命名', () => sheet('对话名称', '', [['保存', async () => {
-      const title = $('chat-name').value.trim();
-      if (!title) return;
-      try { const { status, body } = await bridge().post({ action: 'rename', id: newId(), terminal: terminal.id, title }); if (status !== 200) toast(body.error || '没有保存'); }
-      catch (error) { toast('没有保存，请重试'); }
-    }, 'solid']], form => { form.append(el('input', { id: 'chat-name', value: terminal.title, maxLength: 60, spellcheck: false, ariaLabel: '对话名称' })); setTimeout(() => $('chat-name').select(), 50); })]);
-    if (terminal.session && terminal.dir) choices.push(['在终端中打开', () => sheet('在终端中打开？', '这里的对话会关闭，在手机终端里继续同一段对话。', [['在终端中打开', inTerminal, 'solid']])]);
-    if (open) choices.push(['结束对话', () => sheet('结束这段对话？', '正在执行的会被中断。对话保存在电脑上，之后可以继续。', [['结束对话', () => bridge().send({ action: 'close' }), 'danger']]), 'danger']);
-    sheet('对话选项', '', choices);
+    work.ensure();
+    RemoteSheet.open(menuPage(), '对话选项');
   };
 
   // ---- what the bridge asks of this page

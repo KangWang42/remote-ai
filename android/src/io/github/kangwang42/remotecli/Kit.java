@@ -234,18 +234,21 @@ final class Kit {
     // line under it; and putting it on the screen.
     private LinearLayout sheetBox(String title, String note, int noteLines) {
         LinearLayout box = column();
-        box.setPadding(dp(18), dp(10), dp(18), dp(14));
+        box.setPadding(dp(16), dp(8), dp(16), dp(14));
         GradientDrawable back = new GradientDrawable();
-        back.setColor(PANEL); back.setCornerRadii(new float[]{dp(22), dp(22), dp(22), dp(22), 0, 0, 0, 0});
+        back.setColor(BG); back.setCornerRadii(new float[]{dp(24), dp(24), dp(24), dp(24), 0, 0, 0, 0});
         box.setBackground(back);
         View grip = new View(activity);
-        grip.setBackground(shape(LINE, 0, 2));
-        LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(dp(40), dp(4));
-        middle.gravity = Gravity.CENTER_HORIZONTAL; middle.bottomMargin = dp(14);
+        grip.setBackground(shape(tint(MUTED, 97), 0, 3));
+        LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(dp(38), dp(5));
+        middle.gravity = Gravity.CENTER_HORIZONTAL; middle.bottomMargin = dp(12);
         box.addView(grip, middle);
-        box.addView(bold(title, 18, INK));
+        TextView named = bold(title, 17, INK);
+        named.setGravity(Gravity.CENTER); named.setSingleLine(true); named.setEllipsize(TextUtils.TruncateAt.END);
+        box.addView(named);
         if (note != null && !note.isEmpty()) {
             TextView under = text(note, 13.5f, MUTED);
+            under.setGravity(Gravity.CENTER);
             if (noteLines > 0) { under.setMaxLines(noteLines); under.setEllipsize(TextUtils.TruncateAt.END); }
             box.addView(under, below(4));
         }
@@ -268,7 +271,7 @@ final class Kit {
         LinearLayout box = sheetBox(title, note, 3);
         final EditText field = field(hint, android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         field.setSingleLine(false); field.setMinLines(2); field.setMaxLines(6); field.setGravity(Gravity.TOP | Gravity.START);
-        field.setBackground(shape(BG, LINE, 14)); field.setPadding(dp(16), dp(13), dp(16), dp(13));
+        field.setBackground(shape(PANEL, 0, 14)); field.setPadding(dp(16), dp(13), dp(16), dp(13));
         box.addView(field, below(14));
         box.addView(button(yes, 0, () -> {
             String text = field.getText().toString().trim();
@@ -283,17 +286,34 @@ final class Kit {
         final Dialog dialog = new Dialog(activity);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout box = sheetBox(title, note, 0);
+        // the choices as one group of rows, as the pages' sheets have them (web/ui/sheet.css); the one in use has a
+        // tick ("当前使用" in its note), and the one that ends or deletes something stands apart below
+        LinearLayout group = column(), apart = column();
+        group.setBackground(shape(PANEL, 0, 16)); apart.setBackground(shape(PANEL, 0, 16));
         for (int i = 0; i < labels.length; i++) {
-            LinearLayout item = column();
-            item.setGravity(Gravity.CENTER_VERTICAL); item.setMinimumHeight(dp(54)); item.setPadding(dp(16), dp(9), dp(16), dp(9));
-            item.setBackground(shape(RAISED, LINE, 14));
-            item.addView(bold(labels[i], 15.5f, i == danger ? BAD : INK));
-            if (notes != null && notes[i] != null && !notes[i].isEmpty()) item.addView(text(notes[i], 12.5f, MUTED));
+            String said = notes != null && notes[i] != null ? notes[i] : "";
+            boolean current = said.startsWith("当前使用");
+            if (current) said = said.replaceFirst("^当前使用( · )?", "");
+            LinearLayout target = i == danger ? apart : group;
+            if (target.getChildCount() > 0) { View line = new View(activity); line.setBackgroundColor(mix(LINE, PANEL, .8f)); LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, dp(1)); divider.setMargins(dp(16), 0, 0, 0); target.addView(line, divider); }
+            LinearLayout item = row();
+            item.setMinimumHeight(dp(54)); item.setPadding(dp(16), dp(10), dp(14), dp(10));
+            LinearLayout words = column();
+            TextView name = text(labels[i], 16, i == danger ? BAD : current ? ACCENT : INK);
+            if (current || i == danger) name.setTypeface(Typeface.DEFAULT_BOLD);
+            if (i == danger) { name.setGravity(Gravity.CENTER); words.setGravity(Gravity.CENTER_HORIZONTAL); }
+            words.addView(name);
+            if (!said.isEmpty()) words.addView(text(said, 12.5f, MUTED), below(2));
+            item.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+            if (current) item.addView(icon(R.drawable.ic_check, ACCENT, 20));
+            item.setContentDescription(labels[i] + (current ? "，当前使用" : ""));
             final int at = i;
             press(item, () -> { dialog.dismiss(); picked.accept(at); });
-            box.addView(item, below(i == 0 ? 14 : 8));
+            target.addView(item);
         }
-        box.addView(button("取消", 2, dialog::dismiss), below(4));
+        if (group.getChildCount() > 0) box.addView(group, below(14));
+        if (apart.getChildCount() > 0) box.addView(apart, below(group.getChildCount() > 0 ? 12 : 14));
+        box.addView(button("取消", 2, dialog::dismiss), below(6));
         raise(dialog, box, false);
     }
 }

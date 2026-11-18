@@ -387,7 +387,7 @@ public sealed class TerminalAgent {
     /// What is passed on from one conversation to another when the first has stopped (Chains.cs).
     public readonly Chains Chains;
     readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
-    static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_chains", "work_chain_set", "work_chain_remove" };
+    static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_brief", "work_chains", "work_chain_set", "work_chain_remove" };
     /// One rule runs: the last answer of the conversation that stopped goes to the other one, with its owner's words.
     void Pass(Chains.Item rule, Dictionary<string, object> prefs) {
         bool ok = false; string note;
@@ -523,6 +523,13 @@ public sealed class TerminalAgent {
         if (action == "work_chain_remove") {
             if (!Chains.Remove(Get(op, "chain"))) throw new ArgumentException("没有找到这条接力");
             return new Dictionary<string, object>();
+        }
+        if (action == "work_brief") {
+            // what a hand-over would say, for the phone to show, or to begin a new conversation with
+            var from = sessions.FirstOrDefault(s => s.Tool == Get(op, "from_tool") && s.Id == Get(op, "from"));
+            if (from == null) throw new ArgumentException("电脑上没有找到要交接的对话，请刷新后重试");
+            var read = ReadConversation(new Dictionary<string, object> { { "session", from.Id }, { "tool", from.Tool }, { "dir", from.Dir } }, prefs);
+            return new Dictionary<string, object> { { "text", Brief(from, read, Get(op, "note")) }, { "tool", from.Tool }, { "dir", from.Dir }, { "title", from.Title } };
         }
         if (action == "work_handoff") {
             var from = sessions.FirstOrDefault(s => s.Tool == Get(op, "from_tool") && s.Id == Get(op, "from"));
@@ -1899,7 +1906,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "codex-desktop-control", "chat" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },

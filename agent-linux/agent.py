@@ -80,6 +80,23 @@ SCHEDULE_NUMBERS = ("at", "minutes", "next", "runs", "last_at")
 SCHEDULE_FLAGS = ("on", "last_ok")
 
 
+def week_days(given):
+    """Days of the week as they are given ("1,2,3,4,5", or a list of numbers): each of 1 (Monday) to 7 (Sunday)
+    once, in order; all seven are every day, and so none. None where one is not a day of the week."""
+    if given is None or given == "":
+        return []
+    words = given.split(",") if isinstance(given, str) else given if isinstance(given, list) else [given]
+    days = set()
+    for word in words:
+        if isinstance(word, bool) or not (type(word) is int or isinstance(word, str) and word.strip().isdigit()):
+            return None
+        day = int(word)
+        if not 1 <= day <= 7:
+            return None
+        days.add(day)
+    return [] if len(days) == 7 else sorted(days)
+
+
 def kept_rules(read, keys, numbers, flags):
     """Rules read from disk: one that is old or hand-edited and missing a field is dropped,
     rather than taking the whole feature down the first time it is shown or run."""
@@ -169,11 +186,11 @@ UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish"
 FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "file-upload", "peek", "marks", "delete", "work", "chat", "chains"]
+FEATURES = ["terminal-exit", "files", "file-upload", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days"]
 # What the phone asks about the owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
 # ("chains") is seen by watching the conversation's record grow and then go quiet — the tools' own hooks, which
 # tell the Windows program of it at once, are not there on Linux.
-WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff",
+WORK_ACTIONS = ("work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_brief",
                 "work_chains", "work_chain_set", "work_chain_remove")
 CHAIN_TOOLS = ("claude", "codex", "opencode", "qoder", "cline", "pi")   # the conversations the phone can pass between
 CHAIN_QUIET = 45.0     # a turn is over once the source's record has been quiet this long after growing
@@ -3138,6 +3155,8 @@ class Schedules:
             with open(path, encoding="utf-8") as stream:
                 kept = json.load(stream)
             self.items = kept_rules(kept, SCHEDULE_KEYS, SCHEDULE_NUMBERS, SCHEDULE_FLAGS)
+            for item in self.items:             # (kept as "1,2,3"; a rule written before there were days has none)
+                item["days"] = ",".join(str(day) for day in week_days(item.get("days") if isinstance(item.get("days"), str) else "") or [])
         except (OSError, ValueError, TypeError):
             pass
 
@@ -3164,12 +3183,16 @@ class Schedules:
         at = datetime.datetime.fromtimestamp(now).replace(hour=hour, minute=minute, second=0, microsecond=0)
         if at.timestamp() <= now:
             at += datetime.timedelta(days=1)
+        days = week_days(item.get("days", "")) or []
+        while days and at.isoweekday() not in days:      # on the first of its days of the week from then on
+            at += datetime.timedelta(days=1)
         return int(at.timestamp() * 1000)
 
     @staticmethod
     def shown(item):
         """As the phone is told of one."""
         out = {key: item[key] for key in ("id", "tool", "session", "title", "text", "kind", "time", "at", "minutes", "on", "next", "runs")}
+        out["days"] = week_days(item.get("days", "")) or []
         out["last"] = {"at": item["last_at"], "ok": item["last_ok"], "note": item["last_note"]} if item["last_at"] else None
         return out
 
@@ -3183,6 +3206,10 @@ class Schedules:
         item = {"id": word("id"), "tool": word("tool"), "session": word("session"), "title": word("title")[:80], "text": word("text").strip(), "kind": word("kind"),
                 "time": word("time"), "at": int(whole("at")), "minutes": int(whole("minutes")), "on": given.get("on") is not False,
                 "next": 0, "runs": 0, "last_at": 0, "last_ok": False, "last_note": ""}
+        days = week_days(given.get("days"))
+        if days is None:
+            raise OpError("星期需在周一到周日之间")
+        item["days"] = ",".join(str(day) for day in days) if item["kind"] == "daily" else ""
         if not ID_RE.match(item["id"]):
             raise OpError("编号无效")
         if item["tool"] not in ("claude", "codex", "opencode", "qoder", "cline", "pi"):
@@ -3807,6 +3834,12 @@ class Agent:
                 raise OpError("没有找到这条接力")
             return {}
         source, taker = listed(op.get("from_tool"), op.get("from")), listed(op.get("to_tool"), op.get("to"))
+        if action == "work_brief":
+            # what a hand-over would say, for the phone to show, or to begin a new conversation with
+            if source is None:
+                raise OpError("电脑上没有找到要交接的对话，请刷新后重试")
+            read = self.sessions.read(source["id"], source["tool"], source["dir"], dirs)
+            return {"text": handover(source, read.get("messages", []), str(op.get("note") or "")), "tool": source["tool"], "dir": source["dir"], "title": source["title"]}
         if source is None:
             raise OpError("电脑上没有找到要交接的对话，请刷新后重试")
         if taker is None:

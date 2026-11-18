@@ -87,7 +87,7 @@ class Played:
         self.relay = Relay(str(Path(temporary) / "relay.json"))
         self.now = int(time.time() * 1000)
         self.info = {"instance": "d" * 32, "enabled": True, "tools": ["claude", "codex", "shell"], "workspaces": ["web-shop", "thesis", "data-tools"], "name": "办公室的电脑", "version": "1.6.0", "shell": "PowerShell",
-                     "features": ["peek", "reach", "end", "outbox", "marks", "files", "projects", "work", "chains", "codex-desktop-control", "codex-desktop-open", "claude-desktop-open"]}
+                     "features": ["peek", "reach", "end", "outbox", "marks", "files", "projects", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "codex-desktop-open", "claude-desktop-open"]}
         self.sessions, self.said = story(self.now)
         # what the computer keeps of its owner's work (docs/PROTOCOL.md, `/api/work`), and what it was asked to do
         self.chains = [{"id": "e" * 32, "from": THESIS, "from_tool": "codex", "from_title": "整理第三章的参考文献", "to": TABLES, "to_tool": "claude", "to_title": "核对回归表的系数",
@@ -192,6 +192,10 @@ class Played:
             return {}
         if action == "work_handoff":
             return {"status": "accepted", "note": "已交给对话", "length": 420}
+        if action == "work_brief":
+            source = next(one for one in self.sessions if one["id"] == op["from"])
+            return {"text": "【对话交接】下面是我在另一段对话里的进展（%s，“%s”，项目 %s），请接着处理。\n\n我最初的要求：\n整理第三章引用的文献，统一成 GB/T 7714 格式\n\n它最后的回答：\n已统一 42 条文献的格式，剩下 3 条缺少页码，列在 refs-todo.md 里。\n\n它最近做的操作：\n- Bash：python check_refs.py\n- Edit：chapter3/refs.bib" % ({"claude": "Claude Code", "codex": "Codex"}[source["tool"]], source["title"], source["dir"])
+                    + ("\n\n我的补充：\n" + op["note"] if op.get("note") else ""), "tool": source["tool"], "dir": source["dir"], "title": source["title"]}
         if action == "session_say":
             return {"status": "accepted", "sent": True, "now": True, "way": "hook", "state": "handed", "message": op["id"]}
         # a new conversation: a terminal is started (nothing runs in it here), or a desktop app is handed the first words
@@ -277,7 +281,7 @@ def shots(browser, played):
     browser.open(played.origin + "/?tab=together", "document.querySelectorAll('#chains .card, #schedules .card').length >= 4", "the tab of conversations working together")
     browser.picture(OUT / "together.png")
     # (a taller screen for this one, so that the days are in the picture with today's figures)
-    browser.open(played.origin + "/?tab=me", "document.querySelectorAll('#me .day').length === 7 && !!document.querySelector('#computer')", "the tab of the owner's work", **dict(PHONE, height=940))
+    browser.open(played.origin + "/?tab=me&stats=1", "document.querySelectorAll('#me .day').length === 7 && !!document.querySelector('#computer')", "the tab of the owner's work", **dict(PHONE, height=940))
     browser.picture(OUT / "me.png")
     browser.open(played.origin + "/?tab=tasks&take=" + FIXING, "document.querySelector('#sheet .state') && document.querySelector('#sheet .said')?.textContent.includes('formatPrice')", "a conversation's window")
     browser.value("(() => { const said = document.querySelector('#sheet .said'); said.scrollTop = said.scrollHeight; })()")

@@ -85,6 +85,19 @@ public static class WorkCheck {
         Require(!File.ReadAllText(kept).Contains("进展如何") && !File.ReadAllText(kept).Contains("\\u8fdb"), "kept in a file, the words not in plain sight");
         var again = new Schedules(kept).All();
         Require(again.Length == 3 && again.First(s => s.Id == every).LastNote.Contains("没有在电脑上开着") && again.First(s => s.Id == every).Runs == 1 && again.First(s => s.Id == daily).Text == "进展如何？", "there again after a restart, with how the last asking went");
+        // a daily one on some days of the week only (1 Monday to 7 Sunday): the first of them from then on
+        Func<DateTime, int> iso = day => day.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)day.DayOfWeek;
+        var weekly = item(new string('f', 32), "daily"); weekly["days"] = new object[] { iso(today.AddDays(3)), iso(today.AddDays(5)) };
+        var set = schedules.Set(weekly, now);
+        Require(set.Next == Ms(today.AddDays(3).AddHours(9.5)) && ((int[])Schedules.Shown(set)["days"]).Length == 2, "on its first day of the week from tomorrow on");
+        Require(new Schedules(kept).All().First(s => s.Id == (string)weekly["id"]).Days.SequenceEqual(set.Days), "its days kept as they were set");
+        weekly["days"] = new object[] { 1, 2, 3, 4, 5, 6, 7 };
+        Require(schedules.Set(weekly, now).Days.Length == 0 && schedules.Set(weekly, now).Next == Ms(today.AddDays(1).AddHours(9.5)), "all seven days: every day");
+        weekly["days"] = new object[] { 8 };
+        Require(Refused(() => schedules.Set(weekly, now)).Contains("星期"), "a day that is not one of the week");
+        var spaced = item(new string('f', 32), "every"); spaced["days"] = new object[] { 1 };
+        Require(schedules.Set(spaced, now).Days.Length == 0, "only a daily one has days");
+        schedules.Remove(new string('f', 32));
         Require(schedules.Remove(daily) && !schedules.Remove(daily) && new Schedules(kept).All().Length == 2, "removed for good");
 
         // ---- passed on when a conversation stops: as many times as it was set for, and no more

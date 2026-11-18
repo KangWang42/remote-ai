@@ -18,11 +18,12 @@ public sealed class Schedules {
     public const int Most = 30;
     public sealed class Item {
         public string Id = "", Tool = "", Session = "", Title = "", Text = "", Kind = Once, Time = "";      // Title: the conversation's, as it was when this was set
+        public int[] Days = new int[0];         // a daily one: the days of the week it is asked on, 1 Monday to 7 Sunday; none for every day
         public long At, Next, LastAt;           // milliseconds since 1970: when a single one is due; when it is due next; when it was last asked
         public int Minutes, Runs;
         public bool On = true, LastOk;
         public string LastNote = "";
-        internal Item Copy() { return (Item)MemberwiseClone(); }
+        internal Item Copy() { var copy = (Item)MemberwiseClone(); copy.Days = (int[])Days.Clone(); return copy; }
     }
     readonly string file;
     readonly object gate = new object();
@@ -43,7 +44,8 @@ public sealed class Schedules {
                 Func<string, string> word = name => { object value; return kept.TryGetValue(name, out value) && value != null ? Convert.ToString(value, CultureInfo.InvariantCulture) : ""; };
                 Func<string, long> number = name => { long value; return Int64.TryParse(word(name), out value) ? value : 0; };
                 var item = new Item { Id = word("id"), Tool = word("tool"), Session = word("session"), Title = word("title"), Kind = word("kind"), Time = word("time"), At = number("at"), Next = number("next"),
-                    LastAt = number("last_at"), Minutes = (int)number("minutes"), Runs = (int)number("runs"), On = word("on") == "True", LastOk = word("last_ok") == "True", LastNote = word("last_note") };
+                    LastAt = number("last_at"), Minutes = (int)number("minutes"), Runs = (int)number("runs"), On = word("on") == "True", LastOk = word("last_ok") == "True", LastNote = word("last_note"),
+                    Days = WeekDays(word("days")) ?? new int[0] };
                 try { item.Text = Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(word("text")), null, DataProtectionScope.CurrentUser)); }
                 catch (FormatException) { continue; } catch (CryptographicException) { continue; }
                 if (Regex.IsMatch(item.Id, @"\A[a-f0-9]{16,32}\z")) items.Add(item);
@@ -55,7 +57,7 @@ public sealed class Schedules {
         try {
             var kept = items.Select(item => new Dictionary<string, object> { { "id", item.Id }, { "tool", item.Tool }, { "session", item.Session }, { "title", item.Title }, { "kind", item.Kind }, { "time", item.Time },
                 { "at", item.At }, { "next", item.Next }, { "last_at", item.LastAt }, { "minutes", item.Minutes }, { "runs", item.Runs }, { "on", item.On }, { "last_ok", item.LastOk }, { "last_note", item.LastNote },
-                { "text", Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(item.Text), null, DataProtectionScope.CurrentUser)) } }).ToArray();
+                { "days", String.Join(",", item.Days) }, { "text", Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(item.Text), null, DataProtectionScope.CurrentUser)) } }).ToArray();
             Directory.CreateDirectory(Path.GetDirectoryName(file));
             string fresh = file + ".tmp";
             File.WriteAllText(fresh, json.Serialize(kept), new UTF8Encoding(false));
@@ -71,22 +73,39 @@ public sealed class Schedules {
         if (item.Kind == Every) return Ms(now.ToUniversalTime().AddMinutes(item.Minutes));
         DateTime local = now.ToLocalTime(), at = local.Date.Add(TimeSpan.ParseExact(item.Time, @"hh\:mm", CultureInfo.InvariantCulture));
         if (at <= local) at = at.AddDays(1);
+        // on the first of its days of the week from then on
+        while (item.Days.Length > 0 && Array.IndexOf(item.Days, IsoDay(at)) < 0) at = at.AddDays(1);
         return Ms(at.ToUniversalTime());
+    }
+
+    static int IsoDay(DateTime day) { return day.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)day.DayOfWeek; }
+    /// Days of the week as they are given ("1,2,3,4,5", or a list of numbers): each of 1 to 7 once, in order; all
+    /// seven are every day, and so none. Null where one is not a day of the week.
+    public static int[] WeekDays(object given) {
+        var list = given as System.Collections.IEnumerable;
+        IEnumerable<string> words = given == null ? new string[0] : given is string ? ((string)given).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+            : list != null ? list.Cast<object>().Select(one => Convert.ToString(one, CultureInfo.InvariantCulture)) : new[] { Convert.ToString(given, CultureInfo.InvariantCulture) };
+        var days = new SortedSet<int>();
+        foreach (string word in words) { int day; if (!Int32.TryParse(word.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out day) || day < 1 || day > 7) return null; days.Add(day); }
+        return days.Count == 7 ? new int[0] : days.ToArray();
     }
 
     public Item[] All() { lock (gate) return items.Select(item => item.Copy()).ToArray(); }
     /// As the phone is told of one.
     public static Dictionary<string, object> Shown(Item item) {
         return new Dictionary<string, object> { { "id", item.Id }, { "tool", item.Tool }, { "session", item.Session }, { "title", item.Title }, { "text", item.Text }, { "kind", item.Kind }, { "time", item.Time },
-            { "at", item.At }, { "minutes", item.Minutes }, { "on", item.On }, { "next", item.Next }, { "runs", item.Runs }, { "last", item.LastAt == 0 ? null : new Dictionary<string, object> { { "at", item.LastAt }, { "ok", item.LastOk }, { "note", item.LastNote } } } };
+            { "at", item.At }, { "minutes", item.Minutes }, { "days", item.Days.Clone() }, { "on", item.On }, { "next", item.Next }, { "runs", item.Runs }, { "last", item.LastAt == 0 ? null : new Dictionary<string, object> { { "at", item.LastAt }, { "ok", item.LastOk }, { "note", item.LastNote } } } };
     }
 
     /// Sets one: a new one under a new number, or the one of that number anew. Says in words what is wrong with it.
     public Item Set(IDictionary<string, object> given, DateTime now) {
         Func<string, string> word = name => { object value; return given.TryGetValue(name, out value) && value != null ? Convert.ToString(value, CultureInfo.InvariantCulture) : ""; };
         var item = new Item { Id = word("id"), Tool = word("tool"), Session = word("session"), Title = word("title"), Text = word("text").Trim(), Kind = word("kind"), Time = word("time"), On = word("on") != "False" };
-        long at; int minutes;
+        long at; int minutes; object days;
         Int64.TryParse(word("at"), out at); Int32.TryParse(word("minutes"), out minutes);
+        item.Days = WeekDays(given.TryGetValue("days", out days) ? days : null);
+        if (item.Days == null) throw new ArgumentException("星期需在周一到周日之间");
+        if (item.Kind != Daily) item.Days = new int[0];
         item.At = at; item.Minutes = minutes;
         if (item.Title.Length > 80) item.Title = item.Title.Substring(0, 80);
         if (!Regex.IsMatch(item.Id, @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("编号无效");

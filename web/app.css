@@ -81,7 +81,7 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .card { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
 /* what lies on the page is lifted off it a little */
-#home .card:not(.add), .tile, .panel, #home .group, .acts button, #launch button, #project-files { box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 6px 18px -10px rgb(0 0 0 / .12); }
+#home .card:not(.add), .tile, .panel, #home .group, .collaboration-actions .act, #launch button, #project-files { box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 6px 18px -10px rgb(0 0 0 / .12); }
 .card > button.open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; text-align: left; min-height: 64px; }
 .card > button.open:active { background: var(--raised); }
 /* ending a terminal: a quiet disc beside the card's text, with room around it for a thumb */
@@ -380,60 +380,33 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .skeleton i { display: block; height: 84px; border-radius: 18px; background: linear-gradient(100deg, var(--panel) 40%, var(--raised) 50%, var(--panel) 60%); background-size: 200% 100%; animation: shine 1.3s linear infinite; }
 .skeleton i:first-child { height: 176px; }
 
-/* ---- 协作: the two things done at once, and the cards of what is kept */
-.acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
-.acts button { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); font-weight: 600; line-height: 1.3; text-align: left; }
-.acts button:active { background: var(--raised); }
-.acts .tool { --tint: var(--accent); }
-.action-group h2 { font-size: 1.04rem; margin: 20px 2px 8px; }
-.action-group .acts { margin-top: 0; }
-.collaboration-actions button { flex-direction: column; align-items: flex-start; gap: 10px; border-radius: 20px; }
-.collaboration-actions .tool { width: 32px; height: 32px; border-radius: 10px; --tint: var(--accent); }
-.collaboration-actions .tool svg { width: 19px; height: 19px; }
-#add-chain .tool, #add-schedule .tool { --tint: var(--busy); }
-.collab-action { display: grid; gap: 5px; min-width: 0; }
-.collab-action b { font-size: .94rem; }
-.collab-action small { color: var(--muted); font-size: .76rem; font-weight: 400; line-height: 1.5; }
-.collab-context { margin-block: 12px 22px; }
-#together .hint { text-align: left; }
-.collab-presets { display: flex; flex-wrap: wrap; gap: 6px; }
-.collab-presets button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--accent); font-size: .86rem; }
-.collab-help { color: var(--muted); font-size: .86rem; }
-.collab-help summary { cursor: pointer; min-height: 44px; padding-block: 10px; }
-#together .hint, #together .meta, #together .peek, #together .section-head p, .collab-action small, .collab-help, #sheet-form .collab-help .hint, #sheet-form .collab-intro { color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
+/* ---- 协作: four things to begin, and the cards of what is kept. What is set is set in sheets (ui/sheet.css). */
+.collaboration-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.collaboration-actions .act { display: grid; align-content: space-between; gap: 16px; min-height: 112px; padding: 14px 14px 13px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); text-align: left; transition: transform .1s; }
+.collaboration-actions .act:active { transform: scale(.985); background: var(--raised); }
+.collaboration-actions .tool { width: 38px; height: 38px; border-radius: 12px; }
+.collaboration-actions .tool svg { width: 21px; height: 21px; }
+.collaboration-actions .act.hand .tool, #schedules .card.rule .tool.hand { --tint: #d97757; }
+.collaboration-actions .act.many .tool { --tint: var(--accent); }
+.collaboration-actions .act.time .tool, #schedules .card.rule .tool { --tint: #c77c1a; }
+.collaboration-actions .act.relay .tool, #chains .card.rule .tool { --tint: #7b6fd6; }
+.collab-action { display: grid; gap: 3px; min-width: 0; }
+.collab-action b { font-size: .98rem; font-weight: 700; line-height: 1.3; }
+.collab-action small { color: color-mix(in srgb, var(--muted) 85%, var(--ink)); font-size: .76rem; font-weight: 400; line-height: 1.4; }
+#together .hint { margin: 0 2px 8px; text-align: left; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
+#together .section-head p, #together .meta, #together .peek { color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
 #together .notice button { min-height: 44px; align-self: start; color: var(--accent); text-align: left; }
-#sheet-form .field.text-field { flex-direction: column; align-items: stretch; padding: 8px 0 0; gap: 8px; }
-#sheet-form .text-field textarea { width: 100%; margin: 0; }
-.card .meta .failed, #sheet-form .failed { color: var(--bad); }
-/* in a sheet: rows of what is chosen, a few choices side by side, a list to tick, and what the computer refused */
-.fields { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; }
-.field { display: flex; align-items: center; gap: 12px; min-height: 50px; padding: 0 6px 0 14px; }
-.field + .field { border-top: 1px solid var(--line); }
-.field.chain-instructions { flex-direction: column; align-items: stretch; padding: 8px 0 0; gap: 8px; }
-.field.chain-instructions textarea { width: 100%; margin: 0; }
-.field.chain-rounds { flex-wrap: wrap; padding-block: 8px; }
-#sheet-form .field > span:first-child { flex: none; margin: 0; color: var(--ink); font-size: .92rem; }
-#sheet-form .field select, #sheet-form .field input { flex: 1; min-width: 0; min-height: 48px; padding: 0 8px; border: 0; border-radius: 0; background: transparent; color: var(--muted); text-align: right; text-align-last: right; }
-#sheet-form .field .seg, #sheet-form .field .flip { margin-left: auto; margin-right: 8px; }
-.seg { display: inline-flex; flex: none; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); }
-.seg button { min-width: 40px; min-height: 34px; padding: 0 11px; border-radius: 8px; color: var(--muted); font-size: .86rem; white-space: nowrap; }
-.seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
-.flip { flex: none; position: relative; width: 52px; height: 30px; border-radius: 15px; border: 1px solid var(--line); background: var(--raised); transition: background .15s; }
-.flip::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
-.flip[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
-.flip[aria-checked="true"]::after { transform: translateX(22px); background: var(--on-accent); }
-.checks { display: grid; max-height: 40vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
-#sheet-form .check { display: flex; align-items: center; gap: 12px; min-height: 56px; margin: 0; padding: 8px 14px; color: var(--ink); font-size: 1rem; }
-.check + .check { border-top: 1px solid var(--line); }
-#sheet-form .check input { flex: none; width: 22px; min-height: 22px; height: 22px; padding: 0; accent-color: var(--accent); }
-.check .text { flex: 1; min-width: 0; display: grid; gap: 1px; }
-.check b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.check small { color: var(--muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.check em { flex: none; max-width: 45%; color: var(--muted); font-size: .8rem; font-style: normal; text-align: right; }
-.check em.ok { color: var(--good); font-weight: 600; }
-#sheet-form .problem { color: var(--bad); font-size: .88rem; }
+.card .meta .failed { color: var(--bad); }
+/* a rule's card: what it says, when it runs next, and a switch at its end */
+.card.rule .switch { flex: none; align-self: center; display: grid; padding: 0 14px 0 2px; }
+.card.rule.off .tool { opacity: .5; }
+.card.rule.off b { color: var(--muted); }
 
 /* ---- 我的: figures in tiles, the days as bars, shares as lines */
+/* one of a few, as a row of buttons (the measure and the span of the numbers) */
+.seg { display: inline-flex; flex: none; gap: 2px; padding: 3px; border-radius: 11px; background: color-mix(in srgb, var(--raised) 80%, var(--bg)); }
+.seg button { min-width: 40px; min-height: 34px; padding: 0 11px; border-radius: 8px; color: var(--muted); font-size: .86rem; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--bg); color: var(--ink); font-weight: 650; box-shadow: 0 1px 3px rgb(0 0 0 / .14); }
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .tile { display: grid; gap: 2px; min-width: 0; padding: 14px 16px 13px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
 .tile > span, .sums span { color: var(--muted); font-size: .8rem; }

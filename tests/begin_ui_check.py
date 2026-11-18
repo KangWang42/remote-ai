@@ -212,8 +212,10 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         value("document.querySelector('#sheet-form .bar .icon').click()")
         until("sessionStorage.getItem('app-asked') === JSON.stringify([['home', '']])", "back to the app's list")
         # 协作 opened by the app for one thing: that thing is begun at once
-        for what, field in (("handoff", "handoff-from"), ("many", "many-text"), ("chain", "chain-from"), ("schedule", "schedule-session")):
-            browser.open(played.origin + "/?tab=together&do=" + what, sheet + " && !!document.getElementById('%s')" % field, "协作, opened for " + what, **phone(390))
+        # (in the sheet of ui/sheet.js: the handover begins with the conversation to hand over)
+        for what, ready in (("handoff", "(document.querySelector('dialog.rs[open] .rs-bar h2') || {}).textContent === '交接哪段对话'"), ("many", "!!document.querySelector('dialog.rs[open] #many-text')"),
+                            ("chain", "!!document.querySelector('dialog.rs[open] #chain-from')"), ("schedule", "!!document.querySelector('dialog.rs[open] #schedule-session')")):
+            browser.open(played.origin + "/?tab=together&do=" + what, ready, "协作, opened for " + what, **phone(390))
         assert errors() == "[]", errors()
         browser.ask("Page.removeScriptToEvaluateOnNewDocument", identifier=app)
 

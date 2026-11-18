@@ -188,13 +188,18 @@ def main():
           out.nothing = !document.getElementById('nothing').hidden && !document.getElementById('sections').hidden;
           out.more = !document.getElementById('more-recent').hidden;
           out.summary = document.getElementById('device-text').textContent;
+          out.waiting = (document.getElementById('metric-needs') || {}).textContent;
           return out;
         })()"""
         CARD = "((title) => Array.from(document.querySelectorAll('#overview .card, #project .card')).find(c => c.querySelector('b') && c.querySelector('b').textContent === title && c.offsetParent))"
         about = lambda title: page_value("(() => { const c = %s(%s); if (!c) return null; return { pill: (c.querySelector('.pill') || {}).textContent || '', meta: Array.from(c.querySelectorAll('.meta > span:not(.pill)')).map(s => s.textContent),"
                                          " apart: !!c.querySelector('.chip.apart'), pin: !!c.querySelector('b .pin'), list: c.parentElement.id }; })()" % (CARD, json.dumps(title, ensure_ascii=False)))
-        SHEET = "(() => { const s = document.getElementById('sheet'); return s.open ? Array.from(s.querySelectorAll('button.choice')).map(b => b.firstChild.firstChild.textContent) : null; })()"
-        choose = lambda label: page_value("(() => { const b = Array.from(document.querySelectorAll('#sheet button.choice')).find(b => b.firstChild.firstChild.textContent === %s); b.click(); return 1; })()" % json.dumps(label, ensure_ascii=False))
+        # what a sheet offers: the rows of a question (ui/sheet.js, as ask() puts it) or its one button, else the choices
+        # of the page's own sheet (adding a project)
+        CHOICES = ("(() => { const d = document.querySelector('dialog.rs:not(.closing)'); if (d) { const rows = Array.from(d.querySelectorAll('.rs-row .rs-text b')); return rows.length ? rows : Array.from(d.querySelectorAll('.rs-go')); }"
+                   " const s = document.getElementById('sheet'); return s.open ? Array.from(s.querySelectorAll('button.choice')).map(b => b.firstChild.firstChild) : null; })()")
+        SHEET = "(n => n && n.map(e => e.textContent.trim()))(%s)" % CHOICES
+        choose = lambda label: page_value("(() => { const n = %s.find(e => e.textContent.trim() === %s); (n.nodeType === 3 ? n.parentElement : n).closest('button').click(); return 1; })()" % (CHOICES, json.dumps(label, ensure_ascii=False)))
         press = lambda text: page_value("(() => { const b = Array.from(document.querySelectorAll('#filters button')).find(b => b.textContent === %s); b.click(); return 1; })()" % json.dumps(text, ensure_ascii=False))
         search = lambda words: page_value("(() => { const q = document.getElementById('query'); q.value = %s; q.dispatchEvent(new Event('input')); return 1; })()" % json.dumps(words, ensure_ascii=False))
 
@@ -221,7 +226,7 @@ def main():
         assert len({tuple(seen[1:]) for seen in (app, term, both, plain)}) == 1 and app[2] == "none", report["where"]
         assert first["needs"] == ["部署到测试环境"] and first["active"] == ["整理读书笔记"], first
         assert first["recent"] == ["修复结算页的金额显示", "给结算页加上优惠券"] and first["more"], first
-        assert set(first["opened"]) == {"看日志", "桌面版里闲置的对话", "被占着的对话"} and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and "等你确认" in first["summary"], first
+        assert set(first["opened"]) == {"看日志", "桌面版里闲置的对话", "被占着的对话"} and first["pinned"] is None and first["projects"] == ["web-shop", "thesis"] and first["waiting"] == "1", first
         assert first["filters"] == ["*全部", "Claude Code", "Codex", "PowerShell", "终端", "应用"], first
         # each card says where it is and by what it runs; the one outside every project says its folder, and that it is none
         outside, shell = about("整理读书笔记"), about("看日志")
@@ -459,7 +464,7 @@ def main():
         offered = until(lambda: page_value(SHEET), 5, "what can be done with the one outside")
         report["offered_for_the_one_outside"] = offered
         assert offered == ["置顶", "另开一份到手机终端", "把 reading-notes 加为项目", "交接给另一段对话"], offered
-        assert page_value("document.querySelectorAll('#sheet small, #sheet p').length") == 0, "no lines of explanation"
+        assert page_value("document.querySelectorAll('dialog.rs:not(.closing) small, dialog.rs:not(.closing) p').length") == 0, "no lines of explanation"
         choose("另开一份到手机终端")
         apart = until(lambda: next((t for t in call("/api/terminal")["terminals"] if t["dir"] == "" and t["state"] == "running"), None), 30,
                       lambda: "a terminal outside every project runs; the page says: %s; listed: %s" % (page_value("document.getElementById('toast').textContent"), [(t["dir"], t["state"], t.get("error")) for t in call("/api/terminal")["terminals"]]))
@@ -534,7 +539,7 @@ def main():
         hold("term-notes")
         assert until(lambda: page_value(SHEET), 5, "what can be done with a project") == ["重命名", "移除项目"]
         choose("重命名")
-        until(lambda: page_value("(() => { const f = document.getElementById('field-to'); return f && document.getElementById('sheet').open ? f.value : null; })()") == "term-notes", 5, "the name as it is, to change")
+        until(lambda: page_value("(() => { const f = document.getElementById('field-to'); return f && f.closest('dialog[open]') ? f.value : null; })()") == "term-notes", 5, "the name as it is, to change")
         page_value("(() => { document.getElementById('field-to').value = '终端笔记'; return 1; })()")
         choose("保存")
         lists(lambda seen: seen["projects"] and "终端笔记" in seen["projects"] and "term-notes" not in seen["projects"], "the project has its new name")
