@@ -36,6 +36,7 @@ final class Workbench {
         final List<AggregateSessions.Project> projects;
         final boolean marks;        // the computer keeps what is said of single conversations: pinned, hidden
         final Set<String> can = new HashSet<>();        // what else the computer says it does: "delete", "projects"
+        final List<Long> agyStarts = new ArrayList<>();
         Snapshot(String state, String line, List<AggregateSessions.Project> projects, boolean marks) { this.state = state; this.line = line; this.projects = projects; this.marks = marks; }
     }
     private boolean shown() { return activity.showing("home") || activity.showing("projects"); }
@@ -73,6 +74,8 @@ final class Workbench {
     private JSONObject seen;
     private LinearLayout attention, recent;
     private TextView summary;
+    private TextView[] metrics;
+    private TextView external;
     private String attentionMark;
     private boolean recentOpen;         // "最近" shows more than its first few
     // What is searched for, and what the lists are narrowed to: a tool, and where a thing runs ("" for any).
@@ -136,11 +139,31 @@ final class Workbench {
             page.addView(banner, kit.below(16));
         }
         holders.clear(); marks.clear(); attentionMark = null; filtersMark = null; filters = null; attention = null; recent = null;
+        metrics = null; external = null;
         if (list.length() == 0) {
             page.addView(welcome(), kit.below(22));
             page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(22));
             page.addView(kit.button("手动输入地址", 1, () -> activity.add("")), kit.below(10));
         } else if (tasks) {
+            LinearLayout monitor = kit.row();
+            monitor.setPadding(kit.dp(8), kit.dp(12), kit.dp(8), kit.dp(12));
+            monitor.setBackground(kit.shape(kit.PANEL, kit.LINE, 16));
+            String[] labels = {"待确认", "执行中", "已打开"};
+            metrics = new TextView[labels.length];
+            for (int i = 0; i < labels.length; i++) {
+                LinearLayout cell = kit.column();
+                cell.setPadding(kit.dp(8), 0, kit.dp(4), 0);
+                cell.addView(kit.text(labels[i], 13, kit.MUTED));
+                metrics[i] = kit.bold("—", 24, kit.INK);
+                metrics[i].setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                cell.addView(metrics[i]);
+                monitor.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
+            }
+            page.addView(monitor, kit.below(12));
+            external = kit.text("", 14, kit.ACCENT);
+            external.setMinHeight(kit.dp(48)); external.setGravity(Gravity.CENTER_VERTICAL);
+            external.setVisibility(View.GONE);
+            page.addView(external);
             // one search over every computer's terminals and conversations, and what to tell them apart by
             page.setFocusable(true); page.setFocusableInTouchMode(true);      // the box is written in when it is touched, not as the screen opens
             android.widget.EditText find = kit.field("搜索对话、终端和项目", android.text.InputType.TYPE_CLASS_TEXT);
@@ -350,6 +373,11 @@ final class Workbench {
         if (counts[2] > 0) parts.add(counts[2] + " 个在执行");
         String line = !parts.isEmpty() ? android.text.TextUtils.join(" · ", parts) : counts[3] > 0 ? "在线 · " + counts[3] + " 个终端等待输入" : "在线 · 没有任务在运行";
         Snapshot read = new Snapshot("on", line, groups, marks);
+        JSONArray starts = device.optJSONArray("agy_external");
+        for (int i = 0; starts != null && i < starts.length(); i++) {
+            long at = starts.optLong(i);
+            if (at > 0) read.agyStarts.add(at);
+        }
         for (int i = 0; features != null && i < features.length(); i++) read.can.add(features.optString(i));
         return read;
     }
@@ -371,6 +399,7 @@ final class Workbench {
         JSONArray list = activity.computers();
         List<AggregateSessions.Thing> things = new ArrayList<>();
         int online = 0, known = 0;
+        List<String> agyProcesses = new ArrayList<>();
         int[] total = new int[4];
         for (int i = 0; i < list.length(); i++) {
             JSONObject computer = list.optJSONObject(i);
@@ -381,6 +410,8 @@ final class Workbench {
             known++;
             if (!"on".equals(snapshot.state)) continue;
             online++;
+            for (long at : snapshot.agyStarts) agyProcesses.add(name + " · " +
+                java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(new java.util.Date(at)) + " 启动");
             Map<String, Long> looked = seen(url);
             int[] counts = AggregateSessions.counts(snapshot.projects, looked);
             for (int k = 0; k < 4; k++) total[k] += counts[k];
@@ -394,10 +425,27 @@ final class Workbench {
         if (known > 0) {
             List<String> parts = new ArrayList<>();
             parts.add(list.length() == 1 ? (online == 1 ? "电脑在线" : "电脑离线") : online + " / " + list.length() + " 台在线");
-            if (total[0] > 0) parts.add(total[0] + " 个等你确认");
-            if (total[1] > 0) parts.add(total[1] + " 个已打开");
-            if (total[2] > 0) parts.add(total[2] + " 个在执行");
+            if (metrics == null) {
+                if (total[0] > 0) parts.add(total[0] + " 个等你确认");
+                if (total[1] > 0) parts.add(total[1] + " 个已打开");
+                if (total[2] > 0) parts.add(total[2] + " 个在执行");
+            }
             kit.stands(summary, android.text.TextUtils.join(" · ", parts), total[0] > 0 ? kit.BAD : kit.MUTED, online > 0 ? kit.GOOD : kit.BAD);
+        }
+        if (metrics != null) {
+            int[] counts = {total[0], total[2], total[1]};
+            int[] colors = {kit.BAD, kit.BUSY, kit.INK};
+            for (int i = 0; i < metrics.length; i++) {
+                metrics[i].setText(online == 0 ? "—" : String.valueOf(counts[i]));
+                metrics[i].setTextColor(online > 0 && counts[i] > 0 ? colors[i] : kit.MUTED);
+            }
+            external.setVisibility(agyProcesses.isEmpty() ? View.GONE : View.VISIBLE);
+            if (!agyProcesses.isEmpty()) {
+                external.setText("电脑上的 Antigravity CLI · " + agyProcesses.size() + " 个进程  ›");
+                kit.press(external, () -> kit.sheet("电脑上的 Antigravity CLI",
+                    android.text.TextUtils.join("\n", agyProcesses) + "\n\n独立进程仅显示启动时间。要在手机上输入，请从项目新建 Antigravity 终端。",
+                    new String[]{"关闭"}, null, -1, which -> {}));
+            }
         }
         if (attention == null) return;
         AggregateSessions.Board board = AggregateSessions.board(things, query, tool, source);
@@ -493,7 +541,7 @@ final class Workbench {
         List<String> tools = new ArrayList<>(board.tools), sources = new ArrayList<>(board.sources);
         // (a project whose folder is used by an app or in a terminal is told apart too, also while nothing of it is listed)
         for (Snapshot snapshot : snapshots.values()) for (AggregateSessions.Project project : snapshot.projects) {
-            for (String known : new String[]{"claude", "codex", "opencode", "qoder", "cline", "pi"}) if (project.tools.contains(known) && !tools.contains(known)) tools.add(known);
+            for (String known : new String[]{"claude", "codex", "agy", "opencode", "qoder", "cline", "pi"}) if (project.tools.contains(known) && !tools.contains(known)) tools.add(known);
             for (String known : new String[]{"term", "app"}) if (project.sources.contains(known) && !sources.contains(known)) sources.add(known);
         }
         if (!tool.isEmpty() && !tools.contains(tool)) tools.add(tool);

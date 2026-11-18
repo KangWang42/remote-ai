@@ -7,7 +7,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   // The plain terminal is called what the computer calls it: PowerShell on Windows, the person's shell elsewhere.
-  const TOOLS = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', pi: 'Pi', shell: '终端' };
+  const TOOLS = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', pi: 'Pi', shell: '终端' };
   const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const native = window.RemoteCliNative || null;
   // The look belongs to the app, not to one computer: inside the app it is kept there, so every computer's pages
@@ -41,6 +41,7 @@
   // ---- drawing helpers
   const svg = (path, size) => `<svg viewBox="0 0 24 24" width="${size || 22}" height="${size || 22}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
   const ICON = {
+    agy: svg('<path d="M3 17c5 0 6-11 9-11s4 11 9 11M8 18l4-4 4 4"/>'),
     back: svg('<path d="M15 5l-7 7 7 7"/>'),
     // a wheel with eight teeth: the ring of teeth is one circle drawn in dashes
     gear: svg('<circle cx="12" cy="12" r="2.8"/><circle cx="12" cy="12" r="6.3"/><circle cx="12" cy="12" r="8.4" stroke-width="2.4" stroke-linecap="butt" stroke-dasharray="2.64 3.957"/>'),
@@ -1114,7 +1115,20 @@
     const waiting = stands(everything, 'confirm'), busy = everything.filter(working).length, opened = everything.filter(x => x.live && !needsYou(x) && !working(x)).length;
     // (inside the app, which lists several computers, the line says first which one this is)
     $('device-text').textContent = (computerName ? computerName + ' · ' : '') + (!ready ? (device.online ? '已暂停访问' : '电脑离线')
-      : project || !lists ? '电脑在线' : [waiting ? waiting + ' 个等你确认' : '', busy ? busy + ' 个正在运行' : '', opened ? opened + ' 个已打开' : ''].filter(Boolean).join(' · ') || '电脑在线');
+      : '电脑在线');
+    $('monitor').hidden = !!project || tab !== 'tasks';
+    $('metric-needs').textContent = ready ? waiting : '—';
+    $('metric-active').textContent = ready ? busy : '—';
+    $('metric-open').textContent = ready ? opened : '—';
+    $('metric-needs').toggleAttribute('data-active', ready && waiting > 0);
+    $('metric-active').toggleAttribute('data-active', ready && busy > 0);
+    const external = $('external-agy'), starts = ready ? device.agy_external || [] : [];
+    external.hidden = !starts.length;
+    if (external.dataset.starts !== starts.join(',')) {
+      external.dataset.starts = starts.join(',');
+      external.querySelector('summary').textContent = '电脑上的 Antigravity CLI · ' + starts.length + ' 个进程';
+      external.querySelector('ul').replaceChildren(...starts.map(at => el('li', { textContent: new Date(at).toLocaleString() + ' 启动' })));
+    }
     // what waits for an answer is counted on its tab, whichever tab is open
     $('tab-count').hidden = !waiting; $('tab-count').textContent = waiting > 9 ? '9+' : waiting;
     if (!lists) { if (views[tab]) views[tab].draw(); return; }

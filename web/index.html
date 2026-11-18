@@ -45,6 +45,14 @@
 
     <!-- what there is to work with (任务), and the projects it is in (项目): one search and one row of filters for both -->
     <div id="overview" hidden>
+      <section id="monitor" aria-label="本机任务概览" hidden>
+        <div class="metrics">
+          <div><span>待确认</span><strong id="metric-needs">—</strong></div>
+          <div><span>执行中</span><strong id="metric-active">—</strong></div>
+          <div><span>已打开</span><strong id="metric-open">—</strong></div>
+        </div>
+        <details id="external-agy" hidden><summary>电脑上的 Antigravity CLI</summary><ul></ul><p>独立启动的进程仅显示启动时间。要在手机上输入，请从项目新建 Antigravity 终端。</p></details>
+      </section>
       <!-- one search over every terminal and conversation, and what to tell them apart by -->
       <div id="find" hidden>
         <input id="query" type="search" placeholder="搜索对话、终端和项目" aria-label="搜索全部对话、终端和项目" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">

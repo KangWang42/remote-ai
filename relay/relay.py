@@ -78,7 +78,7 @@ DESKTOP_ACTIONS = ("app_open",)
 DESKTOP_TOOLS = ("codex", "claude")
 UPDATE_ACTION = "update"      # the program on the computer looks for a newer version of itself and installs it
 MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 8, 12, 2_000_000, 300_000
-LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi", "shell": "PowerShell"}
+LABELS = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity CLI", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi", "shell": "PowerShell"}
 OP_SECONDS = 120
 
 
@@ -750,6 +750,8 @@ class Relay:
                     if "text" in payload and _words(payload["text"]) is None:
                         raise RemoteError("内容为空、超过 8000 字或含有控制字符")
                 session = payload.get("session", "")
+                if tool == "agy" and (session or previous or any(payload.get(k) for k in ("history", "fork", "takeover"))):
+                    raise RemoteError("请在项目中新建 Antigravity 终端")
                 if payload.get("history") and not session and not previous:
                     raise RemoteError("请在项目中选择具体的历史对话；新建终端不会打开 resume 选择器")
                 saved = None
@@ -1213,7 +1215,9 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "codex-desktop-control", "chat") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
-                           tools=[x for x in info.get("tools", []) if x in ("claude", "codex", "opencode", "qoder", "cline", "pi", "shell")],
+                           tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
+                           agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
+                           if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))
             for term in state["threads"].values():

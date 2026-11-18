@@ -179,6 +179,7 @@ public sealed class TerminalAgent {
     void Return(Dictionary<string, object> kept, Dictionary<string, object> prefs) {
         string id = Get(kept, "id"), tool = Get(kept, "tool"), dir = Get(kept, "dir"), session = Get(kept, "session");
         var dirs = AllDirs(prefs);
+        if (tool == "agy") return; // An unbound PTY cannot be reattached by conversation ID.
         string launcher = FindTool(tool);
         var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
         string where = Place(live, dirs);
@@ -600,6 +601,7 @@ public sealed class TerminalAgent {
     readonly FileTransfers uploads = new FileTransfers();
     DateTime lastInput = DateTime.MinValue, lastScan = DateTime.MinValue, toolsAt = DateTime.MinValue;
     string[] tools = new string[0];
+    long[] externalAgy = new long[0];
     void Wake() { try { if (wake.CurrentCount == 0) wake.Release(); } catch (SemaphoreFullException) { } catch (ObjectDisposedException) { } }
     DateTime nextScan = DateTime.MinValue, lastActivity = DateTime.MinValue;
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
@@ -951,6 +953,10 @@ public sealed class TerminalAgent {
     }
     internal static string FindTool(string name) {
         if (name == "shell") return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+        if (name == "agy") {
+            string installed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "agy", "bin", "agy.exe");
+            if (File.Exists(installed)) return installed;
+        }
         foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';').Concat(new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "OpenAI", "Codex", "bin") }))
             foreach (string ext in new[] { ".exe", ".cmd" }) { try { string path = Path.Combine(folder.Trim(), name + ext); if (File.Exists(path)) return path; } catch { } }
         return null;
@@ -1379,7 +1385,7 @@ public sealed class TerminalAgent {
         }
     }
     public static string Command(string tool, string launcher, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false) {
-        if (tool != "claude" && tool != "codex" && tool != "shell") throw new ArgumentException("工具无效");
+        if (tool != "claude" && tool != "codex" && tool != "agy" && tool != "shell") throw new ArgumentException("工具无效");
         if (launcher == null || launcher.IndexOfAny(new[] { '"', '%', '\r', '\n' }) >= 0) throw new ArgumentException("工具路径无效");
         if (!String.IsNullOrEmpty(session) && !Regex.IsMatch(session, @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z")) throw new ArgumentException("历史会话编号无效");
         string args = Arguments(tool, session, history, mode, fork, noDaemon, fresh);
@@ -1387,6 +1393,10 @@ public sealed class TerminalAgent {
     }
     public static string Arguments(string tool, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false) {
         string args = "";
+        if (tool == "agy") {
+            if (!String.IsNullOrEmpty(session) || history || fork || fresh) throw new ArgumentException("请在 Antigravity CLI 内选择历史对话");
+            return mode == "read" ? " --mode plan" : mode == "edit" ? " --mode accept-edits" : "";
+        }
         if (tool == "claude") args = (session.Length > 0 ? (fresh ? " --session-id " : " --resume ") + session : history ? " --resume" : "") + (mode == "read" ? " --permission-mode plan" : mode == "edit" ? " --permission-mode acceptEdits" : "");
         if (tool == "codex") args = (session.Length > 0 ? (fork ? " fork " : " resume ") + session : history ? " resume --include-non-interactive" : "") + (noDaemon ? " --no-daemon" : "") + (mode == "read" ? " -s read-only" : mode == "edit" ? " -s workspace-write" : "");
         if (tool == "shell") args = " -NoLogo -NoExit";
@@ -1492,6 +1502,7 @@ public sealed class TerminalAgent {
         lock (work) {
             LiveTerminal live;
             if (!terminals.TryGetValue(terminalId, out live) || live.Pty == null || live.Pty.Closed) throw new InvalidOperationException("手机终端已经结束，请刷新活动列表");
+            if (live.Tool == "agy") throw new InvalidOperationException("请通过“在电脑上打开”使用原 Antigravity 终端");
             var prefs = Preferences();
             var dirs = AllDirs(prefs);
             string where = Place(live, dirs);
@@ -1868,7 +1879,11 @@ public sealed class TerminalAgent {
                     var reading = Task.Run(() => { try { Scan(allowed, running); Recover(); } catch { } finally { scanning = 0; Wake(); } });
                 }
             }
-            if (DateTime.UtcNow - toolsAt > TimeSpan.FromSeconds(30)) { tools = new[] { "claude", "codex", "shell" }.Where(t => FindTool(t) != null).ToArray(); toolsAt = DateTime.UtcNow; }
+            if (DateTime.UtcNow - toolsAt > TimeSpan.FromSeconds(30)) {
+                tools = new[] { "claude", "codex", "agy", "shell" }.Where(t => FindTool(t) != null).ToArray();
+                externalAgy = enabled ? Antigravity.ExternalStarts(FindTool("agy"), terminals.Values.Where(t => !t.Pty.Closed).Select(t => t.Pty.Id).ToArray()) : new long[0];
+                toolsAt = DateTime.UtcNow;
+            }
             // An ended terminal whose conversation runs in a terminal again is no longer one of the recent ones.
             ended.RemoveAll(e => e.Session.Length > 0 && terminals.Values.Any(t => !t.Pty.Closed && t.Tool == e.Tool && t.Session == e.Session));
             // a conversation says itself how it stands and which it is
@@ -1883,7 +1898,7 @@ public sealed class TerminalAgent {
                 return taken++ == 0 || room >= 0;
             }).ToArray();
             var payload = new Dictionary<string, object> {
-                { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, version = Version, newer = Newer, shell = "PowerShell",
+                { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                     features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "codex-desktop-control", "chat" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),

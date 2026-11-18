@@ -22,6 +22,22 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": self.info, "acks": [{"id": payload["id"]}], "terminals": [{"id": self.terminal, "state": "running"}]}, now=1003)
         return payload
 
+    def test_agy_processes_are_separate_from_interactive_terminals(self):
+        request = {"action": "start", "id": "a" * 32, "tool": "agy", "dir": "demo"}
+        self.info.update(tools=["agy"], agy_external=[123456789, "123", True, -1])
+        self.relay.agent({"info": self.info}, now=1001)
+        overview = self.relay.overview(now=1001)
+        self.assertEqual(overview["device"]["agy_external"], [123456789])
+        self.assertEqual(overview["terminals"], [])
+        for extra in ({"previous": "c" * 32}, {"history": True}, {"takeover": True}, {"form": "chat"}):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(request, **extra), now=1002)
+        self.relay.command(request, now=1003)
+        self.assertEqual(self.relay.overview(now=1003)["terminals"][0]["title"], "Antigravity CLI")
+        self.info["enabled"] = False
+        self.relay.agent({"info": self.info}, now=1004)
+        self.assertEqual(self.relay.overview(now=1004)["device"]["agy_external"], [])
+
     def test_phone_computer_update_receipt_and_version_are_distinct(self):
         request = {"action": "update", "id": "a" * 32}
         with self.assertRaisesRegex(RemoteError, "不支持"):

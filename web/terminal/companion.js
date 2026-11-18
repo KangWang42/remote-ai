@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const id = new URLSearchParams(location.search).get('id') || '';
-  const TOOLS = { claude: 'Claude Code', codex: 'Codex', shell: 'PowerShell' };
+  const TOOLS = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', shell: 'PowerShell' };
   const PHASE = { confirm: ['等你确认', 0], done: ['已完成', 1], busy: ['正在执行', 2], starting: ['正在启动', 3], idle: ['等待输入', 4] };
   const load = () => { try { return JSON.parse(localStorage.getItem('rcli-seen') || '{}') || {}; } catch (error) { return {}; } };
   const save = map => { try { localStorage.setItem('rcli-seen', JSON.stringify(map)); } catch (error) { /* private window */ } };

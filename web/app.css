@@ -14,6 +14,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 button:disabled { opacity: .45; cursor: default; }
 svg { display: block; }
 
+/* Task overview */
+#monitor { margin: 8px 0 16px; padding: 15px 0; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+.metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
+.metrics > div { padding: 0 14px; min-width: 0; }
+.metrics > div + div { border-inline-start: 1px solid var(--line); }
+.metrics span, #external-agy p { color: var(--muted); font-size: .82rem; }
+.metrics strong { display: block; font: 650 1.55rem/1.3 ui-monospace, monospace; color: var(--ink); }
+#metric-needs[data-active] { color: var(--bad); }
+#metric-active[data-active] { color: var(--busy); }
+#external-agy { border-top: 1px solid var(--line); margin: 12px 14px -8px; }
+#external-agy summary { padding: 12px 0; cursor: pointer; font-size: .9rem; }
+#external-agy ul { margin: 0 0 6px; padding-inline-start: 1.2em; font-variant-numeric: tabular-nums; }
+#external-agy p { padding-bottom: 8px; }
 /* ---- sign in */
 #login { display: grid; min-height: 100vh; place-items: center; }
 #login form { width: min(100%, 340px); display: grid; gap: 10px; }

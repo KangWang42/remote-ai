@@ -292,7 +292,7 @@
     dialog.showModal();
   }
   async function again() {
-    if (!terminal || terminal.state !== 'closed' || terminal.tool === 'shell') return;
+    if (!terminal || terminal.state !== 'closed' || ['shell', 'agy'].includes(terminal.tool)) return;
     const start = { action: 'start', id: newId(), tool: terminal.tool, dir: terminal.dir };
     if (terminal.session) start.session = terminal.session;
     start.history = false;
@@ -309,7 +309,7 @@
   function menu() {
     if (!terminal) return;
     const closed = terminal.state === 'closed', dom = store.get('renderer', 'webgl') === 'dom', choices = [];
-    if (closed && terminal.tool !== 'shell') choices.push([terminal.session ? '继续这个对话' : '重新新建对话', again]);
+    if (closed && !['shell', 'agy'].includes(terminal.tool)) choices.push([terminal.session ? '继续这个对话' : '重新新建对话', again]);
     choices.push(['更换外观', () => {
       const follows = !!(native && native.pref && native.setPref) && !native.pref('termskin');
       const looks = ui().skins().map(s => [s.name, () => { store.set('skin', s.key); ui().setSkin(s.key); }, s.current && !follows]);

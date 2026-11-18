@@ -649,7 +649,7 @@ public sealed partial class App : Form {
         activityMark = mark;
         activity.Show(running.Select(r => {
             DateTime started; DateTime.TryParse(r[3], null, System.Globalization.DateTimeStyles.RoundtripKind, out started);
-            string tool = r[0] == "claude" ? "Claude Code" : r[0] == "codex" ? "Codex" : "PowerShell";
+            string tool = r[0] == "claude" ? "Claude Code" : r[0] == "codex" ? "Codex" : r[0] == "agy" ? "Antigravity CLI" : "PowerShell";
             // how it stands first; for one that only is open, where: shared with the phone, or on the computer alone
             string tag = r[2] == "confirm" ? "等待确认" : r[2] == "busy" ? "正在执行" : r[2] == "waiting" ? "等手机的消息" : r[6] == "phone" ? "手机和电脑共用" : "电脑上开着";
             return new Row { Glyph = Theme.IconTerminal, Title = (r[4].Length > 0 ? r[4] : tool) + " · " + r[1], About = (r[5].Length > 0 ? r[5] + " · " : "") + tool + (r[6] == "phone" ? " · 双击在电脑上打开 · " + Since(started.ToUniversalTime()) : ""), Value = r,
@@ -713,6 +713,7 @@ public sealed partial class App : Form {
         if (raw == null || raw.Length < 8 || raw[6] != "phone") { Toast("请先在列表中选择一个手机和电脑共用的终端"); return; }
         if (agent == null) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
         string tool = raw[0] == "claude" ? "Claude Code" : raw[0] == "codex" ? "Codex" : "PowerShell";
+        if (raw[0] == "agy") { Toast("请通过“在电脑上打开”使用原 Antigravity 终端"); return; }
         if (raw[0] == "shell") { Toast("PowerShell 没有可恢复的会话，不能转为独立窗口；可通过“在电脑上打开”直接使用"); return; }
         if (!Confirm("转成电脑上的独立窗口？", "这个终端会先结束，然后在电脑的命令行窗口里接着同一段对话，正在执行的任务会中断，手机上不再能看到它。\n仅需在电脑上使用时，选“在电脑上打开”即可，无需转换。", "结束它并转成独立窗口", true)) return;
         activity.Enabled = false;
