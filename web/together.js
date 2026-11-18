@@ -293,7 +293,14 @@
     parts.passing = el('section', { id: 'chains' }, el('div', { className: 'section-head' }, el('h2', { textContent: '自动接力' }), parts.chainCount), parts.chainStatus, parts.chains);
     parts.lists = el('div', null, parts.passing,
       el('section', { id: 'schedules' }, el('div', { className: 'section-head' }, el('h2', { textContent: '定时提问' }), parts.scheduleCount), parts.scheduleStatus, parts.schedules));
-    box.append(el('div', { className: 'acts collaboration-actions' }, act('add-chain', '添加接力', '完成一轮后自动转交', ICON.together, () => editChain()), act('add-schedule', '定时提问', '在指定时间发起提问', CLOCK, () => editSchedule()), act('handoff', '交接对话', '立即交出上下文', HAND, () => handoff()), act('ask-many', '同时提问', '同一个问题发给多段对话', MANY, () => askMany())),
+    function actionGroup(title, first, second) {
+      return el('section', { className: 'action-group' }, el('h2', { textContent: title }),
+        el('div', { className: 'acts collaboration-actions' }, first, second));
+    }
+    box.append(actionGroup('立即协作', act('handoff', '交接对话', '立即交出上下文', HAND, () => handoff()),
+      act('ask-many', '同时提问', '同一个问题发给多段对话', MANY, () => askMany())),
+      actionGroup('自动安排', act('add-chain', '添加接力', '完成一轮后自动转交', ICON.together, () => editChain()),
+        act('add-schedule', '定时提问', '在指定时间发起提问', CLOCK, () => editSchedule())),
       el('p', { className: 'hint collab-context', textContent: '协作在这台电脑上执行。电脑保持运行，手机可以离线。' }), parts.notice, parts.lists);
   }
   function fill(list, cards, signature) {

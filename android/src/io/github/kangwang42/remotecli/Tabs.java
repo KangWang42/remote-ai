@@ -64,7 +64,10 @@ final class Tabs {
             tab.setBackground(pressed);
             LinearLayout both = kit.column();
             both.setGravity(Gravity.CENTER_HORIZONTAL);
-            both.addView(kit.icon(ICONS[i], shade, 24));
+            FrameLayout glyph = new FrameLayout(activity);
+            if (on) glyph.setBackground(kit.shape(Kit.mix(kit.ACCENT, kit.BG, .12f), 0, 14));
+            glyph.addView(kit.icon(ICONS[i], shade, 22), new FrameLayout.LayoutParams(kit.dp(22), kit.dp(22), Gravity.CENTER));
+            both.addView(glyph, new LinearLayout.LayoutParams(kit.dp(48), kit.dp(28)));
             TextView label = kit.text(LABELS[i], 11, shade);
             label.setTextSize(TypedValue.COMPLEX_UNIT_SP, .7f * root());
             label.setTypeface(Build.VERSION.SDK_INT >= 28 ? Typeface.create(Typeface.DEFAULT, 600, false) : Typeface.DEFAULT_BOLD);

@@ -21,7 +21,7 @@ final class AppPages {
     private final Workbench bench;
     private final Map<String, LinearLayout> holders = new HashMap<>();
     private final Map<String, JSONObject> stats = new HashMap<>();
-    private TextView total;
+    private TextView total, coverage;
     private int generation, answered, expected;
 
     AppPages(MainActivity activity, Kit kit, Workbench bench) { this.activity = activity; this.kit = kit; this.bench = bench; }
@@ -32,10 +32,22 @@ final class AppPages {
         LinearLayout page = kit.page(22);
         page.addView(kit.head(mine ? "我的" : "协作", kit.text(mine ? "设备连接与个人偏好" : "交接上下文，让对话接着做", 13, kit.MUTED)));
         if (!mine && activity.computers().length() > 0) {
-            actions(page, "添加接力", "完成一轮后自动转交", "chain", "定时提问", "在指定时间发起提问", "schedule");
+            page.addView(kit.bold("立即协作", 16, kit.INK), kit.below(20));
             actions(page, "交接对话", "立即交出上下文", "handoff", "同时提问", "同一个问题发给多段对话", "many");
+            page.addView(kit.bold("自动安排", 16, kit.INK), kit.below(20));
+            actions(page, "添加接力", "完成一轮后自动转交", "chain", "定时提问", "在指定时间发起提问", "schedule");
         }
         if (mine) {
+            LinearLayout summary = kit.column();
+            summary.setPadding(kit.dp(20), kit.dp(16), kit.dp(20), kit.dp(18));
+            summary.setBackground(kit.shape(Kit.mix(kit.ACCENT, kit.PANEL, .07f), kit.LINE, 20));
+            summary.addView(kit.bold("今日工作", 13, kit.MUTED));
+            total = kit.bold("正在读取工作统计…", 19, kit.INK);
+            summary.addView(total, kit.below(6));
+            coverage = kit.text("", 13, kit.MUTED);
+            summary.addView(coverage, kit.below(4));
+            page.addView(summary, kit.below(18));
+            devices(page);
             LinearLayout reminders = kit.settingGroup(page, "提醒与后台");
             kit.settingSwitch(reminders, "任务提醒", "需要确认或一轮完成时通知", activity.watching(), activity::toggleWatch);
             kit.setting(reminders, "提醒与权限", "通知、电池与后台联网", activity.reminderStatus(), activity::reminderSettings);
@@ -44,15 +56,7 @@ final class AppPages {
             LinearLayout updates = kit.settingGroup(page, "版本与更新");
             kit.setting(updates, "手机 App 更新", "当前 v" + activity.versionName() + " · 检查手机安装包更新", "", activity::checkUpdate);
             kit.settingSwitch(updates, "自动检查手机更新", "发现新版时提示，安装前由你确认", activity.autoUpdate(), activity::toggleAutoUpdate);
-            LinearLayout connections = kit.settingGroup(page, "已连接的电脑");
-            JSONArray saved = activity.computers();
-            for (int i = 0; i < saved.length(); i++) { JSONObject computer = saved.optJSONObject(i); if (computer == null) continue; String url = computer.optString("url");
-                kit.setting(connections, computer.optString("name", MainActivity.host(url)), MainActivity.host(url) + " · 版本与远程更新", "管理", () -> activity.manage(url));
-            }
-            kit.setting(connections, "添加电脑", "扫描电脑端的连接二维码", "", activity::scan);
-            total = kit.text("正在读取工作统计…", 13, kit.MUTED);
-            page.addView(kit.bold("工作统计", 13, kit.MUTED), kit.below(24));
-            page.addView(total, kit.below(8));
+            if (activity.computers().length() > 0) page.addView(kit.bold("各台电脑的统计", 16, kit.INK), kit.below(24));
         } else {
             page.addView(kit.text("选择电脑后设置对话。接力和定时提问由电脑执行，手机可以离线；电脑须保持运行。接力仅限同一台电脑。", 13, kit.MUTED), kit.below(16));
             page.addView(kit.bold("已安排的协作", 16, kit.INK), kit.below(24));
@@ -60,7 +64,7 @@ final class AppPages {
         JSONArray computers = activity.computers(); expected = computers.length();
         if (expected == 0) {
             if (mine) total.setText("添加电脑后显示工作统计");
-            page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(22));
+            else page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(22));
         }
         for (int i = 0; i < computers.length(); i++) {
             JSONObject computer = computers.optJSONObject(i);
@@ -78,14 +82,7 @@ final class AppPages {
             card.addView(name);
             LinearLayout body = kit.column(); body.addView(kit.text("正在连接…", 13, kit.MUTED));
             holders.put(url, body); card.addView(body, kit.below(10));
-            if (!mine) {
-                LinearLayout adds = kit.row();
-                adds.addView(kit.button("添加接力", 1, () -> activity.together(url, "chain")), new LinearLayout.LayoutParams(0, -2, 1));
-                LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(0, -2, 1);
-                beside.leftMargin = kit.dp(8);
-                adds.addView(kit.button("定时提问", 1, () -> activity.together(url, "schedule")), beside);
-                card.addView(adds, kit.below(10));
-            } else card.addView(kit.button("查看统计详情", 1, () -> activity.computerPage(url, tab)), kit.below(10));
+            if (mine) card.addView(kit.button("查看统计详情", 1, () -> activity.computerPage(url, tab)), kit.below(10));
             page.addView(card, kit.below(16));
         }
         page.addView(kit.button("刷新", 1, () -> activity.appPage(tab)), kit.below(16));
@@ -93,6 +90,17 @@ final class AppPages {
         return page;
     }
 
+    private void devices(LinearLayout page) {
+        LinearLayout connections = kit.settingGroup(page, "已连接的电脑");
+        JSONArray saved = activity.computers();
+        for (int i = 0; i < saved.length(); i++) {
+            JSONObject computer = saved.optJSONObject(i);
+            if (computer == null) continue;
+            String url = computer.optString("url");
+            kit.setting(connections, computer.optString("name", MainActivity.host(url)), MainActivity.host(url) + " · 版本与远程更新", "管理", () -> activity.manage(url));
+        }
+        kit.setting(connections, "添加电脑", "扫描电脑端的连接二维码", "", activity::scan);
+    }
     private JSONObject ask(String url, String cookie, String action) throws Exception {
         return bench.post(url + "/api/work", cookie, new JSONObject().put("id", UUID.randomUUID().toString().replace("-", "")).put("action", action).put("days", 7));
     }
@@ -149,7 +157,10 @@ final class AppPages {
     private void sum() {
         long prompts = 0, sessions = 0; double seconds = 0;
         for (JSONObject data : stats.values()) { JSONObject day = day(data); prompts += day.optLong("prompts"); sessions += day.optLong("sessions"); seconds += day.optDouble("active", 0); }
-        total.setText("今天合计 " + prompts + " 次提问 · " + sessions + " 段对话\n" + Math.round(seconds / 60) + " 分钟（各电脑时长相加）\n已读取 " + stats.size() + "/" + expected + " 台" + (answered < expected ? " · 其余读取中" : stats.size() < expected ? " · 未连接电脑未计入" : ""));
+        total.setText(stats.isEmpty() ? (answered < expected ? "正在读取工作统计…" : "暂时无法读取统计")
+            : prompts + " 次提问 · " + sessions + " 段对话");
+        String duration = stats.isEmpty() ? "" : "各电脑合计 " + Math.round(seconds / 60) + " 分钟\n";
+        coverage.setText(duration + "已读取 " + stats.size() + "/" + expected + " 台" + (answered < expected ? " · 其余读取中" : stats.size() < expected ? " · 未连接电脑未计入" : ""));
     }
     private void actions(LinearLayout page, String first, String firstHint, String firstAction, String second, String secondHint, String secondAction) {
         LinearLayout row = kit.row();
@@ -159,8 +170,12 @@ final class AppPages {
     }
     private View action(String title, String hint, String what) {
         LinearLayout tile = kit.column(); tile.setPadding(kit.dp(14), kit.dp(14), kit.dp(14), kit.dp(14));
-        tile.setBackground(kit.shape(kit.PANEL, kit.LINE, 16));
-        tile.addView(kit.bold(title, 16, kit.INK)); tile.addView(kit.text(hint, 12, kit.MUTED), kit.below(5));
+        boolean automatic = what.equals("chain") || what.equals("schedule");
+        int icon = what.equals("chain") ? R.drawable.ic_tab_together : what.equals("schedule") ? R.drawable.ic_clock
+            : what.equals("handoff") ? R.drawable.ic_handoff : R.drawable.ic_say;
+        tile.setBackground(kit.shape(kit.PANEL, kit.LINE, 20));
+        tile.addView(kit.tile(icon, automatic ? kit.BUSY : kit.ACCENT, 32));
+        tile.addView(kit.bold(title, 16, kit.INK), kit.below(10)); tile.addView(kit.text(hint, 13, kit.MUTED), kit.below(3));
         kit.press(tile, () -> {
             java.util.List<String> urls = new java.util.ArrayList<>();
             JSONArray saved = activity.computers();

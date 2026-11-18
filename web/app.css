@@ -359,6 +359,9 @@ button.row:disabled { opacity: 1; cursor: default; }
 #tabs button { position: relative; display: grid; justify-items: center; align-content: center; gap: 1px; min-height: 52px; border-radius: 14px; color: var(--muted); font-size: .7rem; font-weight: 600; line-height: 1.3; }
 #tabs button:active { background: var(--raised); }
 #tabs button[aria-current="page"] { color: var(--accent); }
+#tabs .glyph { display: grid; place-items: center; width: 48px; height: 28px; border-radius: 14px; }
+#tabs .glyph svg { width: 22px; height: 22px; }
+#tabs button[aria-current="page"] .glyph { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
 #tabs button[aria-current="page"] svg { stroke-width: 2.25; }
 /* how many wait for an answer, on the tab they are on */
 #tab-count { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--bad); color: #fff; font-size: .66rem; font-style: normal; font-weight: 700; line-height: 17px; text-align: center; }
@@ -382,8 +385,12 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .acts button { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); font-weight: 600; line-height: 1.3; text-align: left; }
 .acts button:active { background: var(--raised); }
 .acts .tool { --tint: var(--accent); }
-.collaboration-actions button { align-items: flex-start; gap: 9px; }
-.collaboration-actions .tool { width: 24px; height: 24px; flex: none; }
+.action-group h2 { font-size: 1.04rem; margin: 20px 2px 8px; }
+.action-group .acts { margin-top: 0; }
+.collaboration-actions button { flex-direction: column; align-items: flex-start; gap: 10px; border-radius: 20px; }
+.collaboration-actions .tool { width: 32px; height: 32px; border-radius: 10px; --tint: var(--accent); }
+.collaboration-actions .tool svg { width: 19px; height: 19px; }
+#add-chain .tool, #add-schedule .tool { --tint: var(--busy); }
 .collab-action { display: grid; gap: 5px; min-width: 0; }
 .collab-action b { font-size: .94rem; }
 .collab-action small { color: var(--muted); font-size: .76rem; font-weight: 400; line-height: 1.5; }
@@ -475,7 +482,7 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .settings-section { margin: 0 !important; min-width: 0; }
 .settings-section .section-head { margin: 0 0 8px; }
 .settings-section h2 { font-size: .82rem; color: var(--muted); font-weight: 600; }
-.settings-group { background: var(--panel); border-radius: 16px; overflow: hidden; }
+.settings-group { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; }
 .setting-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 72px; padding: 15px 17px; border: 0; border-radius: 0; background: none; text-align: start; color: var(--ink); }
 .setting-row + .setting-row { border-top: 1px solid var(--line); }
 .setting-row:hover { background: var(--raised); }

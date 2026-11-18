@@ -76,6 +76,8 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         until("document.querySelectorAll('#chains .card').length === 2 && document.querySelectorAll('#schedules .card').length === 2", "what the computer keeps, and the two cards that add")
         assert "整理第三章的参考文献 → 核对回归表的系数" in value("document.querySelector('#chains .card b').textContent") and "还剩 2 次" in value("document.querySelector('#chains .card').textContent")
         assert "每天 08:30" in value("document.querySelector('#schedules .card').textContent")
+        assert value("[...document.querySelectorAll('.action-group')].map(g=>[g.querySelector('h2').textContent,...[...g.querySelectorAll('button')].map(b=>b.id)])") == [
+            ['立即协作', 'handoff', 'ask-many'], ['自动安排', 'add-chain', 'add-schedule']]
         browser.picture(out / "together.png")
         # 接力: refused while both ends are one conversation; then set, changed, removed
         value("document.querySelector('#chains .card.add button').click()")
@@ -193,6 +195,14 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
                 assert seen["foot"] == 0 and seen["last"] <= seen["top"] and min(seen["buttons"]) >= 48, (name, width, seen)
                 if width == 320:
                     browser.picture(out / ("narrow-%s.png" % name))
+                    if name == "together":
+                        value("document.documentElement.style.fontSize='19px'; scrollTo(0,0)")
+                        assert value("""[...document.querySelectorAll('.action-group button')].every(b=>{
+                            const r=b.getBoundingClientRect(), icon=b.querySelector('.tool').getBoundingClientRect();
+                            return r.width>=48 && r.height>=48 && icon.width===32 && b.scrollWidth<=b.clientWidth
+                                && b.querySelector('small').getBoundingClientRect().bottom<=r.bottom;
+                        }) && document.documentElement.scrollWidth===320""")
+                        browser.picture(out / "collaboration-large-type.png")
 
         # Native global collaboration opens the form directly; instructions and choices fit even at 320 px.
         for width in (320, 390, 430, 1440):

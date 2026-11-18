@@ -96,8 +96,8 @@ final class Kit {
     /** A button: 0 the main action, 1 an ordinary one, 2 only text. A press dims it for a moment. */
     TextView button(String label, int kind, Runnable action) {
         TextView view = bold(label, 16, kind == 0 ? ON_ACCENT : kind == 1 ? INK : MUTED);
-        view.setGravity(Gravity.CENTER); view.setMinHeight(dp(52)); view.setPadding(dp(18), 0, dp(18), 0);
-        if (kind < 2) view.setBackground(shape(kind == 0 ? ACCENT : PANEL, kind == 0 ? 0 : LINE, 16));
+        view.setGravity(Gravity.CENTER); view.setMinHeight(dp(kind == 0 ? 52 : 48)); view.setPadding(dp(16), dp(6), dp(16), dp(6));
+        if (kind < 2) view.setBackground(shape(kind == 0 ? ACCENT : PANEL, kind == 0 ? 0 : LINE, kind == 0 ? 16 : 12));
         press(view, action);
         return view;
     }
@@ -138,6 +138,7 @@ final class Kit {
         toggle.setTrackTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}}, new int[]{tint(ACCENT, 90), LINE}));
         LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2); gap.leftMargin = dp(12); row.addView(toggle, gap);
         toggle.setOnCheckedChangeListener((button, checked) -> action.run());
+        press(row, toggle::toggle);
     }
     private LinearLayout settingBody(LinearLayout group, String label, String description) {
         if (group.getChildCount() > 0) { View line = new View(activity); line.setBackgroundColor(LINE); LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, dp(1)); divider.setMargins(dp(16), 0, dp(16), 0); group.addView(line, divider); }

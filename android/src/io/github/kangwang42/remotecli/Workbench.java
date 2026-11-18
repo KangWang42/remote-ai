@@ -887,7 +887,13 @@ final class Workbench {
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(14), 0, kit.dp(4), 0);
         texts.addView(kit.line(name, 16.5f, kit.INK, true));
-        texts.addView(kit.line(snapshot == null ? "正在连接…" : snapshot.line, 12.5f, on && counts[0] > 0 ? kit.BAD : kit.MUTED, false));
+        String status = snapshot == null ? "正在连接…" : snapshot.line;
+        if (on) {
+            int namedProjects = 0;
+            for (AggregateSessions.Project project : snapshot.projects) if (!project.name.isEmpty()) namedProjects++;
+            status = namedProjects + " 个项目 · " + status;
+        }
+        texts.addView(kit.text(status, 12.5f, on && counts[0] > 0 ? kit.BAD : kit.MUTED));
         head.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
         boolean folded = collapsed.contains(url);
         View fold = kit.iconButton(R.drawable.ic_chevron, folded ? "展开" + name : "收起" + name, () -> { if (!collapsed.remove(url)) collapsed.add(url); drawComputer(computer); });
@@ -964,7 +970,8 @@ final class Workbench {
         boolean open = unfolded.contains(key);
         LinearLayout row = kit.row();
         row.setMinimumHeight(kit.dp(52)); row.setPadding(kit.dp(16), kit.dp(8), kit.dp(12), kit.dp(8));
-        row.addView(kit.icon(R.drawable.ic_folder, open ? kit.ACCENT : kit.MUTED, 20));
+        int folderColor = need > 0 ? kit.BAD : work > 0 ? kit.BUSY : opened > 0 || open ? kit.ACCENT : kit.MUTED;
+        row.addView(kit.tile(R.drawable.ic_folder, folderColor, 34));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(12), 0, kit.dp(8), 0);
         texts.addView(kit.title(project.name.isEmpty() ? "未加入项目的对话" : project.name, 15, kit.INK, open));
