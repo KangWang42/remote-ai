@@ -26,8 +26,7 @@
     return { app: Object.keys(APPS).filter(tool => page.chatOk(tool) || desktop(tool)), term };
   }
   function named(kind, tool) {
-    if (tool === viaShell) return 'agy（通过 PowerShell）';
-    if (tool === 'agy') return 'agy 终端';
+    if (tool === 'agy' || tool === viaShell) return 'agy';
     return kind === 'app' ? APPS[tool] : TOOLS[tool];
   }
   // The kind that stands open: the one chosen last. Before any choice: a terminal for a project whose folder has

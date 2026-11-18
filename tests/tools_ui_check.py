@@ -52,14 +52,14 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
             browser.open(played.origin + '/?project=web-shop', "document.querySelectorAll('#launch button').length>0", 'project tools', **screen)
             browser.value("Array.from(document.querySelectorAll('#begin .seg button')).find(b=>b.textContent==='终端').click()")
             browser.until("document.querySelectorAll('#launch button').length===7", 'seven tool buttons')
-            assert browser.value("Array.from(document.querySelectorAll('#launch button')).map(b=>b.textContent)") == ['Claude Code', 'Codex', 'agy 终端', 'OpenCode', 'Qoder', 'Cline', 'PowerShell']
+            assert browser.value("Array.from(document.querySelectorAll('#launch button')).map(b=>b.textContent)") == ['Claude Code', 'Codex', 'agy', 'OpenCode', 'Qoder', 'Cline', 'PowerShell']
             if width < 500:
                 assert browser.value("new Set(Array.from(document.querySelectorAll('#launch button'),b=>b.offsetTop)).size >= 2")
             geometry = browser.value("({inner:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth,errors:__errors})")
             assert geometry['inner'] == width and max(geometry['scroll'], geometry['body']) <= width and not geometry['errors'], geometry
             browser.picture(out / ('tools-%d.png' % width))
             tool, name = ('opencode', 'OpenCode') if width == 430 else ('agy', 'Antigravity CLI')
-            label = 'agy 终端' if tool == 'agy' else name
+            label = 'agy' if tool == 'agy' else name
             browser.value(f"Array.from(document.querySelectorAll('#launch button')).find(b=>b.textContent==={json.dumps(label)}).click()")
             browser.until("location.pathname.endsWith('/terminal/')", name + ' terminal')
             terminal = next(op['terminal'] for op in reversed(played.asked) if op['action'] == 'start')
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
         played.relay.agent({'info': played.info, 'sessions': played.sessions})
         browser.open(played.origin + '/?tab=tasks&new=1', "!!document.querySelector('#sheet-form .tools')", 'old relay new task', **screen)
         browser.value("Array.from(document.querySelectorAll('#sheet-form .seg button')).find(b=>b.textContent==='应用').click()")
-        browser.value("Array.from(document.querySelectorAll('#sheet-form .tools button')).find(b=>b.textContent.includes('agy')).click()")
+        browser.value("Array.from(document.querySelectorAll('#sheet-form .tools button')).find(b=>b.textContent==='agy').click()")
         browser.value("Array.from(document.querySelectorAll('#sheet-form .folders button')).find(b=>b.textContent==='thesis').click()")
         browser.until("location.pathname.endsWith('/terminal/')", 'legacy PowerShell terminal')
         op = next(op for op in reversed(played.asked) if op['action'] == 'start')
