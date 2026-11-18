@@ -625,6 +625,14 @@
         if (!more) {
           const caughtUp = restoring, connected = live && !running;
           restoring = false; running = live;
+          if (connected && tool === 'shell' && plain === 'PowerShell') {
+            try {
+              if (sessionStorage.getItem('agy-shell-draft') === t.id) {
+                sessionStorage.removeItem('agy-shell-draft');
+                if (!input.value) { input.value = 'agy --mode plan'; grow(); }
+              }
+            } catch (error) { /* the ordinary terminal input remains available */ }
+          }
           if (caughtUp) term.scrollToBottom();
           if (caughtUp || connected) layout();      // the size is settled once, not after every piece of output
           if (cut && running) redraw();

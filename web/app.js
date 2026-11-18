@@ -23,6 +23,7 @@
     try { localStorage.setItem('rcli-' + key, value); } catch (error) { /* private window */ }
   };
   let data = null, project = '', timer = 0, shown = 2, endedShown = 8, toastTimer = 0;
+  let relayVersion = '';
   // The tabs at the foot. The one last used is kept while the app is open (a terminal's page leads back to it);
   // ?tab=<name> opens one by a link. A project in detail belongs to 项目: `project` is set only there.
   const TABS = { tasks: '任务', projects: '项目', together: '协作', me: '我的' };
@@ -285,6 +286,13 @@
     const result = await run(payload, '正在电脑上启动 ' + TOOLS[tool] + '…');
     if (result) open(result.terminal);
     return !!result;
+  }
+  async function startAgyShell(dir) {
+    const result = await run({ action: 'start', tool: 'shell', dir, history: false }, '正在打开项目 PowerShell…');
+    if (!result) return false;
+    try { sessionStorage.setItem('agy-shell-draft', result.terminal); } catch (error) { /* command can be entered manually */ }
+    open(result.terminal);
+    return true;
   }
   // A conversation that the computer runs through its tool's structured mode, shown on the phone as a conversation
   // (web/chat/): a new one, or a saved one gone on with (`session`). The computer says whether it can (`chat`).
@@ -1323,6 +1331,7 @@
   window.RemoteCliPage = {
     $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep,
     get data() { return data; },
+    get relayVersion() { return relayVersion; }, startAgyShell,
     get tab() { return tab; },
     has: feature => !!data && (data.device.features || []).includes(feature),
     refresh: () => refresh(),
@@ -1342,6 +1351,7 @@
       }
       if (!/^[a-f0-9]{32}$/.test(wanted)) early = fetch('api/terminal', { credentials: 'same-origin' }).then(reply => reply.ok ? reply.json() : null).catch(() => null);
       const session = await (await fetch('api/session', { credentials: 'same-origin' })).json();
+      relayVersion = session.version || '';
       if (!session.signed_in) return showLogin();
       // ?open=<terminal> goes straight to that terminal: the computer's own window opens the one that was picked.
       if (/^[a-f0-9]{32}$/.test(wanted)) return location.replace('terminal/?id=' + wanted);

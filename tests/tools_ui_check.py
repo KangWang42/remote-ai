@@ -52,14 +52,15 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
             browser.open(played.origin + '/?project=web-shop', "document.querySelectorAll('#launch button').length>0", 'project tools', **screen)
             browser.value("Array.from(document.querySelectorAll('#begin .seg button')).find(b=>b.textContent==='终端').click()")
             browser.until("document.querySelectorAll('#launch button').length===7", 'seven tool buttons')
-            assert browser.value("Array.from(document.querySelectorAll('#launch button')).map(b=>b.textContent)") == ['Claude Code', 'Codex', 'Antigravity CLI', 'OpenCode', 'Qoder', 'Cline', 'PowerShell']
+            assert browser.value("Array.from(document.querySelectorAll('#launch button')).map(b=>b.textContent)") == ['Claude Code', 'Codex', 'agy 终端', 'OpenCode', 'Qoder', 'Cline', 'PowerShell']
             if width < 500:
                 assert browser.value("new Set(Array.from(document.querySelectorAll('#launch button'),b=>b.offsetTop)).size >= 2")
             geometry = browser.value("({inner:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth,errors:__errors})")
             assert geometry['inner'] == width and max(geometry['scroll'], geometry['body']) <= width and not geometry['errors'], geometry
             browser.picture(out / ('tools-%d.png' % width))
             tool, name = ('opencode', 'OpenCode') if width == 430 else ('agy', 'Antigravity CLI')
-            browser.value(f"Array.from(document.querySelectorAll('#launch button')).find(b=>b.textContent==={json.dumps(name)}).click()")
+            label = 'agy 终端' if tool == 'agy' else name
+            browser.value(f"Array.from(document.querySelectorAll('#launch button')).find(b=>b.textContent==={json.dumps(label)}).click()")
             browser.until("location.pathname.endsWith('/terminal/')", name + ' terminal')
             terminal = next(op['terminal'] for op in reversed(played.asked) if op['action'] == 'start')
             assert next(op for op in reversed(played.asked) if op['action'] == 'start')['tool'] == tool
@@ -78,8 +79,30 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
             browser.value("document.querySelector('[data-key=ctrlp]').scrollIntoView({block:'nearest',inline:'center'})")
             browser.picture(out / ('terminal-%d.png' % width))
             report.append(geometry)
+        # 1.7.2 exposes PowerShell but discards agy from a Windows agent's heartbeat.
+        server.VERSION = '1.7.2'
+        played.info['tools'].remove('agy')
+        played.relay.agent({'info': played.info, 'sessions': played.sessions})
+        browser.open(played.origin + '/?tab=tasks&new=1', "!!document.querySelector('#sheet-form .tools')", 'old relay new task', **screen)
+        browser.value("Array.from(document.querySelectorAll('#sheet-form .seg button')).find(b=>b.textContent==='应用').click()")
+        browser.value("Array.from(document.querySelectorAll('#sheet-form .tools button')).find(b=>b.textContent.includes('agy')).click()")
+        browser.value("Array.from(document.querySelectorAll('#sheet-form .folders button')).find(b=>b.textContent==='thesis').click()")
+        browser.until("location.pathname.endsWith('/terminal/')", 'legacy PowerShell terminal')
+        op = next(op for op in reversed(played.asked) if op['action'] == 'start')
+        assert (op['tool'], op['dir']) == ('shell', 'thesis')
+        terminal = op['terminal']
+        played.relay.agent({'info': played.info, 'terminals': [{'id': terminal, 'state': 'running'}]})
+        browser.until("document.querySelector('#input').value==='agy --mode plan'", 'editable agy command in new shell')
+        assert not any(op['action'] == 'input' and op['terminal'] == terminal for op in played.asked)
+        browser.value("document.querySelector('#send').click()")
+        for _ in range(60):
+            if any(op['action'] == 'input' and op['terminal'] == terminal and op['data'] == 'agy --mode plan\r' for op in played.asked):
+                break
+            time.sleep(.1)
+        else:
+            raise AssertionError('agy command did not reach the new PowerShell')
         (out / 'ui-report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-        print('Browser checks passed: task monitor, seven tools, Antigravity/OpenCode launch, Ctrl+P input, 320/390/430/1440 layouts.')
+        print('Browser checks passed: direct agy, legacy PowerShell launch draft and send, Ctrl+P, 320/390/430/1440 layouts.')
     finally:
         browser.close()
         played.close()

@@ -13,8 +13,23 @@
   // what the computer offers of each kind: the tools it runs conversations of (else the desktop apps it opens one in),
   // and the tools it has
   const desktop = tool => page.has(tool + '-desktop-open');
-  const offered = () => ({ app: Object.keys(APPS).filter(tool => page.chatOk(tool) || desktop(tool)), term: Object.keys(TOOLS).filter(tool => (page.data.device.tools || []).includes(tool)) });
-  const named = (kind, tool) => kind === 'app' ? APPS[tool] : TOOLS[tool];
+  const viaShell = 'agy-shell';
+  function offered() {
+    const device = page.data.device;
+    const term = Object.keys(TOOLS).filter(tool => (device.tools || []).includes(tool));
+    // Before 1.7.14 the relay discarded agy even when the Windows agent advertised it.
+    const version = /^1\.(\d+)\.(\d+)$/.exec(page.relayVersion);
+    const oldRelay = version && (+version[1] < 7 || (+version[1] === 7 && +version[2] < 14));
+    if (oldRelay && device.shell === 'PowerShell' && term.includes('shell') && !term.includes('agy')) {
+      term.splice(term.indexOf('shell'), 0, viaShell);
+    }
+    return { app: Object.keys(APPS).filter(tool => page.chatOk(tool) || desktop(tool)), term };
+  }
+  function named(kind, tool) {
+    if (tool === viaShell) return 'agy（通过 PowerShell）';
+    if (tool === 'agy') return 'agy 终端';
+    return kind === 'app' ? APPS[tool] : TOOLS[tool];
+  }
   // The kind that stands open: the one chosen last. Before any choice: a terminal for a project whose folder has
   // only been used in terminals, an application for any other.
   function kindOf(project, has) {
@@ -37,12 +52,25 @@
   }
   // (the tile of a tool of 应用 opens its desktop app on the computer at a held press, where both are there)
   const tile = (kind, tool, props, project) => {
-    const made = el('button', Object.assign({ type: 'button' }, props), el('span', { className: 'tool ' + tool, html: ICON[tool] }), el('span', { textContent: named(kind, tool) }));
+    const icon = tool === viaShell ? 'agy' : tool;
+    const made = el('button', Object.assign({ type: 'button' }, props), el('span', { className: 'tool ' + icon, html: ICON[icon] }), el('span', { textContent: named(kind, tool) }));
     return kind === 'app' && page.chatOk(tool) && desktop(tool) && project ? page.held(made, () => inApp(tool, project)) : made;
   };
   // Resolves with whether the page goes on with what began (a conversation's or a terminal's page), as everything
   // here does: where it does not, a page that the app opened for this is left for the app's list again.
-  const begin = (kind, tool, project) => kind !== 'app' ? page.start(tool, project) : page.chatOk(tool) ? page.chat(tool, project) : inApp(tool, project);
+  async function begin(kind, tool, project) {
+    if (tool === viaShell) {
+      return page.startAgyShell(project);
+    }
+    return kind !== 'app' ? page.start(tool, project) : page.chatOk(tool) ? page.chat(tool, project) : inApp(tool, project);
+  }
+
+  // Keep the terminal entry visible on the default 应用 tab as well.
+  function choices(kind, has) {
+    if (kind === 'app') return has.app.concat(has.term.filter(tool => tool === 'agy' || tool === viaShell));
+    return has.term;
+  }
+  const kindFor = (kind, tool) => tool === 'agy' || tool === viaShell ? 'term' : kind;
 
   // ---- on a project's page: the kinds, and a button for each tool of the one that stands open
   function draw(project) {
@@ -51,7 +79,7 @@
     if (box.dataset.signature === signature) return;
     box.dataset.signature = signature;
     box.replaceChildren(el('div', { className: 'section-head' }, el('h2', { textContent: '新建对话' }), switcher(kind, has, () => draw(project))),
-      has[kind].length ? el('div', { id: 'launch' }, ...has[kind].map(tool => tile(kind, tool, { disabled: !ready, onclick: () => begin(kind, tool, project) }, project)))
+      has[kind].length ? el('div', { id: 'launch' }, ...choices(kind, has).map(tool => tile(kindFor(kind, tool), tool, { disabled: !ready, onclick: () => begin(kindFor(kind, tool), tool, project) }, project)))
         : el('p', { className: 'none', textContent: '电脑上没有找到 Claude Code、Codex 或命令行终端' }));
   }
 
@@ -70,15 +98,17 @@
       let kind = kindOf('', has), tool = '';
       const show = now => {
         kind = now;
-        tool = has[kind].includes(page.saved('new' + kind, '')) ? page.saved('new' + kind, '') : has[kind][0];
-        tools.replaceChildren(...has[kind].map(one => tile(kind, one, { ariaPressed: String(one === tool), onclick: event => {
+        const options = choices(kind, has);
+        tool = options.includes(page.saved('new' + kind, '')) ? page.saved('new' + kind, '') : options[0];
+        tools.replaceChildren(...options.map(one => tile(kindFor(kind, one), one, { ariaPressed: String(one === tool), onclick: event => {
           tool = one; page.keep('new' + kind, one);
           tools.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === event.currentTarget)));
         } })));
       };
       show(kind);
       form.append(el('div', { className: 'head' }, el('h3', { textContent: '新建对话' }), switcher(kind, has, show)), tools,
-        el('div', { className: 'anywhere folders' }, ...names.slice(0, 12).map(name => el('button', { type: 'button', className: 'choice', onclick: () => finish({ kind, tool, name }) },
+        el('p', { className: 'quiet', textContent: '选择项目后创建' }),
+        el('div', { className: 'anywhere folders' }, ...names.slice(0, 12).map(name => el('button', { type: 'button', className: 'choice', onclick: () => finish({ kind: kindFor(kind, tool), tool, name }) },
           el('span', { className: 'tool folder', html: ICON.folder }), el('span', { textContent: name }), el('span', { className: 'chev', html: ICON.chev })))));
     });
     return picked ? begin(picked.kind, picked.tool, picked.name) : false;
