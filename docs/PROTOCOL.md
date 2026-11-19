@@ -535,7 +535,7 @@ rules, one each way, let two conversations go back and forth until their rounds 
 `to` one message, in its owner's words: what was asked first and last (800 characters each), what was answered
 last (2,000), the last eight steps (160 each), and the note.
 
-**What a hand-over says** (`brief`, Windows program and Linux agent since the release after 1.7.15): the same
+**What a hand-over says** (`brief`, Windows program and Linux agent since 1.7.16): the same
 message, given back to the phone instead of to a conversation. The phone shows it before it is given, and hands a
 conversation to a new one with it: `start` with `form: "chat"`, the tool chosen, `from`'s `dir`, and the message as
 `text` (at most 8,000 characters; the message is at most about 6,000). The new conversation is an ordinary chat;
