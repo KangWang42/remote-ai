@@ -39,7 +39,7 @@ def main():
     homes.claude_saved(shop, SAVED, "修复结算页的金额显示", 1, said=("结算页的金额有时多出一位小数", "问题在 formatPrice，已经改好。"))
     environment = homes.environment(RCLI_PASSWORD=password)
     tools = homes.stand_ins(temp.name)
-    for name in ("claude", "codex"):
+    for name in ("claude", "codex", "agy"):
         (tools / (name + ".cmd")).write_text('@if "%%1"=="--help" (echo stand-in) else ("%s" "%s" %s %%*)\r\n' % (sys.executable, ROOT / "tests" / "chat_standin.py", name), encoding="mbcs")
     environment["PATH"] = str(tools) + ";" + environment["PATH"]
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % port, "RemoteEnabled": True, "RemoteMaxMode": "full", "RemoteDirs": ["web-shop=" + str(shop)]}), encoding="utf-8")
@@ -108,12 +108,12 @@ def main():
                 time.sleep(0.5)
         for _ in range(80):
             device = call("/api/terminal")["device"]
-            if device["online"] and "chat" in device.get("features", []):
+            if device["online"] and "chat-agy" in device.get("features", []):
                 break
             time.sleep(0.25)
         assert "chat" in device["features"], device
 
-        for tool in ("claude", "codex"):
+        for tool in ("claude", "codex", "agy"):
             # ---- begun with its first words: given back with the phone's number, the answer in pieces, a step that asks
             first = secrets.token_hex(16)
             terminal = op(id=first, action="start", tool=tool, dir="web-shop", form="chat", text="帮我检查一下金额")["terminal"]

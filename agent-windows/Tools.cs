@@ -134,6 +134,7 @@ sealed class CodexTool : Tool {
 sealed class AgyTool : Tool {
     public override string Name { get { return "agy"; } }
     public override string Label { get { return "Antigravity CLI"; } }
+    public override bool Chats { get { return true; } }     // by its ACP server (AcpChat.cs)
     public override bool ReturnsUnnamed { get { return false; } }
     public override string Unnamed { get { return "请先在 Antigravity 终端内开始对话，或通过“在电脑上打开”直接使用"; } }
 

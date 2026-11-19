@@ -23,7 +23,8 @@
     if (oldRelay && device.shell === 'PowerShell' && term.includes('shell') && !term.includes('agy')) {
       term.splice(term.indexOf('shell'), 0, viaShell);
     }
-    return { app: Object.keys(APPS).filter(tool => page.chatOk(tool) || desktop(tool)), term };
+    // (Antigravity CLI has no desktop app: it is offered as a conversation where the computer runs it so)
+    return { app: Object.keys(APPS).filter(tool => page.chatOk(tool) || desktop(tool)).concat(page.chatOk('agy') ? ['agy'] : []), term };
   }
   function named(kind, tool) {
     if (tool === 'agy' || tool === viaShell) return 'agy';
@@ -66,10 +67,11 @@
 
   // Keep the terminal entry visible on the default 应用 tab as well.
   function choices(kind, has) {
-    if (kind === 'app') return has.app.concat(has.term.filter(tool => tool === 'agy' || tool === viaShell));
+    if (kind === 'app') return has.app.concat(has.term.filter(tool => (tool === 'agy' || tool === viaShell) && !has.app.includes(tool)));
     return has.term;
   }
-  const kindFor = (kind, tool) => tool === 'agy' || tool === viaShell ? 'term' : kind;
+  // agy under 应用 is a conversation where the computer runs it as one, else its terminal
+  const kindFor = (kind, tool) => tool === viaShell || (tool === 'agy' && !(kind === 'app' && page.chatOk('agy'))) ? 'term' : kind;
 
   // ---- on a project's page: the kinds, and a button for each tool of the one that stands open
   function draw(project) {

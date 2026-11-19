@@ -390,8 +390,14 @@ screen shows as feedback; an earlier Claude Code, and Codex, are told by a block
 as the `reason`), which Claude Code shows as an error of the hook although nothing failed. Either way the words stand
 in what `read` gives as what the user said.
 
-How this reaches the tools: Claude Code and Codex run hooks of the computer's program (it puts them into the tools'
-own settings when its owner switches that on). A hook for a request for permission is answered with the phone's
+How this reaches the tools: Claude Code, Codex and Antigravity CLI run hooks of the computer's program (it puts them
+into the tools' own settings when its owner switches that on; for Antigravity CLI one hook named `remote-ai` in
+`~/.gemini/config/hooks.json`, run through cmd.exe). Antigravity CLI is told the phone's words before its model's
+next call (`PreInvocation`, `injectSteps` with a `userMessage`), so they join the turn that runs; told to stop, its
+next step is refused (`PreToolUse` `decision: deny`) and it ends after the model's call (`PostInvocation`
+`terminationBehavior: terminate`; the same given at `PreInvocation` is not heeded by agy 1.5.12); a message that
+waits when it stops makes it go on (`Stop` `decision: continue`). It asks for permission through no hook, so its
+questions are answered at the computer only. A hook for a request for permission is answered with the phone's
 answer; a hook that runs as the tool stops is answered with the message, as something to go on with. Claude Code
 shows its question on the computer while the hook runs and takes whichever answer comes first. Codex asks its hooks
 first and shows a running hook meanwhile, so its request is kept for the phone only while nobody has touched the
@@ -582,8 +588,11 @@ capability `chat` (Windows program 1.7.0, Linux agent 0.7.0; the Rust agent does
 | --- | --- | --- | --- | --- |
 | Claude Code | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio --session-id <new id>` (or `--resume <id>`), with `--permission-mode plan` or `acceptEdits` for the computer's `read` and `edit` | a `user` message on its standard input; one sent while it works is taken when it gets to it | the control request `interrupt` | a `can_use_tool` control request, answered `allow` (with the input), `allow` with one validated and displayed `updatedPermissions` suggestion for `always`, or `deny` |
 | Codex | `codex app-server`; `thread/start` with the project folder (`sandbox` for `read` and `edit`) or `thread/resume` | `turn/start`, or `turn/steer` while a turn runs | `turn/interrupt` of the running turn | `item/commandExecution/requestApproval` and `item/fileChange/requestApproval`, answered `accept`, `acceptForSession`, `decline`; `item/tool/requestUserInput` with one question and its choices |
+| Antigravity CLI | `agy acp` (Agent Client Protocol, JSON-RPC 2.0): `initialize` offering no file system and no terminal, then `session/new` with the project folder or `session/load` (its replayed history is passed over; the phone is shown the transcript instead). Its own way of working stays: `read` and `edit` are not passed | `session/prompt`; one sent while a turn runs waits for its end (ACP has no way to add to a running turn) | the notification `session/cancel`; the prompt is answered `stopReason: cancelled` | `session/request_permission`, answered with the option of kind `allow_once`, `allow_always` or `reject_once` |
 
-Run on Claude Code 2.1.283 and Codex 0.163.0. The conversation is the tool's own and saved where its other
+Run on Claude Code 2.1.283, Codex 0.163.0 and Antigravity CLI 1.5.12 (`AcpChat.cs`; any other tool serving ACP
+is driven by the same class). The computer offers chats of Antigravity CLI with the capability `chat-agy` beside
+`chat`; the relay refuses `form: "chat"` for `agy` without it. The conversation is the tool's own and saved where its other
 windows find it: it is listed with the others, and can be gone on with in a terminal or a desktop app once the chat
 is closed. While a chat has it, the computer lists it as held by the phone's own program. Requests of the tools that
 this protocol does not answer are refused, so that the tool does not wait.

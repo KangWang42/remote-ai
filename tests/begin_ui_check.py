@@ -171,6 +171,24 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         played.info["features"] += ["codex-desktop-open", "claude-desktop-open"]
         assert errors() == "[]", errors()
 
+        # ---- Antigravity CLI: a terminal, unless the computer runs it as a conversation (chat-agy); then under 应用
+        played.info["tools"] = played.info["tools"] + ["agy"]
+        browser.open(played.origin + "/?project=web-shop", project, "a project's page, with agy", **phone(390))
+        press("#begin .seg button", "应用")
+        until("document.querySelectorAll('#launch button').length === 3", "the applications and agy's terminal")
+        assert texts("#launch button") == ["Codex", "Claude", "agy"], texts("#launch button")
+        played.info["features"] += ["chat", "chat-agy"]
+        browser.open(played.origin + "/?project=web-shop", project, "a project's page, agy as a conversation", **phone(390))
+        until("document.querySelectorAll('#launch button').length === 3", "the applications with agy")
+        assert texts("#launch button") == ["Codex", "Claude", "agy"], texts("#launch button")
+        press("#launch button", "agy")
+        until("location.pathname.endsWith('/chat/')", "agy's conversation page")
+        op = asked("start")[-1]
+        assert (op["tool"], op["dir"], op.get("form")) == ("agy", "web-shop", "chat"), op
+        played.info["features"] = [feature for feature in played.info["features"] if feature not in ("chat", "chat-agy")]
+        played.info["tools"] = [tool for tool in played.info["tools"] if tool != "agy"]
+        assert errors() == "[]", errors()
+
         # ---- inside the app: the tabs are the app's own
         app = browser.ask("Page.addScriptToEvaluateOnNewDocument", source=NEW_APP)["identifier"]
         noted = lambda: json.loads(value("sessionStorage.getItem('app-asked') || '[]'"))

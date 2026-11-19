@@ -321,7 +321,9 @@ WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handof
 REACH = ("say", "answer", "stop")
 # What is done to a terminal that runs a conversation through its tool's structured mode (form "chat"; docs/PROTOCOL.md,
 # "Chats"): what is said, a stop, an answer to what it asks, ending it. It has no screen to type into or size.
-CHAT_TOOLS = ("claude", "codex")
+CHAT_TOOLS = ("claude", "codex", "agy")
+# a tool beyond the first two runs as a conversation only where the computer says it can (Antigravity CLI: by ACP)
+CHAT_FEATURES = {"agy": "chat-agy"}
 CHAT_ACTIONS = ("say", "stop", "answer", "close", "rename")
 CHAT_DECISIONS = re.compile(r"^(allow|always|deny|choice:[0-9]{1,2})$")
 # By which way the computer does each thing to a conversation that a program there has open (docs/PROTOCOL.md):
@@ -753,7 +755,8 @@ class Relay:
                 if payload.get("form", "") not in ("", "chat") or "text" in payload and not chat:
                     raise RemoteError("终端选项无效")
                 if chat:
-                    if tool not in CHAT_TOOLS or "chat" not in self._device.get("features", []):
+                    features = self._device.get("features", [])
+                    if tool not in CHAT_TOOLS or "chat" not in features or CHAT_FEATURES.get(tool, "chat") not in features:
                         raise RemoteError("电脑端版本不支持这种对话，请更新电脑端")
                     if payload.get("history") or payload.get("fork"):
                         raise RemoteError("对话选项无效")
@@ -1246,7 +1249,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

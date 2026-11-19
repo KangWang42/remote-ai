@@ -394,7 +394,7 @@
     return { title: '对话', build(p) {
       const ended = terminal.state === 'closed', kind = ended ? 'ended' : terminal.state === 'starting' ? 'starting' : state;
       const [standing, colour] = STATE[kind] || STATE.idle;
-      p.body.append(ui.who({ icon: terminal.tool === 'claude' ? 'claude' : 'codex', tint: terminal.tool === 'claude' ? 'claude' : 'codex', title: terminal.title || TOOLS[terminal.tool] || '对话',
+      p.body.append(ui.who({ icon: ['claude', 'agy'].includes(terminal.tool) ? terminal.tool : 'codex', tint: ['claude', 'agy'].includes(terminal.tool) ? terminal.tool : 'codex', title: terminal.title || TOOLS[terminal.tool] || '对话',
         line: (TOOLS[terminal.tool] || terminal.tool) + (terminal.dir ? ' · ' + terminal.dir : '') + ' · ' + (device.online ? standing : '电脑离线'), state: device.online ? colour : 'var(--bad)' }));
       const noSession = terminal.session ? '' : '发出第一条消息后才能使用';
       p.body.append(ui.tiles([

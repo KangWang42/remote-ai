@@ -11,7 +11,10 @@
   'use strict';
   const { ui } = window.RemoteSheet, { el } = ui;
   const TOOLS = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', pi: 'Pi', shell: '终端' };
-  const NEW_TOOLS = ['claude', 'codex'];
+  const NEW_TOOLS = ['claude', 'codex', 'agy'];
+  // a tool's mark and colour in the sheet: its own where it has one
+  const mark = tool => ['claude', 'codex', 'agy'].includes(tool) ? tool : 'chat';
+  const tint = tool => ['claude', 'agy'].includes(tool) ? tool : 'codex';
   const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const two = n => String(n).padStart(2, '0');
   const WEEK = ['一', '二', '三', '四', '五', '六', '日'];       // 1 Monday … 7 Sunday, as the computer counts them
@@ -123,15 +126,15 @@
           const listed = work.find(from.id);
           const takers = work.list().filter(c => c.open && c.id !== from.id && work.sayable(c));
           // a new conversation of a tool the computer has, in the same project: begun with the hand-over as its first message
-          const fresh = from.dir && work.has('chat') ? NEW_TOOLS.filter(tool => (device.tools || []).includes(tool)) : [];
+          const fresh = from.dir && work.has('chat') ? NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && (tool !== 'agy' || work.has('chat-agy'))) : [];
           const offers = fresh.map(tool => ({ key: 'new:' + tool, tool, label: '新对话 · ' + TOOLS[tool], detail: '在 ' + from.dir + ' 中开始' + (tool === from.tool ? ' · 同一工具，重新开始' : ''), tint: tool, icon: tool }))
-            .concat(takers.map(c => ({ key: c.id, c, label: c.title || TOOLS[c.tool], detail: c.where + (c.place ? ' · ' + c.place : ''), tint: c.tool === 'claude' ? 'claude' : 'codex', icon: c.tool === 'claude' || c.tool === 'codex' ? c.tool : 'chat' })));
+            .concat(takers.map(c => ({ key: c.id, c, label: c.title || TOOLS[c.tool], detail: c.where + (c.place ? ' · ' + c.place : ''), tint: tint(c.tool), icon: ['claude', 'codex', 'agy'].includes(c.tool) ? c.tool : 'chat' })));
           // another tool before the one it was in: the usual reason is that one has run out
           offers.sort((a, b) => (a.tool === from.tool) - (b.tool === from.tool));
           if (!offers.some(o => o.key === state.to)) state.to = (offers.find(o => o.tool && o.tool !== from.tool) || offers[0] || {}).key || '';
           const chosen = offers.find(o => o.key === state.to);
 
-          p.body.append(ui.who({ icon: from.tool === 'claude' || from.tool === 'codex' ? from.tool : 'chat', tint: from.tool === 'claude' ? 'claude' : 'codex', title: from.title || TOOLS[from.tool], line: '从 ' + (TOOLS[from.tool] || from.tool) + (from.dir ? ' · ' + from.dir : '') }));
+          p.body.append(ui.who({ icon: mark(from.tool), tint: tint(from.tool), title: from.title || TOOLS[from.tool], line: '从 ' + (TOOLS[from.tool] || from.tool) + (from.dir ? ' · ' + from.dir : '') }));
           const why = work.ready('交接');
           if (why) { p.body.append(ui.summary(why, 'bad', 'hand')); return; }
           if (!listed) { p.body.append(ui.summary(work.data ? '这段对话还没有可以交接的内容，先发一条消息' : '正在读取…', work.data ? 'bad' : '', 'hand')); return; }
@@ -265,7 +268,7 @@
           // the conversation it is for: chosen here where it was not given
           if (!fresh || !fresh.session || fresh.choose) {
             const c = work.find(s.session);
-            p.body.append(ui.section('对话', ui.group(ui.row({ icon: c ? c.tool === 'claude' ? 'claude' : 'codex' : 'chat', tint: c ? c.tool === 'claude' ? 'claude' : 'codex' : 'muted', id: 'schedule-session',
+            p.body.append(ui.section('对话', ui.group(ui.row({ icon: c ? mark(c.tool) : 'chat', tint: c ? tint(c.tool) : 'muted', id: 'schedule-session',
               label: c ? c.title : s.session ? s.title || '已不在列表里的对话' : '选择对话', detail: c ? c.where : '', go: () => p.sheet.push(work.pickPage('选择对话', work.list().filter(one => one.open || one.id === s.session), [s.session], picked => { s.session = picked[0]; const one = work.find(s.session); if (one) { s.title = one.title; s.tool = one.tool; } p.sheet.goBack(); })) }))));
           }
           const text = ui.area({ id: 'schedule-text', value: s.text, placeholder: '到时间要问的话', max: 2000, rows: 3, label: '要问的话', autofocus: !known }, value => { s.text = value; });
@@ -353,7 +356,7 @@
           if (!list.length) { p.body.append(ui.empty('没有开着的对话')); return; }
           const groups = [['开着的', list.filter(c => c.open)], ['其它', list.filter(c => !c.open)]].filter(([, l]) => l.length);
           groups.forEach(([name, l]) => p.body.append(ui.section(groups.length > 1 ? name : '', ui.group(...l.map(c => ui.row({
-            icon: c.tool === 'claude' || c.tool === 'codex' ? c.tool : c.tool === 'shell' ? 'term' : 'chat', tint: c.tool === 'claude' ? 'claude' : 'codex',
+            icon: c.tool === 'shell' ? 'term' : mark(c.tool), tint: tint(c.tool),
             label: c.title || TOOLS[c.tool], detail: c.where + (c.place ? ' · ' + c.place : ''), checked: choice.has(c.id), disabled: !!c.unavailable,
             act: () => {
               if (!multi) { choice.clear(); choice.add(c.id); return picked([c.id], p.sheet); }

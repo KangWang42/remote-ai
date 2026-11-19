@@ -323,8 +323,9 @@
   }
   // A conversation that the computer runs through its tool's structured mode, shown on the phone as a conversation
   // (web/chat/): a new one, or a saved one gone on with (`session`). The computer says whether it can (`chat`).
-  const CHAT_TOOLS = ['claude', 'codex'];
-  const chatOk = tool => !!data && (data.device.features || []).includes('chat') && CHAT_TOOLS.includes(tool) && (data.device.tools || []).includes(tool);
+  // the tools the computer runs as a conversation, and what it says of itself where it does (Antigravity CLI: by ACP)
+  const CHAT_TOOLS = { claude: 'chat', codex: 'chat', agy: 'chat-agy' };
+  const chatOk = tool => !!data && (data.device.features || []).includes('chat') && !!CHAT_TOOLS[tool] && (data.device.features || []).includes(CHAT_TOOLS[tool]) && (data.device.tools || []).includes(tool);
   async function chat(tool, dir, session, takeover) {
     const payload = { action: 'start', tool, dir, history: false, form: 'chat' };
     if (session) Object.assign(payload, { session, takeover: !!takeover });

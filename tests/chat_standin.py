@@ -1,4 +1,4 @@
-"""A stand-in for Claude Code in its stream-json mode and for `codex app-server`, speaking each one's protocol in the
+"""A stand-in for Claude Code in its stream-json mode, for `codex app-server` and for `agy acp`, speaking each one's protocol in the
 shapes recorded from the real tools (Claude Code 2.1.283, Codex 0.163.0): what a conversation run by the computer
 (agent-windows/Chats.cs, agent-linux/agent.py) is checked against. Every turn goes the same way: it says a few
 words in pieces, wants to run one command and asks first, prints what the command printed, and says it is done. A
@@ -190,10 +190,81 @@ def codex(args):
             put({"id": number, "result": {}})
 
 
+# ---- Antigravity CLI's ACP server (`agy acp`), in the shapes recorded from agy 1.5.12
+def agy(args):
+    state = {"session": "", "next": 0}
+    waiting, stop = {}, threading.Event()
+
+    def update(**what):
+        put({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": state["session"], "update": what}})
+
+    def turn(number, text):
+        for piece in ("我先", "看看。"):
+            time.sleep(0.05)
+            update(sessionUpdate="agent_message_chunk", content={"type": "text", "text": piece})
+        slow = "慢" in text
+        command = "ping -n 40 127.0.0.1" if slow else "echo chat-ok"
+        call = "call_" + uuid.uuid4().hex[:10]
+        update(sessionUpdate="tool_call", toolCallId=call, name="run_command", kind="execute", status="pending", title="Run command",
+               rawInput={"CommandLine": command, "Cwd": "."}, args={"CommandLine": command})
+        state["next"] += 1
+        asked, answered = 9000 + state["next"], threading.Event()
+        waiting[asked] = [answered, None]
+        put({"jsonrpc": "2.0", "id": asked, "method": "session/request_permission", "params": {"sessionId": state["session"],
+             "toolCall": {"toolCallId": call, "kind": "execute", "title": "Run command", "rawInput": {"CommandLine": command}},
+             "options": [{"optionId": "proceed_once", "name": "Allow", "kind": "allow_once"}, {"optionId": "proceed_always", "name": "Always allow", "kind": "allow_always"},
+                         {"optionId": "cancel", "name": "Reject", "kind": "reject_once"}]}})
+        while not answered.wait(0.05):
+            if stop.is_set():
+                return ended(number, "cancelled", call)
+        outcome = (waiting.pop(asked)[1] or {}).get("outcome") or {}
+        if outcome.get("optionId") == "cancel":
+            update(sessionUpdate="tool_call_update", toolCallId=call, status="failed")
+            return ended(number, "end_turn", None)
+        update(sessionUpdate="tool_call_update", toolCallId=call, status="in_progress", content=[{"type": "content", "content": {"type": "text", "text": "chat-ok\n"}}])
+        if slow:
+            while not stop.wait(0.05):
+                pass
+            return ended(number, "cancelled", call)
+        update(sessionUpdate="tool_call_update", toolCallId=call, status="completed")
+        update(sessionUpdate="agent_message_chunk", content={"type": "text", "text": "好了：**chat-ok**"})
+        ended(number, "end_turn", None)
+
+    def ended(number, reason, call):
+        stop.clear()
+        if call:
+            update(sessionUpdate="tool_call_update", toolCallId=call, status="failed")
+        put({"jsonrpc": "2.0", "id": number, "result": {"stopReason": reason}})
+
+    for message in lines():
+        method, params, number = message.get("method"), message.get("params") or {}, message.get("id")
+        if method is None and number in waiting:
+            waiting[number][1] = message.get("result") or {}
+            waiting[number][0].set()
+            continue
+        if method == "initialize":
+            put({"jsonrpc": "2.0", "id": number, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}})
+        elif method == "session/new":
+            state["session"] = str(uuid.uuid4())
+            put({"jsonrpc": "2.0", "id": number, "result": {"sessionId": state["session"]}})
+        elif method == "session/load":
+            state["session"] = params["sessionId"]
+            update(sessionUpdate="user_message_chunk", content={"type": "text", "text": "replayed, not shown again"})
+            put({"jsonrpc": "2.0", "id": number, "result": {}})
+        elif method == "session/prompt":
+            threading.Thread(target=turn, args=(number, params["prompt"][0]["text"]), daemon=True).start()
+        elif method == "session/cancel":
+            stop.set()
+        elif number is not None:
+            put({"jsonrpc": "2.0", "id": number, "error": {"code": -32601, "message": "not here"}})
+
+
 if __name__ == "__main__":
     tool, rest = sys.argv[1], sys.argv[2:]
     sys.stdout.reconfigure(encoding="utf-8")
     if tool == "claude":
         claude(rest)
+    elif tool == "agy":
+        agy(rest)
     else:
         codex(rest)

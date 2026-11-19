@@ -116,6 +116,22 @@ class TerminalRelayTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteError, "不支持此操作"):
             self.relay.command({"action": "stop", "id": "4" * 32, "terminal": screen}, now=1013)
 
+    def test_an_agy_chat_needs_a_computer_that_runs_it(self):
+        # Antigravity CLI runs as a conversation by its ACP server, on a computer that says so ("chat-agy")
+        self.info["tools"] = ["claude", "codex", "agy", "shell"]
+        self.info["features"] = ["chat"]
+        self.relay.agent({"info": self.info}, now=1001)
+        start = {"action": "start", "id": "a" * 32, "tool": "agy", "dir": "demo", "history": False, "form": "chat", "text": "看看这个项目"}
+        with self.assertRaisesRegex(RemoteError, "不支持这种对话"):
+            self.relay.command(start, now=1002)
+        self.info["features"] = ["chat", "chat-agy"]
+        self.relay.agent({"info": self.info}, now=1003)
+        terminal = self.relay.command(start, now=1004)["terminal"]
+        op = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]
+        self.assertEqual((op["tool"], op["form"], op["text"]), ("agy", "chat", "看看这个项目"))
+        self.assertEqual(self.relay.overview(now=1005)["terminals"][0]["form"], "chat")
+        self.assertTrue(terminal)
+
     def test_fresh_start_never_becomes_anonymous_resume(self):
         payload = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": True}
         with self.assertRaisesRegex(RemoteError, "resume"):

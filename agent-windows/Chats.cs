@@ -84,6 +84,7 @@ public abstract class Chat : IRunning {
         Chat chat;
         if (tool == "claude") chat = new ClaudeChat(folder, emit);
         else if (tool == "codex") chat = new CodexChat(folder, emit);
+        else if (tool == "agy") chat = new AgyChat(folder, emit);
         else throw new ArgumentException("这个工具不支持对话");
         try { chat.Begin(launcher, session ?? "", resume, mode ?? ""); }
         catch { chat.Dispose(); throw; }
