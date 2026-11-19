@@ -242,6 +242,9 @@ public final class AggregateSessionsCheck {
         require(!inEditor.canEnd(true), "explicitly unavailable end overrides the legacy capability");
         inEditor.endWay = "process"; inEditor.canTakeover = false;
         require(inEditor.canEnd(true), "per-action capability permits ending from the card");
+        AggregateSessions.Entry agyFallback = new AggregateSessions.Entry(true, TERMINAL, "thesis", "Antigravity CLI · thesis", "shell", "running", "idle", "", false, "", "", "");
+        require("agy".equals(agyFallback.displayTool()) && "Antigravity CLI".equals(agyFallback.toolName()), "Legacy-relay agy fallback terminal displays as agy");
+        require(AggregateSessions.board(Collections.singletonList(new AggregateSessions.Thing("pc", "Computer", agyFallback, "idle")), "", "agy", "").opened.size() == 1, "Legacy-relay agy fallback matches agy filter");
         System.out.println("Aggregate checks passed: computer isolation, active/history separation, recent ordering, locks, deduplication, stable refresh and exact terminal route.");
     }
 }

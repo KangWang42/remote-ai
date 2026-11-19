@@ -1402,7 +1402,7 @@ public sealed class TerminalAgent {
         string args = "";
         if (tool == "agy") {
             if (!String.IsNullOrEmpty(session) || history || fork || fresh) throw new ArgumentException("请在 Antigravity CLI 内选择历史对话");
-            return mode == "read" ? " --mode plan" : mode == "edit" ? " --mode accept-edits" : "";
+            return "";
         }
         if (tool == "claude") args = (session.Length > 0 ? (fresh ? " --session-id " : " --resume ") + session : history ? " --resume" : "") + (mode == "read" ? " --permission-mode plan" : mode == "edit" ? " --permission-mode acceptEdits" : "");
         if (tool == "codex") args = (session.Length > 0 ? (fork ? " fork " : " resume ") + session : history ? " resume --include-non-interactive" : "") + (noDaemon ? " --no-daemon" : "") + (mode == "read" ? " -s read-only" : mode == "edit" ? " -s workspace-write" : "");

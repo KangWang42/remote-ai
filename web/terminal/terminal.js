@@ -601,7 +601,10 @@
       // Output arrives many times a second: the page around the terminal is touched only where something changed.
       const plain = device.shell || 'PowerShell';      // what the computer calls its plain terminal
       // its project; one that took on a conversation outside every project runs in that conversation's folder
-      const toolName = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', pi: 'Pi', shell: plain }[tool] || tool;
+      const agyIds = (() => { try { const list = JSON.parse(sessionStorage.getItem('agy-shell-ids') || '[]'); return Array.isArray(list) ? list : []; } catch (error) { return []; } })();
+      const agyShell = tool === 'shell' && (/^Antigravity CLI(?:\s|$|·)/.test(t.title || '') || agyIds.includes(t.id));
+      const shownTool = agyShell ? 'agy' : tool;
+      const toolName = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', pi: 'Pi', shell: plain }[shownTool] || shownTool;
       const where = toolName + ' · ' + (t.dir || String(t.folder || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop());
       // Someone else's size on the screen means the terminal is open in another place too.
       $('shared').hidden = !(running && elsewhere);
@@ -615,8 +618,8 @@
       if ($('ended').hidden !== (!ended || more)) $('ended').hidden = !ended || more;
       if (ended !== wasEnded) {
         wasEnded = ended;
-        show($('ended-text'), tool === 'shell' || tool === 'agy' ? toolName + ' 已结束，画面保留到这里' : '终端已结束，对话保存在电脑上');
-        $('again').hidden = tool === 'shell' || tool === 'agy';
+        show($('ended-text'), shownTool === 'shell' || shownTool === 'agy' ? toolName + ' 已结束，画面保留到这里' : '终端已结束，对话保存在电脑上');
+        $('again').hidden = shownTool === 'shell' || shownTool === 'agy';
         input.disabled = ended; sendButton.disabled = ended; $('voice').disabled = ended;
         drawPalette();
       }
@@ -628,9 +631,9 @@
           restoring = false; running = live;
           if (connected && tool === 'shell' && plain === 'PowerShell') {
             try {
-              if (sessionStorage.getItem('agy-shell-draft') === t.id) {
-                sessionStorage.removeItem('agy-shell-draft');
-                if (!input.value) { input.value = 'agy --mode plan'; grow(); }
+              if (sessionStorage.getItem('agy-shell-run') === t.id) {
+                sessionStorage.removeItem('agy-shell-run');
+                send('agy\r');
               }
             } catch (error) { /* the ordinary terminal input remains available */ }
           }

@@ -35,6 +35,12 @@
     bar.hidden = false;
   }
 
+  const agyShell = t => {
+    if (!t || t.tool !== 'shell') return false;
+    if (/^Antigravity CLI(?:\s|$|·)/.test(t.title || '')) return true;
+    try { const list = JSON.parse(sessionStorage.getItem('agy-shell-ids') || '[]'); return Array.isArray(list) && list.includes(t.id); } catch (error) { return false; }
+  };
+  const displayTool = t => agyShell(t) ? 'agy' : t.tool;
   // ---- the sheet for switching (../ui/sheet.js)
   function switcher() {
     if (!window.RemoteSheet) return;
@@ -42,9 +48,14 @@
     window.RemoteSheet.open({ title: '切换终端', build(p) {
       const list = others();
       if (!list.length) p.body.append(kit.empty('没有别的终端在运行'));
-      else p.body.append(kit.group(...list.map(t => kit.row({ icon: t.tool === 'claude' || t.tool === 'codex' ? t.tool : t.form === 'chat' ? 'chat' : 'term', tint: t.tool === 'claude' ? 'claude' : t.tool === 'shell' ? 'good' : 'codex',
-        label: t.title, detail: (t.dir ? t.dir + ' · ' : '') + (TOOLS[t.tool] || t.tool), end: Object.assign(document.createElement('span'), { className: 'pill ' + t.shows, textContent: PHASE[t.shows][0] }),
-        act: () => { p.sheet.close(null, true); go(t.id); } }))));
+      else p.body.append(kit.group(...list.map(t => {
+        const shown = displayTool(t);
+        const icon = shown === 'claude' || shown === 'codex' || shown === 'agy' ? shown : t.form === 'chat' ? 'chat' : 'term';
+        const tint = shown === 'claude' ? 'claude' : shown === 'agy' ? 'agy' : shown === 'shell' ? 'good' : 'codex';
+        return kit.row({ icon, tint,
+          label: t.title, detail: (t.dir ? t.dir + ' · ' : '') + (TOOLS[shown] || shown), end: Object.assign(document.createElement('span'), { className: 'pill ' + t.shows, textContent: PHASE[t.shows][0] }),
+          act: () => { p.sheet.close(null, true); go(t.id); } });
+      })));
       p.foot.append(kit.go('全部项目', async () => { p.sheet.close(null, true); location.replace('../'); }, { kind: 'quiet', id: 'switch-all' }).button);
     } }, '切换终端');
   }

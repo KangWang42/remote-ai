@@ -8,8 +8,8 @@ internal static class AntigravityCheck {
         if (!ok) throw new Exception(message);
     }
     static void Main(string[] args) {
-        Check(TerminalAgent.Arguments("agy", "", false, "read") == " --mode plan", "plan mode");
-        Check(TerminalAgent.Arguments("agy", "", false, "edit") == " --mode accept-edits", "edit mode");
+        Check(TerminalAgent.Arguments("agy", "", false, "read") == "", "agy keeps user default even in read mode");
+        Check(TerminalAgent.Arguments("agy", "", false, "edit") == "", "agy keeps user default even in edit mode");
         Check(TerminalAgent.Arguments("agy", "", false, "full") == "", "default mode");
         try {
             TerminalAgent.Arguments("agy", Guid.NewGuid().ToString(), false, "read");

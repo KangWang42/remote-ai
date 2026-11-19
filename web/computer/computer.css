@@ -13,14 +13,14 @@
 .tool.cloud, .tool.own { --tint: var(--accent); }
 .tool.public { --tint: var(--busy); }
 
-/* ---- a choice of two or three, and a switch */
-.pick { display: flex; flex: none; padding: 3px; gap: 2px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); }
-.pick button { min-height: 36px; padding: 0 12px; border-radius: 9px; color: var(--muted); font-size: .88rem; white-space: nowrap; }
-.pick button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
-.flip { flex: none; position: relative; width: 52px; height: 30px; border-radius: 15px; border: 1px solid var(--line); background: var(--raised); transition: background .15s; }
-.flip::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
-.flip[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
-.flip[aria-checked="true"]::after { transform: translateX(22px); background: var(--on-accent); }
+/* ---- a choice of two or three, and a switch (aligned with ui/sheet.css) */
+.pick { display: inline-flex; flex: none; padding: 3px; gap: 2px; border-radius: 11px; background: color-mix(in srgb, var(--raised) 80%, var(--bg)); }
+.pick button { min-height: 34px; padding: 0 11px; border-radius: 8px; color: var(--muted); font-size: .86rem; white-space: nowrap; transition: background .15s, color .15s; }
+.pick button[aria-pressed="true"] { background: var(--bg); color: var(--ink); font-weight: 650; box-shadow: 0 1px 3px rgb(0 0 0 / .14), 0 0 0 .5px color-mix(in srgb, var(--line) 80%, transparent); }
+.flip { flex: none; position: relative; width: 51px; height: 31px; border-radius: 16px; border: 0; background: color-mix(in srgb, var(--muted) 30%, var(--raised)); transition: background .2s; }
+.flip::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 5px rgb(0 0 0 / .25); transition: transform .2s cubic-bezier(.3, .8, .3, 1); }
+.flip[aria-checked="true"] { background: var(--good); }
+.flip[aria-checked="true"]::after { transform: translateX(20px); }
 @media (prefers-reduced-motion: reduce) { .flip, .flip::after { transition: none; } #state.busy b::before { animation: none; } }
 /* a setting that says how something stands: in the colour of what is well when it is */
 .text.well small { color: var(--good); font-weight: 600; }

@@ -153,6 +153,7 @@ button.rs-row:active, label.rs-row:active { background: var(--raised); }
 .rs-who small i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--muted)); }
 .rs-tint-claude { --tint: #d97757; }
 .rs-tint-codex { --tint: var(--accent); }
+.rs-tint-agy { --tint: #6366f1; }
 .rs-tint-time { --tint: #c77c1a; }
 .rs-tint-file { --tint: #3c8fd6; }
 .rs-tint-copy { --tint: #7b6fd6; }

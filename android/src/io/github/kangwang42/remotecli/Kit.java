@@ -6,11 +6,12 @@ import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.widget.EditText;
@@ -93,22 +94,25 @@ final class Kit {
         box.setInputType(type); box.setBackground(shape(PANEL, LINE, 14)); box.setPadding(dp(16), 0, dp(16), 0); box.setMinHeight(dp(52));
         return box;
     }
-    /** A button: 0 the main action, 1 an ordinary one, 2 only text. A press dims it for a moment. */
+    /** A button: 0 the main action, 1 an ordinary one, 2 only text, 3 soft danger. */
     TextView button(String label, int kind, Runnable action) {
-        TextView view = bold(label, 16, kind == 0 ? ON_ACCENT : kind == 1 ? INK : MUTED);
-        view.setGravity(Gravity.CENTER); view.setMinHeight(dp(kind == 0 ? 52 : 48)); view.setPadding(dp(16), dp(6), dp(16), dp(6));
-        if (kind < 2) view.setBackground(shape(kind == 0 ? ACCENT : PANEL, kind == 0 ? 0 : LINE, kind == 0 ? 16 : 12));
+        int ink = kind == 0 ? ON_ACCENT : kind == 3 ? BAD : kind == 1 ? INK : MUTED;
+        TextView view = bold(label, 15.5f, ink);
+        view.setGravity(Gravity.CENTER); view.setMinHeight(dp(kind == 0 ? 50 : 48)); view.setPadding(dp(16), dp(6), dp(16), dp(6));
+        if (kind == 0) view.setBackground(shape(ACCENT, 0, 14));
+        else if (kind == 1) view.setBackground(shape(PANEL, mix(LINE, PANEL, .65f), 14));
+        else if (kind == 3) view.setBackground(shape(mix(BAD, BG, .12f), 0, 14));
         press(view, action);
         return view;
     }
     void press(View view, Runnable action) {
         view.setClickable(true); view.setFocusable(true);
-        view.setOnTouchListener((v, event) -> {
-            int what = event.getActionMasked();
-            if (what == MotionEvent.ACTION_DOWN) v.setAlpha(.6f);
-            else if (what == MotionEvent.ACTION_UP || what == MotionEvent.ACTION_CANCEL) v.setAlpha(1f);
-            return false;
-        });
+        Drawable base = view.getBackground();
+        if (!(base instanceof RippleDrawable)) {
+            int ripple = tint(INK, light(BG) ? 26 : 36);
+            Drawable mask = base != null ? null : shape(0xffffffff, 0, 12);
+            view.setBackground(new RippleDrawable(ColorStateList.valueOf(ripple), base, mask));
+        }
         view.setOnClickListener(v -> action.run());
     }
     LinearLayout.LayoutParams below(int top) {
@@ -118,34 +122,94 @@ final class Kit {
     }
     LinearLayout column() { LinearLayout column = new LinearLayout(activity); column.setOrientation(LinearLayout.VERTICAL); return column; }
     LinearLayout row() { LinearLayout row = new LinearLayout(activity); row.setGravity(Gravity.CENTER_VERTICAL); return row; }
+    /** A clean navigation bar for secondary screens: back icon button, title, optional right actions. */
+    LinearLayout navBar(String title, Runnable onBack, View... actions) {
+        LinearLayout bar = row();
+        bar.setMinimumHeight(dp(48));
+        View back = iconButton(R.drawable.ic_back, "返回", INK, onBack);
+        LinearLayout.LayoutParams backParams = (LinearLayout.LayoutParams) back.getLayoutParams();
+        backParams.leftMargin = -dp(12);
+        bar.addView(back, backParams);
+        TextView named = bold(title, 19, INK);
+        named.setSingleLine(true); named.setEllipsize(TextUtils.TruncateAt.END);
+        bar.addView(named, new LinearLayout.LayoutParams(0, -2, 1));
+        for (View action : actions) if (action != null) bar.addView(action);
+        return bar;
+    }
     LinearLayout settingGroup(LinearLayout page, String label) {
-        page.addView(bold(label, 13, MUTED), below(24));
-        LinearLayout group = column(); group.setBackground(shape(PANEL, 0, 18));
-        page.addView(group, below(8)); return group;
+        if (label != null && !label.isEmpty()) {
+            TextView heading = bold(label, 12.5f, MUTED);
+            heading.setPadding(dp(4), 0, dp(4), 0);
+            page.addView(heading, below(20));
+        }
+        LinearLayout group = column();
+        group.setBackground(shape(PANEL, mix(LINE, PANEL, .6f), 16));
+        group.setClipToOutline(true);
+        page.addView(group, below(label != null && !label.isEmpty() ? 8 : 16));
+        return group;
     }
     void setting(LinearLayout group, String label, String description, String value, Runnable action) {
-        LinearLayout row = settingBody(group, label, description);
+        setting(group, 0, 0, label, description, value, MUTED, action);
+    }
+    void setting(LinearLayout group, int iconRes, int iconTint, String label, String description, String value, Runnable action) {
+        setting(group, iconRes, iconTint, label, description, value, MUTED, action);
+    }
+    void setting(LinearLayout group, int iconRes, int iconTint, String label, String description, String value, int valueColor, Runnable action) {
+        LinearLayout row = settingBody(group, iconRes, iconTint, label, description);
         if (value != null && !value.isEmpty()) {
-            TextView status = line(value, 12.5f, MUTED, false); status.setMaxWidth(dp(110));
-            LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2); gap.setMargins(dp(10), 0, dp(8), 0); row.addView(status, gap);
+            TextView status = valueColor != MUTED ? bold(value, 13, valueColor) : line(value, 13, valueColor, false);
+            status.setSingleLine(true); status.setEllipsize(TextUtils.TruncateAt.END); status.setMaxWidth(dp(120));
+            LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2); gap.setMargins(dp(10), 0, dp(6), 0); row.addView(status, gap);
         }
-        row.addView(icon(R.drawable.ic_chevron, MUTED, 14)); press(row, action);
+        row.addView(icon(R.drawable.ic_chevron, tint(MUTED, 150), 15));
+        press(row, action);
     }
     void settingSwitch(LinearLayout group, String label, String description, boolean on, Runnable action) {
-        LinearLayout row = settingBody(group, label, description);
-        android.widget.Switch toggle = new android.widget.Switch(activity); toggle.setChecked(on); toggle.setContentDescription(label);
-        toggle.setThumbTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}}, new int[]{ACCENT, MUTED}));
-        toggle.setTrackTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}}, new int[]{tint(ACCENT, 90), LINE}));
-        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2); gap.leftMargin = dp(12); row.addView(toggle, gap);
-        toggle.setOnCheckedChangeListener((button, checked) -> action.run());
-        press(row, toggle::toggle);
+        settingSwitch(group, 0, 0, label, description, on, action);
     }
-    private LinearLayout settingBody(LinearLayout group, String label, String description) {
-        if (group.getChildCount() > 0) { View line = new View(activity); line.setBackgroundColor(LINE); LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, dp(1)); divider.setMargins(dp(16), 0, dp(16), 0); group.addView(line, divider); }
-        LinearLayout row = row(); row.setPadding(dp(16), dp(13), dp(16), dp(13)); row.setMinimumHeight(dp(64));
-        LinearLayout copy = column(); copy.addView(text(label, 16, INK));
-        if (description != null && !description.isEmpty()) copy.addView(text(description, 12.5f, MUTED), below(3));
-        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); group.addView(row); return row;
+    void settingSwitch(LinearLayout group, int iconRes, int iconTint, String label, String description, boolean on, Runnable action) {
+        LinearLayout row = settingBody(group, iconRes, iconTint, label, description);
+        View toggle = toggleView(on, label);
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(dp(50), dp(30)); gap.leftMargin = dp(12);
+        row.addView(toggle, gap);
+        press(row, action);
+    }
+    /** A crisp pill toggle switch matching web/ui/sheet.css (.rs-switch). */
+    View toggleView(boolean on, String label) {
+        FrameLayout track = new FrameLayout(activity);
+        track.setBackground(shape(on ? GOOD : mix(MUTED, RAISED, .32f), 0, 15));
+        View thumb = new View(activity);
+        thumb.setBackground(shape(0xffffffff, 0, 13));
+        thumb.setElevation(dp(2));
+        FrameLayout.LayoutParams knob = new FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER_VERTICAL | (on ? Gravity.END : Gravity.START));
+        knob.setMargins(dp(2), 0, dp(2), 0);
+        track.addView(thumb, knob);
+        track.setContentDescription(label + (on ? "，已开启" : "，已关闭"));
+        return track;
+    }
+    private LinearLayout settingBody(LinearLayout group, int iconRes, int iconTint, String label, String description) {
+        if (group.getChildCount() > 0) {
+            View line = new View(activity);
+            line.setBackgroundColor(mix(LINE, PANEL, .75f));
+            LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, dp(1));
+            divider.setMargins(dp(iconRes != 0 ? 58 : 16), 0, 0, 0);
+            group.addView(line, divider);
+        }
+        LinearLayout row = row();
+        row.setPadding(dp(14), dp(11), dp(14), dp(11));
+        row.setMinimumHeight(dp(54));
+        if (iconRes != 0) {
+            View badge = tile(iconRes, iconTint == 0 ? ACCENT : iconTint, 32);
+            LinearLayout.LayoutParams badgeParams = (LinearLayout.LayoutParams) badge.getLayoutParams();
+            badgeParams.rightMargin = dp(12);
+            row.addView(badge, badgeParams);
+        }
+        LinearLayout copy = column();
+        copy.addView(line(label, 15.5f, INK, false));
+        if (description != null && !description.isEmpty()) copy.addView(text(description, 12.5f, MUTED), below(2));
+        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+        group.addView(row);
+        return row;
     }
     /** A screen's content: one column with the page margins. */
     LinearLayout page(int top) { LinearLayout page = column(); page.setPadding(dp(18), dp(top), dp(18), dp(28)); return page; }
@@ -313,7 +377,43 @@ final class Kit {
         }
         if (group.getChildCount() > 0) box.addView(group, below(14));
         if (apart.getChildCount() > 0) box.addView(apart, below(group.getChildCount() > 0 ? 12 : 14));
-        box.addView(button("取消", 2, dialog::dismiss), below(6));
+        box.addView(button("取消", 1, dialog::dismiss), below(10));
         raise(dialog, box, false);
+    }
+    /** A bottom confirmation sheet matching web/ui/sheet.js, replacing raw system AlertDialogs. */
+    void confirmSheet(String title, String note, String yesLabel, boolean danger, Runnable onYes) {
+        final Dialog dialog = new Dialog(activity);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = sheetBox(title, null, 0);
+        if (note != null && !note.isEmpty()) {
+            LinearLayout card = column();
+            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+            card.setBackground(shape(mix(danger ? BAD : ACCENT, BG, .1f), 0, 14));
+            card.addView(text(note, 13.5f, INK));
+            box.addView(card, below(12));
+        }
+        box.addView(button(yesLabel, danger ? 3 : 0, () -> { dialog.dismiss(); onYes.run(); }), below(14));
+        box.addView(button("取消", 1, dialog::dismiss), below(8));
+        raise(dialog, box, false);
+    }
+    /** A single-line input sheet (e.g. renaming a computer). */
+    void promptSheet(String title, String initial, String hint, String yesLabel, java.util.function.Consumer<String> onSave) {
+        final Dialog dialog = new Dialog(activity);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = sheetBox(title, null, 0);
+        final EditText field = field(hint, android.text.InputType.TYPE_CLASS_TEXT);
+        field.setText(initial);
+        field.setSelection(initial == null ? 0 : initial.length());
+        field.setBackground(shape(PANEL, 0, 14));
+        box.addView(field, below(14));
+        box.addView(button(yesLabel, 0, () -> {
+            String value = field.getText().toString().trim();
+            if (value.isEmpty()) return;
+            dialog.dismiss();
+            onSave.accept(value);
+        }), below(12));
+        box.addView(button("取消", 1, dialog::dismiss), below(8));
+        raise(dialog, box, true);
+        field.requestFocus();
     }
 }

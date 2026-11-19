@@ -145,29 +145,47 @@ final class Workbench {
             page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(22));
             page.addView(kit.button("手动输入地址", 1, () -> activity.add("")), kit.below(10));
         } else if (tasks) {
+            LinearLayout monitorCard = kit.column();
+            monitorCard.setBackground(kit.shape(kit.PANEL, Kit.mix(kit.LINE, kit.PANEL, .65f), 16));
+            monitorCard.setClipToOutline(true);
             LinearLayout monitor = kit.row();
-            monitor.setPadding(kit.dp(8), kit.dp(12), kit.dp(8), kit.dp(12));
-            monitor.setBackground(kit.shape(kit.PANEL, kit.LINE, 16));
+            monitor.setPadding(kit.dp(10), kit.dp(13), kit.dp(10), kit.dp(13));
             String[] labels = {"待确认", "执行中", "已打开"};
             metrics = new TextView[labels.length];
             for (int i = 0; i < labels.length; i++) {
+                if (i > 0) {
+                    View divider = new View(activity);
+                    divider.setBackgroundColor(Kit.mix(kit.LINE, kit.PANEL, .8f));
+                    monitor.addView(divider, new LinearLayout.LayoutParams(kit.dp(1), kit.dp(36)));
+                }
                 LinearLayout cell = kit.column();
-                cell.setPadding(kit.dp(8), 0, kit.dp(4), 0);
-                cell.addView(kit.text(labels[i], 13, kit.MUTED));
-                metrics[i] = kit.bold("—", 24, kit.INK);
+                cell.setPadding(kit.dp(10), 0, kit.dp(6), 0);
+                cell.addView(kit.text(labels[i], 12.5f, kit.MUTED));
+                metrics[i] = kit.bold("—", 23, kit.INK);
                 metrics[i].setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
                 cell.addView(metrics[i]);
                 monitor.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
             }
-            page.addView(monitor, kit.below(12));
-            external = kit.text("", 14, kit.ACCENT);
+            monitorCard.addView(monitor);
+            external = kit.text("", 13.5f, kit.ACCENT);
             external.setMinHeight(kit.dp(48)); external.setGravity(Gravity.CENTER_VERTICAL);
+            external.setPadding(kit.dp(16), kit.dp(6), kit.dp(16), kit.dp(6));
+            external.setBackgroundColor(Kit.mix(kit.ACCENT, kit.PANEL, .06f));
             external.setVisibility(View.GONE);
-            page.addView(external);
+            monitorCard.addView(external);
+            page.addView(monitorCard, kit.below(14));
             // one search over every computer's terminals and conversations, and what to tell them apart by
             page.setFocusable(true); page.setFocusableInTouchMode(true);      // the box is written in when it is touched, not as the screen opens
             android.widget.EditText find = kit.field("搜索对话、终端和项目", android.text.InputType.TYPE_CLASS_TEXT);
             find.setMinHeight(kit.dp(48)); find.setTextSize(15); find.setText(query);
+            android.graphics.drawable.Drawable searchIcon = activity.getDrawable(R.drawable.ic_search);
+            if (searchIcon != null) {
+                searchIcon = searchIcon.mutate();
+                searchIcon.setTint(kit.MUTED);
+                searchIcon.setBounds(0, 0, kit.dp(18), kit.dp(18));
+                find.setCompoundDrawables(searchIcon, null, null, null);
+                find.setCompoundDrawablePadding(kit.dp(10));
+            }
             find.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
             find.addTextChangedListener(new android.text.TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) { }
@@ -387,8 +405,8 @@ final class Workbench {
         return "confirm".equals(kind) ? kit.BAD : "done".equals(kind) || "waiting".equals(kind) ? kit.GOOD : "busy".equals(kind) || "pc-busy".equals(kind) ? kit.BUSY
             : "starting".equals(kind) || "pc-idle".equals(kind) ? kit.ACCENT : kit.MUTED;
     }
-    private int toolIcon(String tool) { return "claude".equals(tool) ? R.drawable.ic_claude : "codex".equals(tool) ? R.drawable.ic_codex : R.drawable.ic_shell; }
-    private int toolColor(String tool) { return "claude".equals(tool) ? 0xffd98a5f : "codex".equals(tool) ? kit.ACCENT : kit.GOOD; }
+    private int toolIcon(String tool) { return "claude".equals(tool) ? R.drawable.ic_claude : "codex".equals(tool) ? R.drawable.ic_codex : "agy".equals(tool) ? R.drawable.ic_agy : R.drawable.ic_shell; }
+    private int toolColor(String tool) { return "claude".equals(tool) ? 0xffd98a5f : "codex".equals(tool) ? kit.ACCENT : "agy".equals(tool) ? 0xff6366f1 : kit.GOOD; }
 
     /**
      * The summary under the title and the lists over all computers, by what needs the owner: what waits for an
@@ -565,15 +583,18 @@ final class Workbench {
         for (final String one : sources) filters.addView(chip(AggregateSessions.sourceLabel(one), one.equals(source), () -> { source = one.equals(source) ? "" : one; draw(); }));
     }
     private View chip(String label, boolean on, Runnable action) {
+        android.widget.FrameLayout wrap = new android.widget.FrameLayout(activity);
+        wrap.setMinimumHeight(kit.dp(48));
         TextView chip = on ? kit.bold(label, 13, kit.ON_ACCENT) : kit.text(label, 13, kit.MUTED);
-        chip.setSingleLine(true); chip.setGravity(Gravity.CENTER); chip.setMinHeight(kit.dp(48)); chip.setPadding(kit.dp(13), 0, kit.dp(13), 0);
-        chip.setBackground(kit.shape(on ? kit.ACCENT : kit.PANEL, on ? 0 : kit.LINE, 17));
-        chip.setContentDescription(label + (on ? "，已选" : ""));
-        kit.press(chip, action);
+        chip.setSingleLine(true); chip.setGravity(Gravity.CENTER); chip.setMinHeight(kit.dp(34)); chip.setPadding(kit.dp(14), 0, kit.dp(14), 0);
+        chip.setBackground(kit.shape(on ? kit.ACCENT : kit.PANEL, on ? 0 : Kit.mix(kit.LINE, kit.PANEL, .75f), 17));
+        wrap.addView(chip, new android.widget.FrameLayout.LayoutParams(-2, kit.dp(34), Gravity.CENTER_VERTICAL));
+        wrap.setContentDescription(label + (on ? "，已选" : ""));
+        kit.press(wrap, action);
         LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2);
         gap.rightMargin = kit.dp(8);
-        chip.setLayoutParams(gap);
-        return chip;
+        wrap.setLayoutParams(gap);
+        return wrap;
     }
     private View taskCard(AggregateSessions.Thing task, boolean several) {
         final AggregateSessions.Entry entry = task.entry;
@@ -581,7 +602,7 @@ final class Workbench {
         card.setMinimumHeight(kit.dp(66)); card.setPadding(kit.dp(14), kit.dp(11), kit.dp(14), kit.dp(11));
         int edge = "confirm".equals(task.kind) ? Kit.mix(kit.BAD, kit.LINE, .55f) : "done".equals(task.kind) || "waiting".equals(task.kind) ? Kit.mix(kit.GOOD, kit.LINE, .45f) : kit.LINE;
         card.setBackground(kit.shape(kit.PANEL, edge, 16));
-        card.addView(kit.tile(toolIcon(entry.tool), toolColor(entry.tool), 40));
+        card.addView(kit.tile(toolIcon(entry.displayTool()), toolColor(entry.displayTool()), 40));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(12), 0, 0, 0);
         texts.addView(kit.title(entry.shownTitle(), 15.5f, kit.INK, true));
@@ -1028,7 +1049,7 @@ final class Workbench {
     private View talkRow(String url, AggregateSessions.Entry entry, String kind) {
         LinearLayout row = kit.row();
         row.setMinimumHeight(kit.dp(50)); row.setPadding(kit.dp(8), kit.dp(6), kit.dp(8), kit.dp(6));
-        row.addView(kit.tile(toolIcon(entry.tool), toolColor(entry.tool), 30));
+        row.addView(kit.tile(toolIcon(entry.displayTool()), toolColor(entry.displayTool()), 30));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(10), 0, kit.dp(8), 0);
         texts.addView(kit.title(entry.shownTitle(), 14.5f, "history".equals(kind) ? kit.MUTED : kit.INK, false));

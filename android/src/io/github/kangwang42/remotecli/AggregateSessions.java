@@ -116,7 +116,12 @@ final class AggregateSessions {
         int rank() { return AggregateSessions.rank(kind(null)); }
         /** What the computer calls its plain terminal ("PowerShell", "bash"); empty from a computer that does not say. */
         String shell = "";
-        String toolName() { return "shell".equals(tool) ? (shell.isEmpty() ? "PowerShell" : shell) : AggregateSessions.toolName(tool); }
+        /** Display tool identity: legacy-relay agy fallback runs inside a renamed PowerShell terminal. */
+        String displayTool() {
+            if (terminal && "shell".equals(tool) && (title.startsWith("Antigravity CLI") || title.equals("agy") || title.startsWith("agy ·"))) return "agy";
+            return tool;
+        }
+        String toolName() { String shown = displayTool(); return "shell".equals(shown) ? (shell.isEmpty() ? "PowerShell" : shell) : AggregateSessions.toolName(shown); }
         String shownTitle() { return title.isEmpty() ? toolName() : title; }
     }
     static String label(String kind) {
@@ -203,11 +208,11 @@ final class AggregateSessions {
         List<String> words = new ArrayList<>();
         for (String word : query.trim().toLowerCase(java.util.Locale.ROOT).split("\\s+")) if (!word.isEmpty()) words.add(word);
         board.searched = !words.isEmpty();
-        for (String known : new String[]{"claude", "codex", "agy", "opencode", "qoder", "cline", "pi", "shell"}) for (Thing thing : things) if (known.equals(thing.entry.tool)) { board.tools.add(known); break; }
+        for (String known : new String[]{"claude", "codex", "agy", "opencode", "qoder", "cline", "pi", "shell"}) for (Thing thing : things) if (known.equals(thing.entry.displayTool())) { board.tools.add(known); break; }
         for (String known : new String[]{"term", "app"}) for (Thing thing : things) if (known.equals(thing.entry.source())) { board.sources.add(known); break; }
         for (Thing thing : things) {
             Entry entry = thing.entry;
-            if (!tool.isEmpty() && !tool.equals(entry.tool) || !source.isEmpty() && !source.equals(entry.source())) continue;
+            if (!tool.isEmpty() && !tool.equals(entry.displayTool()) || !source.isEmpty() && !source.equals(entry.source())) continue;
             if (entry.terminal && !entry.running() && !entry.session.isEmpty() && saved.contains(thing.url + '\n' + entry.tool + '\n' + entry.session)) continue;
             boolean past = "ended".equals(thing.kind) || "history".equals(thing.kind);
             if (board.searched) {

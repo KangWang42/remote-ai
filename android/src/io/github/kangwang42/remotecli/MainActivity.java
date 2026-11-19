@@ -1,7 +1,6 @@
 package io.github.kangwang42.remotecli;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -24,7 +23,6 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -173,7 +171,7 @@ public final class MainActivity extends Activity {
         String single = prefs.getString("server", "");
         if (!single.isEmpty() && computers().length() == 0) remember("", single);
         updater = new GithubUpdater(this, new GithubUpdater.Listener() {
-            @Override public void found(GithubUpdater.Release release) { new AlertDialog.Builder(MainActivity.this).setTitle("发现 Remote AI 新版本").setMessage("GitHub 上有 v" + release.version + "，现在下载并安装吗？").setPositiveButton("更新", (d, w) -> updater.install(release)).setNegativeButton("稍后", null).show(); }
+            @Override public void found(GithubUpdater.Release release) { kit.confirmSheet("发现 Remote AI 新版本", "GitHub 上有 v" + release.version + "，现在下载并安装吗？", "立即更新", false, () -> updater.install(release)); }
             @Override public void message(String text) {
                 if (text == null || text.isEmpty()) return;
                 // Inside a computer's pages there is no line of the app's own to write on.
@@ -349,14 +347,11 @@ public final class MainActivity extends Activity {
             if (which == 0) open(url, "");
             else if (which == 2) { pairingRecord = computers().optJSONObject(index).optString("id"); scan(); }
             else if (which == 1) {
-                final EditText box = new EditText(this);
-                box.setText(name); box.setSingleLine(true); box.setSelection(name.length());
-                new AlertDialog.Builder(this).setTitle("电脑名称").setView(box).setNegativeButton("取消", null).setPositiveButton("保存", (d, w) -> {
-                    String wanted = box.getText().toString().trim();
-                    if (wanted.isEmpty() || wanted.length() > 40) return;
+                kit.promptSheet("电脑名称", name, "输入电脑名称", "保存", wanted -> {
+                    if (wanted.length() > 40) return;
                     try { JSONArray now = computers(); now.getJSONObject(index).put("name", wanted); store(now); } catch (Exception ignored) { }
                     home("");
-                }).show();
+                });
             } else {
                 JSONArray now = computers();
                 JSONObject removed = now.optJSONObject(index);
@@ -369,15 +364,15 @@ public final class MainActivity extends Activity {
 
     String versionName() { try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception unknown) { return ""; } }
 
-    /** The top of a screen one step below the workbench: a title, a line about it, and the way back. */
+    /** The top of a screen one step below the workbench: a navigation bar and a concise subtitle. */
     private LinearLayout step(String title, String about) {
-        LinearLayout page = kit.page(14);
-        TextView back = kit.text("‹  返回", 15, kit.MUTED);
-        back.setGravity(Gravity.CENTER_VERTICAL); back.setMinHeight(kit.dp(48));
-        kit.press(back, () -> { endScan(); home(""); });
-        page.addView(back, new LinearLayout.LayoutParams(-2, -2));
-        page.addView(kit.bold(title, 23, kit.INK), kit.below(8));
-        page.addView(kit.text(about, 14.5f, kit.MUTED), kit.below(6));
+        LinearLayout page = kit.page(12);
+        page.addView(kit.navBar(title, () -> { endScan(); home(""); }));
+        if (about != null && !about.isEmpty()) {
+            TextView sub = kit.text(about, 13.5f, kit.MUTED);
+            sub.setPadding(kit.dp(4), 0, kit.dp(4), 0);
+            page.addView(sub, kit.below(4));
+        }
         return page;
     }
 
@@ -493,30 +488,56 @@ public final class MainActivity extends Activity {
     }
     /** A plain-language checklist for Android's controls that decide whether background reminders can arrive. */
     void reminderSettings() {
-        LinearLayout page = kit.page(22);
-        page.addView(kit.head("提醒与权限", kit.text("这些开关由 Android 系统管理，开启后提醒更稳定。", 13, kit.MUTED)), kit.below(18));
+        repaint();
+        LinearLayout page = kit.page(12);
+        page.addView(kit.navBar("提醒与权限", () -> appPage("me")));
+        TextView intro = kit.text("开启后台提醒并放行系统权限后，锁屏通知更及时稳定。", 13, kit.MUTED);
+        intro.setPadding(kit.dp(4), 0, kit.dp(4), 0);
+        page.addView(intro, kit.below(4));
+
+        LinearLayout control = kit.settingGroup(page, "任务提醒");
+        kit.settingSwitch(control, R.drawable.ic_bell, 0xffc77c1a, "开启任务提醒", "约每 10 秒检查任务，回到应用时暂停弹出", watching(), this::toggleWatch);
+        kit.setting(control, R.drawable.ic_say, kit.ACCENT, "发送测试通知", "验证当前通知栏与提示音是否正常", "", kit.MUTED, () -> {
+            Watcher.test(this);
+            android.widget.Toast.makeText(this, "已请求发送测试通知，请检查通知栏", android.widget.Toast.LENGTH_LONG).show();
+        });
+
         NotificationManager nm = getSystemService(NotificationManager.class);
         boolean notifications = nm.areNotificationsEnabled();
         boolean channel = nm.getNotificationChannel("tasks") == null || nm.getNotificationChannel("tasks").getImportance() != NotificationManager.IMPORTANCE_NONE;
         boolean battery = getSystemService(android.os.PowerManager.class).isIgnoringBatteryOptimizations(getPackageName());
         int data = getSystemService(android.net.ConnectivityManager.class).getRestrictBackgroundStatus();
-        page.addView(kit.text("必要权限", 13, kit.MUTED), kit.below(4));
-        page.addView(reminderRow("通知", notifications && channel ? "已允许" : "需要允许", notifications && channel ? kit.GOOD : kit.BAD,
-            () -> systemSettings(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()))), kit.below(8));
-        page.addView(reminderRow("任务通知类别", "声音、振动与锁屏显示", kit.MUTED,
-            () -> systemSettings(new Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "tasks"))), kit.below(8));
-        page.addView(reminderRow("电池优化", battery ? "已不受电池优化限制" : "系统可能延迟锁屏后的提醒", battery ? kit.GOOD : kit.BUSY,
-            () -> systemSettings(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))), kit.below(8));
-        page.addView(reminderRow("后台联网", data == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED ? "省流量模式正在限制后台联网" : "未被省流量模式限制", kit.MUTED,
-            () -> systemSettings(new Intent(android.provider.Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS, Uri.parse("package:" + getPackageName())))), kit.below(8));
-        page.addView(reminderRow("应用详情", "检查后台数据、自启动和省电策略", kit.ACCENT,
-            () -> systemSettings(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())))), kit.below(18));
+
+        LinearLayout perms = kit.settingGroup(page, "系统权限检查");
+        kit.setting(perms, R.drawable.ic_bell, notifications && channel ? kit.GOOD : kit.BAD,
+            "通知权限", "允许 Remote AI 发送提醒", notifications && channel ? "已允许" : "需允许", notifications && channel ? kit.GOOD : kit.BAD,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName())));
+        kit.setting(perms, R.drawable.ic_settings, kit.MUTED,
+            "任务通知类别", "调整声音、振动与锁屏显示", "", kit.MUTED,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "tasks")));
+        kit.setting(perms, R.drawable.ic_shield, battery ? kit.GOOD : kit.BUSY,
+            "电池优化", battery ? "已不受电池优化限制" : "建议设为不限制，避免锁屏延迟", battery ? "已放行" : "可能延迟", battery ? kit.GOOD : kit.BUSY,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)));
+        boolean dataRestricted = data == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED;
+        kit.setting(perms, R.drawable.ic_link, dataRestricted ? kit.BUSY : kit.GOOD,
+            "后台联网", dataRestricted ? "省流量模式正在限制后台联网" : "未被省流量模式限制", dataRestricted ? "受限" : "正常", dataRestricted ? kit.BUSY : kit.GOOD,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS, Uri.parse("package:" + getPackageName()))));
+        kit.setting(perms, R.drawable.ic_computer, kit.ACCENT,
+            "应用详情", "检查自启动、后台活动与省电策略", "", kit.MUTED,
+            () -> systemSettings(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
+
         String error = getSharedPreferences("remote-cli-watch", MODE_PRIVATE).getString("error", "");
-        if (!error.isEmpty()) page.addView(kit.text(error, 13, kit.BAD), kit.below(12));
-        page.addView(kit.text("开启后会保留一条“后台连接”通知，约每 10 秒检查任务。回到应用时暂停弹出任务通知，电脑上的确认被处理后会撤下旧提醒。\n\n在应用详情中将电池设为“不限制”或“允许后台活动”。部分手机还需手动开启自启动；这项设置无法自动检测。\n\n锁屏省电、断网或系统强行停止应用仍可能延迟提醒。电脑需要保持在线。", 13.5f, kit.INK), kit.below(18));
-        page.addView(kit.button("发送测试通知", 1, () -> { Watcher.test(this); android.widget.Toast.makeText(this, "已请求发送测试通知，请检查通知栏", android.widget.Toast.LENGTH_LONG).show(); }), kit.below(14));
-        page.addView(kit.button(watching() ? "关闭任务提醒" : "开启任务提醒", watching() ? 1 : 0, this::toggleWatch), kit.below(8));
-        page.addView(kit.button("返回我的", 2, () -> appPage("me")));
+        if (!error.isEmpty()) {
+            LinearLayout warn = kit.column();
+            warn.setPadding(kit.dp(14), kit.dp(12), kit.dp(14), kit.dp(12));
+            warn.setBackground(kit.shape(Kit.mix(kit.BAD, kit.PANEL, .09f), Kit.mix(kit.BAD, kit.LINE, .45f), 14));
+            warn.addView(kit.text(error, 13, kit.BAD));
+            page.addView(warn, kit.below(14));
+        }
+
+        TextView note = kit.text("开启后状态栏会保留“后台连接”通知。部分机型还需在“应用详情”中手动允许自启动和后台活动；电脑须保持在线，确认在电脑端处理后旧提醒会自动撤下。", 12.5f, kit.MUTED);
+        note.setPadding(kit.dp(6), 0, kit.dp(6), 0);
+        page.addView(note, kit.below(16));
         show(page, "reminders");
     }
     private void systemSettings(Intent intent) {
@@ -524,12 +545,6 @@ public final class MainActivity extends Activity {
         catch (android.content.ActivityNotFoundException unavailable) {
             startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
         }
-    }
-    private View reminderRow(String title, String status, int color, Runnable open) {
-        LinearLayout row = kit.row(); row.setPadding(kit.dp(14), kit.dp(10), kit.dp(8), kit.dp(10)); row.setBackground(kit.shape(kit.PANEL, kit.LINE, 14));
-        LinearLayout copy = kit.column(); copy.addView(kit.bold(title, 15, kit.INK)); copy.addView(kit.text(status, 12.5f, color), kit.below(3));
-        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); row.addView(kit.button("打开设置", 2, open), new LinearLayout.LayoutParams(kit.dp(92), -2));
-        return row;
     }
     /** Straight into one terminal; its page is told to come back here rather than to that computer's list. */
     void openTerminal(String address, String terminal) { openTerminal(address, terminal, false); }
@@ -616,23 +631,25 @@ public final class MainActivity extends Activity {
         page.setOrientation(LinearLayout.VERTICAL);
         LinearLayout banner = new LinearLayout(this);
         banner.setOrientation(LinearLayout.HORIZONTAL);
-        banner.setBackgroundColor(kit.PANEL);
+        banner.setBackgroundColor(Kit.mix(kit.BAD, kit.PANEL, .08f));
         banner.setGravity(Gravity.CENTER_VERTICAL);
-        banner.setPadding(kit.dp(14), kit.dp(6), kit.dp(14), kit.dp(6));
+        banner.setPadding(kit.dp(14), kit.dp(8), kit.dp(10), kit.dp(8));
         bannerText = kit.text("", 13, kit.INK);
         banner.addView(bannerText, new LinearLayout.LayoutParams(0, -2, 1));
-        Button again = new Button(this);
-        again.setText("重试");
-        again.setMinHeight(kit.dp(48));
-        again.setMinimumWidth(kit.dp(64));
+        TextView again = kit.bold("重试", 13.5f, kit.ON_ACCENT);
+        again.setGravity(Gravity.CENTER); again.setMinHeight(kit.dp(48)); again.setPadding(kit.dp(14), 0, kit.dp(14), 0);
+        again.setBackground(kit.shape(kit.ACCENT, 0, 12));
+        again.setClickable(true); again.setFocusable(true);
         again.setOnClickListener(v -> openPage(address, password, path));
-        banner.addView(again, new LinearLayout.LayoutParams(-2, -2));
-        Button back = new Button(this);
-        back.setText("返回");
-        back.setMinHeight(kit.dp(48));
-        back.setMinimumWidth(kit.dp(64));
-        back.setOnClickListener(v -> home(""));
-        banner.addView(back, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams retryGap = new LinearLayout.LayoutParams(-2, -2);
+        retryGap.leftMargin = kit.dp(8);
+        banner.addView(again, retryGap);
+        TextView back = kit.bold("返回", 13.5f, kit.MUTED);
+        back.setGravity(Gravity.CENTER); back.setMinHeight(kit.dp(48)); back.setPadding(kit.dp(12), 0, kit.dp(12), 0);
+        kit.press(back, () -> home(""));
+        LinearLayout.LayoutParams backGap = new LinearLayout.LayoutParams(-2, -2);
+        backGap.leftMargin = kit.dp(4);
+        banner.addView(back, backGap);
         banner.setVisibility(View.GONE);
         connectionBanner = banner;
         page.addView(banner, new LinearLayout.LayoutParams(-1, -2));

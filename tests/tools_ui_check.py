@@ -91,18 +91,22 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
         op = next(op for op in reversed(played.asked) if op['action'] == 'start')
         assert (op['tool'], op['dir']) == ('shell', 'thesis')
         terminal = op['terminal']
+        relay_term = next(t for t in played.relay.overview()['terminals'] if t['id'] == terminal)
+        assert relay_term['title'] == 'Antigravity CLI · thesis', relay_term
         played.relay.agent({'info': played.info, 'terminals': [{'id': terminal, 'state': 'running'}]})
-        browser.until("document.querySelector('#input').value==='agy --mode plan'", 'editable agy command in new shell')
-        assert not any(op['action'] == 'input' and op['terminal'] == terminal for op in played.asked)
-        browser.value("document.querySelector('#send').click()")
         for _ in range(60):
-            if any(op['action'] == 'input' and op['terminal'] == terminal and op['data'] == 'agy --mode plan\r' for op in played.asked):
+            if any(op['action'] == 'input' and op['terminal'] == terminal and op['data'] == 'agy\r' for op in played.asked):
                 break
             time.sleep(.1)
         else:
-            raise AssertionError('agy command did not reach the new PowerShell')
+            raise AssertionError('agy command did not automatically run in the new PowerShell')
+        assert browser.value("document.querySelector('#input').value") == '', 'input stays clean after auto-running agy'
+        assert browser.value("document.getElementById('status-text').textContent.startsWith('Antigravity CLI')"), 'status shows Antigravity CLI instead of PowerShell'
+        browser.value("document.getElementById('menu').click()")
+        browser.until("!!document.querySelector('dialog.rs[open] .rs-who .rs-tint-agy')", 'terminal menu shows agy icon and tint')
+        browser.value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         (out / 'ui-report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-        print('Browser checks passed: direct agy, legacy PowerShell launch draft and send, Ctrl+P, 320/390/430/1440 layouts.')
+        print('Browser checks passed: direct agy, legacy PowerShell auto-launch agy + agy logo/title, Ctrl+P, 320/390/430/1440 layouts.')
     finally:
         browser.close()
         played.close()

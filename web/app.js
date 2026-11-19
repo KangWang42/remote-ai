@@ -298,10 +298,24 @@
     if (result) open(result.terminal);
     return !!result;
   }
+  const agyShellTitle = dir => 'Antigravity CLI' + (dir ? ' · ' + dir : '');
+  const isAgyShell = t => !!t && t.tool === 'shell' && (/^Antigravity CLI(?:\s|$|·)/.test(t.title || '') || agyShellIds().includes(t.id));
+  function agyShellIds() {
+    try { const list = JSON.parse(sessionStorage.getItem('agy-shell-ids') || '[]'); return Array.isArray(list) ? list : []; } catch (error) { return []; }
+  }
+  function rememberAgyShell(id) {
+    try {
+      const ids = agyShellIds().filter(one => one !== id);
+      ids.push(id);
+      sessionStorage.setItem('agy-shell-ids', JSON.stringify(ids.slice(-16)));
+    } catch (error) { /* title rename still identifies it */ }
+  }
   async function startAgyShell(dir) {
-    const result = await run({ action: 'start', tool: 'shell', dir, history: false }, '正在打开项目 PowerShell…');
+    const result = await run({ action: 'start', tool: 'shell', dir, history: false }, '正在电脑上启动 agy…');
     if (!result) return false;
-    try { sessionStorage.setItem('agy-shell-draft', result.terminal); } catch (error) { /* command can be entered manually */ }
+    rememberAgyShell(result.terminal);
+    try { sessionStorage.setItem('agy-shell-run', result.terminal); } catch (error) { /* command can be entered manually */ }
+    try { await api('api/terminal', { id: newId(), action: 'rename', terminal: result.terminal, title: agyShellTitle(dir) }); } catch (error) { /* best-effort title update */ }
     open(result.terminal);
     return true;
   }
@@ -852,9 +866,9 @@
     const sessions = data.sessions || [], saved = {};
     sessions.forEach(s => { saved[s.tool + ':' + s.id] = s; });
     const out = (data.terminals || []).map(t => {
-      const s = t.session ? saved[t.tool + ':' + t.session] || null : null, phase = phaseOf(t), live = running(t);
+      const s = t.session ? saved[t.tool + ':' + t.session] || null : null, phase = phaseOf(t), live = running(t), tool = isAgyShell(t) ? 'agy' : t.tool;
       // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
-      return { t, s, tool: t.tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
+      return { t, s, tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
         source: t.form === 'chat' ? 'app' : 'term', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
     });
     sessions.filter(s => !s.terminal).forEach(s => {
@@ -1025,7 +1039,7 @@
     const peek = el('span', { className: 'peek', hidden: true });
     peek.dataset.peek = t.id;
     const made = el('li', { className: 'card ' + phase }, el('button', { type: 'button', className: 'open', onclick: () => open(t.id, t.form) },
-      el('span', { className: 'tool ' + t.tool, html: ICON[t.tool] }), el('span', { className: 'text' }, named(x), meta, peek)));
+      el('span', { className: 'tool ' + x.tool, html: ICON[x.tool] || ICON.shell }), el('span', { className: 'text' }, named(x), meta, peek)));
     // A terminal that waits on a question is answered below, where the question is read: Enter would say yes to it.
     if (t.state === 'running' && phase !== 'confirm') made.append(el('button', { type: 'button', className: 'side say', ariaLabel: '给这个终端发消息', html: ICON.say, onclick: () => say(t) }));
     if (running(t)) made.append(el('button', { type: 'button', className: 'side', ariaLabel: '结束这个终端', html: ICON.stop, onclick: () => endTerminal(t) }));

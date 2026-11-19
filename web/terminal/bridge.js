@@ -291,15 +291,23 @@
   // The files of the project this terminal works in. The terminal goes on running on the computer; the back arrow
   // of the file pages, or the phone's back key, leads here again.
   function files() { if (terminal) location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; }
-  const of = () => ({ id: terminal.session || '', tool: terminal.tool, title: terminal.title || TOOLS[terminal.tool], dir: terminal.dir || '', terminal: id });
+  const agyShell = t => {
+    if (!t || t.tool !== 'shell') return false;
+    if (/^Antigravity CLI(?:\s|$|·)/.test(t.title || '')) return true;
+    try { const list = JSON.parse(sessionStorage.getItem('agy-shell-ids') || '[]'); return Array.isArray(list) && list.includes(t.id); } catch (error) { return false; }
+  };
+  const displayTool = t => !t ? 'shell' : agyShell(t) ? 'agy' : t.tool;
+  const of = () => ({ id: terminal.session || '', tool: terminal.tool, title: terminal.title || TOOLS[displayTool(terminal)], dir: terminal.dir || '', terminal: id });
   // a conversation of a tool the computer knows how to hand over and ask: Claude Code and Codex (and on Linux a few more)
-  const talks = () => !!terminal && !['shell', 'agy'].includes(terminal.tool);
+  const talks = () => !!terminal && !['shell', 'agy'].includes(displayTool(terminal));
   function menuPage() {
     const kit = window.RemoteSheet.ui;
     return { title: '终端', build(p) {
-      const closed = terminal.state === 'closed', glyph = terminal.tool === 'claude' || terminal.tool === 'codex' ? terminal.tool : 'term';
-      p.body.append(kit.who({ icon: glyph, tint: terminal.tool === 'claude' ? 'claude' : terminal.tool === 'shell' ? 'good' : 'codex', title: terminal.title || TOOLS[terminal.tool] || '终端',
-        line: (TOOLS[terminal.tool] || terminal.tool) + (terminal.dir ? ' · ' + terminal.dir : '') + ' · ' + (closed ? '已结束' : link.state === 'connected' ? '已连接' : '正在连接'), state: closed ? 'var(--muted)' : link.state === 'connected' ? 'var(--good)' : 'var(--busy)' }));
+      const shown = displayTool(terminal);
+      const closed = terminal.state === 'closed', glyph = shown === 'claude' || shown === 'codex' || shown === 'agy' ? shown : 'term';
+      const tint = shown === 'claude' ? 'claude' : shown === 'agy' ? 'agy' : shown === 'shell' ? 'good' : 'codex';
+      p.body.append(kit.who({ icon: glyph, tint, title: terminal.title || TOOLS[shown] || '终端',
+        line: (TOOLS[shown] || shown) + (terminal.dir ? ' · ' + terminal.dir : '') + ' · ' + (closed ? '已结束' : link.state === 'connected' ? '已连接' : '正在连接'), state: closed ? 'var(--muted)' : link.state === 'connected' ? 'var(--good)' : 'var(--busy)' }));
       const why = !talks() ? '终端里没有 AI 对话' : !terminal.session ? '对话开始后才能使用' : '';
       p.body.append(kit.tiles([
         { id: 'menu-handoff', icon: 'hand', tint: 'claude', label: '交给 AI', why, say, act: () => worker().handoff(p.sheet, of()) },

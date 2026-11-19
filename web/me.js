@@ -91,18 +91,27 @@
       tools ? row('工具', tools) : ''));
   }
 
+  const ICONS = {
+    bell: page.svg('<path d="M6.5 16.5h11l-1.3-2.2V10a4.2 4.2 0 1 0-8.4 0v4.3z"/><path d="M10 19a2 2 0 0 0 4 0"/>', 18),
+    look: page.svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17c1.4 0 1.8-1 1.3-2-.6-1.2.2-2.5 1.6-2.5h2.1A3.5 3.5 0 0 0 20.5 12 8.5 8.5 0 0 0 12 3.5z"/><circle cx="8" cy="11" r="1.1"/><circle cx="11.5" cy="7.8" r="1.1"/><circle cx="15.5" cy="9" r="1.1"/>', 18),
+    computer: page.svg('<rect x="3.5" y="5" width="17" height="11.5" rx="2.2"/><path d="M8.5 19.5h7M12 16.5v3"/>', 18),
+    chart: page.svg('<path d="M5 19V11M10.5 19V6M16 19v-5M19.5 19H3.5"/>', 18),
+    update: page.svg('<path d="M12 4.5v10M8 10.5l4 4 4-4"/><path d="M5 18.5h14"/>', 18)
+  };
   function settings() {
     const native = window.RemoteCliNative, group = (title, ...rows) => el('section', { className: 'settings-section' }, head(title), el('div', { className: 'settings-group' }, ...rows));
-    const row = (label, description, value, action) => el('button', { type: 'button', className: 'setting-row', onclick: action },
-      el('span', { className: 'setting-copy' }, el('b', { textContent: label }), el('small', { textContent: description })),
-      el('span', { className: 'setting-value', textContent: value || '' }), el('span', { className: 'setting-chevron', ariaHidden: 'true', textContent: '›' }));
-    const groups = [];
-    if (native && native.reminders) groups.push(group('提醒与后台', row('提醒与权限', '通知、电池与后台联网', native.reminderStatus ? native.reminderStatus() : '', () => native.reminders())));
-    groups.push(group('使用偏好', row('外观与文字', '主题、字号与终端阅读方式', '', () => { location.href = 'computer/#part-look'; })));
-    groups.push(group('连接与设备', row('电脑设置', '连接线路、远程访问与工具', page.usable() ? '在线' : '离线', () => { location.href = 'computer/'; })));
-    if (native && native.update) groups.push(group('版本与更新', row('检查更新', 'Remote AI · ' + (native.version ? native.version() : ''), '', () => native.update())));
-    groups.push(group('工作记录', row('工作统计', '提问、对话与工作时长', expanded ? '收起' : '查看', () => { expanded = !expanded; draw(); })));
-    return el('div', { className: 'settings-grid' }, ...groups);
+    const row = (icon, tint, label, description, value, action, tone) => el('button', { type: 'button', className: 'setting-row', onclick: action },
+      el('span', { className: 'setting-glyph ' + tint, html: ICONS[icon] }),
+      el('span', { className: 'setting-copy' }, el('b', { textContent: label }), description ? el('small', { textContent: description }) : ''),
+      value ? el('span', { className: 'setting-value' + (tone ? ' ' + tone : ''), textContent: value }) : '',
+      el('span', { className: 'setting-chevron', ariaHidden: 'true', html: page.ICON.chev }));
+    const deviceRows = [];
+    if (native && native.reminders) deviceRows.push(row('bell', 't-warn', '提醒与权限', '通知、电池与后台联网', native.reminderStatus ? native.reminderStatus() : '', () => native.reminders()));
+    deviceRows.push(row('look', 't-look', '外观与文字', '主题、字号与终端阅读方式', '', () => { location.href = 'computer/#part-look'; }));
+    deviceRows.push(row('computer', 't-accent', '电脑设置', '连接线路、远程访问与工具', page.usable() ? '在线' : '离线', () => { location.href = 'computer/'; }, page.usable() ? 'on' : ''));
+    const dataRows = [row('chart', 't-agy', '工作统计', '提问、对话与工作时长', expanded ? '收起' : '查看', () => { expanded = !expanded; draw(); })];
+    if (native && native.update) dataRows.push(row('update', 't-muted', '检查更新', 'Remote AI 手机端', native.version ? 'v' + native.version() : '', () => native.update()));
+    return el('div', { className: 'settings-grid' }, group('偏好与设备', ...deviceRows), group('数据与版本', ...dataRows));
   }
   function draw() {
     const data = page.data, supported = page.has('work'), online = page.usable(), have = kept[span];
