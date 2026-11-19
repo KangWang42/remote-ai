@@ -20,11 +20,12 @@
     pond: { name: '锦鲤池塘', panel: '#1b292b', raised: '#27383a', line: '#3b5052', muted: '#a4b7b6', accent: '#edbb83', onAccent: '#10191b',
       t: { background: '#10191b', foreground: '#e2ece9', cursor: '#edbb83', selectionBackground: '#415957', black: '#172426', red: '#f39188', green: '#a8c99a', yellow: '#e7c58b', blue: '#9cbfd9', magenta: '#ceafd1', cyan: '#97ceca', white: '#c2d3cf',
         brightBlack: '#94aaa7', brightRed: '#ffada4', brightGreen: '#bfdfb2', brightYellow: '#f4dba8', brightBlue: '#b7d7ed', brightMagenta: '#e0c7e3', brightCyan: '#b3e4df', brightWhite: '#eff7f4' } },
-    // Light skins. The text colours are dark enough to read on the pale background in daylight.
-    paper: { name: '纸白', light: true, panel: '#f0f1f4', raised: '#e4e6eb', line: '#d5d8df', muted: '#666b78', accent: '#2f6fe4', onAccent: '#ffffff',
-      t: { background: '#fbfbfc', foreground: '#2b2f3a', cursor: '#2f6fe4', cursorAccent: '#fbfbfc', selectionBackground: '#cfdcf7', black: '#2b2f3a', red: '#c93c37', green: '#3d8a3a', yellow: '#a36a00', blue: '#2f6fe4', magenta: '#9a2fa0', cyan: '#0b7a96', white: '#8b909c',
-        brightBlack: '#5c6170', brightRed: '#d9534e', brightGreen: '#4c9a48', brightYellow: '#b87a05', brightBlue: '#4a84ee', brightMagenta: '#ab45b0', brightCyan: '#168aa6', brightWhite: '#2b2f3a' } },
-    dawn: { name: '晨光', light: true, panel: '#f4ede4', raised: '#ebe1d5', line: '#ddd3c6', muted: '#7a7089', accent: '#286983', onAccent: '#ffffff',
+    // Light skins: soft mist canvas with crisp elevated white cards (Apple-style surface hierarchy),
+    // while keeping the terminal screen itself a calm, glare-free paper tone.
+    paper: { name: '纸白', light: true, bg: '#f2f3f7', panel: '#ffffff', raised: '#e9ecf2', line: '#dde1e9', muted: '#686e7d', accent: '#2f6fe4', onAccent: '#ffffff',
+      t: { background: '#fbfbfc', foreground: '#232733', cursor: '#2f6fe4', cursorAccent: '#fbfbfc', selectionBackground: '#cfdcf7', black: '#232733', red: '#c93c37', green: '#358432', yellow: '#9e6600', blue: '#2f6fe4', magenta: '#9a2fa0', cyan: '#0b7a96', white: '#8b909c',
+        brightBlack: '#5c6170', brightRed: '#d9534e', brightGreen: '#469643', brightYellow: '#b87a05', brightBlue: '#4a84ee', brightMagenta: '#ab45b0', brightCyan: '#168aa6', brightWhite: '#232733' } },
+    dawn: { name: '晨光', light: true, bg: '#f2ece3', panel: '#fdfaf6', raised: '#e9dfd2', line: '#ded4c6', muted: '#7a7089', accent: '#286983', onAccent: '#ffffff',
       t: { background: '#faf4ed', foreground: '#4a4566', cursor: '#286983', cursorAccent: '#faf4ed', selectionBackground: '#dfd6e6', black: '#4a4566', red: '#b4506a', green: '#3b7d5c', yellow: '#b9781a', blue: '#286983', magenta: '#80689c', cyan: '#3f8590', white: '#9893a5',
         brightBlack: '#6e6a86', brightRed: '#c2607a', brightGreen: '#4a8d6b', brightYellow: '#c98820', brightBlue: '#357793', brightMagenta: '#907aa9', brightCyan: '#56949f', brightWhite: '#4a4566' } }
   };
@@ -33,16 +34,40 @@
      for strings. On a light skin they vanished. The terminal darkens or lightens any letter that would not stand
      out from what is behind it, whatever colour the program asked for. */
   window.RemoteCliLook = { minimumContrastRatio: 4.5 };
-  /* Sets the page colours of a skin and returns it; an unknown name gives the default, the light paper skin. */
+  const prefersDark = () => !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  window.RemoteCliResolveSkin = name => {
+    if (name === 'auto') return prefersDark() ? 'night' : 'paper';
+    return SKINS[name] ? name : 'paper';
+  };
+  let requestedSkin = 'paper', systemWatcher = null;
+  const systemListeners = new Set();
+  window.RemoteCliOnSystemTheme = fn => {
+    if (typeof fn !== 'function') return () => {};
+    systemListeners.add(fn);
+    if (!systemWatcher && window.matchMedia) {
+      systemWatcher = window.matchMedia('(prefers-color-scheme: dark)');
+      const notify = () => { if (requestedSkin === 'auto') systemListeners.forEach(cb => { try { cb(); } catch (error) { /* ignore */ } }); };
+      if (systemWatcher.addEventListener) systemWatcher.addEventListener('change', notify);
+      else if (systemWatcher.addListener) systemWatcher.addListener(notify);
+    }
+    return () => systemListeners.delete(fn);
+  };
+  /* Sets the page colours of a skin and returns it; 'auto' follows the system appearance, unknown gives paper. */
   window.RemoteCliPaint = name => {
-    const s = SKINS[name] || SKINS.paper, style = document.documentElement.style;
-    const vars = { bg: s.t.background, panel: s.panel, raised: s.raised, line: s.line, ink: s.t.foreground, muted: s.muted, accent: s.accent, 'on-accent': s.onAccent,
-      good: s.t.green, busy: s.t.yellow, bad: s.t.red, 'warn-ink': s.t.yellow, 'warn-bg': s.raised };
+    requestedSkin = name || 'paper';
+    const resolved = window.RemoteCliResolveSkin(requestedSkin);
+    const s = SKINS[resolved] || SKINS.paper, style = document.documentElement.style;
+    const bg = s.bg || s.t.background;
+    const vars = { bg, 'term-bg': s.t.background, panel: s.panel, raised: s.raised, line: s.line, ink: s.t.foreground, muted: s.muted, accent: s.accent, 'on-accent': s.onAccent,
+      good: s.t.green, busy: s.t.yellow, bad: s.t.red, 'warn-ink': s.t.yellow, 'warn-bg': s.raised,
+      elevate: s.light ? '0 1px 2px rgb(15 23 42 / .04), 0 6px 20px -10px rgb(15 23 42 / .10)' : '0 1px 2px rgb(0 0 0 / .24)',
+      rim: s.light ? 'rgb(15 23 42 / .06)' : 'rgb(255 255 255 / .07)' };
     Object.keys(vars).forEach(key => style.setProperty('--' + key, vars[key]));
     style.colorScheme = s.light ? 'light' : 'dark';
-    document.documentElement.dataset.skin = SKINS[name] ? name : 'paper';
-    if (pond) pond.setEnabled(name === 'pond');
-    else if (name === 'pond' && !pondLoading) {
+    document.documentElement.dataset.skin = resolved;
+    document.documentElement.dataset.theme = s.light ? 'light' : 'dark';
+    if (pond) pond.setEnabled(resolved === 'pond');
+    else if (resolved === 'pond' && !pondLoading) {
       pondLoading = import(pondModule).then(({ PondTheme }) => {
         pond = new PondTheme();
         pond.setEnabled(document.documentElement.dataset.skin === 'pond');

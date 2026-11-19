@@ -1,5 +1,5 @@
 /* The list pages. Colours come from the chosen skin (terminal/skins.js sets them on :root); these are the default skin's, for the first frame. */
-:root { --bg: #fbfbfc; --panel: #f0f1f4; --raised: #e4e6eb; --line: #d5d8df; --ink: #2b2f3a; --muted: #666b78; --accent: #2f6fe4; --on-accent: #ffffff; --good: #3d8a3a; --busy: #a36a00; --bad: #c93c37; color-scheme: light; }
+:root { --bg: #f2f3f7; --panel: #ffffff; --raised: #e9ecf2; --line: #dde1e9; --ink: #232733; --muted: #686e7d; --accent: #2f6fe4; --on-accent: #ffffff; --good: #358432; --busy: #9e6600; --bad: #c93c37; --elevate: 0 1px 2px rgb(15 23 42 / .04), 0 6px 20px -10px rgb(15 23 42 / .10); --rim: rgb(15 23 42 / .06); color-scheme: light; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 html { font-size: 15.5px; }
@@ -15,12 +15,12 @@ button:disabled { opacity: .45; cursor: default; }
 svg { display: block; }
 
 /* Task overview */
-#monitor { margin: 8px 0 16px; padding: 15px 0; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+#monitor { margin: 8px 0 16px; padding: 15px 0; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); border-radius: 18px; box-shadow: var(--elevate); }
 .metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
 .metrics > div { padding: 0 14px; min-width: 0; }
-.metrics > div + div { border-inline-start: 1px solid var(--line); }
+.metrics > div + div { border-inline-start: 0.5px solid var(--rim, var(--line)); }
 .metrics span, #external-agy p { color: var(--muted); font-size: .82rem; }
-.metrics strong { display: block; font: 650 1.55rem/1.3 ui-monospace, monospace; color: var(--ink); }
+.metrics strong { display: block; font-size: 1.55rem; font-weight: 700; line-height: 1.3; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
 #metric-needs[data-active] { color: var(--bad); }
 #metric-active[data-active] { color: var(--busy); }
 #external-agy { border-top: 1px solid var(--line); margin: 12px 14px -8px; }
@@ -79,10 +79,10 @@ button.wide { width: 100%; margin-top: 8px; border: 1px dashed var(--line); }
 .section-head[data-fold].folded::after { transform: rotate(-90deg); }
 .section-head[data-fold].folded ~ :not(#hidden-history) { display: none; }
 .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.card { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
-/* what lies on the page is lifted off it a little */
-#home .card:not(.add), .tile, .panel, #home .group, .collaboration-actions .act, #launch button, #project-files { box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 6px 18px -10px rgb(0 0 0 / .12); }
-.card > button.open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; text-align: left; min-height: 64px; }
+.card { display: flex; align-items: stretch; border: 0.5px solid var(--rim, var(--line)); border-radius: 16px; background: var(--panel); overflow: hidden; transition: transform .1s ease; }
+/* what lies on the page is lifted off it gently */
+#home .card:not(.add), .tile, .panel, #home .group, .collaboration-actions .act, #launch button, #project-files { box-shadow: var(--elevate); }
+.card > button.open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; text-align: left; min-height: 64px; transition: background .12s; }
 .card > button.open:active { background: var(--raised); }
 /* ending a terminal: a quiet disc beside the card's text, with room around it for a thumb */
 .card > button.side { position: relative; flex: none; align-self: center; width: 36px; height: 36px; margin: 0 12px 0 0; border-radius: 50%; display: grid; place-items: center; background: var(--raised); color: var(--muted); }
@@ -233,10 +233,10 @@ dialog.window .state .end.halt:not([hidden]) + .end { margin-left: 8px; }
 #sheet-form .said .earlier { margin: 0 0 4px; text-align: center; color: var(--muted); font-size: .8rem; }
 dialog.window .write .go { flex: none; min-height: 44px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-weight: 600; }
 dialog.window .write .go[hidden] { display: none; }
-dialog.window #sheet-form .write { padding: 6px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); }
-dialog.window #sheet-form .write:focus-within { border-color: var(--accent); }
-dialog.window #sheet-form .write textarea { border: 0; background: transparent; box-shadow: none; outline: none; }
-dialog.window #sheet-form .write button.solid { border-radius: 14px; }
+dialog.window #sheet-form .write { padding: 5px 5px 5px 8px; border: 0.5px solid var(--rim, var(--line)); border-radius: 24px; background: var(--panel); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
+dialog.window #sheet-form .write:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+dialog.window #sheet-form .write textarea { border: 0; background: transparent; box-shadow: none; outline: none; padding: 8px 6px; min-height: 38px; }
+dialog.window #sheet-form .write button.solid { border-radius: 19px; min-height: 38px; padding: 0 16px; }
 @media (min-width: 800px) {
   dialog.window #sheet-form { max-width: 920px; margin-inline: auto; }
 }
@@ -340,8 +340,8 @@ dialog.window .confirm .answers .no { color: var(--bad); }
 
 /* ---- a group of rows under its title */
 .group-title { margin: 26px 4px 8px; font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
-.group { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
-.group > li + li { border-top: 1px solid var(--line); }
+.group { list-style: none; margin: 0; padding: 0; border: 0.5px solid var(--rim, var(--line)); border-radius: 16px; background: var(--panel); overflow: hidden; }
+.group > li + li { border-top: 0.5px solid var(--rim, var(--line)); }
 .group.pad { display: grid; gap: 10px; padding: 14px; }
 .group.pad .label { margin: 4px 0 -4px; font-size: .82rem; color: var(--muted); }
 .group.last { margin-top: 26px; }

@@ -12,7 +12,7 @@ const names = ['night', 'slate', 'pine', 'dusk', 'paper', 'dawn', 'pond'];
 if (names.length !== Object.keys(skins).length || names.some(name => !skins[name])) throw new Error('Update the Android theme order for the changed palette catalog');
 const colors = names.map(name => {
   const s = skins[name];
-  return [s.t.background, s.panel, s.raised, s.line, s.t.foreground, s.muted, s.accent, s.onAccent, s.t.green, s.t.yellow, s.t.red].map(color => {
+  return [s.bg || s.t.background, s.panel, s.raised, s.line, s.t.foreground, s.muted, s.accent, s.onAccent, s.t.green, s.t.yellow, s.t.red].map(color => {
     if (!/^#[a-f0-9]{6}$/i.test(color)) throw new Error('Invalid palette color: ' + name);
     return '0x' + color.slice(1);
   });

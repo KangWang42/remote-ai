@@ -5,25 +5,45 @@
   const $ = id => document.getElementById(id);
   const input = $('input'), status = $('status-text'), connection = $('connection'), connectionText = $('connection-text'), connectionDetail = $('connection-detail'), notice = $('notice'), palette = $('palette'), sendButton = $('send');
   const screen = $('screen'), holder = $('terminal'), dot = $('dot'), slash = $('slash'), latest = $('latest');
+  const scrollTrack = $('scroll-track'), scrollThumb = $('scroll-thumb'), zoomHud = $('zoom-hud');
+  const haptic = kind => { try { if (window.RemoteCliNative && window.RemoteCliNative.haptic) window.RemoteCliNative.haptic(kind || 'tick'); } catch (error) { /* ignore */ } };
 
   const SKINS = window.RemoteCliSkins;      // skins.js
-  let skin = bridge && SKINS[bridge.skin()] ? bridge.skin() : 'paper';
+  const resolveSkin = name => window.RemoteCliResolveSkin ? window.RemoteCliResolveSkin(name) : (SKINS[name] ? name : 'paper');
+  let skin = bridge && (bridge.skin() === 'auto' || SKINS[bridge.skin()]) ? bridge.skin() : 'paper';
+  let resolvedSkin = resolveSkin(skin);
   const FAMILY = '"Terminal Mono", "Noto Sans Mono CJK SC", "Droid Sans Mono", monospace';
   // The typeface must be ready before the terminal measures a character, or every cell gets the wrong width.
   try { await Promise.race([Promise.all([document.fonts.load('13px "Terminal Mono"'), document.fonts.load('bold 13px "Terminal Mono"')]), new Promise(done => setTimeout(done, 900))]); } catch (error) { /* system monospace */ }
 
-  const sizes = [11, 13, 15, 17];
+  const sizes = [10, 11, 12, 13, 14, 15, 16, 17, 18];
   let noticeTimer = 0;
   // Room between the lines: closer shows more of the screen, wider is easier on the eyes.
-  const SPACING = { tight: ['紧凑', 1.0], cozy: ['适中', 1.12], roomy: ['宽松', 1.3] };
+  const SPACING = { tight: ['紧凑', 1.04], cozy: ['适中', 1.18], roomy: ['宽松', 1.32] };
   let spacing = bridge && bridge.spacing && SPACING[bridge.spacing()] ? bridge.spacing() : 'cozy';
+  const CURSORS = { block: '方块', bar: '竖线', underline: '下划线' };
+  let cursorStyle = bridge && bridge.cursor && CURSORS[bridge.cursor()] ? bridge.cursor() : 'block';
   let fontSize = Number(bridge && bridge.fontSize()) || 13;
   if (!sizes.includes(fontSize)) fontSize = 13;
-  const term = new Terminal({ fontSize, fontFamily: FAMILY, cursorBlink: false, lineHeight: SPACING[spacing][1],
+  const term = new Terminal({ fontSize, fontFamily: FAMILY, cursorBlink: false, cursorStyle, cursorInactiveStyle: 'outline', lineHeight: SPACING[spacing][1],
+    customGlyphs: true, rescaleOverlappingGlyphs: true,
     // No per-row accessibility tree: on a phone it is rebuilt on every refresh and makes typing stutter.
-    scrollback: 5000, screenReaderMode: false, allowProposedApi: false, allowTransparency: skin === 'pond', theme: SKINS[skin].t, ...window.RemoteCliLook });
+    scrollback: 5000, screenReaderMode: false, allowProposedApi: true, allowTransparency: resolvedSkin === 'pond', theme: SKINS[resolvedSkin].t, ...window.RemoteCliLook });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
+  if (window.Unicode11Addon) {
+    try { term.loadAddon(new Unicode11Addon.Unicode11Addon()); term.unicode.activeVersion = '11'; } catch (error) { /* default unicode */ }
+  }
+  if (window.WebLinksAddon) {
+    try {
+      term.loadAddon(new WebLinksAddon.WebLinksAddon((event, uri) => {
+        if (!/^https?:\/\//i.test(uri)) return;
+        const app = window.RemoteCliNative;
+        if (app && app.openUrl) app.openUrl(uri);
+        else window.open(uri, '_blank', 'noopener,noreferrer');
+      }));
+    } catch (error) { /* plain text links */ }
+  }
   term.open(holder);
   // Drawing on the graphics card keeps a busy screen smooth; a phone that cannot do it falls back to plain elements.
   let drawing = 'dom';
@@ -37,17 +57,19 @@
     } catch (error) { drawing = 'dom'; }
   }
   function applySkin(name) {
-    if (!SKINS[name]) return;
+    if (name !== 'auto' && !SKINS[name]) return;
     skin = name;
+    resolvedSkin = resolveSkin(name);
     if (resetThemeScroll) resetThemeScroll();
     const s = window.RemoteCliPaint(name);
-    term.options.allowTransparency = name === 'pond';
+    term.options.allowTransparency = resolvedSkin === 'pond';
     // xterm halves this threshold for SGR dim text; keep that text readable on light surfaces too.
     term.options.minimumContrastRatio = s.light ? 9 : 4.5;
-    term.options.theme = name === 'pond' ? { ...s.t, background: '#10191b66' } : s.t;
+    term.options.theme = resolvedSkin === 'pond' ? { ...s.t, background: '#10191b66' } : s.t;
     if (bridge) bridge.chrome(s.t.background);
   }
   applySkin(skin);
+  if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(() => { if (skin === 'auto') applySkin('auto'); });
 
   // What the tools themselves offer after "/". Anything else can still be typed.
   const COMMANDS = {
@@ -140,7 +162,25 @@
   // That row is no row of the conversation any more: the rows above it are shown a row lower, over it (TerminalSlide,
   // `hole`), so that nothing stands between the conversation and the program's message box. Where there is no strip
   // to show them from, the row is covered instead.
-  let offered = '', hole = -1, pinAfter = 0, followFrame = 0;
+  let offered = '', hole = -1, pinAfter = 0, followFrame = 0, scrollFadeTimer = 0, lastScrollRatio = -1;
+  function updateScrollBar(buffer, reveal) {
+    if (!scrollTrack || !scrollThumb) return;
+    if (buffer.type === 'alternate' || buffer.baseY <= 0) { scrollTrack.classList.remove('shown'); return; }
+    const trackH = scrollTrack.clientHeight;
+    if (trackH <= 0) return;
+    const total = buffer.baseY + term.rows;
+    const thumbH = Math.max(24, Math.round(trackH * term.rows / Math.max(1, total)));
+    const ratio = Math.max(0, Math.min(1, buffer.viewportY / buffer.baseY));
+    const y = Math.round((trackH - thumbH) * ratio);
+    scrollThumb.style.height = thumbH + 'px';
+    scrollThumb.style.transform = `translate3d(0, ${y}px, 0)`;
+    if (reveal || (lastScrollRatio >= 0 && Math.abs(ratio - lastScrollRatio) > 0.002)) {
+      scrollTrack.classList.add('shown');
+      clearTimeout(scrollFadeTimer);
+      scrollFadeTimer = setTimeout(() => scrollTrack.classList.remove('shown'), 750);
+    }
+    lastScrollRatio = ratio;
+  }
   function follow() {
     if (!followFrame) followFrame = requestAnimationFrame(updateFollow);
   }
@@ -155,6 +195,7 @@
     // with no finger on the screen the picture is shown for the hole's sake; a strip that cannot be had is not asked for at every picture
     if (row >= 0 && !slide.active && performance.now() >= pinAfter) { pinAfter = performance.now() + 3000; slide.pin(performance.now()); }
     covered();
+    updateScrollBar(buffer, scroller.dragging);
     // away from the end: the program says so itself, or the rows it was scrolled by say so. Either is enough: the
     // button is rather there once too often than missing when the program words its offer in a way not known here.
     const away = row >= 0 || !(buffer.viewportY >= buffer.baseY && scrollRouter.remoteUp <= 0);
@@ -164,6 +205,7 @@
   term.onScroll(follow);
   const scrollRouter = new TerminalScrollRouter(term, send, () => tool);
   latest.addEventListener('click', () => {
+    haptic('tick');
     scroller.stop(); unslide();
     scrollRouter.latest(); follow();
   });
@@ -177,7 +219,7 @@
   over.id = 'slid'; over.hidden = true;
   holder.querySelector('.xterm-screen').appendChild(over);
   // An opaque surface under the moving rows hides the original text even when the live terminal is translucent.
-  const strip = new TerminalStrip(over, TerminalSlide.KEPT, () => SKINS[skin].t.background);
+  const strip = new TerminalStrip(over, TerminalSlide.KEPT, () => SKINS[resolvedSkin].t.background);
   // A paint notification is not necessarily new content. Reuse the last copied pixels until data,
   // selection or viewport changes; ANSI-only writes still invalidate through the parser event.
   let pictureRevision = 0;
@@ -226,29 +268,61 @@
     owing: () => scrollRouter.owing(),
     slide: pixels => slide.moved(pixels),
     scroll(lines, mode) {
-      if (skin === 'pond') document.dispatchEvent(new Event('rcli-terminal-motion'));
+      if (resolvedSkin === 'pond') document.dispatchEvent(new Event('rcli-terminal-motion'));
       const moved = scrollRouter.scroll(lines, mode);
       slide.ask(scrollRouter.asked, performance.now());
       follow(); return moved;
     }
   });
+  // Two-finger pinch-to-zoom smoothly steps font size with a floating HUD pill.
+  let pinch = null, zoomHudTimer = 0;
+  const touchSpan = touches => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+  function showZoomHud(size) {
+    if (!zoomHud) return;
+    zoomHud.textContent = size + ' px';
+    zoomHud.hidden = false;
+    clearTimeout(zoomHudTimer);
+    zoomHudTimer = setTimeout(() => { zoomHud.hidden = true; }, 750);
+  }
   screen.addEventListener('touchstart', event => {
     scrollRouter.start();
-    if (event.touches.length === 1 && !latest.contains(event.target)) {
+    if (event.touches.length === 2) {
+      scroller.stop(); unslide();
+      pinch = { start: touchSpan(event.touches), size: fontSize };
+    } else if (event.touches.length === 1 && !latest.contains(event.target)) {
+      pinch = null;
       const now = performance.now();
       scroller.start(event.touches[0].clientY, now);
       slide.begin(scrollRouter.mode() === 'local' ? 'local' : 'remote', now);
       if (!slideFrame) slideFrame = requestAnimationFrame(sliding);
-    } else { scroller.stop(); unslide(); }
+    } else { pinch = null; scroller.stop(); unslide(); }
   }, { capture: true, passive: true });
   screen.addEventListener('touchmove', event => {
-    if (event.touches.length !== 1) { scroller.stop(); unslide(); return; }
+    if (event.touches.length === 2 && pinch) {
+      const delta = touchSpan(event.touches) - pinch.start;
+      const steps = Math.trunc(delta / 22);
+      const next = Math.max(sizes[0], Math.min(sizes[sizes.length - 1], pinch.size + steps));
+      if (next !== fontSize && sizes.includes(next)) {
+        fontSize = next;
+        term.options.fontSize = fontSize;
+        if (bridge) bridge.saveFontSize(fontSize);
+        showZoomHud(fontSize);
+        haptic('tick');
+        resize();
+      }
+      event.preventDefault(); event.stopPropagation();
+      return;
+    }
+    if (event.touches.length !== 1) { pinch = null; scroller.stop(); unslide(); return; }
     if (!scroller.dragging) return;
     scroller.move(event.touches[0].clientY, performance.now());
     event.preventDefault(); event.stopPropagation();
   }, { capture: true, passive: false });
-  screen.addEventListener('touchend', () => scroller.end(performance.now()), { capture: true, passive: true });
-  screen.addEventListener('touchcancel', () => { scroller.stop(); unslide(); }, { capture: true, passive: true });
+  screen.addEventListener('touchend', event => {
+    if (event.touches.length < 2) pinch = null;
+    scroller.end(performance.now());
+  }, { capture: true, passive: true });
+  screen.addEventListener('touchcancel', () => { pinch = null; scroller.stop(); unslide(); }, { capture: true, passive: true });
   document.addEventListener('visibilitychange', () => { if (document.hidden) { scroller.stop(); unslide(); } });
   term.buffer.onBufferChange(() => { scroller.stop(); unslide(); slide.forget(); scrollRouter.reset(); scrollRouter.offers = false; follow(); });
   term.onResize(() => { unslide(); slide.forget(); strip.forget(); });
@@ -256,7 +330,7 @@
   // Buttons act on the terminal without taking the keyboard away from the message box.
   function keepFocus(element) { element.addEventListener('mousedown', event => event.preventDefault()); }
   document.querySelectorAll('.keys button, #slash, #send, #latest, #voice').forEach(keepFocus);
-  document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => send(KEYS[button.dataset.key])));
+  document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => { haptic('key'); send(KEYS[button.dataset.key]); }));
 
   // ---- 自定义按键：本机存 localStorage（每台电脑各自一套），编辑器在按键条下展开。
   // 组合键编译成标准控制字节/转义序列；转义序列支持 \xNN \e \r \n \t；命令片段按原文发送。
@@ -494,13 +568,13 @@
 
   // The box is measured only when its text may have wrapped differently, once per frame: measuring on every key
   // press made the whole page lay itself out again while typing.
-  let boxHeight = 44, boxLength = 0, boxFrame = 0, boxFilled = null;
+  let boxHeight = 36, boxLength = 0, boxFrame = 0, boxFilled = null;
   function measure() {
     boxFrame = 0;
     const length = input.value.length;
-    if (length < boxLength || !length) { input.style.height = '44px'; boxHeight = 44; }
+    if (length < boxLength || !length) { input.style.height = '36px'; boxHeight = 36; }
     boxLength = length;
-    const wanted = Math.min(120, Math.max(44, input.scrollHeight + 2));
+    const wanted = Math.min(120, Math.max(36, input.scrollHeight));
     if (wanted !== boxHeight) { boxHeight = wanted; input.style.height = wanted + 'px'; }
   }
   function grow() {
@@ -524,7 +598,7 @@
       const row = document.createElement('button'), name = document.createElement('b'), text = document.createElement('span');
       row.type = 'button'; row.setAttribute('role', 'option'); name.textContent = command; text.textContent = about;
       row.append(name, text); keepFocus(row);
-      row.addEventListener('click', () => { if (send(paste(command) + '\r')) { input.value = ''; paletteOpen = false; grow(); drawPalette(); } });
+      row.addEventListener('click', () => { haptic('confirm'); if (send(paste(command) + '\r')) { input.value = ''; paletteOpen = false; grow(); drawPalette(); } });
       palette.append(row);
     });
     if (!matches.length) { const none = document.createElement('p'); none.textContent = '常用命令里没有匹配项；仍可直接发送，由工具自己处理。'; palette.append(none); }
@@ -534,6 +608,7 @@
   function paste(text) { return term.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text; }
   input.addEventListener('input', () => { grow(); if (!palette.hidden || input.value.charCodeAt(0) === 47) drawPalette(); });
   slash.addEventListener('click', () => {
+    haptic('tick');
     paletteOpen = palette.hidden;
     if (paletteOpen && !input.value) { input.value = '/'; grow(); } else if (!paletteOpen && /^\/\S*$/.test(input.value)) { input.value = ''; grow(); }
     drawPalette();
@@ -541,27 +616,22 @@
   $('composer').addEventListener('submit', event => {
     event.preventDefault();
     const text = input.value;
-    if (!text) { send('\r'); return; }
+    if (!text) { haptic('key'); send('\r'); return; }
     if (!text.trim()) return;
+    haptic('confirm');
     if (send(paste(text) + '\r')) { input.value = ''; paletteOpen = false; grow(); drawPalette(); scrollRouter.reset(); term.scrollToBottom(); follow(); }
   });
-  $('font').addEventListener('click', () => {
-    fontSize = sizes[(sizes.indexOf(fontSize) + 1) % sizes.length];
-    term.options.fontSize = fontSize;
-    if (bridge) bridge.saveFontSize(fontSize);
-    resize();
-  });
-  $('menu').addEventListener('click', () => { if (bridge) bridge.menu(); });
-  $('files').addEventListener('click', () => { if (bridge) bridge.files(); });
-  $('again').addEventListener('click', () => { if (bridge) bridge.again(); });
-  $('back').addEventListener('click', () => { if (bridge) bridge.close(); });
-  $('voice').addEventListener('click', () => { if (bridge) bridge.voice(); });
+  $('menu').addEventListener('click', () => { haptic('tick'); if (bridge) bridge.menu(); });
+  $('files').addEventListener('click', () => { haptic('tick'); if (bridge) bridge.files(); });
+  $('again').addEventListener('click', () => { haptic('confirm'); if (bridge) bridge.again(); });
+  $('back').addEventListener('click', () => { haptic('tick'); if (bridge) bridge.close(); });
+  $('voice').addEventListener('click', () => { haptic('tick'); if (bridge) bridge.voice(); });
   // A microphone that does nothing is worse than none: many phones have no recognizer of their own, and there the
   // one on the keyboard is the way to speak. In a browser the button stays only where the browser can listen.
   const app = window.RemoteCliNative;
   if (app ? (app.canDictate && !app.canDictate()) : !(window.SpeechRecognition || window.webkitSpeechRecognition)) $('voice').hidden = true;
 
-  let wasEnded = null;
+  let wasEnded = null, connectRevealTimer = 0;
   function show(element, text) { if (element.textContent !== text) element.textContent = text; }
   const transportNames = { websocket: 'WebSocket', sse: 'SSE', http: 'HTTP 长轮询' };
   const connectionStates = { connecting: '连接中', connected: '已连接', reconnecting: '重连中', offline: '已断开', paused: '后台暂停' };
@@ -575,6 +645,15 @@
       show(connectionText, `${transport} · ${state}`);
       show(connectionDetail, `${latency} · 重连 ${reconnects} 次`);
       connection.className = info.state || '';
+      // Keep the terminal canvas calm when healthy; reveal the banner only during slow connect or outages.
+      clearTimeout(connectRevealTimer);
+      if (info.state === 'connected' || info.state === 'paused') {
+        connection.hidden = true;
+      } else if (info.state === 'connecting') {
+        connectRevealTimer = setTimeout(() => { if (connection.className === 'connecting') connection.hidden = false; }, 1200);
+      } else {
+        connection.hidden = false;
+      }
     },
     receive(payload) {
       const t = payload.terminal, device = payload.device;
@@ -668,6 +747,8 @@
     skins() { return Object.keys(SKINS).map(key => ({ key, name: SKINS[key].name + (SKINS[key].light ? '（明亮）' : ''), current: key === skin })); },
     spacings() { return Object.keys(SPACING).map(key => ({ key, name: SPACING[key][0], current: key === spacing })); },
     setSpacing(name) { if (!SPACING[name]) return; spacing = name; term.options.lineHeight = SPACING[name][1]; resize(); },
+    cursors() { return Object.keys(CURSORS).map(key => ({ key, name: CURSORS[key], current: key === cursorStyle })); },
+    setCursorStyle(style) { if (!CURSORS[style]) return; cursorStyle = style; term.options.cursorStyle = style; if (bridge && bridge.saveCursor) bridge.saveCursor(style); },
     setSkin(name) { applySkin(name); },
     drawing() { return drawing; },
     screenText() {

@@ -9,11 +9,14 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.os.Build;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.Window;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -41,7 +44,7 @@ final class Kit {
         return "";
     }
     /** The skin a new installation starts with. */
-    static final int PAPER = 0xfffbfbfc;
+    static final int PAPER = 0xfff2f3f7;
     private final Activity activity;
     int BG, PANEL, RAISED, LINE, INK, MUTED, ACCENT, ON_ACCENT, GOOD, BUSY, BAD;
 
@@ -58,11 +61,28 @@ final class Kit {
     }
 
     int dp(float value) { return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, activity.getResources().getDisplayMetrics())); }
+    /** Crisp 0.5dp hairline divider/stroke on high-DPI displays. */
+    int hairline() { return Math.max(1, Math.round(activity.getResources().getDisplayMetrics().density * 0.5f)); }
+    /** Subtle surface rim: whisper-soft dark edge on light canvas, faint highlight on dark canvas. */
+    int rim() { return light(BG) ? tint(0xff0f172a, 16) : tint(0xffffffff, 18); }
+    /** Soft elevation for cards on light themes; flat layered contrast on dark themes. */
+    void elevate(View view, float depthDp) {
+        if (!light(BG)) { view.setElevation(0); return; }
+        view.setElevation(dp(depthDp));
+        if (Build.VERSION.SDK_INT >= 28) {
+            view.setOutlineAmbientShadowColor(0x140f172a);
+            view.setOutlineSpotShadowColor(0x220f172a);
+        }
+    }
+    void haptic(View view, int kind) { if (view != null) view.performHapticFeedback(kind); }
     static int tint(int color, int alpha) { return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color)); }
     /** One colour laid over another at the given share, as the pages do with color-mix. */
     static int mix(int over, int under, float share) {
         return Color.rgb(Math.round(Color.red(over) * share + Color.red(under) * (1 - share)), Math.round(Color.green(over) * share + Color.green(under) * (1 - share)),
             Math.round(Color.blue(over) * share + Color.blue(under) * (1 - share)));
+    }
+    private static Typeface weight(int w) {
+        return Build.VERSION.SDK_INT >= 28 ? Typeface.create(Typeface.DEFAULT, w, false) : (w >= 600 ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
     }
 
     TextView text(String value, float size, int color) {
@@ -70,28 +90,39 @@ final class Kit {
         view.setText(value); view.setTextSize(size); view.setTextColor(color); view.setLineSpacing(dp(3), 1f);
         return view;
     }
-    TextView bold(String value, float size, int color) { TextView view = text(value, size, color); view.setTypeface(Typeface.DEFAULT_BOLD); return view; }
+    TextView medium(String value, float size, int color) { TextView view = text(value, size, color); view.setTypeface(weight(500)); return view; }
+    TextView semibold(String value, float size, int color) { TextView view = text(value, size, color); view.setTypeface(weight(600)); return view; }
+    TextView bold(String value, float size, int color) { TextView view = text(value, size, color); view.setTypeface(weight(700)); return view; }
+    /** Tabular sans-serif KPI number, matching modern iOS/macOS metric displays. */
+    TextView figure(String value, float size, int color) {
+        TextView view = bold(value, size, color);
+        view.setFontFeatureSettings("tnum");
+        view.setLetterSpacing(-0.02f);
+        view.setSingleLine(true);
+        return view;
+    }
     /** One line that ends in an ellipsis when it does not fit. */
     TextView line(String value, float size, int color, boolean strong) {
-        TextView view = strong ? bold(value, size, color) : text(value, size, color);
+        TextView view = strong ? semibold(value, size, color) : text(value, size, color);
         view.setSingleLine(true); view.setEllipsize(TextUtils.TruncateAt.END);
         return view;
     }
     /** A title may use the available width before it is shortened. */
     TextView title(String value, float size, int color, boolean strong) {
-        TextView view = strong ? bold(value, size, color) : text(value, size, color);
+        TextView view = strong ? semibold(value, size, color) : text(value, size, color);
         view.setMaxLines(2); view.setEllipsize(TextUtils.TruncateAt.END);
         return view;
     }
     GradientDrawable shape(int fill, int stroke, float radius) {
         GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(fill); drawable.setCornerRadius(dp(radius)); if (stroke != 0) drawable.setStroke(dp(1), stroke);
+        drawable.setColor(fill); drawable.setCornerRadius(dp(radius)); if (stroke != 0) drawable.setStroke(hairline(), stroke);
         return drawable;
     }
     EditText field(String hint, int type) {
         EditText box = new EditText(activity);
         box.setHint(hint); box.setHintTextColor(MUTED); box.setTextColor(INK); box.setTextSize(16); box.setSingleLine(true);
-        box.setInputType(type); box.setBackground(shape(PANEL, LINE, 14)); box.setPadding(dp(16), 0, dp(16), 0); box.setMinHeight(dp(52));
+        box.setInputType(type); box.setBackground(shape(PANEL, rim(), 14)); box.setPadding(dp(16), 0, dp(16), 0); box.setMinHeight(dp(52));
+        elevate(box, 1f);
         return box;
     }
     /** A button: 0 the main action, 1 an ordinary one, 2 only text, 3 soft danger. */
@@ -138,13 +169,14 @@ final class Kit {
     }
     LinearLayout settingGroup(LinearLayout page, String label) {
         if (label != null && !label.isEmpty()) {
-            TextView heading = bold(label, 12.5f, MUTED);
-            heading.setPadding(dp(4), 0, dp(4), 0);
-            page.addView(heading, below(20));
+            TextView heading = semibold(label, 12.5f, MUTED);
+            heading.setPadding(dp(6), 0, dp(6), 0);
+            page.addView(heading, below(22));
         }
         LinearLayout group = column();
-        group.setBackground(shape(PANEL, mix(LINE, PANEL, .6f), 16));
+        group.setBackground(shape(PANEL, rim(), 16));
         group.setClipToOutline(true);
+        elevate(group, 1.5f);
         page.addView(group, below(label != null && !label.isEmpty() ? 8 : 16));
         return group;
     }
@@ -172,7 +204,7 @@ final class Kit {
         View toggle = toggleView(on, label);
         LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(dp(50), dp(30)); gap.leftMargin = dp(12);
         row.addView(toggle, gap);
-        press(row, action);
+        press(row, () -> { haptic(row, HapticFeedbackConstants.CLOCK_TICK); action.run(); });
     }
     /** A crisp pill toggle switch matching web/ui/sheet.css (.rs-switch). */
     View toggleView(boolean on, String label) {
@@ -190,8 +222,8 @@ final class Kit {
     private LinearLayout settingBody(LinearLayout group, int iconRes, int iconTint, String label, String description) {
         if (group.getChildCount() > 0) {
             View line = new View(activity);
-            line.setBackgroundColor(mix(LINE, PANEL, .75f));
-            LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, dp(1));
+            line.setBackgroundColor(rim());
+            LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, hairline());
             divider.setMargins(dp(iconRes != 0 ? 58 : 16), 0, 0, 0);
             group.addView(line, divider);
         }
@@ -205,7 +237,9 @@ final class Kit {
             row.addView(badge, badgeParams);
         }
         LinearLayout copy = column();
-        copy.addView(line(label, 15.5f, INK, false));
+        TextView title = medium(label, 15.5f, INK);
+        title.setSingleLine(true); title.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(title);
         if (description != null && !description.isEmpty()) copy.addView(text(description, 12.5f, MUTED), below(2));
         row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
         group.addView(row);
@@ -237,7 +271,7 @@ final class Kit {
         LinearLayout head = row();
         LinearLayout titles = column();
         TextView name = bold(title, 29, INK);
-        name.setIncludeFontPadding(false); name.setLineSpacing(0, 1f);
+        name.setIncludeFontPadding(false); name.setLineSpacing(0, 1f); name.setLetterSpacing(-0.02f);
         titles.addView(name);
         if (under != null) titles.addView(under, below(5));
         head.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
@@ -326,7 +360,11 @@ final class Kit {
         dialog.show();
         if (window == null) return;
         window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.setDimAmount(0.36f);
         window.setLayout(-1, -2); window.setGravity(Gravity.BOTTOM);
+        box.setAlpha(0f);
+        box.setTranslationY(dp(36));
+        box.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(new DecelerateInterpolator(2.2f)).start();
     }
     /** A sheet with a box to write in and one button, which hands over what was written. */
     void write(String title, String note, String hint, String yes, java.util.function.Consumer<String> written) {
@@ -359,7 +397,7 @@ final class Kit {
             boolean current = said.startsWith("当前使用");
             if (current) said = said.replaceFirst("^当前使用( · )?", "");
             LinearLayout target = i == danger ? apart : group;
-            if (target.getChildCount() > 0) { View line = new View(activity); line.setBackgroundColor(mix(LINE, PANEL, .8f)); LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, dp(1)); divider.setMargins(dp(16), 0, 0, 0); target.addView(line, divider); }
+            if (target.getChildCount() > 0) { View line = new View(activity); line.setBackgroundColor(rim()); LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, hairline()); divider.setMargins(dp(16), 0, 0, 0); target.addView(line, divider); }
             LinearLayout item = row();
             item.setMinimumHeight(dp(54)); item.setPadding(dp(16), dp(10), dp(14), dp(10));
             LinearLayout words = column();

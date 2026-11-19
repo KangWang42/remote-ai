@@ -4,16 +4,20 @@ import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognizerIntent;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
@@ -56,17 +60,28 @@ public final class MainActivity extends Activity {
         decor.setSystemUiVisibility(light ? decor.getSystemUiVisibility() | flags : decor.getSystemUiVisibility() & ~flags);
         root.setBackgroundColor(shade);
     }
+    /** Resolves "auto" against Android's night mode into the concrete light or dark palette name. */
+    private String resolveSkin(String chosen) {
+        if (!"auto".equals(chosen)) return chosen == null || chosen.isEmpty() ? "paper" : chosen;
+        boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        return night ? "night" : "paper";
+    }
     /** The app's own screens use the app's skin, whatever the page shown last looked like. */
-    private void repaint() { kit.palette(Kit.shade(prefs.getString("look-skin", "paper"))); }
+    private void repaint() { kit.palette(Kit.shade(resolveSkin(prefs.getString("look-skin", "paper")))); }
     /** The look: one skin for the app (workbench and lists), and for the terminal either the same or one of its own. */
     void look() {
         final String app = prefs.getString("look-skin", "paper"), terminal = prefs.getString("look-termskin", "");
+        String appShown = "auto".equals(app) ? "跟随系统" : Kit.title(app);
+        String termShown = terminal.isEmpty() ? "跟随 App" : "auto".equals(terminal) ? "跟随系统" : Kit.title(terminal);
         kit.sheet("外观", "对所有电脑生效。", new String[]{"App 外观", "终端外观"},
-            new String[]{"工作台和列表 · 当前：" + Kit.title(app), "当前：" + (terminal.isEmpty() ? "跟随 App" : Kit.title(terminal))}, -1, which -> {
+            new String[]{"工作台和列表 · 当前：" + appShown, "当前：" + termShown}, -1, which -> {
             final boolean own = which == 1;
-            int extra = own ? 1 : 0;
+            int extra = own ? 2 : 1;
             String[] labels = new String[Kit.NAMES.length + extra], notes = new String[labels.length];
-            if (own) { labels[0] = "跟随 App 外观"; notes[0] = terminal.isEmpty() ? "当前使用" : null; }
+            int idx = 0;
+            if (own) { labels[idx] = "跟随 App 外观"; notes[idx] = terminal.isEmpty() ? "当前使用" : null; idx++; }
+            labels[idx] = "跟随系统";
+            notes[idx] = ("auto".equals(own ? terminal : app) ? "当前使用 · " : "") + "深色时用夜航，浅色时用纸白";
             for (int i = 0; i < Kit.NAMES.length; i++) {
                 labels[i + extra] = Kit.TITLES[i];
                 notes[i + extra] = Kit.NAMES[i].equals(own ? terminal : app) ? "当前使用" : null;
@@ -74,6 +89,7 @@ public final class MainActivity extends Activity {
             }
             kit.sheet(own ? "终端外观" : "App 外观", own ? "只用于终端画面。" : "用于工作台和每台电脑的列表；终端跟随时也用它。", labels, notes, -1, picked -> {
                 if (own && picked == 0) prefs.edit().remove("look-termskin").apply();
+                else if (picked == (own ? 1 : 0)) prefs.edit().putString(own ? "look-termskin" : "look-skin", "auto").apply();
                 else prefs.edit().putString(own ? "look-termskin" : "look-skin", Kit.NAMES[picked - extra]).apply();
                 home("");
             });
@@ -272,6 +288,7 @@ public final class MainActivity extends Activity {
     }
 
     private void show(View content, String name) {
+        String previous = screen;
         ticker.removeCallbacks(watch);
         bench.stop();
         computerManagement.stop();
@@ -285,13 +302,26 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(content, new ViewGroup.LayoutParams(-1, -2));
+        View incoming;
         if (Tabs.has(name)) {
             // the tabs stay at the foot while the list above them is scrolled
             LinearLayout shell = kit.column();
             shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
             shell.addView(tabs.build(name, this::appPage));
             root.addView(shell, new FrameLayout.LayoutParams(-1, -1));
-        } else root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+            incoming = scroll;
+        } else {
+            root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+            incoming = scroll;
+        }
+        if (!previous.isEmpty() && !previous.equals(name)) {
+            boolean secondary = !Tabs.has(name);
+            incoming.setAlpha(0f);
+            if (secondary) incoming.setTranslationX(kit.dp(18));
+            else incoming.setTranslationY(kit.dp(5));
+            incoming.animate().alpha(1f).translationX(0f).translationY(0f).setDuration(secondary ? 190 : 150)
+                .setInterpolator(new DecelerateInterpolator(2.0f)).start();
+        }
         screen = name;
     }
 
@@ -476,7 +506,10 @@ public final class MainActivity extends Activity {
         allowed &= channel == null || channel.getImportance() > NotificationManager.IMPORTANCE_NONE;
         return watching() && allowed ? "已开启" : allowed ? "未开启" : "需授权";
     }
-    String appearanceName() { return Kit.title(prefs.getString("look-skin", "paper")); }
+    String appearanceName() {
+        String chosen = prefs.getString("look-skin", "paper");
+        return "auto".equals(chosen) ? "跟随系统" : Kit.title(chosen);
+    }
     void toggleWatch() {
         boolean on = !watching();
         prefs.edit().putBoolean("watch", on).apply();
@@ -654,7 +687,9 @@ public final class MainActivity extends Activity {
         connectionBanner = banner;
         page.addView(banner, new LinearLayout.LayoutParams(-1, -2));
         page.addView(view, new LinearLayout.LayoutParams(-1, 0, 1));
+        page.setAlpha(0f);
         root.addView(page, new FrameLayout.LayoutParams(-1, -1));
+        page.animate().alpha(1f).setDuration(150).setInterpolator(new DecelerateInterpolator(1.8f)).start();
         String webTarget = address + path;
         if (!password.isEmpty()) webTarget += "#p=" + Uri.encode(password);
         view.loadUrl(webTarget);
@@ -735,7 +770,7 @@ public final class MainActivity extends Activity {
     private String lookScript(boolean terminal, boolean drawn) {
         String own = prefs.getString("look-termskin", ""), skin = terminal && !own.isEmpty() ? own : prefs.getString("look-skin", "paper");
         StringBuilder script = new StringBuilder("(function(){try{var s=localStorage,was=s.getItem('rcli-skin')||'night';");
-        for (String key : new String[]{"skin", "text", "font", "spacing", "renderer"}) {
+        for (String key : new String[]{"skin", "text", "font", "spacing", "cursor", "renderer"}) {
             String value = "skin".equals(key) ? skin : prefs.getString("look-" + key, "");
             if (value.matches("[a-z0-9]{1,16}")) script.append("s.setItem('rcli-").append(key).append("','").append(value).append("');");
         }
@@ -744,11 +779,26 @@ public final class MainActivity extends Activity {
         return script.append("}catch(e){}})()").toString();
     }
     // (and, kept the same way for every computer: the kind of conversation its owner begins, "newkind")
-    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "renderer", "readfont", "readsize", "readline", "newkind");
+    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "cursor", "renderer", "readfont", "readsize", "readline", "newkind");
     private final Saver saver = new Saver(this);
     private final FilePicker filePicker = new FilePicker(this);
     private final class Bridge {
         @JavascriptInterface public boolean canUploadFiles() { return true; }
+        /** Subtle tactile feedback for embedded terminal keys and sheet controls, respecting system haptics. */
+        @JavascriptInterface public void haptic(String kind) {
+            final int code = "key".equals(kind) ? HapticFeedbackConstants.KEYBOARD_TAP
+                : "confirm".equals(kind) && Build.VERSION.SDK_INT >= 23 ? HapticFeedbackConstants.CONTEXT_CLICK
+                : HapticFeedbackConstants.CLOCK_TICK;
+            runOnUiThread(() -> { if (web != null && "web".equals(screen)) web.performHapticFeedback(code); });
+        }
+        /** Opens an http(s) link tapped in the terminal in the phone's browser. */
+        @JavascriptInterface public void openUrl(String url) {
+            if (url == null || !url.matches("(?i)https?://\\S{1,2048}")) return;
+            runOnUiThread(() -> {
+                try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+                catch (Exception ignored) { }
+            });
+        }
         // 终端按键条的自定义键：存应用偏好，App 升级与换连接线路都不丢（web 端有 localStorage 回退）。
         @JavascriptInterface public String termKeys() { return prefs.getString("term-keys", "[]"); }
         @JavascriptInterface public void termKeys(String json) {

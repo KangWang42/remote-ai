@@ -76,6 +76,7 @@ jobs:
           python tests/workbench_ui_check.py
           python tests/android_update_check.py
           python tests/terminal_keys_check.py
+          python tests/terminal_aesthetics_check.py
           python tests/android_aggregate_check.py --jdk "$JAVA_HOME"
 
   android-compile:

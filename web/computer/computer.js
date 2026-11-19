@@ -55,16 +55,22 @@
   function paint() {
     const skin = window.RemoteCliPaint(saved('skin', 'paper'));
     document.documentElement.style.fontSize = (TEXT[saved('text', 'normal')] || TEXT.normal)[1];
+    const shade = skin.bg || skin.t.background;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = skin.t.background;
-    if (native && native.chrome) native.chrome(skin.t.background);
+    if (meta) meta.content = shade;
+    if (native && native.chrome) native.chrome(shade);
   }
+  if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(paint);
   function looks() {
     const skins = window.RemoteCliSkins;
     const mark = () => {
       $('skins').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.key === saved('skin', 'paper'))));
       $('sizes').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.key === saved('text', 'normal'))));
     };
+    const autoPreview = el('i');
+    autoPreview.style.background = 'linear-gradient(135deg, #f2f3f7 50%, #1a1b26 50%)';
+    const autoButton = el('button', { type: 'button', onclick: () => { keep('skin', 'auto'); paint(); mark(); } }, autoPreview, '跟随系统');
+    autoButton.dataset.key = 'auto'; $('skins').append(autoButton);
     Object.keys(skins).forEach(key => {
       const s = skins[key], preview = el('i');
       preview.style.background = s.t.background;

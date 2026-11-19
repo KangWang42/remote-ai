@@ -7,6 +7,7 @@ import android.graphics.drawable.StateListDrawable;
 import android.os.Build;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.FrameLayout;
@@ -46,10 +47,10 @@ final class Tabs {
 
     View build(String current, Consumer<String> picked) {
         LinearLayout bar = kit.column();
-        bar.setBackgroundColor(kit.BG);
+        bar.setBackgroundColor(Kit.light(kit.BG) ? Kit.mix(kit.PANEL, kit.BG, .78f) : kit.BG);
         View line = new View(activity);
-        line.setBackgroundColor(Kit.mix(kit.LINE, kit.BG, .75f));
-        bar.addView(line, new LinearLayout.LayoutParams(-1, kit.dp(1)));
+        line.setBackgroundColor(kit.rim());
+        bar.addView(line, new LinearLayout.LayoutParams(-1, kit.hairline()));
         LinearLayout inner = new LinearLayout(activity);
         inner.setPadding(kit.dp(10), kit.dp(5), kit.dp(10), kit.dp(5));
         for (int i = 0; i < KEYS.length; i++) {
@@ -91,7 +92,7 @@ final class Tabs {
             tab.setClickable(true); tab.setFocusable(true);
             tab.setSelected(on);
             tab.setContentDescription(LABELS[i] + (on ? "，已选中" : ""));
-            tab.setOnClickListener(pressedTab -> picked.accept(key));
+            tab.setOnClickListener(pressedTab -> { kit.haptic(pressedTab, HapticFeedbackConstants.CLOCK_TICK); picked.accept(key); });
             inner.addView(tab, new LinearLayout.LayoutParams(0, -2, 1));
         }
         // (on a wide screen the four stay together in the middle, as on the pages)

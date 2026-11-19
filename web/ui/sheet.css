@@ -45,10 +45,10 @@ dialog.rs.closing { display: block; z-index: 2147483000; pointer-events: none; }
 .rs-note { margin: 0 6px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .rs-note.bad { color: var(--bad); }
 .rs-note.good { color: var(--good); }
-.rs-group { display: grid; border-radius: 16px; background: var(--panel); overflow: hidden; }
-.rs-group > * + * { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--line) 80%, transparent); }
+.rs-group { display: grid; border-radius: 16px; background: var(--panel); overflow: hidden; box-shadow: var(--elevate, none); border: 0.5px solid var(--rim, transparent); }
+.rs-group > * + * { box-shadow: inset 0 0.5px 0 var(--rim, color-mix(in srgb, var(--line) 80%, transparent)); }
 .rs-group.inset > * + * { box-shadow: none; position: relative; }
-.rs-group.inset > * + *::before { content: ""; position: absolute; top: 0; left: 58px; right: 0; border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }
+.rs-group.inset > * + *::before { content: ""; position: absolute; top: 0; left: 58px; right: 0; border-top: 0.5px solid var(--rim, color-mix(in srgb, var(--line) 80%, transparent)); }
 
 /* a row: what it is, what it is set to, and where a press leads */
 .rs-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 14px; text-align: left; line-height: 1.35; }
@@ -82,8 +82,8 @@ button.rs-row:active, label.rs-row:active { background: var(--raised); }
 
 /* the things done most, as a row of tiles under the heading of a menu */
 .rs-tiles { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 8px; }
-.rs-tile { display: grid; justify-items: center; align-content: center; gap: 7px; min-height: 82px; padding: 12px 4px 10px; border-radius: 16px; background: var(--panel); font-size: .78rem; font-weight: 600; line-height: 1.25; text-align: center; }
-.rs-tile:active { background: var(--raised); }
+.rs-tile { display: grid; justify-items: center; align-content: center; gap: 7px; min-height: 82px; padding: 12px 4px 10px; border-radius: 16px; background: var(--panel); border: 0.5px solid var(--rim, transparent); box-shadow: var(--elevate, none); font-size: .78rem; font-weight: 600; line-height: 1.25; text-align: center; transition: background .12s, transform .1s; }
+.rs-tile:active { background: var(--raised); transform: scale(.96); }
 .rs-tile .rs-glyph { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: var(--tint, var(--accent)); background: color-mix(in srgb, var(--tint, var(--accent)) 15%, transparent); }
 .rs-tile[aria-disabled="true"] { opacity: .45; }
 .rs-tile span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

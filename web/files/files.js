@@ -59,12 +59,20 @@
 
   // ---- look
   const TEXT = { small: '14px', normal: '15.5px', large: '17px', larger: '19px' };
-  const skin = window.RemoteCliPaint(saved('skin', 'paper'));
-  const root = document.documentElement.style;
-  root.fontSize = TEXT[saved('text', 'normal')] || TEXT.normal;
-  // The colours of code are the skin's own terminal colours, so a file looks as it does in the terminal beside it.
-  ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan'].forEach(name => root.setProperty('--c-' + name, skin.t[name]));
-  root.setProperty('--c-faint', skin.muted);
+  function paintFiles() {
+    const skin = window.RemoteCliPaint(saved('skin', 'paper'));
+    const root = document.documentElement.style;
+    root.fontSize = TEXT[saved('text', 'normal')] || TEXT.normal;
+    // The colours of code are the skin's own terminal colours, so a file looks as it does in the terminal beside it.
+    ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan'].forEach(name => root.setProperty('--c-' + name, skin.t[name]));
+    root.setProperty('--c-faint', skin.muted);
+    const shade = skin.bg || skin.t.background;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = shade;
+    if (native && native.chrome) native.chrome(shade);
+  }
+  paintFiles();
+  if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(paintFiles);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = skin.t.background;
   if (native && native.chrome) native.chrome(skin.t.background);

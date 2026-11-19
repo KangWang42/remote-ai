@@ -1,6 +1,6 @@
 /* A conversation run through its tool's structured mode. Colours come from the chosen skin (terminal/skins.js sets
    them on :root); these are the default skin's, for the first frame. */
-:root { --bg: #fbfbfc; --panel: #f0f1f4; --raised: #e4e6eb; --line: #d5d8df; --ink: #2b2f3a; --muted: #666b78; --accent: #2f6fe4; --on-accent: #ffffff; --good: #3d8a3a; --busy: #a36a00; --bad: #c93c37; color-scheme: light;
+:root { --bg: #f2f3f7; --panel: #ffffff; --raised: #e9ecf2; --line: #dde1e9; --ink: #232733; --muted: #686e7d; --accent: #2f6fe4; --on-accent: #ffffff; --good: #358432; --busy: #9e6600; --bad: #c93c37; --elevate: 0 1px 2px rgb(15 23 42 / .04), 0 6px 20px -10px rgb(15 23 42 / .10); --rim: rgb(15 23 42 / .06); color-scheme: light;
   --mono: ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK SC", monospace; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
@@ -16,9 +16,9 @@ h1, p { margin: 0; }
 /* the page is one column: the bar, what was said (all the room that is left), what it asks, how it stands, the box */
 main { height: 100%; max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
 main > * { flex: none; }
-header { display: flex; align-items: center; gap: 2px; padding: 6px 8px 6px 6px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+header { display: flex; align-items: center; gap: 2px; padding: 6px 8px 6px 6px; background: color-mix(in srgb, var(--bg) 90%, transparent); box-shadow: inset 0 -0.5px 0 var(--rim, var(--line)); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); }
 header .who { flex: 1; min-width: 0; padding: 0 4px; }
-header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header h1 { font-size: 1.05rem; font-weight: 650; line-height: 1.3; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #where { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .8rem; line-height: 1.35; white-space: nowrap; overflow: hidden; }
 #where-text { overflow: hidden; text-overflow: ellipsis; }
 #dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
@@ -111,12 +111,14 @@ header h1 { font-size: 1.08rem; font-weight: 700; line-height: 1.3; white-space:
 #stop, #again { margin-left: auto; min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: .86rem; font-weight: 600; }
 #stop { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
 #again { background: var(--accent); color: var(--on-accent); }
-#write { display: flex; align-items: flex-end; gap: 8px; padding: 6px 12px 10px; }
-#box { flex: 1; min-width: 0; min-height: 46px; max-height: 160px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); line-height: 1.5; resize: none; }
-#box:focus { border-color: var(--accent); outline: none; }
-#box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-#send { flex: none; min-height: 46px; padding: 0 18px; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
-#go { flex: none; min-height: 46px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); font-weight: 600; }
+#write { display: flex; align-items: flex-end; gap: 6px; margin: 4px 10px 10px; padding: 5px 5px 5px 8px; border: 0.5px solid var(--rim, var(--line)); border-radius: 24px; background: var(--panel); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
+#write:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+#box { flex: 1; min-width: 0; min-height: 38px; max-height: 160px; padding: 8px 8px; border: 0; border-radius: 16px; background: transparent; line-height: 1.5; resize: none; }
+#box:focus { outline: none; }
+#box:focus-visible { outline: none; }
+#send { flex: none; min-height: 38px; padding: 0 16px; border-radius: 19px; background: var(--accent); color: var(--on-accent); font-weight: 600; transition: transform .1s, opacity .15s; }
+#send:active { transform: scale(.95); }
+#go { flex: none; min-height: 38px; padding: 0 13px; border-radius: 19px; border: 0.5px solid var(--rim, var(--line)); background: var(--raised); font-weight: 600; }
 
 #toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 20; max-width: min(88vw, 480px); padding: 10px 16px; border-radius: 14px; background: var(--ink); color: var(--bg); font-size: .9rem; font-weight: 600; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); text-align: center; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

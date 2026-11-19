@@ -6,6 +6,8 @@
 | xterm.js (`@xterm/xterm`) | 5.5.0 | MIT | `web/terminal/vendor/xterm.js`, `xterm.css` |
 | `@xterm/addon-fit` | 0.10.0 | MIT | `web/terminal/vendor/addon-fit.js` |
 | `@xterm/addon-webgl` | 0.18.0 | MIT | `web/terminal/vendor/addon-webgl.js` |
+| `@xterm/addon-unicode11` | 0.8.0 | MIT | `web/terminal/vendor/addon-unicode11.js` |
+| `@xterm/addon-web-links` | 0.11.0 | MIT | `web/terminal/vendor/addon-web-links.js` |
 | JetBrains Mono (`@fontsource/jetbrains-mono`) | 5.2.5 | OFL-1.1 | `web/terminal/vendor/jetbrains-mono-*.woff2` |
 | highlight.js (`@highlightjs/cdn-assets`) | 11.10.0 | BSD-3-Clause | `web/files/vendor/highlight.min.js` (common languages plus PowerShell, Dockerfile, LaTeX, Julia, Stata, SAS, MATLAB) |
 | marked | 12.0.2 | MIT | `web/files/vendor/marked.min.js` |

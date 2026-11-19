@@ -31,10 +31,12 @@
     const skin = window.RemoteCliPaint(saved('skin', 'paper'));
     Object.keys(READ).forEach(key => { const [choices, usual, name] = READ[key]; document.documentElement.style.setProperty(name, choices[saved(key, usual)] || choices[usual]); });
     document.documentElement.style.fontSize = TEXT[saved('text', 'normal')] || TEXT.normal;
+    const shade = skin.bg || skin.t.background;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = skin.t.background;
-    if (native && native.chrome) native.chrome(skin.t.background);
+    if (meta) meta.content = shade;
+    if (native && native.chrome) native.chrome(shade);
   }
+  if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(paint);
 
   function el(tag, props, ...children) {
     const node = document.createElement(tag);
@@ -369,7 +371,12 @@
   // ---- the menu: what the conversation is, what is done with it (handed to another AI, asked at a time), its
   // name, and how it is read. Each opens as a page of the same sheet (../ui/sheet.js, ../ui/work.js).
   const work = RemoteWork.forPage('../', toast);
-  const skinList = () => Object.keys(window.RemoteCliSkins).map(key => { const k = window.RemoteCliSkins[key]; return { key, name: k.name, bg: k.t.background, ink: k.t.foreground, muted: k.muted, accent: k.accent, current: key === saved('skin', 'paper') }; });
+  const skinList = () => {
+    const cur = saved('skin', 'paper');
+    const items = Object.keys(window.RemoteCliSkins).map(key => { const k = window.RemoteCliSkins[key]; return { key, name: k.name, bg: k.bg || k.t.background, ink: k.t.foreground, muted: k.muted, accent: k.accent, current: key === cur }; });
+    items.unshift({ key: 'auto', name: '跟随系统', follow: true, current: cur === 'auto' });
+    return items;
+  };
   const READING = {
     text: ['字号', [['small', '小'], ['normal', '标准'], ['large', '大'], ['larger', '特大']], 'normal'],
     readline: ['行距', [['tight', '紧凑'], ['normal', '标准'], ['loose', '宽松']], 'normal'],
@@ -393,8 +400,9 @@
       if (terminal.session && terminal.dir && !ended) rows.push(ui.row({ icon: 'term', tint: 'muted', label: '在终端中打开', go: () => p.sheet.push(ui.confirm({ title: '在终端中打开', text: '这里的对话会关闭，在手机终端里继续同一段对话。', label: '在终端中打开', busy: '正在转到终端…', act: async sheet => { sheet.close(null, true); await inTerminal(); } })) }));
       if (ended && terminal.session) rows.push(ui.row({ icon: 'play', tint: 'good', label: '继续这段对话', act: () => { p.sheet.close(null, true); bridge().again(); } }));
       p.body.append(ui.section('对话', ui.group(...rows)));
-      const skin = window.RemoteCliSkins[saved('skin', 'paper')] || window.RemoteCliSkins.paper;
-      p.body.append(ui.section('阅读', ui.group(ui.row({ icon: 'look', tint: 'look', label: '外观', value: skin.name, go: () => p.sheet.push(lookPage()) }),
+      const chosenSkin = saved('skin', 'paper');
+      const skin = window.RemoteCliSkins[chosenSkin] || window.RemoteCliSkins.paper;
+      p.body.append(ui.section('阅读', ui.group(ui.row({ icon: 'look', tint: 'look', label: '外观', value: chosenSkin === 'auto' ? '跟随系统' : skin.name, go: () => p.sheet.push(lookPage()) }),
         ...Object.keys(READING).map(key => { const [name, choices, usual] = READING[key]; return ui.row({ label: name, end: ui.seg(choices, saved(key, usual), value => { keep(key, value); reader.change(paint); }, { label: name }) }); }))));
       if (!ended) p.body.append(ui.group(ui.row({ label: '结束对话', danger: true, act: () => p.sheet.push(ui.confirm({ title: '结束对话', text: '正在执行的会被中断。对话保存在电脑上，之后可以继续。', label: '结束对话', kind: 'danger', act: sheet => { sheet.close(null); bridge().send({ action: 'close' }); } })) })));
     } };

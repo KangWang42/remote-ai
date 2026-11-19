@@ -8,7 +8,7 @@
   const native = window.RemoteCliNative || null;
   // Inside the app the look is the app's own, the same for every computer; a browser keeps it per address.
   // The terminal may have a skin of its own there ("termskin"); without one it follows the app's.
-  const LOOK = { skin: 'termskin', font: 'font', spacing: 'spacing', renderer: 'renderer' };
+  const LOOK = { skin: 'termskin', font: 'font', spacing: 'spacing', cursor: 'cursor', renderer: 'renderer' };
   const store = {
     get(key, fallback) {
       if (native && native.pref && LOOK[key]) { const chosen = native.pref(LOOK[key]) || (key === 'skin' ? native.pref('skin') : ''); if (chosen) return chosen; }
@@ -306,8 +306,12 @@
       const shown = displayTool(terminal);
       const closed = terminal.state === 'closed', glyph = shown === 'claude' || shown === 'codex' || shown === 'agy' ? shown : 'term';
       const tint = shown === 'claude' ? 'claude' : shown === 'agy' ? 'agy' : shown === 'shell' ? 'good' : 'codex';
+      const transportLabels = { websocket: 'WebSocket', sse: 'SSE', http: 'HTTP' };
+      const connSummary = closed ? '已结束' : link.state === 'connected'
+        ? ('已连接 · ' + (transportLabels[link.transport] || link.transport) + (Number.isFinite(link.lastLatency) ? ' ' + Math.round(Math.max(0, link.lastLatency)) + 'ms' : '') + (link.reconnects > 0 ? ' · 重连 ' + link.reconnects + ' 次' : ''))
+        : link.state === 'reconnecting' ? '正在重连' : link.state === 'offline' ? '已断开' : '正在连接';
       p.body.append(kit.who({ icon: glyph, tint, title: terminal.title || TOOLS[shown] || '终端',
-        line: (TOOLS[shown] || shown) + (terminal.dir ? ' · ' + terminal.dir : '') + ' · ' + (closed ? '已结束' : link.state === 'connected' ? '已连接' : '正在连接'), state: closed ? 'var(--muted)' : link.state === 'connected' ? 'var(--good)' : 'var(--busy)' }));
+        line: (TOOLS[shown] || shown) + (terminal.dir ? ' · ' + terminal.dir : '') + ' · ' + connSummary, state: closed ? 'var(--muted)' : link.state === 'connected' ? 'var(--good)' : link.state === 'offline' ? 'var(--bad)' : 'var(--busy)' }));
       const why = !talks() ? '终端里没有 AI 对话' : !terminal.session ? '对话开始后才能使用' : '';
       p.body.append(kit.tiles([
         { id: 'menu-handoff', icon: 'hand', tint: 'claude', label: '交给 AI', why, say, act: () => worker().handoff(p.sheet, of()) },
@@ -318,11 +322,14 @@
       if (closed && talks()) rows.push(kit.row({ icon: 'play', tint: 'good', label: terminal.session ? '继续这个对话' : '重新新建对话', act: () => { p.sheet.close(null, true); again(); } }));
       p.body.append(kit.section('终端', kit.group(...rows)));
       const skins = window.RemoteCliSkins, follows = !!(native && native.pref && native.setPref) && !native.pref('termskin');
-      const skin = skins[store.get('skin', 'paper')] || skins.paper, dom = store.get('renderer', 'webgl') === 'dom';
+      const storedSkin = store.get('skin', 'paper');
+      const skin = skins[storedSkin] || skins.paper, dom = store.get('renderer', 'webgl') === 'dom';
+      const skinLabel = follows ? '跟随 App' : storedSkin === 'auto' ? '跟随系统' : skin.name;
       const t = ui(), sizes = t.fontSizes ? t.fontSizes() : [];
-      const show = [kit.row({ icon: 'look', tint: 'look', label: '外观', value: follows ? '跟随 App' : skin.name, go: () => p.sheet.push(lookPage()) })];
+      const show = [kit.row({ icon: 'look', tint: 'look', label: '外观', value: skinLabel, go: () => p.sheet.push(lookPage()) })];
       if (sizes.length) show.push(kit.row({ label: '字号', end: kit.stepper(t.fontSize(), { min: sizes[0], max: sizes[sizes.length - 1], step: sizes[1] - sizes[0], label: '字号' }, size => t.setFontSize(size)) }));
       show.push(kit.row({ label: '行距', end: kit.seg(t.spacings().map(s => [s.key, s.name]), (t.spacings().find(s => s.current) || {}).key, key => { store.set('spacing', key); t.setSpacing(key); }, { label: '行距' }) }));
+      if (t.cursors && t.setCursorStyle) show.push(kit.row({ label: '光标', end: kit.seg(t.cursors().map(c => [c.key, c.name]), (t.cursors().find(c => c.current) || {}).key, key => t.setCursorStyle(key), { label: '光标' }) }));
       show.push(kit.row({ label: '兼容绘制', detail: '画面空白或花屏时打开', end: kit.toggle(dom, on => { store.set('renderer', on ? 'dom' : 'webgl'); setTimeout(() => location.reload(), 220); }, '兼容绘制') }));
       p.body.append(kit.section('显示', kit.group(...show)));
       if (!closed) p.body.append(kit.group(kit.row({ label: '结束终端', danger: true, act: () => p.sheet.push(kit.confirm({ title: '结束终端', text: '正在运行的任务会被中断。对话保存在电脑上，可以从历史对话继续。', label: '结束终端', kind: 'danger', act: sheet => { sheet.close(null); enqueue({ action: 'close' }); } })) })));
@@ -350,7 +357,9 @@
     const kit = window.RemoteSheet.ui;
     return { title: '终端外观', build(p) {
       const skins = window.RemoteCliSkins, canFollow = !!(native && native.pref && native.setPref), follows = canFollow && !native.pref('termskin');
-      const list = Object.keys(skins).map(key => ({ key, name: skins[key].name, bg: skins[key].t.background, ink: skins[key].t.foreground, muted: skins[key].muted, accent: skins[key].accent, current: !follows && key === store.get('skin', 'paper') }));
+      const currentKey = store.get('skin', 'paper');
+      const list = Object.keys(skins).map(key => ({ key, name: skins[key].name, bg: skins[key].t.background, ink: skins[key].t.foreground, muted: skins[key].muted, accent: skins[key].accent, current: !follows && key === currentKey }));
+      list.unshift({ key: 'auto', name: '跟随系统', follow: true, current: !follows && currentKey === 'auto' });
       if (canFollow) list.unshift({ key: 'app', name: '跟随 App', follow: true, current: follows });
       p.body.append(kit.swatches(list, key => {
         if (key === 'app') { native.setPref('termskin', 'app'); ui().setSkin(store.get('skin', 'paper')); return; }
@@ -386,6 +395,8 @@
     skin: () => store.get('skin', 'paper'),
     renderer: () => store.get('renderer', 'webgl'),
     spacing: () => store.get('spacing', 'cozy'),
+    cursor: () => store.get('cursor', 'block'),
+    saveCursor(style) { if (['block', 'bar', 'underline'].includes(style)) store.set('cursor', style); },
     chrome(color) {
       if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
       let meta = document.querySelector('meta[name="theme-color"]');

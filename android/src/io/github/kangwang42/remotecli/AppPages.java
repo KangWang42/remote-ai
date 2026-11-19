@@ -54,9 +54,10 @@ final class AppPages {
         // Compact 3-metric KPI summary card for today's work
         LinearLayout summary = kit.column();
         summary.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(14));
-        summary.setBackground(kit.shape(kit.PANEL, Kit.mix(kit.LINE, kit.PANEL, .6f), 16));
+        summary.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
+        kit.elevate(summary, 1.5f);
         LinearLayout topRow = kit.row();
-        topRow.addView(kit.bold("今日工作", 13.5f, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+        topRow.addView(kit.semibold("今日工作", 13.5f, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         coverage = kit.text(expected == 0 ? "添加电脑后显示统计" : "正在读取…", 12, kit.MUTED);
         topRow.addView(coverage);
         summary.addView(topRow);
@@ -86,8 +87,8 @@ final class AppPages {
             final String name = computer.optString("name", MainActivity.host(url));
             if (connections.getChildCount() > 0) {
                 View line = new View(activity);
-                line.setBackgroundColor(Kit.mix(kit.LINE, kit.PANEL, .75f));
-                LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, kit.dp(1));
+                line.setBackgroundColor(kit.rim());
+                LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, kit.hairline());
                 divider.setMargins(kit.dp(58), 0, 0, 0);
                 connections.addView(line, divider);
             }
@@ -133,16 +134,14 @@ final class AppPages {
     private TextView metricCell(LinearLayout parent, String label, boolean withDivider) {
         if (withDivider) {
             View divider = new View(activity);
-            divider.setBackgroundColor(Kit.mix(kit.LINE, kit.PANEL, .8f));
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(kit.dp(1), kit.dp(34));
+            divider.setBackgroundColor(kit.rim());
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(kit.hairline(), kit.dp(34));
             params.setMargins(kit.dp(6), 0, kit.dp(6), 0);
             parent.addView(divider, params);
         }
         LinearLayout cell = kit.column();
         cell.setPadding(kit.dp(4), 0, kit.dp(4), 0);
-        TextView value = kit.bold("—", 22, kit.MUTED);
-        value.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        value.setSingleLine(true);
+        TextView value = kit.figure("—", 22, kit.MUTED);
         cell.addView(value);
         cell.addView(kit.text(label, 12, kit.MUTED), kit.below(2));
         parent.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
@@ -170,8 +169,9 @@ final class AppPages {
             if (computer == null) continue;
             final String url = computer.optString("url");
             LinearLayout card = kit.column();
-            card.setBackground(kit.shape(kit.PANEL, Kit.mix(kit.LINE, kit.PANEL, .6f), 16));
+            card.setBackground(kit.shape(kit.PANEL, kit.rim(), 16));
             card.setClipToOutline(true);
+            kit.elevate(card, 1.5f);
             LinearLayout head = kit.row();
             head.setMinimumHeight(kit.dp(50));
             head.setPadding(kit.dp(14), kit.dp(8), kit.dp(12), kit.dp(8));
@@ -308,9 +308,10 @@ final class AppPages {
         tile.setMinimumHeight(kit.dp(104));
         int icon = what.equals("chain") ? R.drawable.ic_tab_together : what.equals("schedule") ? R.drawable.ic_clock
             : what.equals("handoff") ? R.drawable.ic_handoff : R.drawable.ic_say;
-        tile.setBackground(kit.shape(kit.PANEL, Kit.mix(kit.LINE, kit.PANEL, .6f), 18));
+        tile.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
+        kit.elevate(tile, 1.5f);
         tile.addView(kit.tile(icon, tint, 36));
-        tile.addView(kit.bold(title, 15.5f, kit.INK), kit.below(12));
+        tile.addView(kit.semibold(title, 15.5f, kit.INK), kit.below(12));
         tile.addView(kit.text(hint, 12.5f, kit.MUTED), kit.below(2));
         kit.press(tile, () -> {
             java.util.List<String> urls = new java.util.ArrayList<>();
@@ -324,8 +325,8 @@ final class AppPages {
     private void rows(LinearLayout body, String url, JSONArray items, boolean chain) {
         int size = items == null ? 0 : items.length();
         View divider = new View(activity);
-        divider.setBackgroundColor(Kit.mix(kit.LINE, kit.PANEL, .75f));
-        body.addView(divider, new LinearLayout.LayoutParams(-1, kit.dp(1)));
+        divider.setBackgroundColor(kit.rim());
+        body.addView(divider, new LinearLayout.LayoutParams(-1, kit.hairline()));
         if (size == 0) {
             TextView empty = kit.text(chain ? "暂无自动接力" : "暂无定时提问", 12.5f, kit.MUTED);
             empty.setPadding(kit.dp(14), kit.dp(10), kit.dp(14), kit.dp(10));

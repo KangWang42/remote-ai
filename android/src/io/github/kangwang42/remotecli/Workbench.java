@@ -146,23 +146,23 @@ final class Workbench {
             page.addView(kit.button("手动输入地址", 1, () -> activity.add("")), kit.below(10));
         } else if (tasks) {
             LinearLayout monitorCard = kit.column();
-            monitorCard.setBackground(kit.shape(kit.PANEL, Kit.mix(kit.LINE, kit.PANEL, .65f), 16));
+            monitorCard.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
             monitorCard.setClipToOutline(true);
+            kit.elevate(monitorCard, 1.5f);
             LinearLayout monitor = kit.row();
-            monitor.setPadding(kit.dp(10), kit.dp(13), kit.dp(10), kit.dp(13));
+            monitor.setPadding(kit.dp(10), kit.dp(14), kit.dp(10), kit.dp(14));
             String[] labels = {"待确认", "执行中", "已打开"};
             metrics = new TextView[labels.length];
             for (int i = 0; i < labels.length; i++) {
                 if (i > 0) {
                     View divider = new View(activity);
-                    divider.setBackgroundColor(Kit.mix(kit.LINE, kit.PANEL, .8f));
-                    monitor.addView(divider, new LinearLayout.LayoutParams(kit.dp(1), kit.dp(36)));
+                    divider.setBackgroundColor(kit.rim());
+                    monitor.addView(divider, new LinearLayout.LayoutParams(kit.hairline(), kit.dp(34)));
                 }
                 LinearLayout cell = kit.column();
                 cell.setPadding(kit.dp(10), 0, kit.dp(6), 0);
                 cell.addView(kit.text(labels[i], 12.5f, kit.MUTED));
-                metrics[i] = kit.bold("—", 23, kit.INK);
-                metrics[i].setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                metrics[i] = kit.figure("—", 23, kit.INK);
                 cell.addView(metrics[i]);
                 monitor.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
             }
@@ -600,8 +600,9 @@ final class Workbench {
         final AggregateSessions.Entry entry = task.entry;
         LinearLayout card = kit.row();
         card.setMinimumHeight(kit.dp(66)); card.setPadding(kit.dp(14), kit.dp(11), kit.dp(14), kit.dp(11));
-        int edge = "confirm".equals(task.kind) ? Kit.mix(kit.BAD, kit.LINE, .55f) : "done".equals(task.kind) || "waiting".equals(task.kind) ? Kit.mix(kit.GOOD, kit.LINE, .45f) : kit.LINE;
+        int edge = "confirm".equals(task.kind) ? Kit.mix(kit.BAD, kit.LINE, .55f) : "done".equals(task.kind) || "waiting".equals(task.kind) ? Kit.mix(kit.GOOD, kit.LINE, .45f) : kit.rim();
         card.setBackground(kit.shape(kit.PANEL, edge, 16));
+        kit.elevate(card, 1.5f);
         card.addView(kit.tile(toolIcon(entry.displayTool()), toolColor(entry.displayTool()), 40));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(12), 0, 0, 0);

@@ -18,6 +18,8 @@
   <script defer src="vendor/xterm.js"></script>
   <script defer src="vendor/addon-fit.js"></script>
   <script defer src="vendor/addon-webgl.js"></script>
+  <script defer src="vendor/addon-unicode11.js"></script>
+  <script defer src="vendor/addon-web-links.js"></script>
   <script defer src="skins.js"></script>
   <script defer src="../ui/sheet.js"></script>
   <script defer src="../ui/work.js"></script>
@@ -40,15 +42,16 @@
       <button type="button" class="quiet" id="files" aria-label="查看项目文件" hidden>
         <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <button type="button" class="quiet" id="font" aria-label="调整字号">Aa</button>
       <button type="button" class="quiet" id="menu" aria-label="终端选项">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>
       </button>
     </header>
-    <p id="connection"><span id="connection-text" role="status" aria-live="polite">正在连接</span><span id="connection-detail">中转延迟待测 · 重连 0 次</span></p>
+    <p id="connection" hidden><span id="connection-text" role="status" aria-live="polite">正在连接</span><span id="connection-detail">中转延迟待测 · 重连 0 次</span></p>
     <div id="screen">
       <div id="terminal" aria-label="电脑上的终端画面"></div>
-      <button type="button" id="latest" hidden><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 5v13M6.5 12.5L12 18l5.5-5.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>回到最新</button>
+      <div id="scroll-track" aria-hidden="true"><div id="scroll-thumb"></div></div>
+      <div id="zoom-hud" aria-hidden="true" hidden></div>
+      <button type="button" id="latest" hidden><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 5v13M6.5 12.5L12 18l5.5-5.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>回到最新</button>
     </div>
     <div id="notice" role="status" aria-live="polite"></div>
     <div id="shared" role="status" hidden>该终端同时在另一处打开，画面按最后输入一方的尺寸排列。在此输入后将按此处重新排列。</div>
@@ -57,62 +60,69 @@
       <button type="button" id="again">继续这个对话</button>
     </div>
     <div id="palette" role="listbox" aria-label="常用命令" hidden></div>
-    <nav class="keys" aria-label="终端按键">
-      <button type="button" data-key="escape">Esc</button>
-      <button type="button" data-key="up" aria-label="向上选择">↑</button>
-      <button type="button" data-key="down" aria-label="向下选择">↓</button>
-      <button type="button" data-key="enter" aria-label="回车确认">⏎</button>
-      <button type="button" data-key="tab">Tab</button>
-      <button type="button" data-key="backtab" aria-label="Shift 加 Tab，切换模式">⇧Tab</button>
-      <button type="button" data-key="interrupt" aria-label="Ctrl 加 C，中断">Ctrl+C</button>
-      <button type="button" data-key="ctrlp" aria-label="Ctrl 加 P，上一条历史">Ctrl+P</button>
-      <button type="button" data-key="left" aria-label="向左移动">←</button>
-      <button type="button" data-key="right" aria-label="向右移动">→</button>
-      <button type="button" data-key="pageup" aria-label="向上翻一页">PgUp</button>
-      <button type="button" data-key="pagedown" aria-label="向下翻一页">PgDn</button>
-      <span id="custom-keys"></span>
-      <button type="button" id="key-add" aria-label="添加自定义按键" aria-expanded="false">＋</button>
-    </nav>
-    <form id="key-editor" hidden>
-      <div class="key-row">
-        <input id="key-label" maxlength="8" placeholder="标签" aria-label="按键标签">
-        <select id="key-kind" aria-label="按键类型">
-          <option value="combo">组合键</option>
-          <option value="seq">转义序列</option>
-          <option value="text">命令片段</option>
-        </select>
-      </div>
-      <div class="key-row" id="key-combo-row">
-        <button type="button" id="key-ctrl" aria-pressed="false">Ctrl</button>
-        <button type="button" id="key-alt" aria-pressed="false">Alt</button>
-        <button type="button" id="key-shift" aria-pressed="false">Shift</button>
-        <select id="key-base" aria-label="基础键"></select>
-      </div>
-      <div class="key-row" id="key-seq-row" hidden>
-        <input id="key-seq" placeholder='转义序列，如 \x1b[1;5C 或 \x12' aria-label="转义序列">
-      </div>
-      <div class="key-row" id="key-text-row" hidden>
-        <input id="key-text" maxlength="200" placeholder="要发送的命令或文字" aria-label="命令片段内容">
-        <label class="key-enter"><input type="checkbox" id="key-enter" checked>发送后回车</label>
-      </div>
-      <div class="key-row">
-        <button type="submit" id="key-save">保存</button>
-        <button type="button" id="key-delete" hidden>删除</button>
-        <button type="button" id="key-cancel">取消</button>
-        <span id="key-error" aria-live="polite"></span>
-      </div>
-    </form>
-    <form id="composer">
-      <button type="button" id="slash" aria-label="常用命令" aria-expanded="false">/</button>
-      <div class="field">
-        <label class="sr-only" for="input">终端输入</label>
-        <textarea id="input" rows="1" maxlength="8000" placeholder="消息，或 / 选命令" spellcheck="false" autocapitalize="off"></textarea>
-        <button type="button" id="voice" aria-label="语音输入">
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-        </button>
-      </div>
-      <button type="submit" id="send">回车</button>
-    </form>
+    <section class="dock" aria-label="终端输入区">
+      <nav class="keys" aria-label="终端按键">
+        <button type="button" data-key="escape">Esc</button>
+        <button type="button" data-key="tab">Tab</button>
+        <button type="button" data-key="backtab" aria-label="Shift 加 Tab，切换模式">⇧Tab</button>
+        <span class="key-sep" aria-hidden="true"></span>
+        <button type="button" data-key="up" aria-label="向上选择">↑</button>
+        <button type="button" data-key="down" aria-label="向下选择">↓</button>
+        <button type="button" data-key="left" aria-label="向左移动">←</button>
+        <button type="button" data-key="right" aria-label="向右移动">→</button>
+        <span class="key-sep" aria-hidden="true"></span>
+        <button type="button" data-key="enter" aria-label="回车确认">⏎</button>
+        <button type="button" class="danger-key" data-key="interrupt" aria-label="Ctrl 加 C，中断">Ctrl+C</button>
+        <button type="button" data-key="ctrlp" aria-label="Ctrl 加 P，上一条历史">Ctrl+P</button>
+        <span class="key-sep" aria-hidden="true"></span>
+        <button type="button" data-key="pageup" aria-label="向上翻一页">PgUp</button>
+        <button type="button" data-key="pagedown" aria-label="向下翻一页">PgDn</button>
+        <span id="custom-keys"></span>
+        <button type="button" id="key-add" aria-label="添加自定义按键" aria-expanded="false">＋</button>
+      </nav>
+      <form id="key-editor" hidden>
+        <div class="key-row">
+          <input id="key-label" maxlength="8" placeholder="标签" aria-label="按键标签">
+          <select id="key-kind" aria-label="按键类型">
+            <option value="combo">组合键</option>
+            <option value="seq">转义序列</option>
+            <option value="text">命令片段</option>
+          </select>
+        </div>
+        <div class="key-row" id="key-combo-row">
+          <button type="button" id="key-ctrl" aria-pressed="false">Ctrl</button>
+          <button type="button" id="key-alt" aria-pressed="false">Alt</button>
+          <button type="button" id="key-shift" aria-pressed="false">Shift</button>
+          <select id="key-base" aria-label="基础键"></select>
+        </div>
+        <div class="key-row" id="key-seq-row" hidden>
+          <input id="key-seq" placeholder='转义序列，如 \x1b[1;5C 或 \x12' aria-label="转义序列">
+        </div>
+        <div class="key-row" id="key-text-row" hidden>
+          <input id="key-text" maxlength="200" placeholder="要发送的命令或文字" aria-label="命令片段内容">
+          <label class="key-enter"><input type="checkbox" id="key-enter" checked>发送后回车</label>
+        </div>
+        <div class="key-row key-actions">
+          <button type="submit" id="key-save">保存</button>
+          <button type="button" id="key-delete" hidden>删除</button>
+          <button type="button" id="key-cancel">取消</button>
+          <span id="key-error" aria-live="polite"></span>
+        </div>
+      </form>
+      <form id="composer">
+        <div class="composer-shell">
+          <button type="button" id="slash" aria-label="常用命令" aria-expanded="false">/</button>
+          <div class="field">
+            <label class="sr-only" for="input">终端输入</label>
+            <textarea id="input" rows="1" maxlength="8000" placeholder="消息，或 / 选命令" spellcheck="false" autocapitalize="off"></textarea>
+          </div>
+          <button type="button" id="voice" aria-label="语音输入">
+            <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button type="submit" id="send">回车</button>
+        </div>
+      </form>
+    </section>
   </main>
 </body>
 </html>

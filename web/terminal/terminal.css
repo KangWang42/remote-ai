@@ -1,41 +1,50 @@
 /* Colours come from the chosen skin (terminal.js sets them on :root); these are the default skin's, for the first frame. */
-:root { color-scheme: light; --bg: #fbfbfc; --panel: #f0f1f4; --raised: #e4e6eb; --ink: #2b2f3a; --muted: #666b78; --line: #d5d8df; --accent: #2f6fe4; --on-accent: #ffffff; --good: #3d8a3a; --busy: #a36a00; --warn-ink: #a36a00; --warn-bg: #e4e6eb; }
+:root { color-scheme: light; --bg: #f2f3f7; --term-bg: #fbfbfc; --panel: #ffffff; --raised: #e9ecf2; --ink: #232733; --muted: #686e7d; --line: #dde1e9; --accent: #2f6fe4; --on-accent: #ffffff; --good: #358432; --busy: #9e6600; --bad: #c93c37; --warn-ink: #9e6600; --warn-bg: #e9ecf2; --elevate: 0 1px 2px rgb(15 23 42 / .04), 0 6px 20px -10px rgb(15 23 42 / .10); --rim: rgb(15 23 42 / .07); }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; width: 100%; height: 100%; background: var(--bg); color: var(--ink); font-family: system-ui, sans-serif; overflow: hidden; }
+html, body { margin: 0; width: 100%; height: 100%; background: var(--term-bg, var(--bg)); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; overflow: hidden; }
 main { height: 100%; height: 100dvh; display: flex; flex-direction: column; min-width: 0; }
 
-header { display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 4px; background: linear-gradient(180deg, var(--panel), var(--bg)); }
-.who { flex: 1; min-width: 0; padding-left: 2px; }
-h1 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#status { display: flex; align-items: center; gap: 6px; margin: 1px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.35; min-width: 0; }
+header { display: flex; align-items: center; gap: 2px; padding: calc(5px + env(safe-area-inset-top)) 6px 5px 4px; background: color-mix(in srgb, var(--term-bg, var(--bg)) 92%, transparent); box-shadow: inset 0 -0.5px 0 var(--rim, var(--line)); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); z-index: 4; }
+.who { flex: 1; min-width: 0; padding: 3px 6px; border-radius: 10px; cursor: pointer; display: grid; grid-template-columns: minmax(0, auto) auto 1fr; align-items: center; column-gap: 6px; transition: background .12s; }
+.who:active { background: var(--raised); }
+h1 { margin: 0; font-size: 15.5px; font-weight: 650; line-height: 1.3; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; margin: 1px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.35; min-width: 0; }
 #status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* how the page is connected: said quietly while all is well, in colour when it is not */
-#connection { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; margin: 0; padding: 4px 14px; color: var(--muted); background: var(--panel); border-block: 1px solid var(--line); font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; }
-#connection-text { font-weight: 650; }
-#connection-detail { margin-inline-start: auto; }
+#others { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+
+/* Connection diagnostics stay out of the way while healthy, and appear cleanly when degraded. */
+#connection { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; margin: 6px 10px 2px; padding: 6px 12px; color: var(--muted); background: color-mix(in srgb, var(--panel) 94%, transparent); border: 0.5px solid var(--rim, var(--line)); border-radius: 12px; font-size: 11.5px; line-height: 1.4; font-variant-numeric: tabular-nums; box-shadow: var(--elevate); }
+#connection-text { font-weight: 600; }
+#connection-detail { margin-inline-start: auto; opacity: .88; }
 #connection-text, #connection-detail { white-space: nowrap; }
-#connection-text::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 6px 1px 0; border-radius: 50%; background: currentColor; vertical-align: middle; }
+#connection-text::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: currentColor; vertical-align: middle; }
 #connection.connected #connection-text::before { background: var(--good); }
-#connection.connecting, #connection.reconnecting { color: var(--busy); }
-#connection.offline { color: var(--bad, #f7768e); }
+#connection.connecting, #connection.reconnecting { color: var(--busy); background: color-mix(in srgb, var(--busy) 10%, var(--panel)); border-color: color-mix(in srgb, var(--busy) 32%, transparent); }
+#connection.offline { color: var(--bad, #f7768e); background: color-mix(in srgb, var(--bad, #f7768e) 10%, var(--panel)); border-color: color-mix(in srgb, var(--bad, #f7768e) 34%, transparent); }
 #dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-#dot.ready { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
-#dot.busy { background: var(--busy); box-shadow: 0 0 0 3px color-mix(in srgb, var(--busy) 22%, transparent); animation: pulse 1.4s ease-in-out infinite; }
+#dot.ready { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 20%, transparent); }
+#dot.busy { background: var(--busy); box-shadow: 0 0 0 3px color-mix(in srgb, var(--busy) 20%, transparent); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .4; } }
 
 button { font: inherit; color: var(--ink); border: 0; background: none; cursor: pointer; touch-action: manipulation; }
 button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-button:disabled { opacity: .45; cursor: default; }
-.quiet { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; color: var(--muted); font-size: 15px; font-weight: 600; flex-shrink: 0; }
-.quiet:active { background: var(--raised); color: var(--ink); }
+button:disabled { opacity: .42; cursor: default; }
+.quiet { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; color: var(--muted); font-size: 15px; font-weight: 600; flex-shrink: 0; transition: background .12s, color .12s, transform .1s; }
+.quiet:active { background: var(--raised); color: var(--ink); transform: scale(.93); }
 
-#screen { flex: 1; min-height: 60px; min-width: 0; position: relative; overflow: hidden; contain: strict; touch-action: none; }
-#composer, .keys, header { contain: layout; }
+#screen { flex: 1; min-height: 60px; min-width: 0; position: relative; overflow: hidden; contain: strict; touch-action: none; background: var(--term-bg, var(--bg)); }
+/* Subtle edge fade gives scrolled output calm top/bottom breathing room without hiding content. */
+#screen::before, #screen::after { content: ""; position: absolute; left: 0; right: 0; height: 7px; z-index: 4; pointer-events: none; }
+#screen::before { top: 0; background: linear-gradient(180deg, var(--term-bg, var(--bg)), transparent); }
+#screen::after { bottom: 0; background: linear-gradient(0deg, var(--term-bg, var(--bg)), transparent); }
+html[data-skin="pond"] #screen::before, html[data-skin="pond"] #screen::after { display: none; }
+
+.dock, header { contain: layout; }
 /* The terminal keeps the height it had before the keyboard opened: the program on the computer is not resized, and
    the newest lines stay visible above the keyboard. */
 /* The terminal's own layers are ordered among themselves only (isolation): the layer for links has a z-index, and
    would otherwise lie over what is laid over the terminal here, and take the taps meant for "回到最新". */
-#terminal { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 10px; isolation: isolate; }
+#terminal { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 12px 6px; isolation: isolate; }
 /* DOM rows are replaced while scrolling. Keep a touch anchored to the stable screen instead of a removed span. */
 @media (pointer: coarse) { .xterm-rows { pointer-events: none; } }
 /* While a finger scrolls, the rows that move are shown here, over the terminal's picture (terminal-strip.js): a canvas
@@ -43,41 +52,60 @@ button:disabled { opacity: .45; cursor: default; }
    its text stays sharp wherever it is moved to. Above the terminal's layer for links. */
 #slid { position: absolute; left: 0; z-index: 3; overflow: hidden; contain: strict; pointer-events: none; }
 #slid canvas { position: absolute; left: 0; top: 0; will-change: transform; image-rendering: pixelated; }
-#latest { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 5px; height: 34px; padding: 0 14px 0 10px; border-radius: 17px; background: var(--panel); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
+/* Ultra-thin floating scroll position indicator (auto-fades when idle). */
+#scroll-track { position: absolute; top: 8px; right: 3px; bottom: 8px; width: 3px; z-index: 5; pointer-events: none; opacity: 0; transition: opacity .28s ease; }
+#scroll-track.shown { opacity: 1; transition-duration: .08s; }
+#scroll-thumb { position: absolute; left: 0; right: 0; min-height: 24px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 32%, transparent); will-change: transform, height; }
+/* Floating font-size pill shown during two-finger pinch-to-zoom. */
+#zoom-hud { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6; padding: 8px 16px; border-radius: 999px; background: color-mix(in srgb, var(--panel) 88%, transparent); border: 0.5px solid var(--rim, var(--line)); color: var(--ink); font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; box-shadow: 0 8px 28px rgb(0 0 0 / .18); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); pointer-events: none; }
+#latest { position: absolute; right: 12px; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 5px; height: 34px; padding: 0 13px 0 10px; border-radius: 17px; background: color-mix(in srgb, var(--panel) 92%, transparent); border: 0.5px solid var(--rim, var(--line)); color: var(--ink); font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 16px rgb(0 0 0 / .16); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); transition: transform .12s; }
+#latest:active { transform: scale(.95); }
 #latest svg { color: var(--accent); }
 /* Where a program writes its own offer of the way back to the end over a row of its screen, the rows above it are
    shown a row lower, over it (terminal.js). Only where there is no strip to show them from is the row covered. */
-#offer { position: absolute; left: 0; width: 100%; z-index: 4; background: var(--bg); pointer-events: none; }
+#offer { position: absolute; left: 0; width: 100%; z-index: 4; background: var(--term-bg, var(--bg)); pointer-events: none; }
 [hidden] { display: none !important; }
 
-#notice { display: none; margin: 0 10px; padding: 7px 12px; border-radius: 10px; font-size: 12px; line-height: 1.5; color: var(--warn-ink); background: var(--warn-bg); }
+#notice { display: none; margin: 4px 10px 0; padding: 7px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5; color: var(--warn-ink); background: color-mix(in srgb, var(--warn-ink) 10%, var(--panel)); border: 0.5px solid color-mix(in srgb, var(--warn-ink) 28%, transparent); }
 #notice:not(:empty) { display: block; }
-#ended { display: flex; align-items: center; gap: 10px; margin: 6px 10px 0; padding: 8px 8px 8px 14px; border-radius: 14px; background: var(--panel); font-size: 12.5px; color: var(--muted); }
+#ended { display: flex; align-items: center; gap: 10px; margin: 6px 10px 4px; padding: 8px 8px 8px 14px; border-radius: 14px; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); box-shadow: var(--elevate); font-size: 12.5px; color: var(--muted); }
 #ended span { flex: 1; min-width: 0; }
 #again { height: 36px; padding: 0 14px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 600; flex-shrink: 0; }
 
-#palette { max-height: 42%; overflow-y: auto; margin: 6px 10px 0; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 4px 0; overscroll-behavior: contain; }
-#palette button { display: flex; align-items: center; gap: 12px; width: 100%; height: auto; min-height: 44px; padding: 6px 14px; text-align: left; line-height: 1.4; }
+#palette { max-height: 42%; overflow-y: auto; margin: 6px 10px 4px; border: 0.5px solid var(--rim, var(--line)); border-radius: 16px; background: var(--panel); box-shadow: 0 -4px 24px rgb(0 0 0 / .12); padding: 4px 0; overscroll-behavior: contain; }
+#palette button { display: flex; align-items: center; gap: 12px; width: 100%; height: auto; min-height: 44px; padding: 7px 14px; text-align: left; line-height: 1.4; transition: background .1s; }
+#palette button + button { box-shadow: inset 0 0.5px 0 var(--rim, var(--line)); }
 #palette button:active { background: var(--raised); }
-#palette b { font-family: "Terminal Mono", monospace; font-size: 13.5px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
+#palette b { font-family: "Terminal Mono", monospace; font-size: 13px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
 #palette span { font-size: 12.5px; color: var(--muted); min-width: 0; }
 #palette p { margin: 0; padding: 10px 14px; font-size: 12.5px; color: var(--muted); }
 
-.keys { display: flex; gap: 6px; padding: 8px 10px 6px; overflow-x: auto; scrollbar-width: none; }
+/* Unified bottom dock: key strip + composer grouped under one subtle surface. */
+.dock { background: var(--bg); box-shadow: inset 0 0.5px 0 var(--rim, var(--line)); }
+.keys { display: flex; align-items: center; gap: 5px; padding: 7px 10px 5px; overflow-x: auto; scrollbar-width: none; }
 .keys::-webkit-scrollbar { display: none; }
-.keys button { flex: 1 0 auto; min-width: 42px; height: 34px; padding: 0 10px; border-radius: 10px; background: var(--panel); color: var(--ink); font-family: "Terminal Mono", system-ui, monospace; font-size: 12px; white-space: nowrap; opacity: .92; }
-.keys button:active { background: var(--raised); opacity: 1; }
+.keys button { flex: 0 0 auto; min-width: 38px; height: 32px; padding: 0 10px; border-radius: 9px; background: var(--panel); color: var(--ink); font-family: "Terminal Mono", system-ui, monospace; font-size: 12px; font-weight: 500; white-space: nowrap; box-shadow: 0 1px 0 rgb(15 23 42 / .09), 0 0 0 0.5px var(--rim, var(--line)); transition: transform .08s ease, background .1s ease; }
+html[data-theme="dark"] .keys button { background: var(--raised); box-shadow: inset 0 0.5px 0 rgb(255 255 255 / .09), 0 1px 2px rgb(0 0 0 / .28); }
+.keys button:active { background: var(--raised); transform: scale(.93); }
+html[data-theme="dark"] .keys button:active { background: color-mix(in srgb, var(--raised) 75%, var(--ink)); }
+.keys button.danger-key { color: color-mix(in srgb, var(--bad, #f7768e) 88%, var(--ink)); }
+.key-sep { flex: none; width: 1px; height: 16px; margin: 0 2px; background: var(--rim, var(--line)); }
 
-#composer { display: flex; align-items: flex-end; gap: 8px; padding: 2px 10px max(10px, env(safe-area-inset-bottom)); }
+/* Unified pill composer (matches chat & conversation composer language). */
+#composer { padding: 3px 10px max(10px, env(safe-area-inset-bottom)); }
+.composer-shell { display: flex; align-items: flex-end; gap: 4px; padding: 4px 5px 4px 6px; border-radius: 24px; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
+.composer-shell:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .field { position: relative; flex: 1; min-width: 0; display: flex; }
-textarea { font: inherit; font-size: 15px; line-height: 22px; flex: 1; min-width: 0; height: 44px; max-height: 120px; resize: none; border: 1px solid var(--line); border-radius: 22px; padding: 10px 44px 10px 16px; color: var(--ink); background: var(--panel); }
-textarea:focus { border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); outline: none; }
-textarea::placeholder { color: var(--muted); opacity: 1; }
-#voice { position: absolute; right: 4px; bottom: 4px; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 18px; color: var(--muted); }
-#voice:active { background: var(--raised); color: var(--accent); }
-#slash { width: 44px; height: 44px; border-radius: 22px; background: var(--panel); border: 1px solid var(--line); color: var(--accent); font-family: "Terminal Mono", monospace; font-size: 17px; font-weight: 700; flex-shrink: 0; }
-#slash[aria-expanded="true"] { background: var(--raised); border-color: var(--accent); }
-#send { min-width: 60px; height: 44px; padding: 0 14px; border-radius: 22px; background: var(--raised); color: var(--ink); font-size: 14px; font-weight: 600; flex-shrink: 0; }
+textarea { font: inherit; font-size: 15px; line-height: 22px; flex: 1; min-width: 0; height: 36px; max-height: 120px; resize: none; border: 0; border-radius: 16px; padding: 7px 8px; color: var(--ink); background: transparent; }
+textarea:focus { outline: none; }
+textarea::placeholder { color: var(--muted); opacity: .85; }
+#voice { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 18px; color: var(--muted); flex-shrink: 0; transition: background .12s, color .12s, transform .1s; }
+#voice:active { background: var(--raised); color: var(--accent); transform: scale(.93); }
+#slash { width: 36px; height: 36px; border-radius: 18px; background: color-mix(in srgb, var(--accent) 11%, transparent); color: var(--accent); font-family: "Terminal Mono", monospace; font-size: 16px; font-weight: 700; flex-shrink: 0; transition: background .12s, transform .1s; }
+#slash:active { transform: scale(.93); }
+#slash[aria-expanded="true"] { background: var(--accent); color: var(--on-accent); }
+#send { min-width: 56px; height: 36px; padding: 0 14px; border-radius: 18px; background: var(--raised); color: var(--ink); font-size: 13.5px; font-weight: 600; flex-shrink: 0; transition: background .15s, color .15s, transform .1s; }
+#send:active { transform: scale(.95); }
 #send.text { background: var(--accent); color: var(--on-accent); }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
@@ -90,34 +118,37 @@ textarea::placeholder { color: var(--muted); opacity: 1; }
 .pill { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 2px 9px 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.5; white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
 .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
 .pill.busy { --c: var(--busy); } .pill.confirm { --c: var(--bad, #f7768e); } .pill.done { --c: var(--good); } .pill.idle { --c: var(--muted); } .pill.starting { --c: var(--accent); }
-header .who { border-radius: 10px; cursor: pointer; display: grid; grid-template-columns: minmax(0, auto) auto 1fr; align-items: center; column-gap: 6px; }
-header .who:active { background: var(--raised); }
-header .who #status { grid-column: 1 / -1; }
-#others { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--raised); color: var(--muted); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
-#attention { display: flex; align-items: center; gap: 8px; margin: 0 10px 4px; padding: 7px 12px 7px 8px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--c, var(--line)) 50%, var(--line)); background: var(--panel); font-size: 12.5px; text-align: left; }
+#attention { display: flex; align-items: center; gap: 8px; margin: 6px 10px 2px; padding: 7px 12px 7px 8px; border-radius: 14px; border: 0.5px solid color-mix(in srgb, var(--c, var(--line)) 45%, var(--rim, var(--line))); background: var(--panel); box-shadow: var(--elevate); font-size: 12.5px; text-align: left; }
 #attention.confirm { --c: var(--bad, #f7768e); } #attention.done { --c: var(--good); }
-#attention b { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#attention b { flex: 1; min-width: 0; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #attention i { font-style: normal; color: var(--accent); font-weight: 600; flex-shrink: 0; }
 
 /* open in two places: said in one quiet line, gone as soon as this side has typed */
-#shared { margin: 0 10px; padding: 6px 12px; border-radius: 10px; font-size: 12px; line-height: 1.5; color: var(--muted); background: var(--panel); }
+#shared { margin: 4px 10px 0; padding: 7px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5; color: var(--muted); background: var(--panel); border: 0.5px solid var(--rim, var(--line)); }
 /* A window on a computer: the keys are on the keyboard and what is typed goes straight to the terminal, so the row of
    keys and the message box are in the way. They stay for touch, and come back in a narrow window. */
 @media (hover: hover) and (pointer: fine) and (min-width: 560px) {
-  .keys, #composer { display: none; }
+  .dock { display: none; }
   #screen { padding-bottom: 8px; }
 }
 
-/* 自定义按键：条上追加的按钮与编辑器面板。 */
+/* 自定义按键：条上追加的按钮与卡片化编辑器面板。 */
 #custom-keys { display: contents; }
-.keys button.custom { border: 1px dashed var(--line); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.keys button.custom { border: 1px dashed color-mix(in srgb, var(--accent) 42%, var(--line)); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.keys button.custom-delete { min-width: 28px; padding: 0 6px; color: var(--bad, #f7768e); }
 /* 钉在滚动条右缘：条内静态键已超出一屏，滚动条又不可见，「＋」不钉住就无从发现。 */
-#key-add { position: sticky; right: 0; min-width: 34px; color: var(--muted); font-size: 15px; background: var(--bg); box-shadow: -10px 0 8px -8px var(--bg); }
-#key-editor { display: grid; gap: 6px; padding: 8px 10px 10px; background: var(--panel); border-top: 1px solid var(--line); }
+#key-add { position: sticky; right: 0; min-width: 34px; color: var(--muted); font-size: 15px; background: var(--panel); box-shadow: -14px 0 12px -2px var(--bg), 12px 0 0 0 var(--bg), 0 0 0 0.5px var(--rim, var(--line)); }
+html[data-theme="dark"] #key-add { background: var(--raised); box-shadow: -14px 0 12px -2px var(--bg), 12px 0 0 0 var(--bg), inset 0 0.5px 0 rgb(255 255 255 / .09); }
+#key-editor { display: grid; gap: 8px; margin: 4px 10px 6px; padding: 12px; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); border-radius: 16px; box-shadow: var(--elevate); }
 #key-editor[hidden] { display: none; }
 .key-row { display: flex; gap: 6px; align-items: center; }
-.key-row button { background: var(--raised); color: var(--ink); border: 0; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; white-space: nowrap; }
+.key-row button { background: var(--raised); color: var(--ink); border: 0; border-radius: 10px; min-height: 36px; padding: 0 13px; font-size: 12.5px; font-weight: 600; white-space: nowrap; transition: background .12s, color .12s, transform .08s; }
+.key-row button:active { transform: scale(.96); }
 .key-row button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
-.key-row input, .key-row select { flex: 1; min-width: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 13px; }
-.key-enter { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; }
-#key-error { color: #f7768e; font-size: 12px; }
+.key-row input, .key-row select { flex: 1; min-width: 0; min-height: 38px; background: var(--bg); color: var(--ink); border: 0.5px solid var(--rim, var(--line)); border-radius: 10px; padding: 7px 10px; font-size: 13px; }
+.key-row input:focus, .key-row select:focus { border-color: var(--accent); outline: none; }
+.key-actions #key-save { background: var(--accent); color: var(--on-accent); }
+.key-actions #key-delete { background: color-mix(in srgb, var(--bad, #f7768e) 12%, transparent); color: var(--bad, #f7768e); }
+.key-actions #key-cancel { background: transparent; color: var(--muted); }
+.key-enter { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+#key-error { color: var(--bad, #f7768e); font-size: 12px; }

@@ -196,6 +196,7 @@
     }
   }
 
+  const haptic = kind => { try { if (window.RemoteCliNative && window.RemoteCliNative.haptic) window.RemoteCliNative.haptic(kind || 'tick'); } catch (error) { /* ignore */ } };
   // ---- the parts of a page
   const ui = {
     el, icon, svg, ICONS,
@@ -218,14 +219,14 @@
       if (end && !apart) node.append(end);
       if (checked !== undefined) node.append(el('span', { className: 'rs-tick', html: icon('tick', 20) }));
       if (go) node.append(el('span', { className: 'rs-chev', html: icon('chev', 18) }));
-      if (act || go) node.addEventListener('click', () => (act || go)());
+      if (act || go) node.addEventListener('click', () => { haptic('tick'); (act || go)(); });
       return apart ? el('div', { className: 'rs-split' }, node, el('span', { className: 'rs-end' }, end)) : node;
     },
     /* the things done most: a few tiles side by side. A tile that cannot be used says why when it is pressed */
     tiles(list) {
       const box = el('div', { className: 'rs-tiles', style: '--n:' + list.length });
       list.forEach(t => box.append(el('button', { type: 'button', className: 'rs-tile', id: t.id, ariaDisabled: t.why ? 'true' : undefined, ariaLabel: t.label,
-        onclick: () => t.why ? t.say(t.why) : t.act() }, el('span', { className: 'rs-glyph' + (t.tint ? ' rs-tint-' + t.tint : ''), html: icon(t.icon, 20) }), el('span', { textContent: t.label }))));
+        onclick: () => { haptic('tick'); t.why ? t.say(t.why) : t.act(); } }, el('span', { className: 'rs-glyph' + (t.tint ? ' rs-tint-' + t.tint : ''), html: icon(t.icon, 20) }), el('span', { textContent: t.label }))));
       return box;
     },
     /* one of a few, side by side */
@@ -233,6 +234,7 @@
       const box = el('span', { className: 'rs-seg' + (full ? ' full' : ''), role: 'group', ariaLabel: label || '' });
       choices.forEach(([value, text]) => box.append(el('button', { type: 'button', textContent: text, ariaPressed: String(value === chosen), dataValue: String(value), onclick: event => {
         event.stopPropagation();
+        haptic('tick');
         box.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === event.currentTarget)));
         changed(value);
       } })));
@@ -241,6 +243,7 @@
     toggle(on, changed, label) {
       const button = el('button', { type: 'button', className: 'rs-switch', role: 'switch', ariaChecked: String(!!on), ariaLabel: label || '', onclick: event => {
         event.stopPropagation();
+        haptic('tick');
         const next = button.getAttribute('aria-checked') !== 'true';
         button.setAttribute('aria-checked', String(next));
         changed(next, button);
@@ -252,8 +255,8 @@
       let now = value;
       const minus = el('button', { type: 'button', ariaLabel: '减小' + (label || ''), textContent: '−' }), plus = el('button', { type: 'button', ariaLabel: '增大' + (label || ''), textContent: '+' });
       const set = next => { now = Math.min(max, Math.max(min, next)); out.textContent = now + unit; minus.disabled = now <= min; plus.disabled = now >= max; };
-      minus.onclick = event => { event.stopPropagation(); set(now - step); changed(now); };
-      plus.onclick = event => { event.stopPropagation(); set(now + step); changed(now); };
+      minus.onclick = event => { event.stopPropagation(); haptic('tick'); set(now - step); changed(now); };
+      plus.onclick = event => { event.stopPropagation(); haptic('tick'); set(now + step); changed(now); };
       set(now);
       return el('span', { className: 'rs-stepper', role: 'group', ariaLabel: label || '' }, minus, out, plus);
     },

@@ -4,9 +4,9 @@
         <item name="android:fontFamily">sans</item>
         <item name="android:colorAccent">#2F6FE4</item>
         <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorBackground">#FBFBFC</item>
-        <item name="android:statusBarColor">#FBFBFC</item>
-        <item name="android:navigationBarColor">#FBFBFC</item>
+        <item name="android:colorBackground">#F2F3F7</item>
+        <item name="android:statusBarColor">#F2F3F7</item>
+        <item name="android:navigationBarColor">#F2F3F7</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>

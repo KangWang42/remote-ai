@@ -84,7 +84,7 @@
   const TEXT = { small: '14px', normal: '15.5px', large: '17px', larger: '19px' };
   // ?skin=<name> chooses a skin from a link, for example when showing the app to someone.
   const asked = new URLSearchParams(location.search).get('skin');
-  if (asked && window.RemoteCliSkins[asked]) keep('skin', asked);
+  if (asked && (asked === 'auto' || window.RemoteCliSkins[asked])) keep('skin', asked);
   // How a conversation is read in its window: the type, its size beside the page's own, and the spacing of the lines.
   const READ = {
     readfont: ['字体', { sans: ['默认', 'inherit'], serif: ['衬线', '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif'], mono: ['等宽', 'ui-monospace, "Cascadia Mono", Consolas, monospace'] }, 'sans', '--read-font'],
@@ -97,11 +97,13 @@
     const skin = window.RemoteCliPaint(saved('skin', 'paper'));
     typeset();
     document.documentElement.style.fontSize = TEXT[saved('text', 'normal')] || TEXT.normal;
+    const shade = skin.bg || skin.t.background;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = skin.t.background;
-    if (native) native.chrome(skin.t.background);
+    if (meta) meta.content = shade;
+    if (native) native.chrome(shade);
   }
   paint();
+  if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(paint);
   $('back').innerHTML = ICON.back; $('settings').innerHTML = ICON.gear; $('new-task').innerHTML = svg('<path d="M12 5v14M5 12h14"/>', 24);
   document.querySelectorAll('#tabs button').forEach(button => {
     button.querySelector('.glyph').innerHTML = button.dataset.tab === 'projects' ? svg(ICON.folder.replace(/^<svg[^>]*>|<\/svg>$/g, ''), 24) : ICON[button.dataset.tab];
