@@ -61,28 +61,29 @@
   }
 
   async function poll() {
-    clearTimeout(timer);
-    if (!document.hidden) {
-      try {
-        const reply = await fetch('../api/terminal', { credentials: 'same-origin' });
-        if (reply.ok) {
-          data = await reply.json();
-          // What is on screen now counts as seen: this terminal is no longer "done" in the lists.
-          const mine = (data.terminals || []).find(t => t.id === id), seen = load();
-          if (mine && mine.phase_at && seen[id] !== mine.phase_at) {
-            seen[id] = mine.phase_at;
-            if (native && native.seen) native.seen(id, String(mine.phase_at));      // the app's workbench keeps the same record
-            const alive = new Set((data.terminals || []).map(t => t.id));
-            Object.keys(seen).forEach(key => { if (!alive.has(key)) delete seen[key]; });
-            save(seen);
-          }
-          drawBar();
-          const count = others().length, mark = document.getElementById('others');
-          if (mark) { mark.textContent = count ? String(count) : ''; mark.hidden = !count; }
+    clearTimeout(timer); timer = 0;
+    if (document.hidden) return;
+    let count = 0;
+    try {
+      const reply = await fetch('../api/terminal', { credentials: 'same-origin' });
+      if (reply.ok) {
+        data = await reply.json();
+        // What is on screen now counts as seen: this terminal is no longer "done" in the lists.
+        const mine = (data.terminals || []).find(t => t.id === id), seen = load();
+        if (mine && mine.phase_at && seen[id] !== mine.phase_at) {
+          seen[id] = mine.phase_at;
+          if (native && native.seen) native.seen(id, String(mine.phase_at));      // the app's workbench keeps the same record
+          const alive = new Set((data.terminals || []).map(t => t.id));
+          Object.keys(seen).forEach(key => { if (!alive.has(key)) delete seen[key]; });
+          save(seen);
         }
-      } catch (error) { /* the terminal itself reports connection trouble */ }
-    }
-    timer = setTimeout(poll, 4000);
+        drawBar();
+        count = others().length;
+        const mark = document.getElementById('others');
+        if (mark) { mark.textContent = count ? String(count) : ''; mark.hidden = !count; }
+      }
+    } catch (error) { /* the terminal itself reports connection trouble */ }
+    if (!document.hidden) timer = setTimeout(poll, count ? 6000 : 12000);
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -91,11 +92,11 @@
     who.setAttribute('role', 'button'); who.setAttribute('tabindex', '0'); who.setAttribute('aria-label', '切换终端');
     const mark = Object.assign(document.createElement('span'), { id: 'others', hidden: true });
     who.querySelector('h1').after(mark);
-    who.addEventListener('click', switcher);
-    who.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); switcher(); } });
+    who.addEventListener('click', () => { poll(); switcher(); });
+    who.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); poll(); switcher(); } });
     screen.before(bar);
     bar.addEventListener('contextmenu', event => { event.preventDefault(); const urgent = others()[0]; dismissed = urgent ? urgent.id + urgent.phase_at : ''; bar.hidden = true; });
     poll();
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { clearTimeout(timer); timer = 0; } else poll(); });
 })();

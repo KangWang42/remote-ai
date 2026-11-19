@@ -30,7 +30,7 @@
   const leave = () => { if (fromBench && native && native.home) native.home(); else home(); };
   // Quick tunnels buffer SSE; a held JSON response is delivered without that delay.
   let after = 0, terminal = null, loaded = false, streamed = !location.hostname.endsWith('.trycloudflare.com'), failures = 0, reader = null, run = 0, fetching = false, gone = false;
-  let socketMode = typeof WebSocket === 'function', socket = null, socketTimer = null;
+  let socketMode = typeof WebSocket === 'function', everSocket = false, socket = null, socketTimer = null;
   const link = { transport: socketMode ? 'websocket' : streamed ? 'sse' : 'http', state: 'connecting', reconnects: 0, lastLatency: null, everConnected: false };
   let lastLinkReport = '', latencyTimer = null, latencyReader = null, latencyRun = 0;
 
@@ -143,7 +143,7 @@
       if (mine !== run) return;
       let item;
       try { item = JSON.parse(event.data); } catch (error) { channel.close(); return; }
-      if (item.t === 'out') { got = true; clearTimeout(socketTimer); connectedLink('websocket'); receive(item, true); }
+      if (item.t === 'out') { got = true; everSocket = true; clearTimeout(socketTimer); connectedLink('websocket'); receive(item, true); }
       else if (item.t === 'ack') {
         const at = queue.findIndex(op => op.id === item.id);
         if (at < 0) return;
@@ -224,7 +224,18 @@
     if (reader) { reader.abort(); reader = null; }
     if (document.hidden) { link.state = 'paused'; reportLink(); }
   }
-  document.addEventListener('visibilitychange', () => { if (document.hidden) hangUp(); else read(); });
+  function resume() {
+    if (gone || !loaded || document.hidden) return;
+    // A brief outage during backgrounding or Wi-Fi/5G handoff should not lock the session off WebSocket forever.
+    if (everSocket && !socketMode) socketMode = true;
+    read();
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) hangUp(); else resume(); });
+  if (typeof addEventListener === 'function') addEventListener('online', () => {
+    if (gone || !loaded || document.hidden) return;
+    if (everSocket && !socketMode) socketMode = true;
+    if (link.state !== 'connected' || (everSocket && link.transport !== 'websocket')) { hangUp(); read(); }
+  });
 
   // ---- input: ordered WebSocket messages; HTTP fallback sends one request at a time
   const queue = [];

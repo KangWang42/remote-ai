@@ -335,7 +335,13 @@
     p.node = bubble(p); said.append(p.node); toEnd();
     bridge().send({ id: p.id, action: 'say', text });
   }
-  const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(160, box.scrollHeight + 2) + 'px'; stands(); };
+  const grow = () => {
+    const prevScroll = box.scrollTop;
+    box.style.height = 'auto';
+    box.style.height = Math.min(160, box.scrollHeight + 2) + 'px';
+    if (prevScroll && box.scrollTop !== prevScroll) box.scrollTop = prevScroll;
+    stands();
+  };
   box.addEventListener('input', () => { draft.set(box.value); grow(); });
   box.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('write').requestSubmit(); } });
   $('write').addEventListener('submit', event => {
@@ -462,7 +468,18 @@
       if (op && op.action === 'answer') { answering.delete(op.ask); drawAsks(); }
       toast(message);
     },
-    dictated: text => { box.value += text; draft.set(box.value); grow(); },
+    dictated: text => {
+      const val = box.value;
+      const hasPos = typeof box.selectionStart === 'number' && typeof box.selectionEnd === 'number';
+      const start = hasPos ? box.selectionStart : val.length, end = hasPos ? box.selectionEnd : val.length;
+      const before = val.slice(0, start), after = val.slice(end);
+      const gap = /[A-Za-z0-9]$/.test(before) && /^[A-Za-z0-9]/.test(text) ? ' ' : '';
+      const inserted = gap + text;
+      box.value = before + inserted + after;
+      const caret = before.length + inserted.length;
+      if (hasPos) try { box.setSelectionRange(caret, caret); } catch (error) { /* unfocused */ }
+      draft.set(box.value); grow();
+    },
     skins: () => [], spacings: () => [], screenText: () => said.innerText
   };
   setInterval(() => { if (state === 'busy') $('clock').textContent = since ? lasted(Date.now() - since) : ''; }, 1000);

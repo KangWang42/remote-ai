@@ -492,7 +492,8 @@
     let watch = 0, readingView;
     const choice = await openSheet((form, finish) => {
       const now = () => (data.sessions || []).find(s => s.id === session.id && s.tool === session.tool) || session;
-      const head = el('p', { className: 'stands' }), said = el('div', { className: 'said' }), asks = el('div'), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
+      const headDot = el('span', { className: 'head-dot', ariaHidden: 'true' }), headText = el('span', { className: 'stands-text' });
+      const head = el('p', { className: 'stands' }, headDot, headText), said = el('div', { className: 'said' }), asks = el('div', { className: 'asks-host', hidden: true }), write = el('div', { className: 'write' }), below = el('div', { className: 'below' });
       const reader = readingView = new RemoteConversation.Reader(said), textCache = new Map();
       const draft = new RemoteConversation.Draft(pendingKey(session));
       said.style.overflowAnchor = 'none';
@@ -721,7 +722,13 @@
       // ---- how it stands, what it asks, and the box
       const box = el('textarea', { rows: 1, maxLength: 8000, placeholder: '发消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
       box.value = draft.get();
-      box.addEventListener('input', () => { draft.set(box.value); box.style.height = 'auto'; box.style.height = Math.min(140, box.scrollHeight + 2) + 'px'; });
+      box.addEventListener('input', () => {
+        draft.set(box.value);
+        const prevScroll = box.scrollTop;
+        box.style.height = 'auto';
+        box.style.height = Math.min(144, box.scrollHeight + 2) + 'px';
+        if (prevScroll && box.scrollTop !== prevScroll) box.scrollTop = prevScroll;
+      });
       const send = el('button', { type: 'button', className: 'solid', textContent: '发送', onclick: async () => {
         const original = box.value, text = original.trim();
         if (send.disabled || !usable() || !can(now(), 'say') || now().ask) return;
@@ -761,6 +768,7 @@
         sawBusy = kind !== 'busy' ? 0 : sawBusy || Date.now();
         const from = kind === 'busy' ? (asked && asked <= Date.now() ? asked : sawBusy) : kind === 'stopped' || kind === 'waiting' ? changed || current.updated : 0;
         state.className = 'state ' + kind;
+        headDot.className = 'head-dot ' + (!current.live ? 'off' : kind === 'busy' ? 'busy' : kind === 'confirm' ? 'confirm' : 'on');
         standing.textContent = !current.live ? '已在电脑上关闭' : PHASE[kind][0];
         clock.textContent = !from ? '' : kind === 'busy' ? lasted(Date.now() - from) : ago(from);
         ending.hidden = !canEnd(current);
@@ -774,9 +782,10 @@
         if (signature === shown) return;
         shown = signature;
         waiting();
-        head.textContent = whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));      // (how it stands is said in the line above the box)
+        headText.textContent = whereOf({ s: current, tool: current.tool, live: current.live }) + ' · ' + (current.dir || base(current.folder));      // (how it stands is said in the line above the box)
         // what it asks is answered here, under what was said
         asks.textContent = '';
+        asks.hidden = !current.ask;
         if (current.ask) {
           const answers = approvalActions(current, show);
           asks.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: current.ask.text }), answers)));

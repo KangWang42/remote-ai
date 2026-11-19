@@ -39,7 +39,7 @@ button:disabled { opacity: .42; cursor: default; }
 #screen::after { bottom: 0; background: linear-gradient(0deg, var(--term-bg, var(--bg)), transparent); }
 html[data-skin="pond"] #screen::before, html[data-skin="pond"] #screen::after { display: none; }
 
-.dock, header { contain: layout; }
+header { contain: layout; }
 /* The terminal keeps the height it had before the keyboard opened: the program on the computer is not resized, and
    the newest lines stay visible above the keyboard. */
 /* The terminal's own layers are ordered among themselves only (isolation): the layer for links has a z-index, and
@@ -84,7 +84,7 @@ html[data-skin="pond"] #screen::before, html[data-skin="pond"] #screen::after { 
 .dock { background: var(--bg); box-shadow: inset 0 0.5px 0 var(--rim, var(--line)); }
 .keys { display: flex; align-items: center; gap: 5px; padding: 7px 10px 5px; overflow-x: auto; scrollbar-width: none; }
 .keys::-webkit-scrollbar { display: none; }
-.keys button { flex: 0 0 auto; min-width: 38px; height: 32px; padding: 0 10px; border-radius: 9px; background: var(--panel); color: var(--ink); font-family: "Terminal Mono", system-ui, monospace; font-size: 12px; font-weight: 500; white-space: nowrap; box-shadow: 0 1px 0 rgb(15 23 42 / .09), 0 0 0 0.5px var(--rim, var(--line)); transition: transform .08s ease, background .1s ease; }
+.keys button { flex: 0 0 auto; min-width: 38px; height: 32px; padding: 0 10px; border-radius: 9px; background: var(--panel); color: var(--ink); font-family: "Terminal Mono", system-ui, monospace; font-size: 12px; font-weight: 500; white-space: nowrap; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; box-shadow: 0 1px 0 rgb(15 23 42 / .09), 0 0 0 0.5px var(--rim, var(--line)); transition: transform .08s ease, background .1s ease; }
 html[data-theme="dark"] .keys button { background: var(--raised); box-shadow: inset 0 0.5px 0 rgb(255 255 255 / .09), 0 1px 2px rgb(0 0 0 / .28); }
 .keys button:active { background: var(--raised); transform: scale(.93); }
 html[data-theme="dark"] .keys button:active { background: color-mix(in srgb, var(--raised) 75%, var(--ink)); }
@@ -96,7 +96,7 @@ html[data-theme="dark"] .keys button:active { background: color-mix(in srgb, var
 .composer-shell { display: flex; align-items: flex-end; gap: 4px; padding: 4px 5px 4px 6px; border-radius: 24px; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
 .composer-shell:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .field { position: relative; flex: 1; min-width: 0; display: flex; }
-textarea { font: inherit; font-size: 15px; line-height: 22px; flex: 1; min-width: 0; height: 36px; max-height: 120px; resize: none; border: 0; border-radius: 16px; padding: 7px 8px; color: var(--ink); background: transparent; }
+textarea { font: inherit; font-size: 15px; line-height: 22px; flex: 1; min-width: 0; min-height: 38px; height: 38px; max-height: 144px; resize: none; border: 0; border-radius: 16px; padding: 8px 8px; color: var(--ink); caret-color: var(--accent); background: transparent; overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: pan-y; }
 textarea:focus { outline: none; }
 textarea::placeholder { color: var(--muted); opacity: .85; }
 #voice { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 18px; color: var(--muted); flex-shrink: 0; transition: background .12s, color .12s, transform .1s; }

@@ -21,6 +21,7 @@ import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -606,6 +607,8 @@ public final class MainActivity extends Activity {
         settings.setBuiltInZoomControls(false); settings.setDisplayZoomControls(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         CookieManager.getInstance().setAcceptCookie(true);
+        // Keep the WebView renderer process bound while briefly switching apps so returning to a live terminal is instant.
+        if (Build.VERSION.SDK_INT >= 26) web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
         web.addJavascriptInterface(new Bridge(), "RemoteCliNative");
         // Without a chrome client a page's confirm() and prompt() are answered "no" without being shown.
         web.setWebChromeClient(filePicker);
@@ -658,6 +661,18 @@ public final class MainActivity extends Activity {
                 String url = request.getUrl().toString();
                 boolean relayRequest = url.startsWith(origin + "/api/");
                 if (ConnectionHealth.httpError(request.isForMainFrame(), relayRequest, response.getStatusCode())) reconnect(view, origin, health);
+            }
+            @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                // System reclaimed the WebView renderer in background: recreate cleanly instead of crashing or leaving a blank screen.
+                String currentUrl = view.getUrl();
+                String recoverPath = currentUrl != null && currentUrl.startsWith(origin + "/") ? currentUrl.substring(origin.length()) : path;
+                if (web == view) {
+                    detachWeb();
+                    try { view.destroy(); } catch (Exception ignored) { }
+                    web = null;
+                }
+                if (health.isActive() && "web".equals(screen)) root.post(() -> openPage(origin, "", recoverPath));
+                return true;
             }
         });
         LinearLayout page = new LinearLayout(this);
@@ -734,6 +749,9 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 boolean failed = health.sample(ok, code);
                 if (!foreground || !health.isActive() || web != checked || !"web".equals(screen)) return;
+                if (ok && connectionBanner != null && connectionBanner.getVisibility() == View.VISIBLE) {
+                    connectionBanner.setVisibility(View.GONE);
+                }
                 if (failed) reconnect(checked, origin, health);
                 else ticker.postDelayed(watch, 3000);
             });
@@ -756,6 +774,7 @@ public final class MainActivity extends Activity {
             if (connectionBanner != null && bannerText != null) {
                 bannerText.setText(text);
                 connectionBanner.setVisibility(View.VISIBLE);
+                if (foreground) ticker.postDelayed(watch, 4000);
                 return;
             }
             home(text);

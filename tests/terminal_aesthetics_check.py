@@ -34,6 +34,23 @@ assert "cursor: 'cursor'" in bridge_js and "saveCursor" in bridge_js
 assert "int hairline()" in kit_java and "void elevate(" in kit_java and "TextView figure(" in kit_java
 assert "resolveSkin(" in main_java and "public void haptic(" in main_java and "public void openUrl(" in main_java
 
+# Mid-text cursor editing, tap interactions, smoothness, and background resilience.
+assert ".dock, header { contain: layout; }" not in term_css
+assert "caret-color: var(--accent)" in term_css and "user-select: text" in term_css and "touch-action: pan-y" in term_css
+assert "function attachWebgl()" in term_js and "function insertAtCursor(" in term_js and "function sendTerminalTap(" in term_js
+assert "function flushWrite(" in term_js and "saveDraft()" in term_js and "REPEATABLE" in term_js
+assert "setRendererPriorityPolicy" in main_java and "onRenderProcessGone" in main_java
+
+# Unified conversation surface design system shared by web/chat/ and dialog.window in web/app.js.
+conv_css = (ROOT / "web/conversation.css").read_text(encoding="utf-8")
+index_html = (ROOT / "web/index.html").read_text(encoding="utf-8")
+chat_html = (ROOT / "web/chat/index.html").read_text(encoding="utf-8")
+assert 'href="conversation.css"' in index_html and "interactive-widget=resizes-content" in index_html
+assert 'href="../conversation.css"' in chat_html
+assert ":is(#said, #sheet-form .said) .md" in conv_css
+assert "#said .step," in conv_css and "#sheet-form .said details.did" in conv_css
+assert "dialog.window .bar .head-dot" in conv_css
+
 # Verify auto skin resolution in Node VM for both light and dark system preferences.
 if shutil.which("node"):
     node_check = r"""

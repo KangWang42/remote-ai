@@ -46,16 +46,25 @@
   }
   term.open(holder);
   // Drawing on the graphics card keeps a busy screen smooth; a phone that cannot do it falls back to plain elements.
-  let drawing = 'dom';
+  // Android frequently evicts background WebGL contexts, so re-attach on return to keep GPU rendering & smooth scroll.
+  let drawing = 'dom', webglAddon = null, webglLost = false, webglRetries = 0;
   let resetThemeScroll = null;
-  if (window.WebglAddon && !(bridge && bridge.renderer() === 'dom')) {
+  function attachWebgl() {
+    if (webglAddon || !window.WebglAddon || (bridge && bridge.renderer() === 'dom')) return false;
     try {
       const gl = new WebglAddon.WebglAddon();
-      gl.onContextLoss(() => { gl.dispose(); drawing = 'dom'; });
+      webglAddon = gl;
+      gl.onContextLoss(() => {
+        if (webglAddon === gl) webglAddon = null;
+        try { gl.dispose(); } catch (error) { /* already lost */ }
+        drawing = 'dom'; webglLost = true;
+      });
       term.loadAddon(gl);
-      drawing = 'webgl';
-    } catch (error) { drawing = 'dom'; }
+      drawing = 'webgl'; webglLost = false;
+      return true;
+    } catch (error) { webglAddon = null; drawing = 'dom'; return false; }
   }
+  attachWebgl();
   function applySkin(name) {
     if (name !== 'auto' && !SKINS[name]) return;
     skin = name;
@@ -144,14 +153,18 @@
     nudge = '';
     resize();
   }
-  function layout() {
+  let scrollTrackHeight = 0, lastThumbH = -1, lastThumbY = -1, lastScrollShown = false;
+  function layout(forceResize) {
     const w = screen.clientWidth, h = screen.clientHeight;
     if (!w || !h) return;
+    scrollTrackHeight = Math.max(0, h - 16);
+    const prevWide = wide, prevTall = tall;
     if (w !== wide) { wide = w; tall = h; } else if (h > tall) tall = h;
-    holder.style.height = tall + 'px';
-    if (!restoring || !initialized) resize();
+    if (tall !== prevTall) holder.style.height = tall + 'px';
+    // Skip expensive fit.proposeDimensions() reflows on intermediate soft-keyboard animation frames.
+    if ((!restoring || !initialized) && (forceResize || wide !== prevWide || tall !== prevTall || !lastSize)) resize();
   }
-  new ResizeObserver(layout).observe(screen);
+  new ResizeObserver(() => layout(false)).observe(screen);
 
   // The way back to the end is the button in the corner. A program that offers one of its own on its screen (Claude
   // Code writes "Jump to bottom (ctrl+End)" over the last row of its conversation) is not shown doing so: on a phone
@@ -162,22 +175,25 @@
   // That row is no row of the conversation any more: the rows above it are shown a row lower, over it (TerminalSlide,
   // `hole`), so that nothing stands between the conversation and the program's message box. Where there is no strip
   // to show them from, the row is covered instead.
-  let offered = '', hole = -1, pinAfter = 0, followFrame = 0, scrollFadeTimer = 0, lastScrollRatio = -1;
+  let offered = '', offeredKey = '', offeredRow = -1, hole = -1, pinAfter = 0, followFrame = 0, scrollFadeTimer = 0, lastScrollRatio = -1;
   function updateScrollBar(buffer, reveal) {
     if (!scrollTrack || !scrollThumb) return;
-    if (buffer.type === 'alternate' || buffer.baseY <= 0) { scrollTrack.classList.remove('shown'); return; }
-    const trackH = scrollTrack.clientHeight;
+    if (buffer.type === 'alternate' || buffer.baseY <= 0) {
+      if (lastScrollShown) { scrollTrack.classList.remove('shown'); lastScrollShown = false; }
+      return;
+    }
+    const trackH = scrollTrackHeight || scrollTrack.clientHeight;
     if (trackH <= 0) return;
     const total = buffer.baseY + term.rows;
     const thumbH = Math.max(24, Math.round(trackH * term.rows / Math.max(1, total)));
     const ratio = Math.max(0, Math.min(1, buffer.viewportY / buffer.baseY));
     const y = Math.round((trackH - thumbH) * ratio);
-    scrollThumb.style.height = thumbH + 'px';
-    scrollThumb.style.transform = `translate3d(0, ${y}px, 0)`;
+    if (thumbH !== lastThumbH) { lastThumbH = thumbH; scrollThumb.style.height = thumbH + 'px'; }
+    if (y !== lastThumbY) { lastThumbY = y; scrollThumb.style.transform = `translate3d(0, ${y}px, 0)`; }
     if (reveal || (lastScrollRatio >= 0 && Math.abs(ratio - lastScrollRatio) > 0.002)) {
-      scrollTrack.classList.add('shown');
+      if (!lastScrollShown) { scrollTrack.classList.add('shown'); lastScrollShown = true; }
       clearTimeout(scrollFadeTimer);
-      scrollFadeTimer = setTimeout(() => scrollTrack.classList.remove('shown'), 750);
+      scrollFadeTimer = setTimeout(() => { scrollTrack.classList.remove('shown'); lastScrollShown = false; }, 750);
     }
     lastScrollRatio = ratio;
   }
@@ -186,7 +202,10 @@
   }
   function updateFollow() {
     followFrame = 0;
-    const buffer = term.buffer.active, row = scrollRouter.offered(), now = row + ' ' + term.rows;
+    const buffer = term.buffer.active;
+    const scanKey = `${pictureRevision}:${buffer.type}:${buffer.viewportY}:${term.rows}:${term.modes.mouseTrackingMode}`;
+    if (scanKey !== offeredKey) { offeredKey = scanKey; offeredRow = scrollRouter.offered(); }
+    const row = offeredRow, now = row + ' ' + term.rows;
     hole = row;
     if (now !== offered) {
       offered = now;
@@ -284,18 +303,34 @@
     clearTimeout(zoomHudTimer);
     zoomHudTimer = setTimeout(() => { zoomHud.hidden = true; }, 750);
   }
+  let touch = null;
+  function sendTerminalTap(clientX, clientY) {
+    const surface = holder.querySelector('.xterm-screen');
+    if (!surface || !term.cols || !term.rows) return;
+    const rect = surface.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const col = Math.max(1, Math.min(term.cols, Math.floor((clientX - rect.left) / rect.width * term.cols) + 1));
+    const row = Math.max(1, Math.min(term.rows, Math.floor((clientY - rect.top) / rect.height * term.rows) + 1));
+    if (scrollRouter.sgr || tool === 'codex') {
+      send(`\x1b[<0;${col};${row}M\x1b[<0;${col};${row}m`);
+    } else if (col <= 223 && row <= 223) {
+      const cx = String.fromCharCode(col + 32), cy = String.fromCharCode(row + 32);
+      send('\x1b[M ' + cx + cy + '\x1b[M#' + cx + cy);
+    }
+  }
   screen.addEventListener('touchstart', event => {
     scrollRouter.start();
     if (event.touches.length === 2) {
-      scroller.stop(); unslide();
+      touch = null; scroller.stop(); unslide();
       pinch = { start: touchSpan(event.touches), size: fontSize };
     } else if (event.touches.length === 1 && !latest.contains(event.target)) {
       pinch = null;
-      const now = performance.now();
-      scroller.start(event.touches[0].clientY, now);
-      slide.begin(scrollRouter.mode() === 'local' ? 'local' : 'remote', now);
-      if (!slideFrame) slideFrame = requestAnimationFrame(sliding);
-    } else { pinch = null; scroller.stop(); unslide(); }
+      const point = event.touches[0];
+      const caught = !!scroller.velocity;
+      // Putting a finger down stops any active momentum glide immediately, while deferring WebGL strip capture until drag.
+      scroller.stop();
+      touch = { x: point.clientX, y: point.clientY, at: performance.now(), wall: Date.now(), moved: false, caught, target: event.target };
+    } else { touch = null; pinch = null; scroller.stop(); unslide(); }
   }, { capture: true, passive: true });
   screen.addEventListener('touchmove', event => {
     if (event.touches.length === 2 && pinch) {
@@ -313,24 +348,79 @@
       event.preventDefault(); event.stopPropagation();
       return;
     }
-    if (event.touches.length !== 1) { pinch = null; scroller.stop(); unslide(); return; }
+    if (event.touches.length !== 1) { touch = null; pinch = null; scroller.stop(); unslide(); return; }
+    const point = event.touches[0], now = performance.now();
+    if (touch && !touch.moved) {
+      if (Math.hypot(point.clientX - touch.x, point.clientY - touch.y) < 6) return;
+      touch.moved = true;
+      scroller.start(touch.y, touch.at);
+      scroller.move(touch.y, touch.at);
+      slide.begin(scrollRouter.mode() === 'local' ? 'local' : 'remote', now);
+      if (!slideFrame) slideFrame = requestAnimationFrame(sliding);
+    }
     if (!scroller.dragging) return;
-    scroller.move(event.touches[0].clientY, performance.now());
+    scroller.move(point.clientY, now);
     event.preventDefault(); event.stopPropagation();
   }, { capture: true, passive: false });
   screen.addEventListener('touchend', event => {
     if (event.touches.length < 2) pinch = null;
-    scroller.end(performance.now());
+    const endedTouch = touch;
+    if (event.touches.length === 0) touch = null;
+    if (endedTouch && !endedTouch.moved && !endedTouch.caught && event.touches.length === 0 && Date.now() - endedTouch.wall < 360) {
+      const onLink = endedTouch.target && endedTouch.target.closest && endedTouch.target.closest('a, .xterm-link-layer');
+      if (document.activeElement === input) {
+        input.blur();
+      } else if (!onLink && running && term.modes.mouseTrackingMode !== 'none') {
+        sendTerminalTap(endedTouch.x, endedTouch.y);
+      }
+    }
+    if (scroller.dragging) scroller.end(performance.now());
   }, { capture: true, passive: true });
-  screen.addEventListener('touchcancel', () => { pinch = null; scroller.stop(); unslide(); }, { capture: true, passive: true });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { scroller.stop(); unslide(); } });
-  term.buffer.onBufferChange(() => { scroller.stop(); unslide(); slide.forget(); scrollRouter.reset(); scrollRouter.offers = false; follow(); });
-  term.onResize(() => { unslide(); slide.forget(); strip.forget(); });
+  screen.addEventListener('touchcancel', () => { touch = null; pinch = null; scroller.stop(); unslide(); }, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      touch = null; pinch = null; scroller.stop(); unslide();
+    } else if (webglLost && webglRetries < 3) {
+      webglRetries++;
+      if (attachWebgl()) { strip.forget(); term.refresh(0, term.rows - 1); }
+    }
+  });
+  term.buffer.onBufferChange(() => { scroller.stop(); unslide(); slide.forget(); scrollRouter.reset(); scrollRouter.offers = false; offeredKey = ''; follow(); });
+  term.onResize(() => { unslide(); slide.forget(); strip.forget(); offeredKey = ''; });
 
   // Buttons act on the terminal without taking the keyboard away from the message box.
   function keepFocus(element) { element.addEventListener('mousedown', event => event.preventDefault()); }
   document.querySelectorAll('.keys button, #slash, #send, #latest, #voice').forEach(keepFocus);
-  document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => { haptic('key'); send(KEYS[button.dataset.key]); }));
+  const REPEATABLE = new Set(['up', 'down', 'left', 'right', 'pageup', 'pagedown']);
+  document.querySelectorAll('[data-key]').forEach(button => {
+    const key = button.dataset.key;
+    if (!REPEATABLE.has(key)) {
+      button.addEventListener('click', () => { haptic('key'); send(KEYS[key]); });
+      return;
+    }
+    let delay = 0, repeat = 0, repeated = false, startX = 0, startY = 0;
+    const stop = () => {
+      if (delay) { clearTimeout(delay); delay = 0; }
+      if (repeat) { clearInterval(repeat); repeat = 0; }
+    };
+    button.addEventListener('pointerdown', event => {
+      stop(); repeated = false; startX = event.clientX; startY = event.clientY;
+      delay = setTimeout(() => {
+        delay = 0; repeated = true;
+        haptic('key'); send(KEYS[key]);
+        repeat = setInterval(() => { haptic('key'); send(KEYS[key]); }, 70);
+      }, 380);
+    });
+    button.addEventListener('pointermove', event => {
+      if ((delay || repeat) && Math.hypot(event.clientX - startX, event.clientY - startY) > 10) stop();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(name => button.addEventListener(name, stop));
+    button.addEventListener('click', event => {
+      stop();
+      if (repeated) { repeated = false; event.preventDefault(); return; }
+      haptic('key'); send(KEYS[key]);
+    });
+  });
 
   // ---- 自定义按键：本机存 localStorage（每台电脑各自一套），编辑器在按键条下展开。
   // 组合键编译成标准控制字节/转义序列；转义序列支持 \xNN \e \r \n \t；命令片段按原文发送。
@@ -567,15 +657,31 @@
   renderKeys();
 
   // The box is measured only when its text may have wrapped differently, once per frame: measuring on every key
-  // press made the whole page lay itself out again while typing.
-  let boxHeight = 36, boxLength = 0, boxFrame = 0, boxFilled = null;
+  // press made the whole page lay itself out again while typing. Preserve scrollTop so editing the middle of
+  // multi-line text never jumps back to the first line.
+  const BOX_MIN = 38, BOX_MAX = 144;
+  const terminalId = new URLSearchParams(location.search).get('id') || '';
+  const draftKey = terminalId ? 'rcli-term-draft:' + terminalId : '';
+  function saveDraft() {
+    if (!draftKey) return;
+    try { if (input.value) sessionStorage.setItem(draftKey, input.value); else sessionStorage.removeItem(draftKey); } catch (error) { /* private window */ }
+  }
+  try { const saved = draftKey ? sessionStorage.getItem(draftKey) : ''; if (saved && !input.value) input.value = saved.slice(0, 8000); } catch (error) { /* ignore */ }
+  let boxHeight = BOX_MIN, boxLength = input.value.length, boxFrame = 0, boxFilled = null;
   function measure() {
     boxFrame = 0;
     const length = input.value.length;
-    if (length < boxLength || !length) { input.style.height = '36px'; boxHeight = 36; }
+    const prevScroll = input.scrollTop;
+    if (!length) {
+      if (boxHeight !== BOX_MIN) { boxHeight = BOX_MIN; input.style.height = BOX_MIN + 'px'; }
+      boxLength = 0;
+      return;
+    }
+    if (length < boxLength && boxHeight > BOX_MIN) { input.style.height = BOX_MIN + 'px'; boxHeight = BOX_MIN; }
     boxLength = length;
-    const wanted = Math.min(120, Math.max(36, input.scrollHeight));
+    const wanted = Math.min(BOX_MAX, Math.max(BOX_MIN, input.scrollHeight));
     if (wanted !== boxHeight) { boxHeight = wanted; input.style.height = wanted + 'px'; }
+    if (prevScroll && input.scrollTop !== prevScroll) input.scrollTop = prevScroll;
   }
   function grow() {
     const filled = input.value.length > 0;
@@ -585,6 +691,20 @@
       sendButton.classList.toggle('text', filled);
     }
     if (!boxFrame) boxFrame = requestAnimationFrame(measure);
+  }
+  function insertAtCursor(text) {
+    const val = input.value;
+    const hasPos = typeof input.selectionStart === 'number' && typeof input.selectionEnd === 'number';
+    const start = hasPos ? input.selectionStart : val.length;
+    const end = hasPos ? input.selectionEnd : val.length;
+    const before = val.slice(0, start), after = val.slice(end);
+    const gap = /[A-Za-z0-9]$/.test(before) && /^[A-Za-z0-9]/.test(text) ? ' ' : '';   // Chinese runs on without a space
+    const inserted = gap + text;
+    const next = (before + inserted + after).slice(0, 8000);
+    const caret = Math.min(next.length, before.length + inserted.length);
+    input.value = next;
+    if (hasPos) try { input.setSelectionRange(caret, caret); } catch (error) { /* unfocused */ }
+    saveDraft(); grow(); drawPalette();
   }
   function drawPalette() {
     const typed = input.value;
@@ -598,7 +718,7 @@
       const row = document.createElement('button'), name = document.createElement('b'), text = document.createElement('span');
       row.type = 'button'; row.setAttribute('role', 'option'); name.textContent = command; text.textContent = about;
       row.append(name, text); keepFocus(row);
-      row.addEventListener('click', () => { haptic('confirm'); if (send(paste(command) + '\r')) { input.value = ''; paletteOpen = false; grow(); drawPalette(); } });
+      row.addEventListener('click', () => { haptic('confirm'); if (send(paste(command) + '\r')) { input.value = ''; saveDraft(); paletteOpen = false; grow(); drawPalette(); } });
       palette.append(row);
     });
     if (!matches.length) { const none = document.createElement('p'); none.textContent = '常用命令里没有匹配项；仍可直接发送，由工具自己处理。'; palette.append(none); }
@@ -606,11 +726,11 @@
   }
   // Bracketed paste keeps Chinese and multi-line text intact in the tool's own editor.
   function paste(text) { return term.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text; }
-  input.addEventListener('input', () => { grow(); if (!palette.hidden || input.value.charCodeAt(0) === 47) drawPalette(); });
+  input.addEventListener('input', () => { saveDraft(); grow(); if (!palette.hidden || input.value.charCodeAt(0) === 47) drawPalette(); });
   slash.addEventListener('click', () => {
     haptic('tick');
     paletteOpen = palette.hidden;
-    if (paletteOpen && !input.value) { input.value = '/'; grow(); } else if (!paletteOpen && /^\/\S*$/.test(input.value)) { input.value = ''; grow(); }
+    if (paletteOpen && !input.value) { input.value = '/'; saveDraft(); grow(); } else if (!paletteOpen && /^\/\S*$/.test(input.value)) { input.value = ''; saveDraft(); grow(); }
     drawPalette();
   });
   $('composer').addEventListener('submit', event => {
@@ -619,7 +739,7 @@
     if (!text) { haptic('key'); send('\r'); return; }
     if (!text.trim()) return;
     haptic('confirm');
-    if (send(paste(text) + '\r')) { input.value = ''; paletteOpen = false; grow(); drawPalette(); scrollRouter.reset(); term.scrollToBottom(); follow(); }
+    if (send(paste(text) + '\r')) { input.value = ''; saveDraft(); paletteOpen = false; grow(); drawPalette(); scrollRouter.reset(); term.scrollToBottom(); follow(); }
   });
   $('menu').addEventListener('click', () => { haptic('tick'); if (bridge) bridge.menu(); });
   $('files').addEventListener('click', () => { haptic('tick'); if (bridge) bridge.files(); });
@@ -631,6 +751,41 @@
   const app = window.RemoteCliNative;
   if (app ? (app.canDictate && !app.canDictate()) : !(window.SpeechRecognition || window.webkitSpeechRecognition)) $('voice').hidden = true;
 
+  const agyIds = (() => { try { const list = JSON.parse(sessionStorage.getItem('agy-shell-ids') || '[]'); return new Set(Array.isArray(list) ? list : []); } catch (error) { return new Set(); } })();
+  let writing = false, writeEpoch = 0, queuedText = '', queuedMeta = null;
+  function flushWrite(text, meta) {
+    const myEpoch = writeEpoch;
+    const finish = () => {
+      if (myEpoch !== writeEpoch) { writing = false; return; }
+      initialized = true;
+      if (!meta.more) {
+        const caughtUp = restoring, connected = meta.live && !running;
+        restoring = false; running = meta.live;
+        if (connected && tool === 'shell' && meta.plain === 'PowerShell') {
+          try {
+            if (sessionStorage.getItem('agy-shell-run') === meta.id) {
+              sessionStorage.removeItem('agy-shell-run');
+              send('agy\r');
+            }
+          } catch (error) { /* the ordinary terminal input remains available */ }
+        }
+        if (caughtUp) term.scrollToBottom();
+        if (caughtUp || connected) layout(true);      // the size is settled once, not after every piece of output
+        if (cut && running) redraw();
+      } else if (!restoring) running = meta.live;
+      follow();
+      if (bridge) bridge.rendered(String(meta.after), meta.more ? 'more' : meta.hasText || meta.status === 'busy' ? 'active' : 'quiet');
+      if (queuedMeta) {
+        const nextText = queuedText, nextMeta = queuedMeta;
+        queuedText = ''; queuedMeta = null;
+        flushWrite(nextText, nextMeta);
+      } else {
+        writing = false;
+      }
+    };
+    if (text) { writing = true; term.write(text, finish); }
+    else finish();
+  }
   let wasEnded = null, connectRevealTimer = 0;
   function show(element, text) { if (element.textContent !== text) element.textContent = text; }
   const transportNames = { websocket: 'WebSocket', sse: 'SSE', http: 'HTTP 长轮询' };
@@ -669,9 +824,10 @@
       slash.hidden = !(COMMANDS[tool] || []).length;
       if ($('files').hidden === !!t.dir) $('files').hidden = !t.dir;        // the files of its project; a terminal outside every project has none to show
       if (!initialized || payload.reset) {
+        writeEpoch++; writing = false; queuedText = ''; queuedMeta = null;
         restoring = true; running = false;
         scroller.stop(); unslide(); slide.forget();
-        scrollRouter.reset(); scrollRouter.sgr = false;
+        scrollRouter.reset(); scrollRouter.sgr = false; offeredKey = '';
         term.reset(); term.resize(t.cols || 80, t.rows || 24);
         start = payload.chunks.length ? payload.chunks[0].seq - 1 : payload.after;
         cut = start > 0; nudge = ''; clearTimeout(nudgeTimer);
@@ -680,13 +836,13 @@
       // Output arrives many times a second: the page around the terminal is touched only where something changed.
       const plain = device.shell || 'PowerShell';      // what the computer calls its plain terminal
       // its project; one that took on a conversation outside every project runs in that conversation's folder
-      const agyIds = (() => { try { const list = JSON.parse(sessionStorage.getItem('agy-shell-ids') || '[]'); return Array.isArray(list) ? list : []; } catch (error) { return []; } })();
-      const agyShell = tool === 'shell' && (/^Antigravity CLI(?:\s|$|·)/.test(t.title || '') || agyIds.includes(t.id));
+      const agyShell = tool === 'shell' && (/^Antigravity CLI(?:\s|$|·)/.test(t.title || '') || agyIds.has(t.id));
       const shownTool = agyShell ? 'agy' : tool;
       const toolName = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI', opencode: 'OpenCode', qoder: 'Qoder', cline: 'Cline', pi: 'Pi', shell: plain }[shownTool] || shownTool;
       const where = toolName + ' · ' + (t.dir || String(t.folder || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop());
       // Someone else's size on the screen means the terminal is open in another place too.
-      $('shared').hidden = !(running && elsewhere);
+      const hideShared = !(running && elsewhere);
+      if ($('shared').hidden !== hideShared) $('shared').hidden = hideShared;
       const loading = restoring && more ? `载入输出 ${Math.round(100 * (payload.after - start) / Math.max(1, t.seq - start))}%` : '';
       show($('title'), t.title);
       show(status, where + ' · ' + (loading || (!device.online ? '电脑离线，等待重连' : !device.enabled ? '电脑远控已关闭' : t.state === 'starting' ? '正在启动'
@@ -703,41 +859,26 @@
         drawPalette();
       }
       const text = payload.chunks.map(c => c.data).join('');
-      const written = () => {
-        initialized = true;
-        if (!more) {
-          const caughtUp = restoring, connected = live && !running;
-          restoring = false; running = live;
-          if (connected && tool === 'shell' && plain === 'PowerShell') {
-            try {
-              if (sessionStorage.getItem('agy-shell-run') === t.id) {
-                sessionStorage.removeItem('agy-shell-run');
-                send('agy\r');
-              }
-            } catch (error) { /* the ordinary terminal input remains available */ }
-          }
-          if (caughtUp) term.scrollToBottom();
-          if (caughtUp || connected) layout();      // the size is settled once, not after every piece of output
-          if (cut && running) redraw();
-        } else if (!restoring) running = live;
-        follow();
-        if (bridge) bridge.rendered(String(payload.after), more ? 'more' : text || t.status === 'busy' ? 'active' : 'quiet');
-      };
-      if (text) term.write(text, written); else written();
+      const meta = { id: t.id, after: payload.after, more, live, plain, status: t.status, hasText: !!text };
+      // Write immediately when xterm is idle (0 ms added latency); coalesce bursts arriving while a write is in flight.
+      if (writing) {
+        queuedText += text;
+        queuedMeta = queuedMeta ? Object.assign(meta, { hasText: queuedMeta.hasText || meta.hasText }) : meta;
+      } else {
+        flushWrite(text, meta);
+      }
     },
     error(message) { notice.textContent = message; status.textContent = '连接中断，正在重连'; dot.className = ''; running = false; },
     inputError(message, draft) {
       notice.textContent = message;
       // A typed message comes back for another try; a single key press does not.
       const typed = (draft || '').replace(/\x1b\[20[01]~/g, '').replace(/\r$/, '');
-      if (typed && !input.value && !/[\x00-\x08\x0b-\x1f]/.test(typed)) { input.value = typed; grow(); }
+      if (typed && !input.value && !/[\x00-\x08\x0b-\x1f]/.test(typed)) { input.value = typed; saveDraft(); grow(); }
     },
-    // Spoken words are put into the message box to be checked before they are sent.
+    // Spoken words are inserted at the current cursor position so mid-sentence edits work naturally.
     dictated(text) {
       if (!text || ended) return;
-      const gap = /[A-Za-z0-9]$/.test(input.value) && /^[A-Za-z0-9]/.test(text) ? ' ' : '';   // Chinese runs on without a space
-      input.value = (input.value + gap + text).slice(0, 8000);
-      grow(); drawPalette();
+      insertAtCursor(text);
     },
     // a word for a moment, under the screen (what was copied, why a choice cannot be made)
     notice(text) { notice.textContent = text; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { if (notice.textContent === text) notice.textContent = ''; }, 3500); },

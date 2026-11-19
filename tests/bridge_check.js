@@ -188,6 +188,19 @@ async function check() {
   resumedPage.sockets[0].message({ ...output, terminal: { id: terminalId, state: 'closed', tool: 'claude', dir: 'demo', session: savedSession } });
   resumedPage.context.ProjectTerminal.again();
   assert.equal(JSON.parse(resumedPage.requests.find(item => item.options.method === 'POST').options.body).session, savedSession, 'continue must preserve the exact conversation');
+
+  // After a temporary outage falls back to HTTP, returning from background must upgrade back to WebSocket if WS previously worked.
+  const upgraded = page();
+  upgraded.context.ProjectTerminal.ready();
+  upgraded.sockets[0].open(); upgraded.sockets[0].message(output);
+  upgraded.sockets[0].close(); upgraded.advance(300);
+  upgraded.advance(4000); upgraded.advance(0);
+  assert.equal(upgraded.connections.at(-1).transport, 'http');
+  const socketsBefore = upgraded.sockets.length;
+  upgraded.context.document.hidden = true; upgraded.listeners.visibilitychange(); await settle();
+  upgraded.context.document.hidden = false; upgraded.listeners.visibilitychange();
+  assert.equal(upgraded.sockets.length, socketsBefore + 1, 'returning from background must re-attempt WebSocket when it worked before');
+  assert.equal(upgraded.connections.at(-1).transport, 'websocket');
   console.log('bridge transport checks passed');
 }
 
