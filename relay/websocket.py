@@ -116,7 +116,11 @@ class Connection:
                 raise ProtocolError(1009)
             mask = self.read(4)
             raw = self.read(length)
-            data = bytes(value ^ mask[n % 4] for n, value in enumerate(raw))
+            if length:
+                full_mask = (mask * ((length + 3) // 4))[:length]
+                data = (int.from_bytes(raw, "big") ^ int.from_bytes(full_mask, "big")).to_bytes(length, "big")
+            else:
+                data = b""
             if opcode == 8:
                 if len(data) == 1:
                     raise ProtocolError()

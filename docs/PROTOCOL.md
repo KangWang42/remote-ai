@@ -67,6 +67,10 @@ Later requests carry the cookie or `Authorization: Bearer <token>`. A token is g
 use. `POST` requests must have `Content-Type: application/json`; when an `Origin` header is present it must be
 the relay itself. The computer signs in the same way as the viewer.
 
+Optional `POST` request compression: a relay that accepts `Content-Encoding: gzip` on `POST` bodies (bounded by the
+same decompressed size limit as uncompressed JSON) advertises `X-RemoteCli-Accept-Encoding: gzip` on responses to
+`POST /api/terminal/agent`. Older relays omit that header and continue receiving plain UTF-8 JSON.
+
 The app passes the password to its page once as `/#p=<password>`; the page signs in and removes it.
 The program on the computer opens its own window on `/?open=<terminal>#t=<ticket>` (or `/#t=<ticket>` for the list):
 the page signs in with the ticket, so the password is never part of an address. A terminal shown there is the one

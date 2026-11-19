@@ -20,6 +20,7 @@ import socket
 import sys
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -115,7 +116,11 @@ class Sessions:
     def valid(self, token):
         if not token or len(token) != 64:
             return False
-        key = hashlib.sha256(token.encode()).hexdigest()
+        return self.valid_hash(hashlib.sha256(token.encode()).hexdigest())
+
+    def valid_hash(self, key):
+        if not key:
+            return False
         with self.lock:
             expires = self.items.get(key, 0)
             now = time.time()
@@ -392,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
         return "gzip" in self.headers.get("Accept-Encoding", "").lower()
 
     def _json(self, code, value, extra=None):
-        data = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         # What a reader asks for (the lists, a terminal's output) is long and repeats itself; what it sends is short.
         if self.command == "GET" and len(data) > 2048 and self._gzip():
             data, extra = gzip.compress(data, 3, mtime=0), dict(extra or {}, **{"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
@@ -500,6 +505,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         self.connection.settimeout(35)
+        token_hash = hashlib.sha256(self._token().encode()).hexdigest()
         channel = websocket.Connection(self.rfile, self.connection, compression)
         channel.send(dict(first, t="out"))
 
@@ -509,7 +515,7 @@ class Handler(BaseHTTPRequestHandler):
                 for item in lines:
                     if channel.closed.is_set():
                         return
-                    if not self._authed():
+                    if not self.space.sessions.valid_hash(token_hash):
                         channel.close(1008)
                         return
                     channel.send(dict(item, t="out"))
@@ -530,7 +536,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             while not channel.closed.is_set():
                 raw = channel.receive()
-                if not self._authed():
+                if not self.space.sessions.valid_hash(token_hash):
                     channel.close(1008)
                     break
                 payload = json.loads(raw)
@@ -562,6 +568,18 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return self._json(413, {"error": "请求过大"})
         raw = self.rfile.read(length)
+        encoding = self.headers.get("Content-Encoding", "").strip().lower()
+        if encoding == "gzip":
+            try:
+                unpacker = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                raw = unpacker.decompress(raw, BODY_LIMIT + 1) + unpacker.flush()
+            except zlib.error:
+                return self._json(400, {"error": "压缩请求格式无效"})
+            if len(raw) > BODY_LIMIT or unpacker.unconsumed_tail:
+                self.close_connection = True
+                return self._json(413, {"error": "请求过大"})
+        elif encoding and encoding != "identity":
+            return self._json(400, {"error": "不支持的请求编码"})
         # A page on another site cannot send JSON with our cookie: the content type forces a preflight that is
         # never answered, and a browser's Origin must be this server.
         origin = self.headers.get("Origin")
@@ -608,7 +626,8 @@ class Handler(BaseHTTPRequestHandler):
         if call is None:
             return self._json(404, {"error": "not found"})
         try:
-            return self._json(200, call(payload))
+            extra = {"X-RemoteCli-Accept-Encoding": "gzip"} if path == "/api/terminal/agent" else None
+            return self._json(200, call(payload), extra)
         except (ValueError, TypeError) as exc:
             return self._error(exc, "请求格式无效")
         except OSError:

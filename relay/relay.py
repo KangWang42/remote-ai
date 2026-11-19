@@ -234,6 +234,10 @@ REDRAW_SECONDS, ECHO_SECONDS = 3, 1.2
 
 
 def _asks(term):
+    seq = term.get("seq", 0)
+    cached = term.get("_asks_cache")
+    if cached and cached[0] == seq:
+        return cached[1]
     text, size = [], 0
     for chunk in reversed(term.get("output", [])):
         text.append(chunk["data"])
@@ -241,7 +245,9 @@ def _asks(term):
         if size >= 6000:
             break
     tail = "".join(_ESCAPES.sub("", "".join(reversed(text))).split()).lower()[-900:]
-    return any(ask in tail for ask in _ASKS)
+    matched = any(ask in tail for ask in _ASKS)
+    term["_asks_cache"] = (seq, matched)
+    return matched
 
 
 def _phase(term, now):
@@ -390,8 +396,9 @@ class Relay:
     def __init__(self, path):
         self.path = path
         self._lock = threading.Lock()
-        self._changed = threading.Condition(self._lock)   # new output, a new state or a new operation: waiting requests look again
-        self._tick = [0]            # counts every wake-up, so a waiter can tell that one happened between its look and its wait
+        self._changed = threading.Condition(self._lock)       # new terminal output or state: waiting stream/overview readers wake
+        self._ops_changed = threading.Condition(self._lock)   # new queued operations or RPC answers: pull() and _held() wake
+        self._tick = [0]            # counts terminal output/state wake-ups, so a waiter can tell one happened between look and wait
         self._kept = None           # the list of terminals, once it has been read
         self._unsaved = None        # the time of the oldest output not yet written to disk
         self._logged = {}           # terminal -> [seq of the last piece in its file, characters in the file]
@@ -452,7 +459,7 @@ class Relay:
                 _write(file + ".tmp", _lines(output))
                 _replace(file + ".tmp", file)
                 self._logged[key] = [last, sum(len(c["data"]) for c in output)]
-        _write(self.path + ".tmp", json.dumps({"threads": {key: {k: v for k, v in term.items() if k != "output"} for key, term in state["threads"].items()}}, ensure_ascii=False))
+        _write(self.path + ".tmp", json.dumps({"threads": {key: {k: v for k, v in term.items() if k not in ("output", "_asks_cache")} for key, term in state["threads"].items()}}, ensure_ascii=False))
         _replace(self.path + ".tmp", self.path)
         for name in os.listdir(folder):
             if name.endswith(".jsonl") and name[:-6] not in state["threads"]:
@@ -567,7 +574,7 @@ class Relay:
         return lines
 
     def _public(self, term):
-        shown = {k: v for k, v in term.items() if k not in ("output", "instance", "size", "out_at", "touched", "calm_until", "modes", "modes_rest", "asking")}
+        shown = {k: v for k, v in term.items() if k not in ("output", "instance", "size", "out_at", "touched", "calm_until", "modes", "modes_rest", "asking", "_asks_cache")}
         # Until the owner names a terminal, it carries the name of the conversation it has open.
         if not term.get("renamed"):
             shown["title"] = next((s["title"] for s in self._sessions if s["id"] == term.get("session")), term["title"])
@@ -599,7 +606,7 @@ class Relay:
             if deadline <= time.monotonic():
                 result.pop("tick", None)
                 return result
-            mark = json.dumps([result["terminal"], result["device"]["online"], result["device"]["enabled"]], sort_keys=True)
+            mark = (result["terminal"], result["device"]["online"], result["device"]["enabled"])
             first = mark if first is None else first
             remaining = deadline - time.monotonic()
             tick = result.pop("tick")
@@ -608,7 +615,7 @@ class Relay:
             self._wait(tick, remaining)
 
     def _wait(self, seen, seconds):
-        """Sleeps until the next wake-up, unless one already happened after the caller looked."""
+        """Sleeps until the next terminal output/state wake-up, unless one already happened after the caller looked."""
         with self._changed:
             if self._tick[0] == seen:
                 self._changed.wait(min(seconds, 5))
@@ -616,6 +623,9 @@ class Relay:
     def _wake(self):
         self._tick[0] += 1
         self._changed.notify_all()
+
+    def _wake_ops(self):
+        self._ops_changed.notify_all()
 
     def stream(self, terminal, after=0, seconds=55, beat=15):
         """Yields a terminal's output as it arrives, for about `seconds`; the reader then asks again from where it is.
@@ -626,7 +636,7 @@ class Relay:
         while True:
             result = self._overview(terminal, after, time.time())
             tick = result.pop("tick")
-            mark = json.dumps([result["terminal"], result["device"]["online"], result["device"]["enabled"]], sort_keys=True)
+            mark = (result["terminal"], result["device"]["online"], result["device"]["enabled"])
             now = time.monotonic()
             if result["chunks"] or result["reset"] or mark != sent or now - last >= beat:
                 sent, last, after = mark, now, result["after"]
@@ -800,6 +810,7 @@ class Relay:
                     if not isinstance(title, str) or not title.strip() or len(title) > 60 or any(ord(c) < 32 for c in title):
                         raise RemoteError("名称需为 1 至 60 字")
                     term.update(title=title.strip(), renamed=True)
+                    self._wake()
                     self._save(state)
                     return {"id": op_id, "terminal": terminal, "state": "done", "error": ""}
                 if term["state"] != "running":
@@ -847,8 +858,9 @@ class Relay:
             if asked is not None:
                 op["asked"] = asked         # what the viewer sent, to know the same request again
             self._pending[op_id] = self._pending.queued[op_id] = op
-            self._wake()
+            self._wake_ops()
             if action == "start":
+                self._wake()
                 self._save(state)
             return {k: op[k] for k in ("id", "terminal", "state", "error")}
 
@@ -903,17 +915,17 @@ class Relay:
             return self._held(question, now, wait)
 
     def _held(self, question, now, wait):
-        """Passes a question on to the computer and waits for its answer. Called with self._changed held."""
+        """Passes a question on to the computer and waits for its answer. Called with self._lock held."""
         op_id = question["id"]
         op = {"id": op_id, "terminal": "", "state": "queued", "error": "", "at": now, "payload": question}
         self._pending[op_id] = self._pending.queued[op_id] = op
-        self._wake()
+        self._wake_ops()
         deadline = time.monotonic() + wait
         while op["state"] == "queued":
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            self._changed.wait(min(remaining, 5))
+            self._ops_changed.wait(min(remaining, 5))
         self._pending.queued.pop(op_id, None)
         self._pending.pop(op_id, None)           # asked once, answered once: nothing of the answer stays here
         if op["state"] == "queued":
@@ -1189,7 +1201,7 @@ class Relay:
             raise RemoteError("电脑实例编号无效")
         seconds = payload.get("wait", 12)
         deadline = time.monotonic() + (min(max(seconds, 0), 12) if type(seconds) in (int, float) else 12)
-        with self._changed:
+        with self._ops_changed:
             while True:
                 fresh = [op for op in self._pending.queued.values() if not op.get("sent")] if payload["instance"] == self._device["instance"] else []
                 if fresh:
@@ -1199,7 +1211,7 @@ class Relay:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return {"operations": []}
-                self._changed.wait(min(remaining, 5))
+                self._ops_changed.wait(min(remaining, 5))
 
     def agent(self, payload, now=None):
         now = time.time() if now is None else now
@@ -1212,7 +1224,9 @@ class Relay:
         with self._lock:
             self._expire(now)
             state = self._state()
-            dirty = wrote = False
+            was_online = now - self._device["seen"] < 15
+            was_enabled = self._device["enabled"]
+            dirty = wrote = answered = False
             if isinstance(payload.get("sessions"), list):
                 self._sessions[:] = [
                     {"id": s["id"], "tool": s["tool"], **_placed(s), "title": s["title"].strip()[:80], "updated": s["updated"],
@@ -1238,6 +1252,8 @@ class Relay:
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))
+            if not was_online or was_enabled != self._device["enabled"]:
+                wrote = True
             for term in state["threads"].values():
                 if term.get("instance") != instance and term["state"] in ("starting", "running"):
                     term.update(state="closed", error="电脑后台已重启，请从历史对话恢复")
@@ -1251,7 +1267,7 @@ class Relay:
                 if op and op["state"] == "queued":
                     if op["payload"]["action"] in ANSWERED:
                         op["result"] = ack.get("result") if isinstance(ack.get("result"), dict) else {}
-                        wrote = True        # the request that waits for it looks again
+                        answered = True        # the request that waits for it looks again
                     op.update(state="error" if ack.get("error") else "done", error=str(ack.get("error", ""))[:300])
                     self._pending.queued.pop(op["id"], None)
                     term = state["threads"].get(op["terminal"])
@@ -1348,6 +1364,8 @@ class Relay:
                 self._unsaved = None
             if dirty or wrote:
                 self._wake()
+            if answered:
+                self._wake_ops()
             for op in self._pending.queued.values():
                 op["sent"] = True
             ops = [{**op["payload"], "terminal": op["terminal"], "at": op["at"]} for op in self._pending.queued.values()]

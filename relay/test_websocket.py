@@ -298,6 +298,62 @@ class WebSocketIntegrationTests(unittest.TestCase):
         ws.send(operation(self.terminal, "input", data="ok"))
         self.assertEqual(self.next_type(ws, "ack")["status"], 200)
 
+    def test_gzip_post_agent_upload_and_bomb_guard(self):
+        import gzip, http.client
+        from urllib.parse import urlsplit
+        parsed = urlsplit(self.origin)
+
+        def post_raw(path, raw, encoding=None):
+            conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=3)
+            headers = {"Content-Type": "application/json", "Origin": self.origin, **self.client.cookie}
+            if encoding:
+                headers["Content-Encoding"] = encoding
+            conn.request("POST", path, body=raw, headers=headers)
+            reply = conn.getresponse()
+            body = reply.read()
+            hdrs = {k.lower(): v for k, v in reply.getheaders()}
+            conn.close()
+            return reply.status, hdrs, body
+
+        # Plain agent report advertises gzip capability for updated agents.
+        plain_body = json.dumps(self.live).encode("utf-8")
+        status, hdrs, _ = post_raw("/api/terminal/agent", plain_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(hdrs.get("x-remotecli-accept-encoding"), "gzip")
+
+        # Gzipped agent report delivers large ANSI output cleanly.
+        big_text = ("\x1b[32mhello world\x1b[0m\r\n" * 400)
+        gz_payload = gzip.compress(json.dumps(dict(self.live, output=[{"terminal": self.terminal, "seq": 1, "data": big_text}])).encode("utf-8"))
+        status, _, body = post_raw("/api/terminal/agent", gz_payload, encoding="gzip")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["output_ack"][self.terminal], 1)
+        self.assertEqual(self.relay.overview(self.terminal, 0)["chunks"][0]["data"], big_text)
+
+        # Corrupt gzip and gzip bomb (> BODY_LIMIT) are rejected safely.
+        self.assertEqual(post_raw("/api/terminal/agent", b"not-gzip", encoding="gzip")[0], 400)
+        bomb = gzip.compress(b" " * (server.BODY_LIMIT + 1024))
+        self.assertEqual(post_raw("/api/terminal/agent", bomb, encoding="gzip")[0], 413)
+        self.assertEqual(post_raw("/api/terminal/agent", plain_body, encoding="br")[0], 400)
+
+    def test_large_unaligned_websocket_unmask_and_split_wakeups(self):
+        # Fast big-int unmasking must match byte-by-byte XOR for every alignment (1..15 and >10KB).
+        ws = self.connect()
+        ws.receive()
+        for sample in ("a", "ab", "abc", "abcd", "中文测试123", "x" * 12003):
+            op = operation(self.terminal, "input", data=sample)
+            ws.send(op)
+            self.assertEqual(self.next_type(ws, "ack")["status"], 200)
+        # Keystrokes wake pull() promptly via _ops_changed, and output wakes stream() via _changed.
+        pulled = self.relay.pull({"instance": self.info["instance"], "wait": 0.2})
+        self.assertEqual([op["data"] for op in pulled["operations"][-6:]], ["a", "ab", "abc", "abcd", "中文测试123", "x" * 12003])
+        # _asks cache invalidates when new output arrives.
+        term = self.relay._state()["threads"][self.terminal]
+        self.assertFalse(tr._asks(term))
+        self.relay.agent(dict(self.live, output=[{"terminal": self.terminal, "seq": 1, "data": "Allow command? [y/n]"}]))
+        self.assertTrue(tr._asks(term))
+        self.relay.agent(dict(self.live, output=[{"terminal": self.terminal, "seq": 2, "data": "x" * 7000}]))
+        self.assertFalse(tr._asks(term))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -122,7 +123,7 @@ public sealed class TerminalAgent {
         dataDir = dataFolder ?? DefaultData;
         Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter(), new ClaudeDesktopAdapter());
         OpenDesktopConversation = desktopConversation ?? (() => CodexDesktopControl.Connect());
-        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += Wake; Reach.Outbox.Changed += Wake;
+        Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += () => { sessionsDirty = true; Wake(); }; Reach.Outbox.Changed += () => { sessionsDirty = true; Wake(); };
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
         Chains = new Chains(Path.Combine(dataDir, "chains.json"));
@@ -599,7 +600,11 @@ public sealed class TerminalAgent {
         return offered;
     }
     public Dictionary<string, string> ProjectFolders() { return AllDirs(Preferences()); }
-    string sentSessions = ""; DateTime sessionsSent = DateTime.MinValue;
+    string sentSessions = ""; DateTime sessionsSent = DateTime.MinValue, sessionsChecked = DateTime.MinValue;
+    volatile bool sessionsDirty = true, relayAcceptsGzip;
+    readonly object prefsGate = new object();
+    string prefsStamp = ""; Dictionary<string, object> cachedPrefs;
+    string ownProjectsStamp = ""; List<KeyValuePair<string, string>> cachedOwnProjects;
     // Released when a program wrote to its terminal or the relay holds a new operation: the next report goes out at once.
     readonly SemaphoreSlim wake = new SemaphoreSlim(0);
     bool soon;
@@ -926,12 +931,15 @@ public sealed class TerminalAgent {
     }
     // Many small reads become few numbered pieces, so a busy screen is not held back by the per-request piece limit.
     public static void Seal(LiveTerminal t) {
-        while (t.Pending.Length > 0) {
-            int n = Math.Min(12000, t.Pending.Length);
-            if (n < t.Pending.Length && Char.IsHighSurrogate(t.Pending[n - 1])) n--;
-            t.Output.Add(new Dictionary<string, object> { { "terminal", t.Id }, { "seq", ++t.Seq }, { "data", t.Pending.ToString(0, n) } });
-            t.Pending.Remove(0, n);
+        int total = t.Pending.Length;
+        if (total == 0) return;
+        for (int pos = 0; pos < total; ) {
+            int n = Math.Min(12000, total - pos);
+            if (pos + n < total && Char.IsHighSurrogate(t.Pending[pos + n - 1])) n--;
+            t.Output.Add(new Dictionary<string, object> { { "terminal", t.Id }, { "seq", ++t.Seq }, { "data", t.Pending.ToString(pos, n) } });
+            pos += n;
         }
+        t.Pending.Clear();
     }
     static string Get(IDictionary<string, object> d, string key) { object v; return d != null && d.TryGetValue(key, out v) && v != null ? Convert.ToString(v) : ""; }
     static IEnumerable<object> List(IDictionary<string, object> d, string key) { object v; return d != null && d.TryGetValue(key, out v) && v is IEnumerable && !(v is string) ? ((IEnumerable)v).Cast<object>() : new object[0]; }
@@ -953,10 +961,20 @@ public sealed class TerminalAgent {
         return new Reach.Kept();
     }
     Dictionary<string, object> Preferences() {
-        var prefs = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dataDir, "config.json"), Encoding.UTF8));
-        string server = Get(prefs, "Server").TrimEnd('/');
-        if (server != Origin) { if (Origin.Length > 0) Reset(); Origin = server; }       // another relay: sign in there at once
-        return prefs;
+        string path = Path.Combine(dataDir, "config.json");
+        lock (prefsGate) {
+            var info = new FileInfo(path);
+            string stamp = info.Exists ? info.Length + "." + info.LastWriteTimeUtc.Ticks : "";
+            Dictionary<string, object> prefs;
+            if (cachedPrefs != null && stamp.Length > 0 && stamp == prefsStamp) prefs = cachedPrefs;
+            else {
+                prefs = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                cachedPrefs = prefs; prefsStamp = stamp;
+            }
+            string server = Get(prefs, "Server").TrimEnd('/');
+            if (server != Origin) { if (Origin.Length > 0) Reset(); Origin = server; }       // another relay: sign in there at once
+            return prefs;
+        }
     }
     internal static string FindTool(string name) {
         if (name == "shell") return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -977,17 +995,24 @@ public sealed class TerminalAgent {
     string ProjectsFile { get { return Path.Combine(dataDir, "terminal-projects.json"); } }
     // Folders added from the phone, beside the ones set in the desktop widget's settings.
     List<KeyValuePair<string, string>> OwnProjects() {
-        var own = new List<KeyValuePair<string, string>>();
-        try {
-            if (File.Exists(ProjectsFile)) foreach (var item in json.Deserialize<List<Dictionary<string, object>>>(File.ReadAllText(ProjectsFile, Encoding.UTF8)))
-                if (Get(item, "name").Length > 0 && Get(item, "path").Length > 0 && !own.Any(p => p.Key == Get(item, "name"))) own.Add(new KeyValuePair<string, string>(Get(item, "name"), Get(item, "path")));
-        } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
-        return own;
+        lock (prefsGate) {
+            var info = new FileInfo(ProjectsFile);
+            string stamp = info.Exists ? info.Length + "." + info.LastWriteTimeUtc.Ticks : "missing";
+            if (cachedOwnProjects != null && stamp == ownProjectsStamp) return new List<KeyValuePair<string, string>>(cachedOwnProjects);
+            var own = new List<KeyValuePair<string, string>>();
+            try {
+                if (info.Exists) foreach (var item in new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Deserialize<List<Dictionary<string, object>>>(File.ReadAllText(ProjectsFile, Encoding.UTF8)))
+                    if (Get(item, "name").Length > 0 && Get(item, "path").Length > 0 && !own.Any(p => p.Key == Get(item, "name"))) own.Add(new KeyValuePair<string, string>(Get(item, "name"), Get(item, "path")));
+            } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
+            cachedOwnProjects = own; ownProjectsStamp = stamp;
+            return new List<KeyValuePair<string, string>>(own);
+        }
     }
     void SaveProjects(List<KeyValuePair<string, string>> own) {
         string temporary = ProjectsFile + ".tmp";
         File.WriteAllText(temporary, json.Serialize(own.Select(p => new Dictionary<string, object> { { "name", p.Key }, { "path", p.Value } }).ToArray()), new UTF8Encoding(false));
         if (File.Exists(ProjectsFile)) File.Replace(temporary, ProjectsFile, null); else File.Move(temporary, ProjectsFile);
+        lock (prefsGate) { cachedOwnProjects = null; ownProjectsStamp = ""; }
     }
     public Dictionary<string, string> AllDirs(Dictionary<string, object> prefs) {
         var dirs = Dirs(prefs);
@@ -1455,7 +1480,18 @@ public sealed class TerminalAgent {
         return batch;
     }
     // The address or the password changed: sign in again at once instead of after the usual pause.
-    public void Reset() { nextLogin = DateTime.MinValue; client = null; sentSessions = ""; }
+    public void Reset() { nextLogin = DateTime.MinValue; client = null; sentSessions = ""; sessionsDirty = true; relayAcceptsGzip = false; }
+    static HttpContent JsonBody(string text, bool compress) {
+        if (!compress || text.Length < 2048) return new StringContent(text, Encoding.UTF8, "application/json");
+        byte[] raw = Encoding.UTF8.GetBytes(text);
+        using (var buffer = new MemoryStream()) {
+            using (var gz = new GZipStream(buffer, CompressionLevel.Fastest, true)) gz.Write(raw, 0, raw.Length);
+            var content = new ByteArrayContent(buffer.ToArray());
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+            content.Headers.ContentEncoding.Add("gzip");
+            return content;
+        }
+    }
     /// Whether a relay of one's own can be used: reached at this address, and taking this password. Says nothing
     /// when it can, and otherwise what is wrong and what to do about it.
     public static string CheckRelay(string server, string password) {
@@ -1544,7 +1580,8 @@ public sealed class TerminalAgent {
         if (DateTime.UtcNow < nextLogin) return false;
         nextLogin = DateTime.UtcNow.AddSeconds(60);
         if (client != null) client.Dispose();
-        client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer() }) { Timeout = TimeSpan.FromSeconds(20) };
+        relayAcceptsGzip = false;
+        client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer(), AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate }) { Timeout = TimeSpan.FromSeconds(20) };
         // The address of a relay, or of this computer's place at a relay for everyone (https://relay/c/<id>).
         if (!Regex.IsMatch(Origin, @"\Ahttps?://[^/\s]+(/c/[a-f0-9]{20})?\z")) return false;
         var endpoint = ServicePointManager.FindServicePoint(new Uri(Origin));
@@ -1680,6 +1717,7 @@ public sealed class TerminalAgent {
                 string session = Get(op, "session"), tool = Get(op, "tool");
                 if (!sessions.Any(s => s.Id == session && s.Tool == tool)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 foreach (string kind in Marks.Kinds.Where(op.ContainsKey)) Marks.Set(kind, tool, session, Get(op, kind) == "True");
+                sessionsDirty = true;
                 result = new Dictionary<string, object>();
             }
             else if (action == "session_delete") {
@@ -1697,6 +1735,7 @@ public sealed class TerminalAgent {
                 catch (UnauthorizedAccessException) { throw new InvalidOperationException("没有权限移走这段对话的文件"); }
                 foreach (string kind in Marks.Kinds) Marks.Set(kind, tool, session, false);
                 sessions = sessions.Where(s => !(s.Id == session && s.Tool == tool)).ToList();
+                sessionsDirty = true;
                 nextScan = DateTime.MinValue;
                 result = new Dictionary<string, object>();
             }
@@ -1875,15 +1914,17 @@ public sealed class TerminalAgent {
             try { Ask(prefs); } catch (Exception) { }       // what was set to be asked at this time
             if (!enabled) foreach (var t in terminals.Values.Where(t => !t.Pty.Closed)) t.Pty.Dispose();
             List<Dictionary<string, object>> output;
-            var allowed = AllDirs(prefs);
             var settings = Dirs(prefs);
+            var own = OwnProjects();
+            var allowed = new Dictionary<string, string>(settings);
+            foreach (var p in own) { try { if (!allowed.ContainsKey(p.Key) && Directory.Exists(p.Value)) allowed[p.Key] = p.Value; } catch { } }
             // Reading the conversation lists takes a moment; it waits while someone is typing.
             if (DateTime.UtcNow >= nextScan && (DateTime.UtcNow - lastInput > TimeSpan.FromSeconds(2) || DateTime.UtcNow - lastScan > TimeSpan.FromSeconds(20))) {
                 nextScan = DateTime.UtcNow.AddSeconds(5); lastScan = DateTime.UtcNow;
-                if (!enabled) { sessions = new List<SessionInfo>(); candidates = new List<Dictionary<string, object>>(); }
+                if (!enabled) { sessions = new List<SessionInfo>(); candidates = new List<Dictionary<string, object>>(); sessionsDirty = true; }
                 else if (Interlocked.CompareExchange(ref scanning, 1, 0) == 0) {
                     var running = terminals.Values.ToArray();
-                    var reading = Task.Run(() => { try { Scan(allowed, running); Recover(); } catch { } finally { scanning = 0; Wake(); } });
+                    var reading = Task.Run(() => { try { Scan(allowed, running); Recover(); } catch { } finally { sessionsDirty = true; scanning = 0; Wake(); } });
                 }
             }
             if (DateTime.UtcNow - toolsAt > TimeSpan.FromSeconds(30)) {
@@ -1908,7 +1949,7 @@ public sealed class TerminalAgent {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                     features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
-                        .Concat(OwnProjects().Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
+                        .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray() } },
                 // Every terminal says what it is, so that a relay that did not start it can list it: the computer may turn to another relay.
                 { "terminals", terminals.Values.Concat(ended).Select(t => new { id = t.Id, state = t.Pty.Closed ? "closed" : "running", cols = t.Pty.Cols, rows = t.Pty.Rows, session = t.Session, status = t.Status, exit_code = t.Pty.ExitCode, error = t.Pty.ExitCode.HasValue && t.Pty.ExitCode.Value != 0 ? "程序退出（代码 " + t.Pty.ExitCode.Value + "），请检查终端画面中的原因" : "",
@@ -1916,18 +1957,29 @@ public sealed class TerminalAgent {
                     form = t.Chat != null ? "chat" : "", said = t.Chat != null ? t.Chat.Said : "", ask = t.Chat != null ? t.Chat.Asking : "" }).ToArray() },
                 { "output", output }, { "acks", acknowledgments }
             };
-            // The list of conversations is long: it goes out when it changed, and now and then in case the relay restarted.
-            var listed = sessions.Select(Listed).ToArray();
-            listedText = json.Serialize(listed);
-            listing = listedText != sentSessions || DateTime.UtcNow - sessionsSent > TimeSpan.FromSeconds(10);
-            if (listing) payload["sessions"] = listed;
+            // Rebuilding and serializing all sessions is expensive during rapid terminal streaming: only recompute when
+            // session state changed or periodically, keeping lock(work) fast for incoming keystrokes.
+            DateTime nowUtc = DateTime.UtcNow;
+            bool needCheck = sessionsDirty || nowUtc - sessionsChecked > TimeSpan.FromSeconds(1.5) || nowUtc - sessionsSent > TimeSpan.FromSeconds(10);
+            if (needCheck) {
+                sessionsDirty = false; sessionsChecked = nowUtc;
+                var listed = sessions.Select(Listed).ToArray();
+                listedText = json.Serialize(listed);
+                listing = listedText != sentSessions || nowUtc - sessionsSent > TimeSpan.FromSeconds(10);
+                if (listing) payload["sessions"] = listed;
+            } else {
+                listedText = sentSessions; listing = false;
+            }
             body = json.Serialize(payload);
         }
         var request = new HttpRequestMessage(HttpMethod.Post, Origin + "/api/terminal/agent");
-        request.Headers.TryAddWithoutValidation("Origin", Origin); request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        request.Headers.TryAddWithoutValidation("Origin", Origin); request.Content = JsonBody(body, relayAcceptsGzip);
         using (request) using (var response = await client.SendAsync(request)) {
             if ((int)response.StatusCode == 401) { await Login(prefs); return; }
             if (!response.IsSuccessStatusCode) return;
+            IEnumerable<string> acceptEnc;
+            if (!relayAcceptsGzip && response.Headers.TryGetValues("X-RemoteCli-Accept-Encoding", out acceptEnc) && acceptEnc.Any(v => v.IndexOf("gzip", StringComparison.OrdinalIgnoreCase) >= 0))
+                relayAcceptsGzip = true;
             string answer = await response.Content.ReadAsStringAsync();
             lock (work) {
                 var result = json.Deserialize<Dictionary<string, object>>(answer);
