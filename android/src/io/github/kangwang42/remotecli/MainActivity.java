@@ -106,7 +106,7 @@ public final class MainActivity extends Activity {
     private ComputerManagement computerManagement;
     private UuRemote uuRemote;
     private String pairingRecord = "";
-    private AppPages appPages;
+    AppPages appPages;          // (the workbench redraws the limits on 我的 when it has read them)
     private Tabs tabs;
     private String appTab = "home";                 // the tab the app's lists were left at
     private FrameLayout root;

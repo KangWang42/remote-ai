@@ -7,6 +7,7 @@ import android.webkit.CookieManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.json.JSONArray;
@@ -50,7 +51,51 @@ final class AppPages {
         return page;
     }
 
+    private LinearLayout quotaCard;
+    /** The tools' limits, first on 我的: a line for each window, its share used drawn under it (red above 90%). */
+    void drawQuotas() {
+        if (quotaCard == null) return;
+        quotaCard.removeAllViews();
+        List<QuotaLines.Reading> shown = bench.quotas();
+        quotaCard.setVisibility(shown.isEmpty() ? View.GONE : View.VISIBLE);
+        long now = System.currentTimeMillis() / 1000;
+        LinearLayout head = kit.row();
+        head.addView(kit.semibold("额度", 13.5f, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+        quotaCard.addView(head);
+        for (QuotaLines.Reading one : shown) {
+            if (one.windows.isEmpty()) { quotaLine(QuotaLines.tool(one.tool), one.why, kit.MUTED, -1); continue; }
+            for (QuotaLines.Window w : one.windows) quotaLine(QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used);
+        }
+    }
+    private void quotaLine(String label, String detail, int tone, double used) {
+        LinearLayout line = kit.row();
+        line.setPadding(0, kit.dp(12), 0, 0);
+        line.addView(kit.semibold(label, 14, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+        line.addView(kit.text(detail, 12, tone));
+        quotaCard.addView(line);
+        if (used < 0) return;
+        // the share used, as a bar
+        LinearLayout track = new LinearLayout(activity);
+        track.setBackground(kit.shape(kit.RAISED, 0, 3));
+        track.setClipToOutline(true);
+        View part = new View(activity);
+        part.setBackground(kit.shape(used >= 90 ? kit.BAD : kit.ACCENT, 0, 3));
+        float share = (float) Math.max(2, Math.min(100, used));
+        track.addView(part, new LinearLayout.LayoutParams(0, -1, share));
+        if (share < 100) track.addView(new View(activity), new LinearLayout.LayoutParams(0, -1, 100 - share));
+        LinearLayout.LayoutParams bar = new LinearLayout.LayoutParams(-1, kit.dp(6));
+        bar.topMargin = kit.dp(6);
+        quotaCard.addView(track, bar);
+    }
+
     private void buildMe(LinearLayout page, JSONArray computers) {
+        quotaCard = kit.column();
+        quotaCard.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(16));
+        quotaCard.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
+        kit.elevate(quotaCard, 1.5f);
+        page.addView(quotaCard, kit.below(16));
+        drawQuotas();
+
         // Compact 3-metric KPI summary card for today's work
         LinearLayout summary = kit.column();
         summary.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(14));
@@ -220,6 +265,7 @@ final class AppPages {
                     if (request != generation || !activity.showing(tab)) return;
                     answered++;
                     if ("me".equals(tab)) {
+                        drawQuotas();
                         TextView sub = deviceSummaries.get(url);
                         if (data == null || !problem.isEmpty()) {
                             if (sub != null) { sub.setText("离线 · " + (problem.isEmpty() ? "请确认电脑在线" : problem)); sub.setTextColor(kit.MUTED); }

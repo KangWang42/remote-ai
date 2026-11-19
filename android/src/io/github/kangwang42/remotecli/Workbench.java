@@ -37,6 +37,7 @@ final class Workbench {
         final boolean marks;        // the computer keeps what is said of single conversations: pinned, hidden
         final Set<String> can = new HashSet<>();        // what else the computer says it does: "delete", "projects"
         final List<Long> agyStarts = new ArrayList<>();
+        final List<QuotaLines.Reading> quotas = new ArrayList<>();      // how much of each tool's limits is used (device.quotas)
         Snapshot(String state, String line, List<AggregateSessions.Project> projects, boolean marks) { this.state = state; this.line = line; this.projects = projects; this.marks = marks; }
     }
     private boolean shown() { return activity.showing("home") || activity.showing("projects"); }
@@ -318,6 +319,7 @@ final class Workbench {
                     pending.remove(url);
                     snapshots.put(url, answer == null ? new Snapshot(s, l, Collections.<AggregateSessions.Project>emptyList(), false) : read(url, answer));
                     activity.waiting(waiting());
+                    if (activity.showing("me")) activity.appPages.drawQuotas();      // (the limits are read with the lists)
                     if (!shown()) return;
                     drawComputer(computer); draw();
                 });
@@ -397,7 +399,25 @@ final class Workbench {
             if (at > 0) read.agyStarts.add(at);
         }
         for (int i = 0; features != null && i < features.length(); i++) read.can.add(features.optString(i));
+        JSONArray quotas = device.optJSONArray("quotas");
+        for (int i = 0; quotas != null && i < quotas.length(); i++) {
+            JSONObject one = quotas.optJSONObject(i);
+            if (one == null) continue;
+            List<QuotaLines.Window> windows = new ArrayList<>();
+            JSONArray told = one.optJSONArray("windows");
+            for (int j = 0; told != null && j < told.length(); j++) {
+                JSONObject w = told.optJSONObject(j);
+                if (w != null) windows.add(new QuotaLines.Window(w.optString("name"), w.optDouble("used", 0), w.optLong("resets")));
+            }
+            read.quotas.add(new QuotaLines.Reading(one.optString("tool"), one.optLong("at"), one.optString("why"), windows));
+        }
         return read;
+    }
+    /** What the computers that answer tell of the tools' limits: of each tool the newest. */
+    List<QuotaLines.Reading> quotas() {
+        List<QuotaLines.Reading> all = new ArrayList<>();
+        for (Snapshot one : snapshots.values()) all.addAll(one.quotas);
+        return QuotaLines.newest(all, System.currentTimeMillis() / 1000);
     }
 
     // ---- drawing; a part is rebuilt only when what it shows has changed, so a press or a scroll is not interrupted
