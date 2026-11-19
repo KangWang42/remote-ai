@@ -736,6 +736,11 @@ public static class ReachHooks {
             }
             if (hooks.Count == 0) all.Remove("hooks");
         }
+        WriteSettings(file, all);
+    }
+    /// Writes a tool's settings as they were read, with what this program changed: the file as it was before the
+    /// first change is kept beside it, and the new one takes its place whole.
+    public static void WriteSettings(string file, Dictionary<string, object> all) {
         Directory.CreateDirectory(Path.GetDirectoryName(file));
         string before = file + ".before-remotecli";
         if (File.Exists(file) && !File.Exists(before)) File.Copy(file, before);

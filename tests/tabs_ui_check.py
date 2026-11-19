@@ -211,6 +211,21 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         value("document.querySelectorAll('#me .day')[3].click()")
         until("document.querySelector('#me .at').textContent !== %s && document.querySelectorAll('#me .day')[3].getAttribute('aria-pressed') === 'true'" % json.dumps(before), "the day that was pressed")
 
+        # ---- the limits, first on 我的: a line for each window; one nearly used up stands out; why one is not known
+        soon = int(time.time()) + 2 * 3600
+        played.info["quotas"] = [{"tool": "claude", "at": int(time.time() * 1000), "why": "", "windows": [{"name": "five_hour", "used": 38, "resets": soon}, {"name": "seven_day", "used": 93.4, "resets": soon + 5 * 86400}]},
+                                 {"tool": "codex", "at": int(time.time() * 1000), "why": "Codex 用 ChatGPT 账号登录后才能读取额度", "windows": []}]
+        browser.open(played.origin + "/?tab=me", "!!document.querySelector('#quotas li')", "the limits on 我的", **phone(390))
+        lines = value("Array.from(document.querySelectorAll('#quotas li')).map(li => li.innerText.replace(/\\s+/g, ' ').trim())")
+        assert lines[0].startswith("Claude Code · 5 小时") and "38%" in lines[0] and "2 小时后重置" in lines[0], lines
+        assert "本周" in lines[1] and "93%" in lines[1] and lines[2] == "Codex Codex 用 ChatGPT 账号登录后才能读取额度", lines
+        assert value("Array.from(document.querySelectorAll('#quotas li')).map(li => li.classList.contains('high'))") == [False, True, False], "the one nearly used up stands out"
+        assert value("document.querySelector('#me > section, #me > *:nth-child(2)').id") == "quotas", "the limits stand first"
+        seen = value("(() => { const q = document.getElementById('quotas').getBoundingClientRect(); return { right: q.right, inner: innerWidth, page: document.documentElement.scrollWidth }; })()")
+        assert seen["right"] <= seen["inner"] and seen["page"] <= seen["inner"], seen
+        browser.picture(out / "me-quotas.png")
+        del played.info["quotas"]
+
         # ---- every tab at three widths: nothing wider than the screen, the tabs at its foot, nothing left under them
         for width in (320, 390, 430, 1440):
             for name, ready in (("tasks", listed), ("projects", "document.querySelectorAll('#project-list .card').length === 4"),

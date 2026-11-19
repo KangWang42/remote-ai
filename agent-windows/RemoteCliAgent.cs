@@ -123,6 +123,7 @@ public sealed class TerminalAgent {
         dataDir = dataFolder ?? DefaultData;
         Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter(), new ClaudeDesktopAdapter());
         OpenDesktopConversation = desktopConversation ?? (() => CodexDesktopControl.Connect());
+        Quotas = new Quotas(dataDir);
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += () => { sessionsDirty = true; Wake(); }; Reach.Outbox.Changed += () => { sessionsDirty = true; Wake(); };
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
@@ -190,7 +191,7 @@ public sealed class TerminalAgent {
             // a conversation goes on where it was; one whose tool had not named it yet cannot be found again
             if (session.Length == 0 || !kind.Chats) return;
             live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
-            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live));
+            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas);
             terminals[id] = live;
             return;
         }
@@ -275,6 +276,9 @@ public sealed class TerminalAgent {
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
     /// the tools' settings; whether or not it has, this listens for them.
     public readonly Reach Reach;
+    /// How much of each tool's usage limits the owner's account has used (Quotas.cs).
+    public readonly Quotas Quotas;
+    public string DataFolder { get { return dataDir; } }
     /// What the owner said of single conversations from the phone: pinned, hidden (Marks.cs).
     public readonly Marks Marks;
     // A conversation as the phone is told of it: what the scan found, and where a hook or its application has told
@@ -1880,7 +1884,7 @@ public sealed class TerminalAgent {
                     if (!kind.Chats) throw new ArgumentException("这个工具不支持对话");
                     if (fork || Get(op, "history") == "True") throw new ArgumentException("对话选项无效");
                     bool resume = !fresh && session.Length > 0;
-                    live.Pty = Chat.Open(tool, launcher, Place(live, dirs), session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live));
+                    live.Pty = Chat.Open(tool, launcher, Place(live, dirs), session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas);
                     terminals[terminal] = live;
                     if (resume) Recall(live, Place(live, dirs));
                     string first = Get(op, "text").Trim();
@@ -1942,6 +1946,7 @@ public sealed class TerminalAgent {
                 tools = new[] { "claude", "codex", "agy", "shell" }.Where(t => FindTool(t) != null).ToArray();
                 externalAgy = enabled ? Antigravity.ExternalStarts(FindTool("agy"), terminals.Values.Where(t => !t.Pty.Closed).Select(t => t.Pty.Id).ToArray(), agySessions.LivePids()) : new long[0];
                 toolsAt = DateTime.UtcNow;
+                if (enabled && tools.Contains("codex")) Quotas.AskCodex(FindTool("codex"));      // (at most once in ten minutes)
             }
             // An ended terminal whose conversation runs in a terminal again is no longer one of the recent ones.
             ended.RemoveAll(e => e.Session.Length > 0 && terminals.Values.Any(t => !t.Pty.Closed && t.Tool == e.Tool && t.Session == e.Session));
@@ -1961,7 +1966,7 @@ public sealed class TerminalAgent {
                     features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
-                    candidates = candidates.ToArray() } },
+                    candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0] } },
                 // Every terminal says what it is, so that a relay that did not start it can list it: the computer may turn to another relay.
                 { "terminals", terminals.Values.Concat(ended).Select(t => new { id = t.Id, state = t.Pty.Closed ? "closed" : "running", cols = t.Pty.Cols, rows = t.Pty.Rows, session = t.Session, status = t.Status, exit_code = t.Pty.ExitCode, error = t.Pty.ExitCode.HasValue && t.Pty.ExitCode.Value != 0 ? "程序退出（代码 " + t.Pty.ExitCode.Value + "），请检查终端画面中的原因" : "",
                     tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title, completion = CompletionOf(t.Tool, t.Session, t.Status),
@@ -2069,6 +2074,12 @@ public sealed class TerminalAgent {
             Directory.CreateDirectory(folder);
             File.WriteAllBytes(Path.Combine(folder, "password.dpapi"), ProtectedData.Protect(Encoding.UTF8.GetBytes(secret), null, DataProtectionScope.CurrentUser));
             return 0;
+        }
+        // --statusline <data folder> [--then <the owner's own command, base64>]: run by Claude Code as its status line (Quotas.cs)
+        if (args.Length >= 2 && args[0] == RemoteCli.Quotas.Flag) {
+            string then = "";
+            if (args.Length == 4 && args[2] == "--then") { try { then = Encoding.UTF8.GetString(Convert.FromBase64String(args[3])); } catch (FormatException) { } }
+            return RemoteCli.Quotas.StatusLine(args[1], then);
         }
         // --hook <tool> <pipe>: run by Claude Code or Codex as one of their hooks (Reach.cs)
         if (args.Length == 3 && args[0] == "--hook") return RemoteCli.Reach.Hook(args[1], args[2]);

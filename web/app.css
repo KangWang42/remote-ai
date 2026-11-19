@@ -385,6 +385,9 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .shares span { flex: none; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
 .track { height: 6px; margin-top: 7px; border-radius: 3px; background: var(--raised); overflow: hidden; }
 .track i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+#quotas { margin-bottom: 18px; }
+.shares li.high .track i { background: var(--bad); }
+.shares li.high span { color: var(--bad); }
 #me .hint { margin-top: 18px; }
 #computer .row .text { flex: none; }
 #computer .row .value { flex: 1; min-width: 0; text-align: right; }

@@ -48,6 +48,8 @@ public abstract class Chat : IRunning {
     readonly Dictionary<string, int> printed = new Dictionary<string, int>();     // step -> how much of its output was passed on
     protected readonly Dictionary<string, Asked> asks = new Dictionary<string, Asked>();
     protected bool stopping;
+    /// Where what the tool tells of its account's usage limits is kept (Quotas.cs); none where nobody keeps it.
+    protected Quotas quotas;
 
     public string Tool { get; private set; }
     public string Folder { get; private set; }
@@ -80,12 +82,13 @@ public abstract class Chat : IRunning {
     /// Starts the conversation: the saved one `session` gone on with (`resume`), else a new one (named `session`
     /// where the tool lets its id be chosen). `mode` is the computer's widest allowed way of working (full, edit,
     /// read), as for its terminals.
-    public static Chat Open(string tool, string launcher, string folder, string session, bool resume, string mode, Action<string> emit) {
+    public static Chat Open(string tool, string launcher, string folder, string session, bool resume, string mode, Action<string> emit, Quotas quotas = null) {
         Chat chat;
         if (tool == "claude") chat = new ClaudeChat(folder, emit);
         else if (tool == "codex") chat = new CodexChat(folder, emit);
         else if (tool == "agy") chat = new AgyChat(folder, emit);
         else throw new ArgumentException("这个工具不支持对话");
+        chat.quotas = quotas;
         try { chat.Begin(launcher, session ?? "", resume, mode ?? ""); }
         catch { chat.Dispose(); throw; }
         return chat;
@@ -313,6 +316,8 @@ public sealed class ClaudeChat : Chat {
         if (type == "user") { Came(m); return; }
         if (type == "control_request") { Permission(m); return; }
         if (type == "control_cancel_request") { Withdrawn(Text(m, "request_id")); return; }
+        // with each turn, how much of the account's limits is used (Claude Code 2.1.322)
+        if (type == "rate_limit_event") { if (quotas != null) quotas.Note("claude", Quotas.FromClaudeEvent(At(m, "rate_limit_info"))); return; }
         if (type == "result") {
             string subtype = Text(m, "subtype");
             bool ok = subtype == "success" && !true.Equals(At(m, "is_error"));
@@ -549,6 +554,7 @@ public sealed class CodexChat : Chat {
                 break;
             }
             case "error": Note(Text(At(p, "error"), "message").Length > 0 ? Text(At(p, "error"), "message") : "Codex 出错"); break;
+            case "account/rateLimits/updated": if (quotas != null) quotas.Note("codex", Quotas.FromCodex(At(p, "rateLimits"))); break;
         }
     }
     readonly HashSet<string> thoughts = new HashSet<string>();

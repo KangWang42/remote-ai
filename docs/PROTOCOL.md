@@ -92,6 +92,15 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
                "pinned": false, "hidden": false, "terminal": ""}]}
 ```
 
+`quotas` (Windows program, with remote access on) say how much of each tool's usage limits its owner's account has
+used, as the tools tell it (`Quotas.cs`): `[{"tool": "claude", "at": <ms>, "why": "", "windows": [{"name": "five_hour",
+"used": 38.0, "resets": <seconds>}, ...]}]`. `used` is a share in percent, `resets` when the window starts anew;
+`why` says in words why a tool's are not known (Codex signed in otherwise than with ChatGPT). Claude Code tells them
+with each turn of a chat (`rate_limit_event`) and to its status line, which the computer sets in Claude Code's
+settings together with its hooks (a status line of the owner's is run after it and put back when it is taken out);
+Codex is asked by `account/rateLimits/read` of its app-server at most every ten minutes. Nothing of the account is
+passed on; the relay keeps at most four entries of four windows and leaves out any that is not a share.
+
 `workspaces` are the project names a terminal may be started in. `candidates` are folders that are no projects and
 have conversations of Claude Code or Codex, for a project to be made of (`project_add` with the `path`): at most 40,
 the ones in use (`live`) first, then by when they were last used. `kinds` says by what a folder is used, in the

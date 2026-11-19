@@ -132,6 +132,24 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual(self.relay.overview(now=1005)["terminals"][0]["form"], "chat")
         self.assertTrue(terminal)
 
+    def test_quotas_are_kept_as_shares_and_times_only(self):
+        self.info["quotas"] = [
+            {"tool": "claude", "at": 1700000000000, "why": "", "windows": [{"name": "five_hour", "used": 38.0, "resets": 1795126800}, {"name": "seven_day", "used": 9, "resets": 1795665600, "token": "x"}]},
+            {"tool": "codex", "at": 1700000000000, "why": "Codex 用 ChatGPT 账号登录后才能读取额度", "windows": []},
+            {"tool": "codex", "at": 1, "windows": [{"name": "Bad Name", "used": 5}, {"name": "x", "used": 101}, {"name": "y", "used": True}]},
+            {"tool": "claude", "at": "soon", "windows": []},
+            {"tool": "other", "at": 1, "windows": []},
+            "not a quota"]
+        self.relay.agent({"info": self.info}, now=1001)
+        quotas = self.relay.overview(now=1002)["device"]["quotas"]
+        self.assertEqual([q["tool"] for q in quotas], ["claude", "codex", "codex"])
+        self.assertEqual(quotas[0]["windows"], [{"name": "five_hour", "used": 38.0, "resets": 1795126800}, {"name": "seven_day", "used": 9.0, "resets": 1795665600}])
+        self.assertEqual((quotas[1]["windows"], quotas[1]["why"]), ([], "Codex 用 ChatGPT 账号登录后才能读取额度"))
+        self.assertEqual(quotas[2]["windows"], [], "windows that are not shares are left out")
+        # a computer that lets nobody in tells nothing of its owner's limits
+        self.relay.agent({"info": dict(self.info, enabled=False)}, now=1003)
+        self.assertEqual(self.relay.overview(now=1004)["device"]["quotas"], [])
+
     def test_fresh_start_never_becomes_anonymous_resume(self):
         payload = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": True}
         with self.assertRaisesRegex(RemoteError, "resume"):

@@ -66,6 +66,8 @@ public sealed partial class App {
         set {
             if (value && !File.Exists(HookProgram)) throw new InvalidOperationException("没有找到 RemoteCliAgent.exe，请重新安装电脑端");
             foreach (string tool in Hooked.Where(tool => Used(tool) || !value)) ReachHooks.Set(tool, value, HookProgram, agent.Reach.Pipe);
+            // Claude Code's status line tells of the limits of its account: kept with the hooks (Quotas.cs)
+            if (Used("claude") || !value) QuotaStatusLine.Set(value, HookProgram, agent.DataFolder);
             Keep("Reach", value);
         }
     }
@@ -116,6 +118,7 @@ public sealed partial class App {
         var states = new List<Dictionary<string, object>>();
         if (agent == null || !Reaching) return states;
         var told = (config["ReachHeard"] as System.Collections.IEnumerable ?? new object[0]).Cast<object>().Select(Convert.ToString).ToList();
+        if (Used("claude") && !QuotaStatusLine.Installed(HookProgram, agent.DataFolder)) { try { QuotaStatusLine.Set(true, HookProgram, agent.DataFolder); } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (InvalidOperationException) { } }
         foreach (string tool in Hooked.Where(Used)) {
             bool there = ReachHooks.Installed(tool, HookProgram, agent.Reach.Pipe);
             if (!there) { try { ReachHooks.Set(tool, true, HookProgram, agent.Reach.Pipe); there = true; } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (InvalidOperationException) { } }

@@ -97,6 +97,22 @@ def _words(text, most=8000):
     return text
 
 
+def _quotas(items):
+    """How much of each tool's usage limits the computer's owner has used, as the computer read it from the tools
+    (agent-windows/Quotas.cs): per tool, each window's share used (0..100) and when it starts anew; or why it is not
+    known. Nothing of the account itself."""
+    kept = []
+    for item in items[:4] if isinstance(items, list) else []:
+        if not isinstance(item, dict) or item.get("tool") not in ("claude", "codex", "agy") or type(item.get("at")) is not int:
+            continue
+        windows = [{"name": w["name"], "used": float(w["used"]), "resets": w["resets"] if type(w.get("resets")) is int and w["resets"] >= 0 else 0}
+                   for w in (item.get("windows") if isinstance(item.get("windows"), list) else [])[:4]
+                   if isinstance(w, dict) and isinstance(w.get("name"), str) and re.fullmatch(r"[a-z0-9_]{1,20}", w["name"])
+                   and type(w.get("used")) in (int, float) and 0 <= w["used"] <= 100]
+        kept.append({"tool": item["tool"], "at": item["at"], "why": str(item.get("why") or "")[:80], "windows": windows})
+    return kept
+
+
 def _folders(items, limit):
     """Folders as the computer reports them; the relay only shows them and hands the chosen one back."""
     out = []
@@ -1254,7 +1270,8 @@ class Relay:
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
-                           projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40))
+                           projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40),
+                           quotas=_quotas(info.get("quotas")) if info.get("enabled") is True else [])
             if not was_online or was_enabled != self._device["enabled"]:
                 wrote = True
             for term in state["threads"].values():
