@@ -35,7 +35,7 @@
 
 | 工作项 | 做法 | 验收 |
 | --- | --- | --- |
-| 1.1 工具适配层 | 新建 `agent-windows/Tools/`：每个工具一个类（`ClaudeTool`、`CodexTool`、`AgyTool`），实现同一个接口：列出对话、读记录、判定归属、启动参数、可用通道、对话驱动、额度。`RemoteCliAgent.cs` 只按接口调用，删掉散落的 `tool == ...` 分支。`Ways.Of` 改为询问工具“有哪些通道”，原因文字随工具类 | 现有检查全部通过（`ways_check.py`、`agy_check.py`、`in_use_check.py`、`chat_check.py` 等），行为不变；`RemoteCliAgent.cs` 明显变小 |
+| 1.1 工具适配层 | 新建 `agent-windows/Tools/`：每个工具一个类（`ClaudeTool`、`CodexTool`、`AgyTool`），实现同一个接口：列出对话、读记录、判定归属、启动参数、可用通道、对话驱动、额度。`RemoteCliAgent.cs` 只按接口调用，删掉散落的 `tool == ...` 分支。`Ways.Of` 改为询问工具“有哪些通道”，原因文字随工具类 | 现有检查全部通过（`ways_check.py`、`agy_check.py`、`in_use_check.py`、`chat_check.py` 等），行为不变；`RemoteCliAgent.cs` 明显变小。**第一步已完成**：`agent-windows/Tools.cs`，启动参数、记录文件、占用检查、接管、结束、删除归入各工具的类，按工具名的分支从 61 处减到 24 处。剩下的在对话列表扫描和记录解析里，是第二步 |
 | 1.2 agy 钩子 | `Reach` 增加 agy：安装时写入 `~/.gemini/config/hooks.json` 中名为 `remote-ai` 的一项（保留用户自己的钩子，卸载时只删这一项）；`Stop` 时交付排队的消息，`PreToolUse` 回答确认、按要求停止 | 先在临时文件夹用真实 agy 1.5.12 实测三件事：`Stop` 返回 `decision: block` 能否让它继续处理留言；`PreToolUse` 的 `continue: false` 能否停下这一轮；确认请求能否由钩子回答。实测通过的才写进 `Ways` |
 | 1.3 agy 对话驱动 | `Chats.cs` 增加 `AgyChat`。优先 `agy acp`：ACP 是公开协议，Gemini CLI、Codex（codex-acp）等也实现了它，一个 `AcpChat` 驱动以后能复用到 OpenCode、Qoder 等（中转已经认识这些工具名）；若 ACP 缺少续聊或确认，再用 stream-json | `tests/chat_check.py` 加 agy 的替身；真实 agy 上跑通新建、确认、停止、续聊 |
 | 1.4 Linux | `agent-linux/agent.py` 同步 1.1–1.3（agy 在 Linux 上的数据目录要先核实） | `agent-linux/test_agent.py` 在 Linux 测试服务器上通过 |
