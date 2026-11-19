@@ -22,6 +22,10 @@ public static class ReachCheck {
     static string Event(string name, string session, string more = "") {
         return "{\"hook_event_name\":\"" + name + "\",\"session_id\":\"" + session + "\",\"transcript_path\":" + Quoted(transcript) + ",\"cwd\":\"C:\\\\work\"" + more + "}";
     }
+    // Antigravity CLI's words for the same: camelCase, the event named in it, a step's tool in `toolCall`.
+    static string AgyEvent(string name, string session, string more = "") {
+        return "{\"hookEventName\":\"" + name + "\",\"conversationId\":\"" + session + "\",\"transcriptPath\":" + Quoted(transcript) + ",\"workspacePaths\":[\"C:\\\\work\"],\"cwd\":\"C:\\\\work\"" + more + "}";
+    }
     static string Request(string session, string command, string why) {
         return Event("PermissionRequest", session, ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":" + Quoted(command) + ",\"description\":" + Quoted(why) + "}");
     }
@@ -439,6 +443,40 @@ public static class ReachCheck {
                 Require(claude(asleep).Status == "busy" && claude(asleep).Last == "" && claude(asleep).Completion == "", "new prompt clears stale failure and completion");
                 Answer(Run("claude", Event("SessionEnd", asleep)), 5000, "ended");
 
+                // ---- Antigravity CLI: told of before each call of its model and after it, before each step and as it
+                // stops. What the phone says while it works is handed to it before its model's next call; told to stop,
+                // its step is refused and it ends after the call; what waited when it stops makes it go on.
+                idle = 0;
+                string agy = Guid.NewGuid().ToString(), a1 = Guid.NewGuid().ToString("N"), a2 = Guid.NewGuid().ToString("N");
+                Func<Reach.Open> gravity = () => reach.Of("agy", agy);
+                Require(Answer(Run("agy", AgyEvent("SessionStart", agy)), 5000, "agy start") == "" && gravity().Status == "idle" && !gravity().Stoppable, "an Antigravity CLI conversation that started waits");
+                Require(Answer(Run("agy", AgyEvent("PreInvocation", agy, ",\"invocationNum\":0,\"initialNumSteps\":1")), 5000, "agy first call") == "" && gravity().Status == "busy" && gravity().Stoppable, "its model is called: it works, and can be stopped");
+                Require(reach.Say("agy", agy, "顺便把测试也跑一下", a1) == false && reach.Outbox.Find(a1).State == Outbox.Queued, "a message for it at work waits");
+                Require(Answer(Run("agy", AgyEvent("PreToolUse", agy, ",\"stepIdx\":2,\"toolCall\":{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"npm test\"}}")), 5000, "agy step") == "", "a step goes on, and is not where the message goes");
+                string handed = Answer(Run("agy", AgyEvent("PreInvocation", agy, ",\"invocationNum\":1,\"initialNumSteps\":3")), 5000, "agy next call");
+                Require(handed.Contains("\"injectSteps\"") && handed.Contains("\"userMessage\"") && handed.Contains("顺便把测试也跑一下") && handed.Contains(Reach.FromPhone) && reach.Outbox.Find(a1).State == Outbox.Handed, "handed to it before its model's next call, as its user's message: " + handed);
+                Require(Answer(Run("agy", AgyEvent("PostInvocation", agy, ",\"invocationNum\":1")), 5000, "agy call over") == "" && gravity().Status == "busy", "a call that is over says nothing where no stop was asked");
+                // told to stop: the step is refused, and it ends after its model's call; what was left for it is held
+                reach.Say("agy", agy, "这条先别发", a2);
+                Require(reach.Stop("agy", agy) == 0 && reach.Outbox.Find(a2).State == Outbox.Paused, "told to stop: what waited is held");
+                string refused = Answer(Run("agy", AgyEvent("PreToolUse", agy, ",\"stepIdx\":4,\"toolCall\":{\"name\":\"run_command\",\"args\":{}}")), 5000, "agy step refused");
+                Require(refused.Contains("\"decision\":\"deny\"") && refused.Contains(Reach.StoppedFromPhone), "its next step is refused: " + refused);
+                Require(Answer(Run("agy", AgyEvent("PreInvocation", agy, ",\"invocationNum\":2")), 5000, "agy call while stopping") == "", "nothing is handed to one that is to stop");
+                string cut = Answer(Run("agy", AgyEvent("PostInvocation", agy, ",\"invocationNum\":2")), 5000, "agy ended");
+                Require(cut.Contains("\"terminationBehavior\":\"terminate\"") && gravity().Status == "idle" && !gravity().Stoppable, "after the call it is ended: " + cut);
+                Require(Answer(Run("agy", AgyEvent("Stop", agy, ",\"executionNum\":0,\"terminationReason\":\"TERMINAL_CUSTOM_HOOK\",\"fullyIdle\":true")), 5000, "agy stopped") == "" && gravity().Completion == "" && reach.Outbox.Find(a2).State == Outbox.Paused, "a turn that was cut is no turn finished, and what was held stays held");
+                // a new turn; a message said while it works and not taken before it stops makes it go on
+                // what was held and is let go again goes with its model's next call
+                reach.Outbox.Release("agy", agy);
+                string released = Answer(Run("agy", AgyEvent("PreInvocation", agy, ",\"invocationNum\":0")), 5000, "agy new turn");
+                Require(released.Contains("这条先别发") && reach.Outbox.Find(a2).State == Outbox.Handed, "let go again, it is handed with the next call: " + released);
+                string a3 = Guid.NewGuid().ToString("N");
+                Require(reach.Say("agy", agy, "最后再检查一遍", a3) == false, "said while it is at its last call");
+                string goOn = Answer(Run("agy", AgyEvent("Stop", agy, ",\"executionNum\":1,\"terminationReason\":\"NO_TOOL_CALL\",\"fullyIdle\":true")), 5000, "agy stops with a message");
+                Require(goOn.Contains("\"decision\":\"continue\"") && goOn.Contains("最后再检查一遍") && reach.Outbox.Find(a3).State == Outbox.Handed && gravity().Status == "busy", "as it stops, what waited makes it go on: " + goOn);
+                string done = Answer(Run("agy", AgyEvent("Stop", agy, ",\"executionNum\":2,\"terminationReason\":\"NO_TOOL_CALL\",\"fullyIdle\":true")), 5000, "agy done");
+                Require(done == "" && gravity().Status == "idle" && gravity().Completion.Length > 0 && reach.Heard("agy"), "with nothing waiting it stops, and its turn is finished");
+
                 // ---- a conversation that ends is forgotten
                 Answer(Run("claude", Event("SessionEnd", one)), 5000, "ended");
                 Require(claude(one) == null && codex(two) != null, "only the one that ended");
@@ -565,6 +603,31 @@ public static class ReachCheck {
             read = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(codexHooks, Encoding.UTF8));
             hooks = (Dictionary<string, object>)read["hooks"];
             Require(!ReachHooks.Installed("codex") && hooks.Count == 1 && Convert.ToInt32(entry0(hooks, "SessionEnd", "echo keep-session-end")["timeout"]) == 1 && !File.ReadAllText(codexHooks, Encoding.UTF8).Contains("RemoteCli.reach"), "taken out without removing the person's own SessionEnd hook");
+            // Antigravity CLI: one hook of this program's name in .gemini/config/hooks.json, beside the person's own
+            string gemini = Path.Combine(folder, "gemini"), agyHooks = Path.Combine(gemini, "config", "hooks.json");
+            Environment.SetEnvironmentVariable("AGY_HOME", Path.Combine(gemini, "antigravity-cli"));
+            Require(ReachHooks.FileOf("agy") == agyHooks, "Antigravity CLI's hooks file: " + ReachHooks.FileOf("agy"));
+            Directory.CreateDirectory(Path.GetDirectoryName(agyHooks));
+            string ownAgy = "{\n  \"my-linter\": {\n    \"PostToolUse\": [{\"matcher\": \"run_command\", \"hooks\": [{\"command\": \"lint.cmd\"}]}]\n  }\n}\n";
+            File.WriteAllText(agyHooks, ownAgy, new UTF8Encoding(false));
+            Require(!ReachHooks.Installed("agy"), "nothing of this program's in it to begin with");
+            ReachHooks.Set("agy", true, program, "RemoteCli.reach.abc123");
+            string agyWritten = File.ReadAllText(agyHooks, Encoding.UTF8);
+            var agyRead = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(agyWritten);
+            var ours = (Dictionary<string, object>)agyRead[ReachHooks.AgyName];
+            string agyLine = "\"" + program + "\" --hook agy RemoteCli.reach.abc123";
+            Require(agyRead.ContainsKey("my-linter") && Reach.AgyEvents.All(ours.ContainsKey) && ours.Count == Reach.AgyEvents.Length, "its events under its own name, the person's hook kept: " + agyWritten);
+            Require(Convert.ToString(((Dictionary<string, object>)((IEnumerable)ours["Stop"]).Cast<object>().Single())["command"]) == agyLine, "the program in double quotes, for cmd.exe");
+            var step = (Dictionary<string, object>)((IEnumerable)ours["PreToolUse"]).Cast<object>().Single();
+            Require(Convert.ToString(step["matcher"]) == "*" && Convert.ToString(((Dictionary<string, object>)((IEnumerable)step["hooks"]).Cast<object>().Single())["command"]) == agyLine, "a step's hook matches every tool");
+            Require(Convert.ToInt32(((Dictionary<string, object>)((IEnumerable)ours["Stop"]).Cast<object>().Single())["timeout"]) == Reach.Patience && Convert.ToInt32(((Dictionary<string, object>)((IEnumerable)ours["PreInvocation"]).Cast<object>().Single())["timeout"]) == 10, "only the stop may wait");
+            Require(ReachHooks.Installed("agy") && ReachHooks.Installed("agy", program, "RemoteCli.reach.abc123") && !ReachHooks.Installed("agy", program, "RemoteCli.reach.other"), "installed, at this pipe");
+            ReachHooks.Set("agy", true, program, "RemoteCli.reach.abc123");
+            Require(File.ReadAllText(agyHooks, Encoding.UTF8) == agyWritten && File.ReadAllText(agyHooks + ".before-remotecli", Encoding.UTF8) == ownAgy, "twice is once, and the file as it was is kept");
+            ReachHooks.Set("agy", false, program, "RemoteCli.reach.abc123");
+            agyRead = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(agyHooks, Encoding.UTF8));
+            Require(!ReachHooks.Installed("agy") && agyRead.Count == 1 && agyRead.ContainsKey("my-linter"), "taken out whole, the person's hook left");
+            Environment.SetEnvironmentVariable("AGY_HOME", null);
             // a file that cannot be read is left alone
             File.WriteAllText(settings, "{ this is not json", new UTF8Encoding(false));
             Require(Refused(() => ReachHooks.Set("claude", true, program, "RemoteCli.reach.abc123")).Contains("无法读懂") && File.ReadAllText(settings) == "{ this is not json" && !ReachHooks.Installed("claude"), "a settings file that cannot be read is not written over");

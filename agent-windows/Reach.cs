@@ -73,7 +73,25 @@ public sealed class Reach : IDisposable {
     // Claude emits a completion hook after a permission prompt has been answered in its own window.  Listening to
     // it closes a phone card immediately instead of waiting for the next user turn.  Codex has no equivalent hook in
     // its supported contract, so its native channel remains the source of truth.
-    public static string[] EventsOf(string tool) { return tool == "claude" ? Events.Concat(new[] { Step, "PostToolUse", "PostToolUseFailure", "StopFailure" }).ToArray() : Events; }
+    public static string[] EventsOf(string tool) { return tool == "claude" ? Events.Concat(new[] { Step, "PostToolUse", "PostToolUseFailure", "StopFailure" }).ToArray() : tool == "agy" ? AgyEvents : Events; }
+    /// Antigravity CLI tells of other moments (tried on agy 1.5.12, in its print mode): before each call of its model
+    /// (`PreInvocation`) what the phone said is handed to it as its user's message, so it takes it at once, in the
+    /// turn that runs; after each call (`PostInvocation`) it can be ended (`terminationBehavior: terminate`; given
+    /// before the call, the same is not heeded); before a step (`PreToolUse`) the step is refused where it is to stop,
+    /// so that nothing more is run; and as it stops (`Stop`) it is told to go on (`decision: continue`) with what waited.
+    /// It asks nobody for permission through its hooks: a question of its own is answered at the computer.
+    public static readonly string[] AgyEvents = { "SessionStart", "PreInvocation", "PostInvocation", Step, "Stop" };
+    /// An event of Antigravity CLI's in the words of the others' (camelCase there, `toolCall` holding name and args).
+    static Dictionary<string, object> FromAgy(Dictionary<string, object> hooked) {
+        var said = new Dictionary<string, object>(hooked);
+        said["hook_event_name"] = Text(hooked, "hookEventName");
+        said["session_id"] = Text(hooked, "conversationId");
+        said["transcript_path"] = Text(hooked, "transcriptPath");
+        object call; hooked.TryGetValue("toolCall", out call);
+        var named = call as Dictionary<string, object>;
+        if (named != null) { said["tool_name"] = Text(named, "name"); object args; if (named.TryGetValue("args", out args)) said["tool_input"] = args; }
+        return said;
+    }
     /// What Claude Code shows where it was stopped. Read by the person at the computer, not by the model.
     public const string StoppedFromPhone = "已从手机停止（Remote AI）";
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
@@ -353,8 +371,9 @@ public sealed class Reach : IDisposable {
 
     /// One event of a tool. Returns what the hook writes for the tool to read, and the code it ends with.
     string[] Handle(string tool, Dictionary<string, object> hooked, Func<bool> gone, int process) {
+        if (tool == "agy") hooked = FromAgy(hooked);
         string name = Text(hooked, "hook_event_name"), session = Text(hooked, "session_id");
-        if ((tool != "claude" && tool != "codex") || !Regex.IsMatch(session, Uuid)) return Nothing;
+        if ((tool != "claude" && tool != "codex" && tool != "agy") || !Regex.IsMatch(session, Uuid)) return Nothing;
         if (name == Step) {
             // Before a step: nothing is said, unless the phone asked for a stop. This runs at every step of every
             // conversation, so it does no more than that; one that is not known yet is told of by its other events.
@@ -369,13 +388,16 @@ public sealed class Reach : IDisposable {
                 stepping.Steps = true;
                 stepping.Completion = "";
                 if (stepping.Status == "idle" || stepping.Status == "waiting") { stepping.Status = "busy"; stepping.Held = false; }
-                stop = stepping.StopAsked; stepping.StopAsked = false;
+                stop = stepping.StopAsked;
                 // Told to stop, it ends its turn here and runs no hook for that: how it stands is said now. Like one
-                // that stopped by itself, it is the phone's turn while nobody is at the computer.
-                if (stop) { stepping.Stopped = DateTime.UtcNow; stepping.Status = idle() >= Unattended ? "waiting" : "idle"; stepping.Held = false; }
+                // that stopped by itself, it is the phone's turn while nobody is at the computer. (Antigravity CLI is
+                // refused the step and ends after its model's call: that is where it is said.)
+                if (stop && tool != "agy") { stepping.StopAsked = false; stepping.Stopped = DateTime.UtcNow; stepping.Status = idle() >= Unattended ? "waiting" : "idle"; stepping.Held = false; }
             }
             if (news || stop) Tell();
+            if (stop && tool == "agy") return new[] { json.Serialize(new Dictionary<string, object> { { "decision", "deny" }, { "reason", StoppedFromPhone } }), "0" };
             if (stop) return new[] { json.Serialize(new Dictionary<string, object> { { "continue", false }, { "stopReason", StoppedFromPhone } }), "0" };
+            if (tool == "agy") return Nothing;      // what the phone said is handed to it before its model's next call
             // What the phone said while it works is handed to it here, between two of its steps: it need not wait
             // until the whole turn is over. (Only a Claude Code that is known to take added context from a hook;
             // an earlier one is given the words when it stops, as before.)
@@ -401,6 +423,8 @@ public sealed class Reach : IDisposable {
         if (o == null || first) Tell();
         if (o == null) return Nothing;
         if (name == "SessionStart") { lock (gate) { if (o.Status != "busy") { o.Status = "idle"; o.Held = false; } } Tell(); return Nothing; }
+        if (name == "PreInvocation") return Invoking(o, tool, hooked);
+        if (name == "PostInvocation") return Invoked(o, tool);
         if (name == "UserPromptSubmit") { lock (gate) { o.Status = "busy"; o.AskId = o.AskText = o.Last = o.Completion = ""; o.AskOptions = new object[0]; o.Always = null; o.Answerable = o.Held = o.StopAsked = false; Monitor.PulseAll(gate); } Tell(); return Nothing; }
         if (tool == "claude" && name == "StopFailure") {
             Outbox.Pause(tool, session);
@@ -485,7 +509,36 @@ public sealed class Reach : IDisposable {
         if (tool == "claude" && System.Version.TryParse(version ?? "", out runs) && runs >= ContextAtStop)
             return json.Serialize(new Dictionary<string, object> { { "hookSpecificOutput", new Dictionary<string, object> { { "hookEventName", "Stop" },
                 { "additionalContext", FromPhone + ". It is the next message of the user of this conversation:\n\n" + message } } } });
+        if (tool == "agy") return json.Serialize(new Dictionary<string, object> { { "decision", "continue" }, { "reason", FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message } });
         return json.Serialize(new Dictionary<string, object> { { "decision", "block" }, { "reason", FromPhone + " while they are away from the computer. Treat it as their next instruction:\n\n" + message } });
+    }
+    // Antigravity CLI is about to call its model. The first call of a turn is where its user's words were taken: as
+    // with another tool's UserPromptSubmit, what was asked and answered before is over. What the phone said since is
+    // handed to it here, as its user's newest message (tried on agy 1.5.12: taken into the turn that runs).
+    string[] Invoking(Open o, string tool, Dictionary<string, object> hooked) {
+        bool stopping;
+        lock (gate) {
+            if (Text(hooked, "invocationNum") == "0") { o.AskId = o.AskText = o.Last = ""; o.AskOptions = new object[0]; o.Always = null; o.Answerable = false; }
+            o.Status = "busy"; o.Held = false; o.Steps = true; o.Completion = "";
+            stopping = o.StopAsked;
+            Monitor.PulseAll(gate);
+        }
+        Tell();
+        if (stopping) return Nothing;           // it is ended once this call is over
+        var said = Outbox.Hand(tool, o.Session);
+        if (said.Length == 0) return Nothing;
+        return new[] { json.Serialize(new Dictionary<string, object> { { "injectSteps", new object[] { new Dictionary<string, object> { { "userMessage", BetweenSteps + Joined(said) } } } } }), "0" };
+    }
+    // Its model's call is over. Told to stop, it ends here (tried on agy 1.5.12: no further call is made, and its
+    // Stop hook says TERMINAL_CUSTOM_HOOK). The stop stays asked until then, so that the Stop hook knows its turn
+    // was cut and not finished.
+    string[] Invoked(Open o, string tool) {
+        lock (gate) {
+            if (!o.StopAsked) return Nothing;
+            o.Stopped = DateTime.UtcNow; o.Status = idle() >= Unattended ? "waiting" : "idle"; o.Held = false;
+        }
+        Tell();
+        return new[] { json.Serialize(new Dictionary<string, object> { { "terminationBehavior", "terminate" } }), "0" };
     }
     string[] Stopped(Open o, string tool, Dictionary<string, object> hooked, Func<bool> gone, bool mine) {
         string message = null; var began = DateTime.UtcNow; int turn, wait = kept().AtStop; bool held = false;
@@ -542,7 +595,8 @@ public sealed class Reach : IDisposable {
             string text = Encoding.UTF8.GetString(hooked).Trim().TrimStart('﻿');
             if (!text.StartsWith("{", StringComparison.Ordinal)) return 0;
             bool request = Regex.IsMatch(text, "\"hook_event_name\"\\s*:\\s*\"PermissionRequest\"");
-            bool step = Regex.IsMatch(text, "\"hook_event_name\"\\s*:\\s*\"" + Step + "\"");       // run at every step: it waits for nobody
+            // run at every step (Antigravity CLI: at every call of its model too): it waits for nobody
+            bool step = Regex.IsMatch(text, "\"(?:hook_event_name|hookEventName)\"\\s*:\\s*\"(?:" + Step + "|PreInvocation|PostInvocation)\"");
             DateTime? lost = null;
             for (;;) {
                 bool taken = false;
@@ -573,15 +627,31 @@ public sealed class Reach : IDisposable {
     }
 }
 
-/// The hooks in the tools' own settings: Claude Code's settings.json and Codex's hooks.json, in the person's own
-/// folders. Only the entries that are this program's are added or taken out; everything else in those files is
-/// written back as it was read, and the file as it was before the first change is kept beside it.
+/// The hooks in the tools' own settings: Claude Code's settings.json, Codex's hooks.json and Antigravity CLI's
+/// hooks.json, in the person's own folders. Only the entries that are this program's are added or taken out;
+/// everything else in those files is written back as it was read, and the file as it was before the first change is
+/// kept beside it.
 public static class ReachHooks {
     public static string FileOf(string tool) {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (tool == "claude") return Path.Combine(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ?? Path.Combine(home, ".claude"), "settings.json");
         if (tool == "codex") return Path.Combine(CodexSessions.Home, "hooks.json");
+        // Antigravity CLI reads its user's hooks from .gemini/config/hooks.json (not from its own settings.json);
+        // where its home is named elsewhere (AGY_HOME, as a check does), beside that.
+        if (tool == "agy") return Path.Combine(Path.GetDirectoryName(Antigravity.Home.TrimEnd('\\', '/')), "config", "hooks.json");
         throw new ArgumentException("工具无效");
+    }
+    /// The name this program's hooks go by in Antigravity CLI's hooks.json, where every hook has a name of its own
+    /// and holds its events (a "hooks" key around them is taken for one hook of that name).
+    public const string AgyName = "remote-ai";
+    // Antigravity CLI runs a hook's command with cmd.exe (tried on agy 1.5.12): a path in double quotes is a program.
+    static Dictionary<string, object> AgyHooks(string program, string pipe) {
+        var all = new Dictionary<string, object>();
+        foreach (string name in Reach.AgyEvents) {
+            var hook = new Dictionary<string, object> { { "type", "command" }, { "command", "\"" + program + "\" --hook agy " + pipe }, { "timeout", name == "Stop" ? Reach.Patience : 10 } };
+            all[name] = name == Reach.Step ? new object[] { new Dictionary<string, object> { { "matcher", "*" }, { "hooks", new object[] { hook } } } } : new object[] { hook };
+        }
+        return all;
     }
     // Codex hands its hook to PowerShell as one line. A path without a space in it is a command as it stands; one
     // with a space is called with the call operator (in double quotes alone it would be a string, not a command).
@@ -632,6 +702,7 @@ public static class ReachHooks {
     public static bool Installed(string tool, string program, string pipe) {
         try {
             object hooks; var all = Read(FileOf(tool));
+            if (tool == "agy") return all.TryGetValue(AgyName, out hooks) && hooks is Dictionary<string, object> && Write(hooks, 0) == Write(AgyHooks(program, pipe), 0);
             if (!all.TryGetValue("hooks", out hooks) || !(hooks is Dictionary<string, object>)) return false;
             return Reach.EventsOf(tool).All(name => { object groups; string wanted = Write(Entry(tool, name, program, pipe), 0); return ((Dictionary<string, object>)hooks).TryGetValue(name, out groups) && Items(groups).Any(group => group is Dictionary<string, object> && Write(group, 0) == wanted); });
         } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } catch (InvalidOperationException) { return false; }
@@ -639,6 +710,7 @@ public static class ReachHooks {
     public static bool Installed(string tool) {
         try {
             object hooks; var all = Read(FileOf(tool));
+            if (tool == "agy") return all.ContainsKey(AgyName);
             if (!all.TryGetValue("hooks", out hooks) || !(hooks is Dictionary<string, object>)) return false;
             return Reach.EventsOf(tool).All(name => { object groups; return ((Dictionary<string, object>)hooks).TryGetValue(name, out groups) && Items(groups).Count() > Others(groups).Count; });
         } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } catch (InvalidOperationException) { return false; }
@@ -649,15 +721,21 @@ public static class ReachHooks {
         string file = FileOf(tool);
         if (!on && !File.Exists(file)) return;
         var all = Read(file);
-        object existing; Dictionary<string, object> hooks = all.TryGetValue("hooks", out existing) ? existing as Dictionary<string, object> : null;
-        if (hooks == null) { if (!on) return; if (existing != null) throw new InvalidOperationException(Path.GetFileName(file) + " 里的 hooks 不是预期的格式，没有改动它"); all["hooks"] = hooks = new Dictionary<string, object>(); }
-        foreach (string name in Reach.EventsOf(tool).Concat(hooks.Keys.ToArray()).Distinct().ToArray()) {
-            object groups; hooks.TryGetValue(name, out groups);
-            var kept = Others(groups);
-            if (on && Array.IndexOf(Reach.EventsOf(tool), name) >= 0) kept.Add(Entry(tool, name, program, pipe));
-            if (kept.Count > 0) hooks[name] = kept.ToArray(); else hooks.Remove(name);
+        if (tool == "agy") {
+            // one hook of its own name: put in whole, or taken out whole
+            if (on) all[AgyName] = AgyHooks(program, pipe);
+            else if (!all.Remove(AgyName)) return;
+        } else {
+            object existing; Dictionary<string, object> hooks = all.TryGetValue("hooks", out existing) ? existing as Dictionary<string, object> : null;
+            if (hooks == null) { if (!on) return; if (existing != null) throw new InvalidOperationException(Path.GetFileName(file) + " 里的 hooks 不是预期的格式，没有改动它"); all["hooks"] = hooks = new Dictionary<string, object>(); }
+            foreach (string name in Reach.EventsOf(tool).Concat(hooks.Keys.ToArray()).Distinct().ToArray()) {
+                object groups; hooks.TryGetValue(name, out groups);
+                var kept = Others(groups);
+                if (on && Array.IndexOf(Reach.EventsOf(tool), name) >= 0) kept.Add(Entry(tool, name, program, pipe));
+                if (kept.Count > 0) hooks[name] = kept.ToArray(); else hooks.Remove(name);
+            }
+            if (hooks.Count == 0) all.Remove("hooks");
         }
-        if (hooks.Count == 0) all.Remove("hooks");
         Directory.CreateDirectory(Path.GetDirectoryName(file));
         string before = file + ".before-remotecli";
         if (File.Exists(file) && !File.Exists(before)) File.Copy(file, before);

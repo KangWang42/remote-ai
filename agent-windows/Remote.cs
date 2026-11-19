@@ -57,8 +57,8 @@ public sealed partial class App {
     // The hooks go into the tools' own settings, for each tool that has been used on this computer.
     // The first time the program runs it switches this on by itself; after that the switch says what its owner wants,
     // and while it is on the hooks are kept in place: put back when something took them out, or the program moved.
-    static readonly string[] Hooked = { "claude", "codex" };
-    static readonly Dictionary<string, string> ToolNames = new Dictionary<string, string> { { "claude", "Claude Code" }, { "codex", "Codex" } };
+    static readonly string[] Hooked = { "claude", "codex", "agy" };
+    static readonly Dictionary<string, string> ToolNames = new Dictionary<string, string> { { "claude", "Claude Code" }, { "codex", "Codex" }, { "agy", "Antigravity CLI" } };
     static bool Used(string tool) { try { return Directory.Exists(Path.GetDirectoryName(ReachHooks.FileOf(tool))); } catch (ArgumentException) { return false; } }
     static string HookProgram { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RemoteCliAgent.exe"); } }
     bool Reaching {

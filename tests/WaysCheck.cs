@@ -80,6 +80,16 @@ public static class WaysCheck {
         var saved = In("claude", "", true, true); saved.Live = false;
         var none = Ways.Of(saved, null, null);
         Require(none.Reach == null && none.Named.Values.All(way => Convert.ToString(way).Length == 0) && Ways.Things.All(none.Why.ContainsKey), "a saved conversation has no way in");
-        Console.WriteLine("ways: Claude Code and Codex, in an application, an editor and a command line, by how each stands");
+        // ---- Antigravity CLI, in an editor's terminal or a console of its own: by its hooks, once they have told of it
+        foreach (string origin in new[] { "Positron", "" }) {
+            Is("agy at work, heard by its hooks", Ways.Of(In("agy", origin, false, true), Hooked("busy", steps: true), null), H, H, "", P, "busy", "say,stop", H);
+            Is("agy stopped, its hook kept for the phone", Ways.Of(In("agy", origin, false, true), Hooked("waiting", held: true), null), H, "", "", P, "waiting", "say", "");
+            Is("agy idle", Ways.Of(In("agy", origin, false, true), Hooked("idle"), null), "", "", "", P, "idle", "", "");
+            Is("agy opened before its hooks", Ways.Of(In("agy", origin, false, true), null, null), "", "", "", P, "idle", "null", "");
+        }
+        var before = Ways.Of(In("agy", "Positron", false, true), null, null);
+        Require(before.Why["say"].Contains("重新打开") && Ways.Of(In("agy", "", false, true), Hooked("idle"), null).Why["say"].Contains("电脑上输入"), "why agy cannot be told something: " + before.Why["say"]);
+
+        Console.WriteLine("ways: Claude Code, Codex and Antigravity CLI, in an application, an editor and a command line, by how each stands");
     }
 }
