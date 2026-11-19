@@ -69,7 +69,7 @@ _session_re = {"opencode": re.compile(r"^ses_[A-Za-z0-9]{10,40}$"),
 
 
 def session_id_ok(tool, session):
-    """A conversation id in this tool's own shape; claude, codex, qoder and pi name a UUID."""
+    """A conversation id in this tool's own shape; claude, codex, agy, qoder and pi name a UUID."""
     return bool(_session_re.get(tool, _session).fullmatch(session))
 _word = re.compile(r"^[a-z0-9_]{1,40}$")
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
@@ -104,7 +104,7 @@ def _folders(items, limit):
         if isinstance(item, dict) and _name(item.get("name"), 60) and _name(item.get("path"), 260):
             out.append({"name": item["name"], "path": item["path"], "fixed": item.get("fixed") is True, "exists": item.get("exists") is not False,
                         "updated": item["updated"] if type(item.get("updated")) is int else 0, "live": item.get("live") is True,
-                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex", "opencode", "qoder", "cline", "pi")],
+                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex", "agy", "opencode", "qoder", "cline", "pi")],
                         # by what the folder is used on the computer, in the computer's words: a desktop app, an editor, a terminal
                         "kinds": [k[:20] for k in item.get("kinds", []) if isinstance(k, str) and k.strip()][:4] if isinstance(item.get("kinds"), list) else []})
     return out
@@ -760,8 +760,8 @@ class Relay:
                     if "text" in payload and _words(payload["text"]) is None:
                         raise RemoteError("内容为空、超过 8000 字或含有控制字符")
                 session = payload.get("session", "")
-                if tool == "agy" and (session or previous or any(payload.get(k) for k in ("history", "fork", "takeover"))):
-                    raise RemoteError("请在项目中新建 Antigravity 终端")
+                if tool == "agy" and (payload.get("history") or (payload.get("takeover") and not session)):
+                    raise RemoteError("请在项目中选择具体的 Antigravity 对话，或新建终端")
                 if payload.get("history") and not session and not previous:
                     raise RemoteError("请在项目中选择具体的历史对话；新建终端不会打开 resume 选择器")
                 saved = None
@@ -1242,7 +1242,7 @@ class Relay:
                      "can_takeover": s.get("can_takeover") is True, "ownership_known": s.get("ownership_known") is True,
                      "takeover_reason": str(s.get("takeover_reason") or "")[:200]}
                     for s in payload["sessions"][:120]
-                    if isinstance(s, dict) and isinstance(s.get("id"), str) and session_id_ok(s.get("tool"), s["id"]) and s.get("tool") in ("claude", "codex", "opencode", "qoder", "cline", "pi")
+                    if isinstance(s, dict) and isinstance(s.get("id"), str) and session_id_ok(s.get("tool"), s["id"]) and s.get("tool") in ("claude", "codex", "agy", "opencode", "qoder", "cline", "pi")
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),

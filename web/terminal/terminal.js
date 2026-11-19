@@ -726,6 +726,92 @@
   }
   // Bracketed paste keeps Chinese and multi-line text intact in the tool's own editor.
   function paste(text) { return term.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text; }
+  // Android WebViews and some OEM IMEs snap a mid-text tap inside a flex-resized textarea back to the end of the text.
+  // Let native hit-testing run first; only if a short single tap left the caret stuck at the end do we map the tap
+  // coordinates through an exact-typography mirror and place the caret where the finger actually landed.
+  function caretOffsetAtPoint(el, relX, relY, scrollTop) {
+    const val = el.value;
+    if (!val) return null;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const cs = getComputedStyle(el);
+    const padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+    const padT = parseFloat(cs.paddingTop) || 0, padB = parseFloat(cs.paddingBottom) || 0;
+    const hitX = rect.left + Math.max(padL + 1, Math.min(rect.width - padR - 1, relX));
+    const hitY = rect.top + Math.max(padT + 1, Math.min(rect.height - padB - 1, relY));
+    const mirror = document.createElement('div');
+    const style = mirror.style;
+    style.position = 'fixed';
+    style.left = rect.left + 'px';
+    style.top = rect.top + 'px';
+    style.width = rect.width + 'px';
+    style.height = rect.height + 'px';
+    style.boxSizing = cs.boxSizing;
+    style.padding = cs.padding;
+    style.border = cs.border;
+    style.font = cs.font;
+    style.fontFamily = cs.fontFamily;
+    style.fontSize = cs.fontSize;
+    style.fontWeight = cs.fontWeight;
+    style.lineHeight = cs.lineHeight;
+    style.letterSpacing = cs.letterSpacing;
+    style.whiteSpace = 'pre-wrap';
+    style.wordBreak = cs.wordBreak;
+    style.overflowWrap = cs.overflowWrap || 'break-word';
+    style.overflow = 'hidden';
+    style.opacity = '0';
+    style.pointerEvents = 'auto';
+    style.zIndex = '2147483647';
+    const inner = document.createElement('div');
+    if (scrollTop) inner.style.transform = `translateY(${-scrollTop}px)`;
+    const textNode = document.createTextNode(val);
+    inner.appendChild(textNode);
+    mirror.appendChild(inner);
+    document.body.appendChild(mirror);
+    try {
+      if (document.caretPositionFromPoint) {
+        const pos = document.caretPositionFromPoint(hitX, hitY);
+        if (pos && pos.offsetNode === textNode) return Math.max(0, Math.min(val.length, pos.offset));
+      } else if (document.caretRangeFromPoint) {
+        const range = document.caretRangeFromPoint(hitX, hitY);
+        if (range && range.startContainer === textNode) return Math.max(0, Math.min(val.length, range.startOffset));
+      }
+      return null;
+    } finally {
+      mirror.remove();
+    }
+  }
+  let inputComposing = false, inputTap = null, inputTapTimer = 0;
+  input.addEventListener('compositionstart', () => { inputComposing = true; });
+  input.addEventListener('compositionend', () => { inputComposing = false; });
+  input.addEventListener('touchstart', event => {
+    clearTimeout(inputTapTimer);
+    if (event.touches.length !== 1 || inputComposing || !input.value || input.disabled) { inputTap = null; return; }
+    const p = event.touches[0], rect = input.getBoundingClientRect();
+    inputTap = { x: p.clientX, y: p.clientY, relX: p.clientX - rect.left, relY: p.clientY - rect.top, scrollTop: input.scrollTop, at: Date.now(), moved: false };
+  }, { passive: true });
+  input.addEventListener('touchmove', event => {
+    if (!inputTap || event.touches.length !== 1) { inputTap = null; return; }
+    const p = event.touches[0];
+    if (Math.hypot(p.clientX - inputTap.x, p.clientY - inputTap.y) > 8) inputTap.moved = true;
+  }, { passive: true });
+  input.addEventListener('touchcancel', () => { inputTap = null; clearTimeout(inputTapTimer); }, { passive: true });
+  input.addEventListener('touchend', event => {
+    const tap = inputTap;
+    inputTap = null;
+    if (!tap || tap.moved || inputComposing || event.touches.length !== 0 || Date.now() - tap.at > 380) return;
+    const len = input.value.length;
+    if (!len) return;
+    clearTimeout(inputTapTimer);
+    inputTapTimer = setTimeout(() => {
+      if (inputComposing || document.activeElement !== input || input.value.length !== len) return;
+      if (input.selectionStart !== len || input.selectionEnd !== len) return;
+      const offset = caretOffsetAtPoint(input, tap.relX, tap.relY, tap.scrollTop);
+      if (offset !== null && offset >= 0 && offset < len) {
+        try { input.setSelectionRange(offset, offset); } catch (error) { /* ignore */ }
+      }
+    }, 40);
+  }, { passive: true });
   input.addEventListener('input', () => { saveDraft(); grow(); if (!palette.hidden || input.value.charCodeAt(0) === 47) drawPalette(); });
   slash.addEventListener('click', () => {
     haptic('tick');
@@ -853,8 +939,9 @@
       if ($('ended').hidden !== (!ended || more)) $('ended').hidden = !ended || more;
       if (ended !== wasEnded) {
         wasEnded = ended;
-        show($('ended-text'), shownTool === 'shell' || shownTool === 'agy' ? toolName + ' 已结束，画面保留到这里' : '终端已结束，对话保存在电脑上');
-        $('again').hidden = shownTool === 'shell' || shownTool === 'agy';
+        const canResume = shownTool !== 'shell' && !(shownTool === 'agy' && !t.session);
+        show($('ended-text'), canResume ? '终端已结束，对话保存在电脑上' : toolName + ' 已结束，画面保留到这里');
+        $('again').hidden = !canResume;
         input.disabled = ended; sendButton.disabled = ended; $('voice').disabled = ended;
         drawPalette();
       }

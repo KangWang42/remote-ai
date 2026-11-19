@@ -50,7 +50,7 @@ public sealed class Ways {
     public static Ways Of(TerminalAgent.SessionInfo s, Reach.Open known, CodexDesktopSessions.State channel) {
         var ways = new Ways { Status = TerminalAgent.ObservedStatus(s, known), Now = s.Now };
         if (!s.Live) { foreach (string thing in Things) ways.Why[thing] = "这段对话没有在电脑上开着"; return ways; }
-        bool claude = s.Tool == "claude", desktop = s.Origin == CodexDesktop, asks = known != null && known.Status == "confirm";
+        bool claude = s.Tool == "claude", agy = s.Tool == "agy", desktop = s.Origin == CodexDesktop, asks = known != null && known.Status == "confirm";
         if (channel != null) {
             // The application says how it stands; a request that its tool's hook tells of stands before that.
             ways.Status = asks ? "confirm" : channel.Busy ? "busy" : channel.Ready ? "waiting" : "confirm";
@@ -68,6 +68,7 @@ public sealed class Ways {
         else if (s.Wakes && !desktop && !asks) ways.Say = Wake;
         else ways.Why["say"] = channel != null ? "Codex 桌面版还没有就绪：等它当前的执行或电脑上的确认结束后再发"
             : desktop ? "暂时无法连接 Codex 原对话：应用连接尚未就绪、工作目录无法确认，或此版本尚未适配。请在电脑上打开这段对话后刷新；无需先添加项目"
+            : agy ? "电脑上的 Antigravity CLI 对话暂不支持直接发送消息，可接管到手机终端继续"
             : "电脑上的 " + (claude ? "Claude Code" : "Codex 命令行") + " 现在收不到手机的消息：它执行时发的消息会在它做完后收到";
 
         // ---- stopping what it is at; it stays open
@@ -77,6 +78,7 @@ public sealed class Ways {
             : channel != null ? "Codex 桌面版正在执行一个目标，或同时有几轮在进行：这种情况只能在电脑上停止"
             : claude ? "这段对话是在可以从手机停止之前打开的，在电脑上重新打开它之后才行"
             : desktop ? "暂时无法连接 Codex 原对话的停止接口，请在电脑上停止；无需通过添加项目解锁"
+            : agy ? "Antigravity CLI 的回答不能从外面单独停止"
             : "Codex 命令行的回答不能从外面单独停止";
 
         // ---- answering what it asks

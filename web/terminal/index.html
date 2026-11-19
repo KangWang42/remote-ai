@@ -112,10 +112,7 @@
       <form id="composer">
         <div class="composer-shell">
           <button type="button" id="slash" aria-label="常用命令" aria-expanded="false">/</button>
-          <div class="field">
-            <label class="sr-only" for="input">终端输入</label>
-            <textarea id="input" rows="1" maxlength="8000" placeholder="消息，或 / 选命令" spellcheck="false" autocapitalize="off"></textarea>
-          </div>
+          <textarea id="input" rows="1" maxlength="8000" placeholder="消息，或 / 选命令" spellcheck="false" autocapitalize="off" aria-label="终端输入"></textarea>
           <button type="button" id="voice" aria-label="语音输入">
             <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           </button>

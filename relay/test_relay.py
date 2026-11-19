@@ -24,16 +24,26 @@ class TerminalRelayTests(unittest.TestCase):
 
     def test_agy_processes_are_separate_from_interactive_terminals(self):
         request = {"action": "start", "id": "a" * 32, "tool": "agy", "dir": "demo"}
+        sid = "11111111-2222-3333-4444-555555555555"
         self.info.update(tools=["agy"], agy_external=[123456789, "123", True, -1])
-        self.relay.agent({"info": self.info}, now=1001)
+        self.relay.agent({"info": self.info, "sessions": [{
+            "id": sid, "tool": "agy", "dir": "demo", "title": "Positron agy",
+            "updated": 1700000000000, "live": True, "host": "cli", "origin": "Positron",
+            "kind": "终端", "status": "idle", "can_takeover": True, "ownership_known": True,
+        }]}, now=1001)
         overview = self.relay.overview(now=1001)
         self.assertEqual(overview["device"]["agy_external"], [123456789])
         self.assertEqual(overview["terminals"], [])
-        for extra in ({"previous": "c" * 32}, {"history": True}, {"takeover": True}, {"form": "chat"}):
+        self.assertEqual(len(overview["sessions"]), 1)
+        self.assertEqual(overview["sessions"][0]["origin"], "Positron")
+        for extra in ({"history": True}, {"takeover": True}, {"fork": True}, {"form": "chat"}):
             with self.assertRaises(RemoteError):
                 self.relay.command(dict(request, **extra), now=1002)
+        self.relay.command(dict(request, id="d" * 32, session=sid, takeover=True), now=1002)
         self.relay.command(request, now=1003)
-        self.assertEqual(self.relay.overview(now=1003)["terminals"][0]["title"], "Antigravity CLI")
+        titles = [t["title"] for t in self.relay.overview(now=1003)["terminals"]]
+        self.assertIn("Antigravity CLI", titles)
+        self.assertIn("Positron agy", titles)
         self.info["enabled"] = False
         self.relay.agent({"info": self.info}, now=1004)
         self.assertEqual(self.relay.overview(now=1004)["device"]["agy_external"], [])

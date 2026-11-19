@@ -180,7 +180,7 @@ public sealed class TerminalAgent {
     void Return(Dictionary<string, object> kept, Dictionary<string, object> prefs) {
         string id = Get(kept, "id"), tool = Get(kept, "tool"), dir = Get(kept, "dir"), session = Get(kept, "session");
         var dirs = AllDirs(prefs);
-        if (tool == "agy") return; // An unbound PTY cannot be reattached by conversation ID.
+        if (tool == "agy" && session.Length == 0) return; // An unbound PTY cannot be reattached without a conversation ID.
         string launcher = FindTool(tool);
         var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
         string where = Place(live, dirs);
@@ -218,6 +218,7 @@ public sealed class TerminalAgent {
     string ConversationFile(string tool, string session, string root) {
         string file;
         if (tool == "claude") file = Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl");
+        else if (tool == "agy") file = Antigravity.TranscriptPath(session);
         else if (!codexFiles.TryGetValue(session, out file) || !File.Exists(file))
             codexFiles[session] = file = Directory.GetFiles(Path.Combine(CodexSessions.Home, "sessions"), "rollout-*" + session + ".jsonl", SearchOption.AllDirectories).FirstOrDefault();
         return file != null && File.Exists(file) ? file : null;
@@ -406,7 +407,7 @@ public sealed class TerminalAgent {
         } catch (Exception problem) { note = problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "没有发出"; }
         Chains.Done(rule.Id, ok, note);
     }
-    static string Label(string tool) { return tool == "claude" ? "Claude Code" : "Codex"; }
+    static string Label(string tool) { return tool == "claude" ? "Claude Code" : tool == "agy" ? "Antigravity CLI" : "Codex"; }
     // The name a folder goes by in the numbers: its project's where it is one (or lies in one), else its own.
     string NamedFolder(string folder, Dictionary<string, string> dirs) {
         if (String.IsNullOrEmpty(folder)) return "";
@@ -579,6 +580,7 @@ public sealed class TerminalAgent {
     readonly Dictionary<string, string> codexFiles = new Dictionary<string, string>();       // a Codex conversation -> its file
     readonly Dictionary<string, TitleCache> titles = new Dictionary<string, TitleCache>();
     readonly CodexSessions codexSessions = new CodexSessions();
+    readonly AgySessions agySessions = new AgySessions();
     readonly Dictionary<string, string> codexFolders = new Dictionary<string, string>();
     Dictionary<string, string> codexNames = new Dictionary<string, string>();
     long codexNamesStamp;
@@ -854,6 +856,37 @@ public sealed class TerminalAgent {
                 found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
+        try {
+            agySessions.Refresh();
+            var agyParents = Parents();
+            var agyCounts = new Dictionary<string, int>();
+            foreach (var item in Antigravity.Summaries(null, agySessions.LiveIds())) {
+                var owner = agySessions.Get(item.Id);
+                bool live = owner.Live;
+                LiveTerminal phoneOwner = live && owner.Pid > 0
+                    ? running.FirstOrDefault(t => !t.Pty.Closed && CodexSessions.Descends(owner.Pid, new[] { t.Pty.Id }, agyParents))
+                    : null;
+                if (phoneOwner != null) {
+                    phoneOwner.Session = item.Id;
+                    if (phoneOwner.Chat == null && item.Status.Length > 0) phoneOwner.Status = item.Status;
+                }
+                bool external = live && phoneOwner == null;
+                string origin = external ? owner.Origin : "";
+                string agyKind = external ? Folders.Held(origin, Folders.Terminal) : Folders.Terminal;
+                string dir = item.Folder.Length > 0 ? dirs.Where(d => SamePath(d.Value, item.Folder)).Select(d => d.Key).FirstOrDefault() : null;
+                if (item.Folder.Length > 0) note(item.Folder, "agy", item.Created, external, agyKind);
+                if (dir == null) {
+                    bool taken = running.Any(t => t.Tool == "agy" && t.Session == item.Id && t.Folder.Length > 0 && !t.Pty.Closed);
+                    if ((external || taken) && Elsewhere(item.Folder))
+                        found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = "", Folder = item.Folder, Kind = agyKind, Title = item.Title, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = "" });
+                    continue;
+                }
+                int count; agyCounts.TryGetValue(dir, out count);
+                if (!live && count >= 15) continue;
+                if (!live) agyCounts[dir] = count + 1;
+                found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir, Kind = agyKind, Title = item.Title, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = item.Title });
+            }
+        } catch { }
         foreach (SessionInfo held in found.Where(s => s.Live)) {
             int count;
             held.MultipleOwners = held.Tool == "claude" && ownerCounts.TryGetValue(held.Id, out count) && count > 1;
@@ -1102,7 +1135,7 @@ public sealed class TerminalAgent {
         Func<object, object, string> brief = (name, given) => {
             var input = given as Dictionary<string, object>; string about = "";
             // what the step is for, where the tool says it (Bash's description), before the command itself
-            foreach (string key in new[] { "description", "command", "file_path", "path", "pattern", "query", "url" }) { about = at(input, key) as string ?? ""; if (about.Length > 0) break; }
+            foreach (string key in new[] { "description", "toolSummary", "command", "CommandLine", "file_path", "path", "Path", "pattern", "query", "url" }) { about = at(input, key) as string ?? ""; if (about.Length > 0) break; }
             return (Convert.ToString(name) + (about.Length > 0 ? "：" + (about.Length > 160 ? about.Substring(0, 160) : about) : "")).Trim();
         };
         // A step as a terminal would show it: besides what it is for, the command itself (`detail`, where the step
@@ -1122,16 +1155,17 @@ public sealed class TerminalAgent {
         long began = 0;       // when its user said the last thing: the work it is at began then
         Action<Dictionary<string, object>> stamped = written => {
             DateTime when;
-            if (DateTime.TryParse(at(written, "timestamp") as string, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out when)) began = Milliseconds(when);
+            string raw = (at(written, "timestamp") as string) ?? (at(written, "created_at") as string);
+            if (DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out when)) began = Milliseconds(when);
         };
         string read = ReadPart(path, true, limit);
         // Codex notes each step for its own window as it ends (the command that ran, the files changed). Where it
         // does, the steps are told by those, and the calls that only wrap them ("exec", "shell") are passed over.
-        bool itemized = tool != "claude" && read.IndexOf("\"item_completed\"", StringComparison.Ordinal) >= 0;
+        bool itemized = tool == "codex" && read.IndexOf("\"item_completed\"", StringComparison.Ordinal) >= 0;
         foreach (string line in read.Split('\n')) {
             if (!line.StartsWith("{", StringComparison.Ordinal)) continue;
             // What a tool gave back fills most of a long conversation: of such a row only the beginning is taken, unread.
-            if (line.Length > 4096 && line.IndexOf(tool == "claude" ? "\"type\":\"tool_result\"" : "\"type\":\"function_call_output\"", 0, 1200, StringComparison.Ordinal) >= 0) {
+            if (tool != "agy" && line.Length > 4096 && line.IndexOf(tool == "claude" ? "\"type\":\"tool_result\"" : "\"type\":\"function_call_output\"", 0, 1200, StringComparison.Ordinal) >= 0) {
                 if (tool == "claude") {
                     var whose = Regex.Match(line.Substring(0, 1200), "\"tool_use_id\":\"([^\"]+)\"");
                     Dictionary<string, object> asked;
@@ -1139,9 +1173,31 @@ public sealed class TerminalAgent {
                 }
                 continue;
             }
+            if (tool == "agy" && line.IndexOf("\"type\":\"GENERIC\"", 0, Math.Min(line.Length, 200), StringComparison.Ordinal) >= 0) continue;
             Dictionary<string, object> row;
             try { row = reader.Deserialize<Dictionary<string, object>>(line); } catch (Exception) { continue; }
             string type = at(row, "type") as string;
+            if (tool == "agy") {
+                if (type == "USER_INPUT") {
+                    string text = Antigravity.ExtractUserRequest(at(row, "content") as string);
+                    if (text.Length > 0) { add("user", text); stamped(row); }
+                } else if (type == "PLANNER_RESPONSE") {
+                    string thinking = at(row, "thinking") as string;
+                    if (!String.IsNullOrWhiteSpace(thinking)) add("thought", thinking);
+                    var calls = at(row, "tool_calls") as IEnumerable;
+                    if (calls != null && !(at(row, "tool_calls") is string)) {
+                        foreach (object one in calls) {
+                            var call = one as Dictionary<string, object>;
+                            var args = at(call, "args") as Dictionary<string, object>;
+                            string name = at(call, "name") as string;
+                            if (!String.IsNullOrEmpty(name)) step(brief(name, args), at(args, "CommandLine") as string ?? at(args, "Path") as string);
+                        }
+                    }
+                    string reply = at(row, "content") as string;
+                    if (!String.IsNullOrWhiteSpace(reply)) add("assistant", reply);
+                }
+                continue;
+            }
             if (tool == "claude") {
                 var message = at(row, "message") as Dictionary<string, object>;
                 if (type == "attachment") {
@@ -1426,8 +1482,8 @@ public sealed class TerminalAgent {
     public static string Arguments(string tool, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false) {
         string args = "";
         if (tool == "agy") {
-            if (!String.IsNullOrEmpty(session) || history || fork || fresh) throw new ArgumentException("请在 Antigravity CLI 内选择历史对话");
-            return "";
+            if (history || fork || fresh) throw new ArgumentException("请在 Antigravity CLI 内选择历史对话");
+            return session.Length > 0 ? " --conversation " + session : "";
         }
         if (tool == "claude") args = (session.Length > 0 ? (fresh ? " --session-id " : " --resume ") + session : history ? " --resume" : "") + (mode == "read" ? " --permission-mode plan" : mode == "edit" ? " --permission-mode acceptEdits" : "");
         if (tool == "codex") args = (session.Length > 0 ? (fork ? " fork " : " resume ") + session : history ? " resume --include-non-interactive" : "") + (noDaemon ? " --no-daemon" : "") + (mode == "read" ? " -s read-only" : mode == "edit" ? " -s workspace-write" : "");
@@ -1545,34 +1601,40 @@ public sealed class TerminalAgent {
         lock (work) {
             LiveTerminal live;
             if (!terminals.TryGetValue(terminalId, out live) || live.Pty == null || live.Pty.Closed) throw new InvalidOperationException("手机终端已经结束，请刷新活动列表");
-            if (live.Tool == "agy") throw new InvalidOperationException("请通过“在电脑上打开”使用原 Antigravity 终端");
             var prefs = Preferences();
             var dirs = AllDirs(prefs);
             string where = Place(live, dirs);
             if (where == null) throw new InvalidOperationException("这个项目已经从电脑端移除");
-            if (live.Tool == "codex" && live.Session.Length == 0) { Scan(dirs); }
+            if ((live.Tool == "codex" || live.Tool == "agy") && live.Session.Length == 0) { Scan(dirs); }
             string session = live.Session;
             if ((live.Tool == "claude" || live.Tool == "codex") && session.Length == 0) throw new InvalidOperationException("正在等待会话编号，请刷新活动后再接管");
+            if (live.Tool == "agy" && session.Length == 0) throw new InvalidOperationException("请先在 Antigravity 终端内开始对话，或通过“在电脑上打开”直接使用");
             if (live.Tool == "codex") {
                 var owner = CodexSessions.Inspect(session);
                 if (!owner.Live || owner.Pid <= 0 || !CodexSessions.Descends(owner.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Codex 进程属于手机终端，已取消接管");
+            }
+            if (live.Tool == "agy") {
+                var owner = AgySessions.Inspect(session);
+                if (!owner.Live || owner.Pid <= 0 || !CodexSessions.Descends(owner.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Antigravity CLI 进程属于手机终端，已取消接管");
             }
             if (live.Tool == "claude") {
                 string folder = Path.Combine(ClaudeHome, "sessions");
                 var source = Directory.Exists(folder) ? Directory.GetFiles(folder, "*.json").Select(noted => ClaudeSessions.Inspect(noted)).FirstOrDefault(s => s.Live && s.Session == session) : null;
                 if (source == null || !CodexSessions.Descends(source.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Claude Code 进程属于手机终端，已取消接管");
             }
-            if (live.Tool != "claude" && live.Tool != "codex") {
+            if (live.Tool != "claude" && live.Tool != "codex" && live.Tool != "agy") {
                 live.Pty.Dispose();
                 return new ComputerTakeover { Tool = live.Tool, Dir = where, Session = "", Launcher = FindTool(live.Tool), PhoneTerminal = true };
             }
             live.Pty.Dispose();
             for (int n = 0; n < 60; n++) {
                 if (live.Tool == "codex" && !CodexSessions.Inspect(session).Live) break;
+                if (live.Tool == "agy" && !AgySessions.Inspect(session).Live) break;
                 if (live.Tool == "claude" && !Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json").Select(noted => ClaudeSessions.Inspect(noted)).Any(s => s.Live && s.Session == session)) break;
                 Thread.Sleep(50);
             }
             if (live.Tool == "codex" && CodexSessions.Inspect(session).Live) throw new InvalidOperationException("原 Codex 进程没有及时结束，已取消接管");
+            if (live.Tool == "agy" && AgySessions.Inspect(session).Live) throw new InvalidOperationException("原 Antigravity CLI 进程没有及时结束，已取消接管");
             return new ComputerTakeover { Tool = live.Tool, Dir = where, Session = session, Launcher = FindTool(live.Tool), PhoneTerminal = true };
         }
     }
@@ -1729,6 +1791,7 @@ public sealed class TerminalAgent {
                 if (gone.Live || terminals.Values.Any(t => t.Session == session && !t.Pty.Closed)) throw new InvalidOperationException("这段对话正开着，请先结束它再删除");
                 try {
                     if (tool == "claude") Removal.Claude(Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl"));
+                    else if (tool == "agy") throw new InvalidOperationException("Antigravity CLI 对话暂不支持从手机删除");
                     else Removal.Codex(FindTool("codex"), session);
                 }
                 catch (FileNotFoundException) { throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试"); }
@@ -1749,6 +1812,7 @@ public sealed class TerminalAgent {
                 var ways = WaysOf(open, Reach.Of(tool, session));
                 if (ways.End != Ways.Process) throw new InvalidOperationException(ways.Why["end"]);
                 if (tool == "claude") ClaudeExclusive(session, true);
+                else if (tool == "agy") AgySessions.Takeover(session, terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray(), Parents());
                 else CodexSessions.Takeover(session, terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray(), Parents());
                 nextScan = DateTime.MinValue;
                 result = new Dictionary<string, object>();
@@ -1840,7 +1904,7 @@ public sealed class TerminalAgent {
                 var dirs = AllDirs(prefs);
                 // In a project; or, to go on with a conversation that is open in a folder that is no project, in that
                 // folder (the relay says which, from what this computer listed).
-                string folder = dir.Length == 0 && (session.Length > 0 || previous.Length > 0) && (tool == "claude" || tool == "codex") ? NormalFolder(Get(op, "folder")) : "";
+                string folder = dir.Length == 0 && (session.Length > 0 || previous.Length > 0) && (tool == "claude" || tool == "codex" || tool == "agy") ? NormalFolder(Get(op, "folder")) : "";
                 if (dir.Length == 0 ? folder.Length == 0 || !Directory.Exists(folder) : !dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
                 string launcher = FindTool(tool);
                 if (launcher == null) throw new ArgumentException("电脑未安装这个工具");
@@ -1853,12 +1917,19 @@ public sealed class TerminalAgent {
                         var owner = CodexSessions.Inspect(session);
                         if (!owner.Known || owner.Live) throw new InvalidOperationException("原 Codex 对话仍被占用，请先在原应用结束并关闭它，再接管同一段历史；不会自动新建副本");
                     }
+                    if (tool == "agy") {
+                        var roots = terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray();
+                        if (Get(op, "takeover") == "True") AgySessions.Takeover(session, roots, Parents());
+                        var owner = AgySessions.Inspect(session);
+                        if (!owner.Known || owner.Live) throw new InvalidOperationException("原 Antigravity CLI 对话仍被占用，请选择接管原对话，或在原终端结束后重试");
+                    }
                 } else if (previous.Length > 0) {
                     if (!Regex.IsMatch(previous, @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("历史编号无效");
                     session = List(prefs, "RemoteSessions").Select(Convert.ToString).Where(s => s.StartsWith(previous + "|", StringComparison.Ordinal)).Select(s => s.Substring(previous.Length + 1)).FirstOrDefault() ?? "";
                     if (session.Length == 0) throw new ArgumentException("旧对话没有会话编号，请使用历史对话入口");
                     if (tool == "claude") ClaudeExclusive(session, false);
                     else if (tool == "codex") { var owner = CodexSessions.Inspect(session); if (!owner.Known || owner.Live) throw new InvalidOperationException("原对话仍被占用，请从项目中选择接管原对话"); }
+                    else if (tool == "agy") { var owner = AgySessions.Inspect(session); if (!owner.Known || owner.Live) throw new InvalidOperationException("原对话仍被占用，请从项目中选择接管原对话"); }
                 }
                 bool fresh = tool == "claude" && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
@@ -1929,7 +2000,7 @@ public sealed class TerminalAgent {
             }
             if (DateTime.UtcNow - toolsAt > TimeSpan.FromSeconds(30)) {
                 tools = new[] { "claude", "codex", "agy", "shell" }.Where(t => FindTool(t) != null).ToArray();
-                externalAgy = enabled ? Antigravity.ExternalStarts(FindTool("agy"), terminals.Values.Where(t => !t.Pty.Closed).Select(t => t.Pty.Id).ToArray()) : new long[0];
+                externalAgy = enabled ? Antigravity.ExternalStarts(FindTool("agy"), terminals.Values.Where(t => !t.Pty.Closed).Select(t => t.Pty.Id).ToArray(), agySessions.LivePids()) : new long[0];
                 toolsAt = DateTime.UtcNow;
             }
             // An ended terminal whose conversation runs in a terminal again is no longer one of the recent ones.

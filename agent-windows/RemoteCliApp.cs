@@ -712,8 +712,7 @@ public sealed partial class App : Form {
         var row = activity.Selected; var raw = row == null ? null : row.Value as string[];
         if (raw == null || raw.Length < 8 || raw[6] != "phone") { Toast("请先在列表中选择一个手机和电脑共用的终端"); return; }
         if (agent == null) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
-        string tool = raw[0] == "claude" ? "Claude Code" : raw[0] == "codex" ? "Codex" : "PowerShell";
-        if (raw[0] == "agy") { Toast("请通过“在电脑上打开”使用原 Antigravity 终端"); return; }
+        string tool = raw[0] == "claude" ? "Claude Code" : raw[0] == "codex" ? "Codex" : raw[0] == "agy" ? "Antigravity CLI" : "PowerShell";
         if (raw[0] == "shell") { Toast("PowerShell 没有可恢复的会话，不能转为独立窗口；可通过“在电脑上打开”直接使用"); return; }
         if (!Confirm("转成电脑上的独立窗口？", "这个终端会先结束，然后在电脑的命令行窗口里接着同一段对话，正在执行的任务会中断，手机上不再能看到它。\n仅需在电脑上使用时，选“在电脑上打开”即可，无需转换。", "结束它并转成独立窗口", true)) return;
         activity.Enabled = false;

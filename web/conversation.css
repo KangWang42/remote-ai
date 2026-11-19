@@ -127,7 +127,7 @@ dialog.window #sheet-form .confirm { margin: 4px 12px 6px; border: 0.5px solid v
 
 dialog.window #sheet-form .write { margin: 4px 10px 10px; padding: 5px 5px 5px 8px; border: 0.5px solid var(--rim, var(--line)); border-radius: 24px; background: var(--panel); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
 dialog.window #sheet-form .write:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
-dialog.window #sheet-form .write textarea { border: 0; border-radius: 16px; background: transparent; box-shadow: none; outline: none; padding: 8px 8px; min-height: 38px; max-height: 144px; caret-color: var(--accent); overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: pan-y; }
+dialog.window #sheet-form .write textarea { border: 0; border-radius: 16px; background: transparent; box-shadow: none; outline: none; padding: 8px 8px; min-height: 38px; max-height: 144px; caret-color: var(--accent); overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; }
 dialog.window #sheet-form .write .go { flex: none; min-height: 38px; padding: 0 13px; border-radius: 19px; border: 0.5px solid var(--rim, var(--line)); background: var(--raised); color: var(--ink); font-weight: 600; transition: transform .1s; }
 dialog.window #sheet-form .write .go:active { transform: scale(.96); }
 dialog.window #sheet-form .write button.solid { border-radius: 19px; min-height: 38px; padding: 0 16px; transition: transform .1s; }

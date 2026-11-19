@@ -36,8 +36,10 @@ assert "resolveSkin(" in main_java and "public void haptic(" in main_java and "p
 
 # Mid-text cursor editing, tap interactions, smoothness, and background resilience.
 assert ".dock, header { contain: layout; }" not in term_css
-assert "caret-color: var(--accent)" in term_css and "user-select: text" in term_css and "touch-action: pan-y" in term_css
-assert "function attachWebgl()" in term_js and "function insertAtCursor(" in term_js and "function sendTerminalTap(" in term_js
+assert "#input {" in term_css and "\ntextarea {" not in term_css
+assert "caret-color: var(--accent)" in term_css and "user-select: text" in term_css and "touch-action: auto" in term_css
+assert "touch-action: pan-y" not in term_css
+assert "function attachWebgl()" in term_js and "function insertAtCursor(" in term_js and "function sendTerminalTap(" in term_js and "function caretOffsetAtPoint(" in term_js
 assert "function flushWrite(" in term_js and "saveDraft()" in term_js and "REPEATABLE" in term_js
 assert "setRendererPriorityPolicy" in main_java and "onRenderProcessGone" in main_java
 

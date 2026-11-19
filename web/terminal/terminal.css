@@ -27,7 +27,7 @@ h1 { margin: 0; font-size: 15.5px; font-weight: 650; line-height: 1.3; letter-sp
 @keyframes pulse { 50% { opacity: .4; } }
 
 button { font: inherit; color: var(--ink); border: 0; background: none; cursor: pointer; touch-action: manipulation; }
-button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button:focus-visible, #input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button:disabled { opacity: .42; cursor: default; }
 .quiet { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; color: var(--muted); font-size: 15px; font-weight: 600; flex-shrink: 0; transition: background .12s, color .12s, transform .1s; }
 .quiet:active { background: var(--raised); color: var(--ink); transform: scale(.93); }
@@ -95,10 +95,9 @@ html[data-theme="dark"] .keys button:active { background: color-mix(in srgb, var
 #composer { padding: 3px 10px max(10px, env(safe-area-inset-bottom)); }
 .composer-shell { display: flex; align-items: flex-end; gap: 4px; padding: 4px 5px 4px 6px; border-radius: 24px; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
 .composer-shell:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
-.field { position: relative; flex: 1; min-width: 0; display: flex; }
-textarea { font: inherit; font-size: 15px; line-height: 22px; flex: 1; min-width: 0; min-height: 38px; height: 38px; max-height: 144px; resize: none; border: 0; border-radius: 16px; padding: 8px 8px; color: var(--ink); caret-color: var(--accent); background: transparent; overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: pan-y; }
-textarea:focus { outline: none; }
-textarea::placeholder { color: var(--muted); opacity: .85; }
+#input { font: inherit; font-size: 15px; line-height: 22px; flex: 1; min-width: 0; min-height: 38px; height: 38px; max-height: 144px; resize: none; border: 0; border-radius: 16px; padding: 8px 8px; color: var(--ink); caret-color: var(--accent); background: transparent; overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; }
+#input:focus { outline: none; }
+#input::placeholder { color: var(--muted); opacity: .85; }
 #voice { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 18px; color: var(--muted); flex-shrink: 0; transition: background .12s, color .12s, transform .1s; }
 #voice:active { background: var(--raised); color: var(--accent); transform: scale(.93); }
 #slash { width: 36px; height: 36px; border-radius: 18px; background: color-mix(in srgb, var(--accent) 11%, transparent); color: var(--accent); font-family: "Terminal Mono", monospace; font-size: 16px; font-weight: 700; flex-shrink: 0; transition: background .12s, transform .1s; }
