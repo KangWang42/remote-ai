@@ -180,20 +180,21 @@ public sealed class TerminalAgent {
     void Return(Dictionary<string, object> kept, Dictionary<string, object> prefs) {
         string id = Get(kept, "id"), tool = Get(kept, "tool"), dir = Get(kept, "dir"), session = Get(kept, "session");
         var dirs = AllDirs(prefs);
-        if (tool == "agy" && session.Length == 0) return; // An unbound PTY cannot be reattached without a conversation ID.
+        Tool kind = Tool.Of(tool);
+        if (kind == null || (!kind.ReturnsUnnamed && session.Length == 0)) return; // an unnamed one cannot be found again
         string launcher = FindTool(tool);
         var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
         string where = Place(live, dirs);
         if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || where == null || !Directory.Exists(where)) return;
         if (Get(kept, "form") == "chat") {
             // a conversation goes on where it was; one whose tool had not named it yet cannot be found again
-            if (session.Length == 0 || (tool != "claude" && tool != "codex")) return;
+            if (session.Length == 0 || !kind.Chats) return;
             live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
             live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live));
             terminals[id] = live;
             return;
         }
-        live.Pending.Append("\r\n\x1b[2m" + (tool == "shell" ? "Remote AI 已更新，这是重新打开的 PowerShell。" : session.Length > 0 ? "Remote AI 已更新，正在接回原来的对话…" : "Remote AI 已更新；原对话保存在电脑上，可从历史对话继续。") + "\x1b[0m\r\n");
+        live.Pending.Append("\r\n\x1b[2m" + (!kind.Converses ? "Remote AI 已更新，这是重新打开的 PowerShell。" : session.Length > 0 ? "Remote AI 已更新，正在接回原来的对话…" : "Remote AI 已更新；原对话保存在电脑上，可从历史对话继续。") + "\x1b[0m\r\n");
         live.Pty = new PseudoTerminal(Command(tool, launcher, session, false, Get(prefs, "RemoteMaxMode"), false, tool == "codex" && SupportsStandalone(launcher), false), where,
             Math.Max(20, Math.Min(240, Convert.ToInt32(kept["cols"]))), Math.Max(6, Math.Min(100, Convert.ToInt32(kept["rows"]))), Emitted(live));
         terminals[id] = live;
@@ -217,10 +218,12 @@ public sealed class TerminalAgent {
     /// The file a tool keeps a conversation in; null where there is none.
     string ConversationFile(string tool, string session, string root) {
         string file;
-        if (tool == "claude") file = Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl");
-        else if (tool == "agy") file = Antigravity.TranscriptPath(session);
-        else if (!codexFiles.TryGetValue(session, out file) || !File.Exists(file))
-            codexFiles[session] = file = Directory.GetFiles(Path.Combine(CodexSessions.Home, "sessions"), "rollout-*" + session + ".jsonl", SearchOption.AllDirectories).FirstOrDefault();
+        Tool kind = Tool.Of(tool);
+        if (kind == null) return null;
+        // the reading of the lists may have found it already (Codex keeps its conversations by day)
+        if (kind == Tool.Codex && codexFiles.TryGetValue(session, out file) && File.Exists(file)) return file;
+        file = kind.Transcript(session, root);
+        if (file != null && kind == Tool.Codex) codexFiles[session] = file;
         return file != null && File.Exists(file) ? file : null;
     }
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
@@ -407,7 +410,7 @@ public sealed class TerminalAgent {
         } catch (Exception problem) { note = problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "没有发出"; }
         Chains.Done(rule.Id, ok, note);
     }
-    static string Label(string tool) { return tool == "claude" ? "Claude Code" : tool == "agy" ? "Antigravity CLI" : "Codex"; }
+    static string Label(string tool) { return Tool.LabelOf(tool); }
     // The name a folder goes by in the numbers: its project's where it is one (or lies in one), else its own.
     string NamedFolder(string folder, Dictionary<string, string> dirs) {
         if (String.IsNullOrEmpty(folder)) return "";
@@ -1452,43 +1455,17 @@ public sealed class TerminalAgent {
         SaveProjects(own);
         nextScan = DateTime.MinValue;
     }
-    // End only the verified conversation writer before resuming the original session.
-    void ClaudeExclusive(string session, bool takeover) {
-        var parents = Parents();
-        string folder = Path.Combine(ClaudeHome, "sessions");
-        if (!Directory.Exists(folder)) return;
-        var owners = Directory.GetFiles(folder, "*.json").Select(file => new { File = file, Owner = ClaudeSessions.Inspect(file) })
-            .Where(item => item.Owner.Live && item.Owner.Session == session).ToArray();
-        if (owners.Length > 1) throw new InvalidOperationException(ClaudeSessions.MultipleReason);
-        foreach (var item in owners) {
-            string file = item.File; var owner = item.Owner;
-            var roots = terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id });
-            if (!takeover || !owner.CanTakeover || CodexSessions.Descends(owner.Pid, roots, parents)) throw new InvalidOperationException(owner.Reason);
-            using (var process = Process.GetProcessById(owner.Pid)) {
-                var current = ClaudeSessions.Inspect(file);
-                if (!current.CanTakeover || current.Session != session || current.Pid != owner.Pid || current.Started != owner.Started || process.StartTime.ToUniversalTime().ToFileTimeUtc() != owner.Started) throw new InvalidOperationException("Claude Code 会话归属已变化，请刷新后重试");
-                process.Kill();
-                if (!process.WaitForExit(5000)) throw new InvalidOperationException("原 Claude Code 会话尚未结束，已取消接管");
-            }
-        }
-    }
+    /// This program's own processes, which a takeover never ends: the phone's terminals and itself.
+    int[] OwnRoots() { return terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray(); }
     public static string Command(string tool, string launcher, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false) {
-        if (tool != "claude" && tool != "codex" && tool != "agy" && tool != "shell") throw new ArgumentException("工具无效");
+        Tool.Named(tool);
         if (launcher == null || launcher.IndexOfAny(new[] { '"', '%', '\r', '\n' }) >= 0) throw new ArgumentException("工具路径无效");
         if (!String.IsNullOrEmpty(session) && !Regex.IsMatch(session, @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z")) throw new ArgumentException("历史会话编号无效");
         string args = Arguments(tool, session, history, mode, fork, noDaemon, fresh);
         return LaunchCommand(launcher, args);
     }
     public static string Arguments(string tool, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false) {
-        string args = "";
-        if (tool == "agy") {
-            if (history || fork || fresh) throw new ArgumentException("请在 Antigravity CLI 内选择历史对话");
-            return session.Length > 0 ? " --conversation " + session : "";
-        }
-        if (tool == "claude") args = (session.Length > 0 ? (fresh ? " --session-id " : " --resume ") + session : history ? " --resume" : "") + (mode == "read" ? " --permission-mode plan" : mode == "edit" ? " --permission-mode acceptEdits" : "");
-        if (tool == "codex") args = (session.Length > 0 ? (fork ? " fork " : " resume ") + session : history ? " resume --include-non-interactive" : "") + (noDaemon ? " --no-daemon" : "") + (mode == "read" ? " -s read-only" : mode == "edit" ? " -s workspace-write" : "");
-        if (tool == "shell") args = " -NoLogo -NoExit";
-        return args;
+        return Tool.Named(tool).Arguments(session ?? "", history, mode, fork, noDaemon, fresh);
     }
     public static ProcessStartInfo ComputerProcess(ComputerTakeover takeover, string mode) {
         if (takeover == null || String.IsNullOrEmpty(takeover.Launcher)) throw new InvalidOperationException("电脑上没有找到这个工具");
@@ -1605,36 +1582,18 @@ public sealed class TerminalAgent {
             var dirs = AllDirs(prefs);
             string where = Place(live, dirs);
             if (where == null) throw new InvalidOperationException("这个项目已经从电脑端移除");
-            if ((live.Tool == "codex" || live.Tool == "agy") && live.Session.Length == 0) { Scan(dirs); }
-            string session = live.Session;
-            if ((live.Tool == "claude" || live.Tool == "codex") && session.Length == 0) throw new InvalidOperationException("正在等待会话编号，请刷新活动后再接管");
-            if (live.Tool == "agy" && session.Length == 0) throw new InvalidOperationException("请先在 Antigravity 终端内开始对话，或通过“在电脑上打开”直接使用");
-            if (live.Tool == "codex") {
-                var owner = CodexSessions.Inspect(session);
-                if (!owner.Live || owner.Pid <= 0 || !CodexSessions.Descends(owner.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Codex 进程属于手机终端，已取消接管");
-            }
-            if (live.Tool == "agy") {
-                var owner = AgySessions.Inspect(session);
-                if (!owner.Live || owner.Pid <= 0 || !CodexSessions.Descends(owner.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Antigravity CLI 进程属于手机终端，已取消接管");
-            }
-            if (live.Tool == "claude") {
-                string folder = Path.Combine(ClaudeHome, "sessions");
-                var source = Directory.Exists(folder) ? Directory.GetFiles(folder, "*.json").Select(noted => ClaudeSessions.Inspect(noted)).FirstOrDefault(s => s.Live && s.Session == session) : null;
-                if (source == null || !CodexSessions.Descends(source.Pid, new[] { live.Pty.Id }, Parents())) throw new InvalidOperationException("无法确认这个 Claude Code 进程属于手机终端，已取消接管");
-            }
-            if (live.Tool != "claude" && live.Tool != "codex" && live.Tool != "agy") {
+            Tool kind = Tool.Named(live.Tool);
+            if (!kind.Converses) {
                 live.Pty.Dispose();
                 return new ComputerTakeover { Tool = live.Tool, Dir = where, Session = "", Launcher = FindTool(live.Tool), PhoneTerminal = true };
             }
+            if (!kind.NamedAtStart && live.Session.Length == 0) { Scan(dirs); }
+            string session = live.Session;
+            if (session.Length == 0) throw new InvalidOperationException(kind.Unnamed);
+            if (!kind.HeldUnder(session, live.Pty.Id, Parents())) throw new InvalidOperationException("无法确认这个 " + kind.Label + " 进程属于手机终端，已取消接管");
             live.Pty.Dispose();
-            for (int n = 0; n < 60; n++) {
-                if (live.Tool == "codex" && !CodexSessions.Inspect(session).Live) break;
-                if (live.Tool == "agy" && !AgySessions.Inspect(session).Live) break;
-                if (live.Tool == "claude" && !Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json").Select(noted => ClaudeSessions.Inspect(noted)).Any(s => s.Live && s.Session == session)) break;
-                Thread.Sleep(50);
-            }
-            if (live.Tool == "codex" && CodexSessions.Inspect(session).Live) throw new InvalidOperationException("原 Codex 进程没有及时结束，已取消接管");
-            if (live.Tool == "agy" && AgySessions.Inspect(session).Live) throw new InvalidOperationException("原 Antigravity CLI 进程没有及时结束，已取消接管");
+            for (int n = 0; n < 60 && kind.Open(session); n++) Thread.Sleep(50);
+            if (kind.Open(session)) throw new InvalidOperationException("原 " + kind.Label + " 进程没有及时结束，已取消接管");
             return new ComputerTakeover { Tool = live.Tool, Dir = where, Session = session, Launcher = FindTool(live.Tool), PhoneTerminal = true };
         }
     }
@@ -1790,9 +1749,7 @@ public sealed class TerminalAgent {
                 if (gone == null || !Regex.IsMatch(session, Uuid) || !AllDirs(prefs).TryGetValue(gone.Dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 if (gone.Live || terminals.Values.Any(t => t.Session == session && !t.Pty.Closed)) throw new InvalidOperationException("这段对话正开着，请先结束它再删除");
                 try {
-                    if (tool == "claude") Removal.Claude(Path.Combine(ClaudeHome, "projects", ProjectFolder(root), session + ".jsonl"));
-                    else if (tool == "agy") throw new InvalidOperationException("Antigravity CLI 对话暂不支持从手机删除");
-                    else Removal.Codex(FindTool("codex"), session);
+                    Tool.Named(tool).Remove(session, root, FindTool(tool));
                 }
                 catch (FileNotFoundException) { throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试"); }
                 catch (UnauthorizedAccessException) { throw new InvalidOperationException("没有权限移走这段对话的文件"); }
@@ -1811,9 +1768,7 @@ public sealed class TerminalAgent {
                 if (open == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
                 var ways = WaysOf(open, Reach.Of(tool, session));
                 if (ways.End != Ways.Process) throw new InvalidOperationException(ways.Why["end"]);
-                if (tool == "claude") ClaudeExclusive(session, true);
-                else if (tool == "agy") AgySessions.Takeover(session, terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray(), Parents());
-                else CodexSessions.Takeover(session, terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray(), Parents());
+                Tool.Named(tool).End(session, OwnRoots(), Parents());
                 nextScan = DateTime.MinValue;
                 result = new Dictionary<string, object>();
             }
@@ -1898,46 +1853,34 @@ public sealed class TerminalAgent {
                 if (terminals.ContainsKey(terminal)) return;
                 if (terminals.Values.Count(t => !t.Pty.Closed) >= 8) throw new InvalidOperationException("最多同时运行 8 个终端");
                 string tool = Get(op, "tool"), dir = Get(op, "dir"), previous = Get(op, "previous"), session = Get(op, "session");
+                Tool kind = Tool.Named(tool);
                 if (Get(op, "history") == "True" && session.Length == 0 && previous.Length == 0) throw new ArgumentException("请选择具体历史对话，或重新新建对话");
                 bool fork = Get(op, "fork") == "True";
-                if (fork && (tool != "codex" || session.Length == 0 || Get(op, "takeover") == "True")) throw new ArgumentException("副本选项无效");
+                if (fork && (!kind.Forks || session.Length == 0 || Get(op, "takeover") == "True")) throw new ArgumentException("副本选项无效");
                 var dirs = AllDirs(prefs);
                 // In a project; or, to go on with a conversation that is open in a folder that is no project, in that
                 // folder (the relay says which, from what this computer listed).
-                string folder = dir.Length == 0 && (session.Length > 0 || previous.Length > 0) && (tool == "claude" || tool == "codex" || tool == "agy") ? NormalFolder(Get(op, "folder")) : "";
+                string folder = dir.Length == 0 && (session.Length > 0 || previous.Length > 0) && kind.Converses ? NormalFolder(Get(op, "folder")) : "";
                 if (dir.Length == 0 ? folder.Length == 0 || !Directory.Exists(folder) : !dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
                 string launcher = FindTool(tool);
                 if (launcher == null) throw new ArgumentException("电脑未安装这个工具");
                 if (session.Length > 0) {
                     if (!Scan(dirs).Any(s => s.Id == session && s.Tool == tool && s.Dir == dir && (dir.Length > 0 || SamePath(s.Folder, folder)))) throw new ArgumentException("电脑上没有找到这个对话");
-                    if (tool == "claude") ClaudeExclusive(session, Get(op, "takeover") == "True");
-                    if (tool == "codex" && !fork) {
-                        var roots = terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray();
-                        if (Get(op, "takeover") == "True") CodexSessions.Takeover(session, roots, Parents());
-                        var owner = CodexSessions.Inspect(session);
-                        if (!owner.Known || owner.Live) throw new InvalidOperationException("原 Codex 对话仍被占用，请先在原应用结束并关闭它，再接管同一段历史；不会自动新建副本");
-                    }
-                    if (tool == "agy") {
-                        var roots = terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray();
-                        if (Get(op, "takeover") == "True") AgySessions.Takeover(session, roots, Parents());
-                        var owner = AgySessions.Inspect(session);
-                        if (!owner.Known || owner.Live) throw new InvalidOperationException("原 Antigravity CLI 对话仍被占用，请选择接管原对话，或在原终端结束后重试");
-                    }
+                    // a copy leaves the original where it is
+                    if (!fork) kind.Exclusive(session, Get(op, "takeover") == "True", OwnRoots(), Parents(), null);
                 } else if (previous.Length > 0) {
                     if (!Regex.IsMatch(previous, @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("历史编号无效");
                     session = List(prefs, "RemoteSessions").Select(Convert.ToString).Where(s => s.StartsWith(previous + "|", StringComparison.Ordinal)).Select(s => s.Substring(previous.Length + 1)).FirstOrDefault() ?? "";
                     if (session.Length == 0) throw new ArgumentException("旧对话没有会话编号，请使用历史对话入口");
-                    if (tool == "claude") ClaudeExclusive(session, false);
-                    else if (tool == "codex") { var owner = CodexSessions.Inspect(session); if (!owner.Known || owner.Live) throw new InvalidOperationException("原对话仍被占用，请从项目中选择接管原对话"); }
-                    else if (tool == "agy") { var owner = AgySessions.Inspect(session); if (!owner.Known || owner.Live) throw new InvalidOperationException("原对话仍被占用，请从项目中选择接管原对话"); }
+                    kind.Exclusive(session, false, OwnRoots(), Parents(), "原对话仍被占用，请从项目中选择接管原对话");
                 }
-                bool fresh = tool == "claude" && session.Length == 0 && Get(op, "history") != "True";
+                bool fresh = kind.NamedAtStart && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
                 var live = new LiveTerminal { Id = terminal, Tool = tool, Dir = dir, Folder = folder, Session = fork ? "" : session };
                 if (Get(op, "form") == "chat") {
                     // A conversation run through its tool's structured mode: what it says and does is given as events, and
                     // the first thing to say, where there is one, is said at once (Chats.cs).
-                    if (tool != "claude" && tool != "codex") throw new ArgumentException("这个工具不支持对话");
+                    if (!kind.Chats) throw new ArgumentException("这个工具不支持对话");
                     if (fork || Get(op, "history") == "True") throw new ArgumentException("对话选项无效");
                     bool resume = !fresh && session.Length > 0;
                     live.Pty = Chat.Open(tool, launcher, Place(live, dirs), session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live));

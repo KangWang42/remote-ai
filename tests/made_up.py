@@ -1,6 +1,6 @@
 """Made-up homes of Claude Code and Codex for the checks and the pictures: conversations that are saved, and ones
-that something holds open. An agent that is given these homes (CLAUDE_CONFIG_DIR, CODEX_HOME) reads nothing of the
-tools on this computer, so no real conversation is ever listed by a check or drawn into a picture."""
+that something holds open. An agent that is given these homes (CLAUDE_CONFIG_DIR, CODEX_HOME, and an empty AGY_HOME
+for Antigravity CLI) reads nothing of the tools on this computer, so no real conversation is ever listed by a check or drawn into a picture."""
 import json
 import msvcrt
 import os
@@ -12,15 +12,15 @@ from pathlib import Path
 
 class Homes:
     def __init__(self, folder):
-        self.claude, self.codex = Path(folder) / "claude-home", Path(folder) / "codex-home"
-        for made in (self.claude / "projects", self.claude / "sessions", self.codex / "sessions" / "2026" / "10" / "11", self.codex / "thread-writer-locks"):
+        self.claude, self.codex, self.agy = Path(folder) / "claude-home", Path(folder) / "codex-home", Path(folder) / "agy-home"
+        for made in (self.agy,self.claude / "projects", self.claude / "sessions", self.codex / "sessions" / "2026" / "10" / "11", self.codex / "thread-writer-locks"):
             made.mkdir(parents=True, exist_ok=True)
         self.locks = []
         self.holders = []
         self.rollouts = {}
 
     def environment(self, **more):
-        return dict(os.environ, PYTHONUTF8="1", CLAUDE_CONFIG_DIR=str(self.claude), CODEX_HOME=str(self.codex), **more)
+        return dict(os.environ, PYTHONUTF8="1", CLAUDE_CONFIG_DIR=str(self.claude), CODEX_HOME=str(self.codex), AGY_HOME=str(self.agy), **more)
 
     def claude_saved(self, folder, session, title, hours_ago, said=("帮我看看", "好的。"), entry=None, worked=()):
         """A conversation Claude Code saved for a folder, named, and last used that many hours ago. `entry`: what
