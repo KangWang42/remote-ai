@@ -36,8 +36,8 @@
 | 工作项 | 做法 | 验收 |
 | --- | --- | --- |
 | 1.1 工具适配层 | 新建 `agent-windows/Tools/`：每个工具一个类（`ClaudeTool`、`CodexTool`、`AgyTool`），实现同一个接口：列出对话、读记录、判定归属、启动参数、可用通道、对话驱动、额度。`RemoteCliAgent.cs` 只按接口调用，删掉散落的 `tool == ...` 分支。`Ways.Of` 改为询问工具“有哪些通道”，原因文字随工具类 | 现有检查全部通过（`ways_check.py`、`agy_check.py`、`in_use_check.py`、`chat_check.py` 等），行为不变；`RemoteCliAgent.cs` 明显变小。**第一步已完成**：`agent-windows/Tools.cs`，启动参数、记录文件、占用检查、接管、结束、删除归入各工具的类，按工具名的分支从 61 处减到 24 处。剩下的在对话列表扫描和记录解析里，是第二步 |
-| 1.2 agy 钩子 | `Reach` 增加 agy：安装时写入 `~/.gemini/config/hooks.json` 中名为 `remote-ai` 的一项（保留用户自己的钩子，卸载时只删这一项）；`Stop` 时交付排队的消息，`PreToolUse` 回答确认、按要求停止 | 先在临时文件夹用真实 agy 1.5.12 实测三件事：`Stop` 返回 `decision: block` 能否让它继续处理留言；`PreToolUse` 的 `continue: false` 能否停下这一轮；确认请求能否由钩子回答。实测通过的才写进 `Ways` |
-| 1.3 agy 对话驱动 | `Chats.cs` 增加 `AgyChat`。优先 `agy acp`：ACP 是公开协议，Gemini CLI、Codex（codex-acp）等也实现了它，一个 `AcpChat` 驱动以后能复用到 OpenCode、Qoder 等（中转已经认识这些工具名）；若 ACP 缺少续聊或确认，再用 stream-json | `tests/chat_check.py` 加 agy 的替身；真实 agy 上跑通新建、确认、停止、续聊 |
+| 1.2 agy 钩子 | `Reach` 增加 agy：安装时写入 `~/.gemini/config/hooks.json` 中名为 `remote-ai` 的一项（保留用户自己的钩子，卸载时只删这一项）；`Stop` 时交付排队的消息，`PreToolUse` 回答确认、按要求停止 | **已完成**：接入 `~/.gemini/config/hooks.json` 的 `remote-ai` 项，支持执行中留言（`PreInvocation`）、停止（`PreToolUse` + `PostInvocation`）和停下续做（`Stop`），在真实 `agy 1.5.12` 验证通过（`tests/agy_reach_live.py`） |
+| 1.3 agy 对话驱动 | `Chats.cs` 增加 `AgyChat`。优先 `agy acp`：ACP 是公开协议，Gemini CLI、Codex（codex-acp）等也实现了它，一个 `AcpChat` 驱动以后能复用到 OpenCode、Qoder 等（中转已经认识这些工具名）；若 ACP 缺少续聊或确认，再用 stream-json | **已完成**：新增通用 `AcpChat` 与 `AgyChat`（`agy acp`），中转支持 `chat-agy`，新建对话与交接支持 agy；`tests/chat_check.py` 与真实 `agy 1.5.12`（`tests/agy_live.py`）验证通过 |
 | 1.4 Linux | `agent-linux/agent.py` 同步 1.1–1.3（agy 在 Linux 上的数据目录要先核实） | `agent-linux/test_agent.py` 在 Linux 测试服务器上通过 |
 
 完成后，Positron 里那段 agy 对话在手机上可以：执行中留言、停止、回答确认，不必再接管结束它。
@@ -52,7 +52,7 @@
 | Claude Code | 状态栏（statusLine）收到的 JSON 里有 `rate_limits.five_hour` 和 `seven_day`（`used_percentage`、`resets_at`），只对 Pro/Max 账户、且第一次回答之后才有，任一窗口可能缺失。做法二选一：给用户的状态栏套一层，记录额度后原样调用用户原来的命令；或在 stream-json 的事件里找额度（要实测） | 需要用户同意改状态栏配置 |
 | agy | 未找到公开接口 | 先查 `/usage` 一类命令和 ACP 的返回，没有就不显示 |
 
-界面：“我的”页列出每个工具两个窗口的已用百分比和重置时间；新建对话和“交给另一个 AI”的面板上，工具名旁写剩余额度；某个工具超过 90% 时在面板顶部建议交给另一个。电脑端只把百分比和重置时间交给中转，不传账户信息。
+界面：“我的”页列出每个工具两个窗口的已用百分比和重置时间；新建对话和“交给另一个 AI”的面板上，工具名旁写剩余额度；某个工具超过 90% 时在面板顶部建议交给另一个。电脑端只把百分比和重置时间交给中转，不传账户信息。**已完成（1.8.0）**：Windows `Quotas.cs`、中转、`web/me.js`、`web/ui/work.js` 与 Android 原生 `QuotaLines.java` / `AppPages.java` 已上线并通过检查。
 
 ## 阶段 3：多个 AI 共同完成一项工作
 
@@ -75,7 +75,7 @@
 - 手机：“协作”页加“协作任务”，一页时间线显示每一轮谁说了什么、改了哪些文件；可以暂停、插话、结束。
 - 中转：`/api/work` 增加 `teams`；协议写进 `docs/PROTOCOL.md`。
 
-验收：真实的 Claude Code 写、Codex 审，在临时仓库里完成一个小改动并在第二轮通过；重启电脑端后任务接着进行；手机上看到每一轮。
+验收：真实的 Claude Code 写、Codex 审，在临时仓库里完成一个小改动并在第二轮通过；重启电脑端后任务接着进行；手机上看到每一轮。**已完成第一版（1.8.0）**：`agent-windows/Teams.cs` 实现写审（`review`）与领队（`lead`）两种模式及加密持久化、重启暂停恢复；中转 `/api/work`、`web/teams.js`、`web/together.js` 与 Android 原生 `AppPages.java` 全部接通并通过单元、中转和浏览器 UI 检查（`tests/teams_check.py`、`relay/test_relay.py`、`tests/together_ui_check.py`）。独立 worktree 隔离与并行比稿留作下一阶段。
 
 ## 阶段 4：交互
 

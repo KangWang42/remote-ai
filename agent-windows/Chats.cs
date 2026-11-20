@@ -195,6 +195,8 @@ public abstract class Chat : IRunning {
         lock (gate) Event(new Dictionary<string, object> { { "t", "history" }, { "messages", messages }, { "more", more } });
     }
     protected void Item(string id, string kind, string text, Dictionary<string, object> more = null) {
+        if (kind == "text") { wordsId = id; words.Clear().Append(text ?? ""); }
+        else if (kind == "user") { wordsId = ""; words.Clear(); }
         var item = new Dictionary<string, object> { { "t", "item" }, { "id", id }, { "kind", kind }, { "text", text ?? "" }, { "at", Now() } };
         if (more != null) foreach (var pair in more) item[pair.Key] = pair.Value;
         Event(item);
@@ -209,6 +211,7 @@ public abstract class Chat : IRunning {
             if (had + text.Length > OutputMost) text = text.Substring(0, OutputMost - had) + "\n…";
             printed[id] = had + text.Length;
         }
+        if (kind == "more" && id == wordsId) words.Append(text);
         if (gathered.Length > 0 && (gatherKind != kind || gatherId != id)) Flush();
         gatherKind = kind; gatherId = id; gathered.Append(text);
         if (gathered.Length > 8000) Flush();
@@ -221,13 +224,24 @@ public abstract class Chat : IRunning {
         Event(done);
     }
     /// The whole of a text once it is written, where the tool says it: it replaces what came in pieces.
-    protected void Settled(string id, string text) { Event(new Dictionary<string, object> { { "t", "set" }, { "id", id }, { "text", text } }); Spoken(text); }
+    protected void Settled(string id, string text) {
+        if (id == wordsId || !String.IsNullOrEmpty(text)) { wordsId = id; words.Clear().Append(text ?? ""); }
+        Event(new Dictionary<string, object> { { "t", "set" }, { "id", id }, { "text", text } }); Spoken(text);
+    }
+    // what it said last in this turn, whole: given with the end of the turn to whoever listens (Teams.cs)
+    string wordsId = "";
+    readonly StringBuilder words = new StringBuilder();
+    /// A turn has ended: how ("done", "stopped", "failed"), and what it said last in it. Told on a thread of its own,
+    /// outside the conversation's lock, so that whoever listens may tell this or another conversation something.
+    public event Action<string, string> Turned;
     protected void Note(string text) { Event(new Dictionary<string, object> { { "t", "note" }, { "text", text }, { "at", Now() } }); }
     protected void TurnEnded(string how, string error) {
         var turn = new Dictionary<string, object> { { "t", "turn" }, { "end", how }, { "at", Now() } };
         if (!String.IsNullOrEmpty(error)) turn["error"] = error;
         Event(turn);
         stopping = false;
+        var turned = Turned;
+        if (turned != null) { string said = words.ToString(); ThreadPool.QueueUserWorkItem(_ => { try { turned(how, said); } catch (Exception) { } }); }
     }
     protected string Ask(object request, string kind, string title, string text, bool always, IList<string> choices = null) {
         var asked = new Asked { Id = Guid.NewGuid().ToString("N").Substring(0, 16), Request = request, Kind = kind, Text = (title + (text.Length > 0 ? "\n" + text : "")).Trim(), Always = always };

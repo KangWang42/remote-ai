@@ -162,8 +162,8 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work`, `chains`, `brief` and `schedule-days`
-(the last four: "The owner's work", below). These are forwarded
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy` and `teams`
+(the work capabilities: "The owner's work", below). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 An agent verifies Codex's actual writer lock and process ownership before advertising takeover, then checks
 again before terminating the selected independent CLI. Shared app servers and phone descendants are protected.
@@ -250,7 +250,7 @@ to held requests. Switching to the background cancels the active reader; returni
 
 | `action` | Fields |
 | --- | --- |
-| `start` | `tool` (`claude`, `codex`, `agy`, `opencode`, `qoder`, `cline`, `pi`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list), `form: "chat"` (a conversation run through its tool's structured mode, see "Chats"; `claude` and `codex` only, needs the `chat` capability, not with `history` or `fork`) with optional `text` (the first thing to say, at most 8,000 characters) |
+| `start` | `tool` (`claude`, `codex`, `agy`, `opencode`, `qoder`, `cline`, `pi`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list), `form: "chat"` (a conversation run through its tool's structured mode, see "Chats"; `claude` and `codex` need `chat`, `agy` needs `chat` and `chat-agy`, not with `history` or `fork`) with optional `text` (the first thing to say, at most 8,000 characters) |
 | `input` | `terminal`, `data` (at most 16,000 characters) |
 | `say` | `terminal`, `text` (at most 8,000 characters, no control characters but line breaks and tabs). A message for a running terminal from where the terminal is not on the screen (a list, the app's workbench): what the box of the terminal's page sends, the text and then Enter. The relay knows from the program's output whether it takes pasted text in brackets (`ESC [ ? 2004 h`): it then gives the computer `input` with the text between `ESC [ 200 ~` and `ESC [ 201 ~` and `\r`, and otherwise the text on one line and `\r`. Refused while the terminal's phase is `confirm`: Enter would answer its question |
 | `resize` | `terminal`, `cols` (20–240), `rows` (6–100). Not for a chat |
@@ -483,9 +483,9 @@ at the computer.
 
 ### The owner's work
 
-The Android collaboration overview links stored rules to `/?tab=together&do=chain&item=<id>`
-or `do=schedule&item=<id>`. The page waits for that list to load before opening its existing
-rule; a missing id is reported and never treated as a request to create a new rule. Omitting
+The Android collaboration overview links stored items to `/?tab=together&do=team&item=<id>`,
+`/?tab=together&do=chain&item=<id>` or `do=schedule&item=<id>`. The page waits for that list to load before opening its existing
+item; a missing id is reported and never treated as a request to create a new one. Omitting
 `item` opens the creation form. `do=handoff` and `do=many` open immediate actions.
 Chains and schedules are loaded independently, with failures and explicit retry shown per
 kind; a failed refresh retains previously read data. New-rule forms retain the same rule id
@@ -494,7 +494,7 @@ switches ignore repeated taps while saving; a requested refresh is queued if one
 
 `POST /api/work` `{"id": "<16 to 32 hex digits>", "action": "..."}` is held like `/api/files` and needs the `work`
 capability, which the Windows program and the Linux agent have. The three actions that begin with `chain` need
-`chains` besides. The Windows program hears that a conversation has stopped from the tools' own hooks; the Linux
+`chains` besides; the five actions that begin with `team` need `teams`. The Windows program hears that a conversation has stopped from the tools' own hooks; the Linux
 agent has none, and sees a finished turn by watching the source conversation's record grow and then stay quiet
 for a little while. The computer keeps and does all of it; the relay checks the shape of the question, passes it
 on as the operation `work_<action>` and keeps nothing.
@@ -510,6 +510,11 @@ on as the operation `work_<action>` and keeps nothing.
 | `chain_remove` | `chain`: its `id` | `{}` |
 | `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
 | `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
+| `teams` | none; needs `teams` | `{"teams": [...]}`: multi-AI collaboration tasks kept on this computer |
+| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review` or `lead`), `dir` (a workspace name), `goal` (1 to 4,000 characters), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for `lead`: `[leader, ...members]`), `rounds` (1 to 10, default 3) | `{"team": {...}}` |
+| `team_stop` | `team`: its `id` | `{}` |
+| `team_resume` | `team`: its `id` (must be `paused`) | `{}` |
+| `team_remove` | `team`: its `id` (must not be `running`) | `{}` |
 
 The tool of each conversation named is the one the computer listed it with, whatever the phone says. A conversation
 counts as open when a program on the computer has it (`live`) or one of the phone's own terminals runs it.
@@ -573,6 +578,18 @@ conversation", below). The Linux agent knows the first way only.
 
 The computer keeps the questions and rules in `schedules.json` and `chains.json` of its data folder; the Windows
 program encrypts their words for the Windows account.
+
+**Multi-AI collaboration tasks** (`teams`, Windows program since 1.8.0, `agent-windows/Teams.cs`): each member runs as
+an ordinary phone chat (`Chats.cs`) in the task's project folder so the owner can open, watch, stop or answer any
+member from the phone. Up to 3 tasks may be active (`running` or `paused`) at once and up to 10 are kept in
+`teams.dat` (encrypted for the Windows account). On restart, previously `running` tasks restore as `paused` waiting
+for `team_resume`.
+- `review` (写审): the writer makes changes; when its turn ends, the computer runs `git status`/`git diff` in the
+  project folder and passes the changes plus the writer's summary to a read-only reviewer, which starts its reply with
+  `REVIEW: PASS` or `REVIEW: CHANGES`. Findings loop back to the writer until it passes or `rounds` are exhausted.
+- `lead` (领队): the leader splits the goal into `ASSIGN <tool>: <task>` lines for its members (who run in parallel in
+  their own chats) and receives their combined answers and git diff until it answers `DONE: <summary>` or `rounds` are
+  exhausted.
 
 ## Chats
 
@@ -1036,7 +1053,7 @@ no terminal input or output to any log. A relay for everyone keeps the same file
 
 ## App-wide navigation and optional Windows tools
 
-Android opens its aggregate lists even with one saved computer: four tabs over every computer (`tasks`, `projects`, `together`, `me`), the same four a computer's page draws at its foot. Its native `AppPages` reads `stats`, `chains` and `schedules` from each computer’s existing `/api/work`, with that computer’s cookie only. Failures remain local to each computer; partial totals state their coverage and sum per-computer active time. Collaboration remains scoped to one computer. No new relay operation is introduced.
+Android opens its aggregate lists even with one saved computer: four tabs over every computer (`tasks`, `projects`, `together`, `me`), the same four a computer's page draws at its foot. Its native `AppPages` reads `stats`, `teams`, `chains` and `schedules` from each computer’s existing `/api/work`, with that computer’s cookie only. Failures remain local to each computer; partial totals state their coverage and sum per-computer active time. Collaboration remains scoped to one computer. No new relay operation is introduced.
 
 Between a computer's page and the app that shows it (`window.RemoteCliNative`):
 
@@ -1044,6 +1061,6 @@ Between a computer's page and the app that shows it (`window.RemoteCliNative`):
 - `computer()` returns the name the phone gave this computer; the page says it in the line under its heading.
 - `home()` returns to the list the app was left at. A page that the app opened for one thing calls it when that thing is left without going on to a terminal: `?new=1` (the sheet of a new conversation), `?take=<conversation>` (one conversation's window). A terminal started from there is opened with `&from=bench` and leads back the same way.
 - `pref(name)` / `setPref(name, value)` keep what is the same for every computer: the look, and `newkind` (`app` or `term`), the kind of conversation the owner begins.
-- The app opens a computer's page by links: `?tab=<name>` (that computer's part of a tab), `?project=<name>`, and `?tab=together&do=handoff|many|chain|schedule`, which opens that sheet of 协作 at once (`?tab=together&newchain=1` is the same as `do=chain`, from the app of 1.6.1).
+- The app opens a computer's page by links: `?tab=<name>` (that computer's part of a tab), `?project=<name>`, and `?tab=together&do=team|handoff|many|chain|schedule`, which opens that sheet of 协作 at once (`?tab=together&newchain=1` is the same as `do=chain`, from the app of 1.6.1).
 
 Windows offers optional Claude Code and Codex CLI installation on first visible startup, and from settings. Only locally accepted, selected tools are installed. It downloads the official Windows PowerShell installers from `https://claude.ai/install.ps1` and `https://chatgpt.com/codex/install.ps1` (redirecting to `downloads.claude.ai` and `releases.openai.com`, respectively), then executes a saved script without elevation. There is no remote install API. Installed tools are detected again; native executables must pass `--version`. Logs are in the computer data folder’s `tool-install` directory. Official instructions: <https://code.claude.com/docs/en/setup> and <https://learn.chatgpt.com/docs/codex/cli>.

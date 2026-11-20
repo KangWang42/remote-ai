@@ -195,6 +195,7 @@ final class AppPages {
 
     private void buildTogether(LinearLayout page, JSONArray computers) {
         if (expected > 0) {
+            page.addView(wideAction("协作任务", "写审循环或领队分工，多 AI 配合完成", "team", TINT_AGY), kit.below(14));
             actions(page,
                 "交给另一个 AI", "交接上下文接着做", "handoff", TINT_CLAUDE,
                 "同时提问", "一个问题发给多段对话", "many", kit.ACCENT);
@@ -202,7 +203,7 @@ final class AppPages {
                 "定时提问", "到时间由电脑替你问", "schedule", TINT_WARN,
                 "自动接力", "完成一轮后自动转交", "chain", TINT_RELAY);
         } else {
-            page.addView(kit.text("添加电脑后，可将对话交接给另一个 AI，或安排接力和定时提问。", 13.5f, kit.MUTED), kit.below(18));
+            page.addView(kit.text("添加电脑后，可发起多 AI 协作任务，交接对话，或安排接力和定时提问。", 13.5f, kit.MUTED), kit.below(18));
             page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(18));
             return;
         }
@@ -253,7 +254,9 @@ final class AppPages {
                     if ("me".equals(tab)) result = ask(url, cookie, "stats");
                     else {
                         result = new JSONObject();
-                        // An older computer can still provide schedules when it does not support chains.
+                        // An older computer can still provide schedules when it does not support teams or chains.
+                        try { result.put("teams", ask(url, cookie, "teams").optJSONArray("teams")); }
+                        catch (Exception ignored) { }
                         try { result.put("chains", ask(url, cookie, "chains").optJSONArray("chains")); }
                         catch (Exception unavailable) { result.put("chain_error", unavailable.getMessage() == null ? "连接失败" : unavailable.getMessage()); }
                         try { result.put("schedules", ask(url, cookie, "schedules").optJSONArray("schedules")); }
@@ -282,6 +285,8 @@ final class AppPages {
                     if (data == null || !problem.isEmpty()) {
                         addRowMessage(body, "暂时无法读取：" + (problem.isEmpty() ? "请确认电脑在线" : problem), kit.BAD);
                     } else {
+                        JSONArray teams = data.optJSONArray("teams");
+                        if (teams != null && teams.length() > 0) teamRows(body, url, teams);
                         for (boolean chain : new boolean[]{false, true}) {
                             String failure = data.optString(chain ? "chain_error" : "schedule_error");
                             if (!failure.isEmpty()) addRowMessage(body, (chain ? "接力" : "定时提问") + "暂不可用：" + failure, kit.BAD);
@@ -339,6 +344,48 @@ final class AppPages {
         }
     }
 
+    private View wideAction(String title, String hint, String what, int tint) {
+        LinearLayout row = kit.row();
+        row.setPadding(kit.dp(14), kit.dp(13), kit.dp(14), kit.dp(13));
+        row.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
+        kit.elevate(row, 1.5f);
+        View badge = kit.tile(R.drawable.ic_tab_together, tint, 38);
+        ((LinearLayout.LayoutParams) badge.getLayoutParams()).rightMargin = kit.dp(12);
+        row.addView(badge);
+        LinearLayout copy = kit.column();
+        copy.addView(kit.semibold(title, 15.5f, kit.INK));
+        copy.addView(kit.text(hint, 12.5f, kit.MUTED), kit.below(2));
+        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 15));
+        kit.press(row, () -> pickTogether(title, what));
+        return row;
+    }
+
+    private void pickTogether(String title, String what) {
+        java.util.List<String> urls = new java.util.ArrayList<>();
+        JSONArray saved = activity.computers();
+        for (int i = 0; i < saved.length(); i++) if (saved.optJSONObject(i) != null) urls.add(saved.optJSONObject(i).optString("url"));
+        activity.pick(title, urls, url -> activity.together(url, what));
+    }
+
+    private void teamRows(LinearLayout body, String url, JSONArray items) {
+        View divider = new View(activity);
+        divider.setBackgroundColor(kit.rim());
+        body.addView(divider, new LinearLayout.LayoutParams(-1, kit.hairline()));
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i); if (item == null) continue;
+            String mode = "lead".equals(item.optString("mode")) ? "领队" : "写审";
+            String rawState = item.optString("state");
+            String state = "running".equals(rawState) ? "进行中" : "paused".equals(rawState) ? "已暂停" : "done".equals(rawState) ? "已完成" : "stopped".equals(rawState) ? "已停止" : "没有开始";
+            String desc = state + " · " + mode + " · 第 " + item.optInt("round", 1) + " / " + item.optInt("rounds", 3) + " 轮";
+            String note = item.optString("note");
+            if (!note.isEmpty()) desc += " · " + note;
+            kit.setting(body, R.drawable.ic_tab_together, TINT_AGY, item.optString("goal", "协作任务"), desc, "",
+                "running".equals(rawState) ? kit.GOOD : "paused".equals(rawState) ? TINT_WARN : kit.MUTED,
+                () -> activity.together(url, "team", item.optString("id")));
+        }
+    }
+
     private void actions(LinearLayout page, String first, String firstHint, String firstAction, int firstTint,
                          String second, String secondHint, String secondAction, int secondTint) {
         LinearLayout row = kit.row();
@@ -359,12 +406,7 @@ final class AppPages {
         tile.addView(kit.tile(icon, tint, 36));
         tile.addView(kit.semibold(title, 15.5f, kit.INK), kit.below(12));
         tile.addView(kit.text(hint, 12.5f, kit.MUTED), kit.below(2));
-        kit.press(tile, () -> {
-            java.util.List<String> urls = new java.util.ArrayList<>();
-            JSONArray saved = activity.computers();
-            for (int i = 0; i < saved.length(); i++) if (saved.optJSONObject(i) != null) urls.add(saved.optJSONObject(i).optString("url"));
-            activity.pick(title, urls, url -> activity.together(url, what));
-        });
+        kit.press(tile, () -> pickTogether(title, what));
         return tile;
     }
 

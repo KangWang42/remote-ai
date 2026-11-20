@@ -1,6 +1,7 @@
 /* 协作: conversations working together. One conversation is handed over to another AI, a new conversation or one
    that is open, with what was asked and done in it; one question is put to several at once; when a conversation
-   stops, what it said last goes on to another (接力); and a question is asked of a conversation at a set time. The
+   stops, what it said last goes on to another (接力); a question is asked of a conversation at a set time; and
+   several AIs do one piece of work together (协作任务, teams.js). The
    computer keeps the rules and does the passing on (docs/PROTOCOL.md, `/api/work`); this draws them, and sets them
    in sheets (ui/sheet.js; the hand-over and the questions at a time are ui/work.js, shared with each conversation's
    own menu). */
@@ -186,7 +187,7 @@
     asking = true;
     try {
       // (接力 needs the tools' own word that a conversation has stopped: a computer says whether it has that)
-      const [first, second] = await Promise.allSettled([page.has('chains') ? work('chains') : { chains: [] }, work('schedules')]);
+      const [first, second] = await Promise.allSettled([page.has('chains') ? work('chains') : { chains: [] }, work('schedules'), window.RemoteTeams.load()]);
       if (first.status === 'fulfilled') { chains = first.value.chains || []; failures.chains = ''; }
       else failures.chains = first.reason.message;
       if (second.status === 'fulfilled') { schedules = second.value.schedules || []; failures.schedules = ''; }
@@ -226,7 +227,9 @@
     parts.chainCount = el('p'); parts.scheduleCount = el('p');
     parts.chainStatus = el('p', { className: 'hint', role: 'status' }); parts.scheduleStatus = el('p', { className: 'hint', role: 'status' });
     parts.passing = el('section', { id: 'chains' }, el('div', { className: 'section-head' }, el('h2', { textContent: '自动接力' }), parts.chainCount), parts.chainStatus, parts.chains);
-    parts.lists = el('div', null,
+    parts.teams = el('ul', { className: 'cards' }); parts.teamCount = el('p'); parts.teamStatus = el('p', { className: 'hint', role: 'status' });
+    parts.working = el('section', { id: 'teams' }, el('div', { className: 'section-head' }, el('h2', { textContent: '协作任务' }), parts.teamCount), parts.teamStatus, parts.teams);
+    parts.lists = el('div', null, parts.working,
       el('section', { id: 'schedules' }, el('div', { className: 'section-head' }, el('h2', { textContent: '定时提问' }), parts.scheduleCount), parts.scheduleStatus, parts.schedules), parts.passing);
     box.append(el('div', { className: 'acts collaboration-actions' },
       act('handoff', '交给另一个 AI', '新对话或开着的对话接着做', HAND, 'hand', () => handoff()),
@@ -250,6 +253,10 @@
     if (notice) parts.notice.replaceChildren(el('b', { textContent: notice[0] }), el('span', { textContent: notice[1] }), online && supported ? el('button', { type: 'button', textContent: asking ? '正在重试…' : '重新读取', disabled: asking, onclick: () => load(true) }) : '');
     parts.lists.hidden = !supported;
     parts.passing.hidden = !page.has('chains');
+    parts.working.hidden = !page.has('teams');
+    const teams = window.RemoteTeams;
+    fill(parts.teams, teams.cards(), JSON.stringify([teams.teams, Math.floor(Date.now() / 60000), page.data.device.tools, page.data.device.features]));
+    parts.teamCount.textContent = teams.count(); parts.teamStatus.textContent = teams.status(); parts.teamStatus.hidden = !parts.teamStatus.textContent;
     // (the minute is part of what a card is known by: "3 分钟前" and "下次 今天 14:30" move on)
     const tick = Math.floor(Date.now() / 60000), names = (page.data.sessions || []).map(s => s.id + s.title).join();
     fill(parts.chains, (chains || []).map(chainCard).concat(adding('添加接力', () => editChain(), 'chain-new')), JSON.stringify([chains, tick, names]));
@@ -264,7 +271,7 @@
 
   // ?do=<name> comes from the app's own 协作, which lists every computer: what was pressed there is begun here at
   // once, on this computer. (?newchain=1 is how the app of an earlier version asks for a new rule.)
-  const DO = { handoff: () => handoff(), many: askMany, chain: () => editChain(), schedule: () => editSchedule() };
+  const DO = { handoff: () => handoff(), many: askMany, chain: () => editChain(), schedule: () => editSchedule(), team: () => window.RemoteTeams.begin() };
   const asks = new URLSearchParams(location.search);
   let wanted = asks.get('do') || (asks.get('newchain') === '1' ? 'chain' : '');
   const wantedItem = asks.get('item');
@@ -272,13 +279,14 @@
     if (!wanted || page.tab !== 'together' || !page.usable()) return;
     const action = wanted;
     if (!DO[action]) { wanted = ''; return; }
-    if (wantedItem && (action === 'chain' || action === 'schedule')) {
-      const list = action === 'chain' ? chains : schedules;
-      if (list === null || asking || failures[action === 'chain' ? 'chains' : 'schedules']) return;
+    if (wantedItem && (action === 'chain' || action === 'schedule' || action === 'team')) {
+      const list = action === 'chain' ? chains : action === 'schedule' ? schedules : window.RemoteTeams.teams;
+      const failed = action === 'chain' ? failures.chains : action === 'schedule' ? failures.schedules : window.RemoteTeams.failure;
+      if (list === null || asking || failed) return;
       wanted = '';
       const known = list.find(item => item.id === wantedItem);
-      if (!known) return toast('这条安排已不存在，请刷新协作列表');
-      if (action === 'chain') editChain(known); else editSchedule(known);
+      if (!known) return toast(action === 'team' ? '这个协作任务已不存在，请刷新协作列表' : '这条安排已不存在，请刷新协作列表');
+      if (action === 'chain') editChain(known); else if (action === 'schedule') editSchedule(known); else window.RemoteTeams.show(known);
     } else { wanted = ''; DO[action](); }
   }
   page.view('together', { open: () => {

@@ -128,6 +128,8 @@ public sealed class TerminalAgent {
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
         Chains = new Chains(Path.Combine(dataDir, "chains.json"));
+        Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands { Begin = BeginMember, Say = SayToMember, Stop = StopMember, Changes = ChangesIn });
+        Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
@@ -192,6 +194,7 @@ public sealed class TerminalAgent {
             if (session.Length == 0 || !kind.Chats) return;
             live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
             live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas);
+            Heard(live);
             terminals[id] = live;
             return;
         }
@@ -395,8 +398,63 @@ public sealed class TerminalAgent {
     public readonly Schedules Schedules;
     /// What is passed on from one conversation to another when the first has stopped (Chains.cs).
     public readonly Chains Chains;
+    /// Work several AIs do together (Teams.cs): their members are conversations of the phone's that this program begins.
+    public readonly Teams Teams;
+    // ---- the members of a team: conversations the phone runs, begun and told by this program
+    string BeginMember(string tool, string dir, string words, bool read) {
+        var prefs = Preferences(); var dirs = AllDirs(prefs);
+        if (!dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
+        Tool kind = Tool.Named(tool);
+        if (!kind.Chats) throw new ArgumentException(kind.Label + " 不能作为协作成员");
+        string launcher = FindTool(tool);
+        if (launcher == null) throw new ArgumentException("电脑上没有 " + kind.Label);
+        lock (work) {
+            if (terminals.Values.Count(t => !t.Pty.Closed) >= 8) throw new InvalidOperationException("最多同时运行 8 个终端");
+            // read only where it is asked for, and never wider than its owner allows
+            string widest = Get(prefs, "RemoteMaxMode"), mode = read ? "read" : widest;
+            string first = words.Split('\n')[0].Trim();
+            var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = tool, Dir = dir, Title = first.Length > 60 ? first.Substring(0, 59) + "…" : first };
+            live.Pty = Chat.Open(tool, launcher, Place(live, dirs), "", false, mode, Emitted(live), Quotas);
+            Heard(live);
+            terminals[live.Id] = live;
+            live.Chat.Say(words, null);
+            return live.Id;
+        }
+    }
+    Chat Member(string terminal) {
+        LiveTerminal live;
+        lock (work) if (!terminals.TryGetValue(terminal, out live) || live.Pty.Closed || live.Chat == null) throw new InvalidOperationException("这个成员的对话已经结束");
+        return live.Chat;
+    }
+    void SayToMember(string terminal, string words) { Member(terminal).Say(words, null); }
+    void StopMember(string terminal) { try { Member(terminal).Stop(); } catch (InvalidOperationException) { } }
+    /// What changed in a project's folder, as git says it: the files, and the changes themselves (a folder that is
+    /// no repository says nothing).
+    string ChangesIn(string dir) {
+        string folder;
+        if (!AllDirs(Preferences()).TryGetValue(dir, out folder)) return "";
+        Func<string, string> git = args => {
+            try {
+                var info = new ProcessStartInfo("git", "-C \"" + folder + "\" " + args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false) };
+                using (var program = Process.Start(info)) {
+                    var said = program.StandardOutput.ReadToEndAsync(); program.StandardError.ReadToEndAsync();
+                    if (!program.WaitForExit(15000)) { try { program.Kill(); } catch { } return ""; }
+                    return program.ExitCode == 0 ? said.Result : "";
+                }
+            } catch (System.ComponentModel.Win32Exception) { return ""; } catch (InvalidOperationException) { return ""; }
+        };
+        string files = git("status --porcelain --untracked-files=all");
+        if (files.Trim().Length == 0) return "";
+        return "文件：\n" + files.TrimEnd() + "\n\n" + git("-c core.quotepath=false diff HEAD --no-color").TrimEnd();
+    }
+    /// A conversation the phone runs tells a team when a turn of it ends.
+    void Heard(LiveTerminal live) {
+        var chat = live.Chat;
+        if (chat != null) chat.Turned += (how, words) => Teams.Turned(live.Id, how, words);
+    }
     readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
-    static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_brief", "work_chains", "work_chain_set", "work_chain_remove" };
+    static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_brief", "work_chains", "work_chain_set", "work_chain_remove",
+        "work_teams", "work_team_start", "work_team_stop", "work_team_resume", "work_team_remove" };
     /// One rule runs: the last answer of the conversation that stopped goes to the other one, with its owner's words.
     void Pass(Chains.Item rule, Dictionary<string, object> prefs) {
         bool ok = false; string note;
@@ -533,6 +591,15 @@ public sealed class TerminalAgent {
             if (!Chains.Remove(Get(op, "chain"))) throw new ArgumentException("没有找到这条接力");
             return new Dictionary<string, object>();
         }
+        if (action == "work_teams") return new Dictionary<string, object> { { "teams", Teams.All().Select(Teams.Shown).ToArray() } };
+        if (action == "work_team_start") {
+            var item = (op.ContainsKey("item") ? op["item"] : null) as Dictionary<string, object>;
+            if (item == null) throw new ArgumentException("协作任务无效");
+            return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Start(item)) } };
+        }
+        if (action == "work_team_stop") { Teams.Stop(Get(op, "team")); return new Dictionary<string, object>(); }
+        if (action == "work_team_resume") { Teams.Resume(Get(op, "team")); return new Dictionary<string, object>(); }
+        if (action == "work_team_remove") { if (!Teams.Remove(Get(op, "team"))) throw new ArgumentException("没有找到这个协作任务"); return new Dictionary<string, object>(); }
         if (action == "work_brief") {
             // what a hand-over would say, for the phone to show, or to begin a new conversation with
             var from = sessions.FirstOrDefault(s => s.Tool == Get(op, "from_tool") && s.Id == Get(op, "from"));
@@ -1885,6 +1952,7 @@ public sealed class TerminalAgent {
                     if (fork || Get(op, "history") == "True") throw new ArgumentException("对话选项无效");
                     bool resume = !fresh && session.Length > 0;
                     live.Pty = Chat.Open(tool, launcher, Place(live, dirs), session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas);
+                    Heard(live);
                     terminals[terminal] = live;
                     if (resume) Recall(live, Place(live, dirs));
                     string first = Get(op, "text").Trim();
@@ -1963,7 +2031,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0] } },

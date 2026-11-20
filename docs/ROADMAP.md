@@ -69,6 +69,15 @@
 | 按星期的定时提问（`schedule-days`） | `Schedules.cs`、`agent.py` 的 `Schedules`、中转校验；没有这项能力的电脑端不显示星期，中转拒绝而不是每天都问 | `tests/work_check.py`、`relay/test_relay.py`、`agent-linux/test_agent.py` |
 | App 原生面板 | `Kit.sheet` 改为一组带分隔线的行，当前使用的打勾，结束类单独一组；标题居中 | 只通过了编译 |
 
+## 已完成（1.8.0）：工具适配层、Antigravity 补齐、额度显示与多 AI 协作任务
+
+| 项目 | 做法与文件 | 检查 |
+| --- | --- | --- |
+| 工具适配层（第一步） | `agent-windows/Tools.cs`：`ClaudeTool`、`CodexTool`、`AgyTool`、`ShellTool` 统一启动参数、记录文件、占用判定、接管、结束和移除，`RemoteCliAgent.cs` 对应分支从 61 处减至 24 处 | `tests/chat_check.py`、`tests/ways_check.py`、`tests/agy_check.py` |
+| Antigravity CLI 钩子与 ACP 对话 | `agent-windows/Reach.cs`、`Ways.cs` 接入 `~/.gemini/config/hooks.json` 的 `remote-ai` 项（执行中留言、停止、停下续做）；`Chats.cs` 新增通用 `AcpChat` 与 `AgyChat`（`agy acp`）；中转新增 `chat-agy`；新建对话与交接支持 agy | `tests/reach_check.py`、`tests/ways_check.py`、`tests/chat_check.py`、`tests/begin_ui_check.py`、`tests/agy_reach_live.py`、`tests/agy_live.py` |
+| 工具用量额度显示 | `agent-windows/Quotas.cs` 采集 Claude Code（对话事件与状态栏套壳）和 Codex（app-server）的额度窗口与重置时间；中转透传；手机页 `web/me.js`、`web/ui/work.js` 与 Android 原生 `QuotaLines.java` / `AppPages.java` 顶部显示进度条（超 90% 标红） | `tests/quotas_check.py`、`relay/test_relay.py`、`tests/tabs_ui_check.py`、`tests/android_aggregate_check.py` |
+| 多 AI 协作任务（写审 / 领队） | `agent-windows/Teams.cs` 实现写审（`review`，写手 + 只读审查员 + `git diff` 循环）与领队（`lead`，拆分分派 + 并行执行 + 汇总验收），加密持久化并支持重启暂停后继续；中转 `/api/work` 新增 `teams` 能力与 5 个动作；手机页 `web/teams.js`、`web/together.js` 与 Android 原生 `AppPages.java` 支持新建、查看、直达详情和启停删除 | `tests/teams_check.py`、`relay/test_relay.py`、`tests/together_ui_check.py`、`tests/android_aggregate_check.py` |
+
 ## 未完成
 
 | 项目 | 现状 | 怎样继续 |

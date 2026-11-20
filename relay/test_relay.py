@@ -330,6 +330,47 @@ class TerminalRelayTests(unittest.TestCase):
         asked, got = carried({"id": "c" * 32, "action": "handoff", "from": a, "to": b}, {"status": "accepted"})
         self.assertEqual((asked["to"], asked["to_tool"]), (b, "codex"))
 
+    def test_a_team_is_checked_and_passed_on(self):
+        import threading
+        # several AIs at one piece of work: a computer that has it, tools it runs as conversations, in one of its projects
+        self.info.update(tools=["claude", "codex", "agy", "shell"], features=["work", "chat"])
+        self.relay.agent({"info": self.info}, now=1001)
+        item = {"id": "d" * 32, "mode": "review", "dir": "demo", "goal": "  给结算页加上优惠券  ", "tools": ["claude", "codex"], "rounds": 3}
+        with self.assertRaisesRegex(RemoteError, "不支持协作任务"):
+            self.relay.work({"id": "1" * 32, "action": "team_start", "item": item}, now=1002, wait=0)
+        self.info["features"] = ["work", "chat", "teams"]
+        self.relay.agent({"info": self.info}, now=1002)
+        for wrong, said in ((dict(item, mode="vote"), "方式无效"), (dict(item, dir="elsewhere"), "没有报告这个项目"), (dict(item, goal=""), "1 至 4000"),
+                            (dict(item, goal="x" * 4001), "1 至 4000"), (dict(item, tools=["claude", "agy"]), "不能让这个工具"), (dict(item, tools=["shell", "codex"]), "不能让这个工具"),
+                            (dict(item, tools=["claude"]), "写审需要"), (dict(item, mode="lead", tools=["claude", "claude"]), "领队需要"),
+                            (dict(item, mode="lead", tools=["claude", "codex", "codex"]), "领队需要"), (dict(item, rounds=11), "1 到 10"), (dict(item, rounds=True), "1 到 10"), (dict(item, id="x"), "无效")):
+            with self.assertRaisesRegex(RemoteError, said):
+                self.relay.work({"id": "2" * 32, "action": "team_start", "item": wrong}, now=1003, wait=0)
+        with self.assertRaisesRegex(RemoteError, "无效"):
+            self.relay.work({"id": "2" * 32, "action": "team_stop", "team": "zz"}, now=1003, wait=0)
+
+        def carried(payload, answer):
+            got = {}
+            asking = threading.Thread(target=lambda: got.update(value=self.relay.work(payload, now=1004, wait=5)))
+            asking.start()
+            asked = self.relay.pull({"instance": self.info["instance"], "wait": 3})["operations"][0]
+            self.relay.agent({"info": self.info, "acks": [{"id": payload["id"], "error": "", "result": answer}]}, now=1005)
+            asking.join(5)
+            return {k: v for k, v in asked.items() if k not in ("at", "terminal")}, got.get("value")
+        asked, got = carried({"id": "3" * 32, "action": "team_start", "item": item}, {"team": {"id": "d" * 32, "state": "running"}})
+        self.assertEqual(asked, {"id": "3" * 32, "action": "work_team_start", "item": dict(item, goal="给结算页加上优惠券")})
+        self.assertEqual(got["team"]["state"], "running")
+        # agy takes part where the computer runs it as a conversation
+        self.info["features"] = ["work", "chat", "teams", "chat-agy"]
+        self.relay.agent({"info": self.info}, now=1005)
+        asked, got = carried({"id": "4" * 32, "action": "team_start", "item": dict(item, mode="lead", tools=["claude", "codex", "agy"])}, {"team": {}})
+        self.assertEqual(asked["item"]["tools"], ["claude", "codex", "agy"])
+        for action in ("team_stop", "team_resume", "team_remove"):
+            asked, got = carried({"id": "5" * 32, "action": action, "team": "d" * 32}, {})
+            self.assertEqual((asked["action"], asked["team"]), ("work_" + action, "d" * 32))
+        asked, got = carried({"id": "6" * 32, "action": "teams"}, {"teams": []})
+        self.assertEqual((asked, got), ({"id": "6" * 32, "action": "work_teams"}, {"teams": []}))
+
     def test_desktop_timeout_never_claims_not_executed(self):
         self.info["features"] = ["codex-desktop-open"]
         self.relay.agent({"info": self.info}, now=1001)

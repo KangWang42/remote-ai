@@ -89,6 +89,7 @@ class Played:
         self.info = {"instance": "d" * 32, "enabled": True, "tools": ["claude", "codex", "shell"], "workspaces": ["web-shop", "thesis", "data-tools"], "name": "办公室的电脑", "version": "1.6.0", "shell": "PowerShell",
                      "features": ["peek", "reach", "end", "outbox", "marks", "files", "projects", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "codex-desktop-open", "claude-desktop-open"]}
         self.sessions, self.said = story(self.now)
+        self.teams = []          # several AIs at one piece of work (Teams.cs)
         # what the computer keeps of its owner's work (docs/PROTOCOL.md, `/api/work`), and what it was asked to do
         self.chains = [{"id": "e" * 32, "from": THESIS, "from_tool": "codex", "from_title": "整理第三章的参考文献", "to": TABLES, "to_tool": "claude", "to_title": "核对回归表的系数",
                         "text": "按上面整理好的文献，核对正文里的引用编号有没有对上。", "left": 2, "rounds": 3, "runs": 1, "last": {"at": self.now - 14 * 60000, "ok": True, "note": "已交给对话"}}]
@@ -189,6 +190,24 @@ class Played:
             return {"schedule": item}
         if action == "work_schedule_remove":
             self.schedules[:] = [one for one in self.schedules if one["id"] != op["schedule"]]
+            return {}
+        if action == "work_teams":
+            return {"teams": self.teams}
+        if action == "work_team_start":
+            given = op["item"]
+            role = "writer" if given["mode"] == "review" else "leader"
+            item = dict(given, state="running", note="", round=1, created=now, members={role: "1" * 32}, awaited=[role],
+                        log=[{"at": now, "who": "目标", "text": given["goal"]}, {"at": now, "who": role, "text": "开始：【协作任务】" + given["goal"]}])
+            self.teams[:] = [one for one in self.teams if one["id"] != item["id"]] + [item]
+            return {"team": item}
+        if action in ("work_team_stop", "work_team_resume", "work_team_remove"):
+            team = next((one for one in self.teams if one["id"] == op["team"]), None)
+            if team is None:
+                raise RemoteError("没有找到这个协作任务")
+            if action == "work_team_remove":
+                self.teams[:] = [one for one in self.teams if one["id"] != op["team"]]
+            else:
+                team.update(state="stopped" if action == "work_team_stop" else "running", note="已停止" if action == "work_team_stop" else "")
             return {}
         if action == "work_handoff":
             return {"status": "accepted", "note": "已交给对话", "length": 420}

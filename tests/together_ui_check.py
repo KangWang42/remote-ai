@@ -150,6 +150,60 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         except AssertionError:
             raise AssertionError(('focus back on the action', value("[document.activeElement.id, document.activeElement.className, document.activeElement.tagName, document.querySelectorAll('dialog[open]').length]")))
 
+        # ---- 协作任务: only where the computer has it, and runs at least two tools as conversations of the phone's
+        assert value("document.getElementById('teams').hidden"), "no teams on a computer without them"
+        played.info["features"] = played.info["features"] + ["teams", "chat", "chat-agy"]
+        played.info["tools"] = ["claude", "codex", "agy", "shell"]
+        open_page('', "(t => !!t && !t.hidden)(document.getElementById('teams')) && !!document.getElementById('team-new')")
+        assert "还没有协作任务" in value("document.getElementById('teams').innerText")
+        value("document.getElementById('team-new').click()")
+        until(opened('team-goal'), 'the sheet of a new team')
+        chips = lambda label: value("[...document.querySelector('dialog.rs[open] [aria-label=%s]').querySelectorAll('.rs-chip')].map(c => c.textContent + (c.getAttribute('aria-pressed') === 'true' ? '*' : ''))" % json.dumps(label))
+        assert chips('写的 AI') == ['Claude Code*', 'Codex', 'Antigravity CLI'] and chips('审查的 AI') == ['Claude Code', 'Codex*', 'Antigravity CLI'], chips('写的 AI')
+        press('开始')
+        until("document.querySelector('dialog.rs[open]').innerText.includes('请写下要完成什么')", 'a goal is asked for')
+        typed('team-goal', '给结算页加上优惠券，并补上测试')
+        press('开始')
+        until("document.querySelector('dialog.rs[open]').innerText.includes('请选择项目')", 'a project is asked for')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
+        browser.picture(out / 'team-new-390.png')
+        press('开始')
+        # it begins, and its sheet shows how it stands and its members
+        until("!!document.getElementById('member-writer')", "the team's sheet, with its writer")
+        made = played.teams[-1]
+        assert (made["mode"], made["dir"], made["tools"], made["rounds"], made["goal"]) == ("review", "web-shop", ["claude", "codex"], 3, "给结算页加上优惠券，并补上测试"), made
+        assert "进行中" in value("document.querySelector('dialog.rs[open] .rs-who').innerText") and "写 · Claude Code" in value("document.getElementById('member-writer').innerText")
+        assert "给结算页加上优惠券" in value("document.querySelector('dialog.rs[open] .team-log').innerText")
+        browser.picture(out / 'team-sheet-390.png')
+        press('停止')
+        until(closed + " || document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'it says it stopped')
+        assert played.teams[-1]["state"] == "stopped"
+        # 领队: a leader, and the members it may give work to (not itself)
+        value("document.querySelector('dialog.rs:not(.closing) .rs-close') && document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+        until(closed, 'the sheet closed')
+        open_page('&do=team', opened('team-goal'))
+        press('领队')
+        until("!!document.querySelector('dialog.rs[open] [aria-label=成员]')", 'the members')
+        assert chips('领队') == ['Claude Code*', 'Codex', 'Antigravity CLI'] and chips('成员') == ['Codex*', 'Antigravity CLI*'], chips('成员')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=领队]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'Codex').click()")
+        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Claude Code', 'Antigravity CLI'])", 'the leader is no member')
+        typed('team-goal', '做一个登录页')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'thesis').click()")
+        press('开始')
+        until("!!document.getElementById('member-leader')", "the leader's team")
+        assert played.teams[-1]["mode"] == "lead" and played.teams[-1]["tools"][0] == "codex" and played.teams[-1]["dir"] == "thesis", played.teams[-1]
+        value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+        until(closed, 'closed')
+        until("document.querySelectorAll('#teams .card:not(.add)').length === 2", 'both on 协作')
+        assert "进行中" in value("document.getElementById('teams').innerText") and "1 个进行中 / 2 个" in value("document.getElementById('teams').innerText")
+        browser.picture(out / 'teams-390.png')
+        # deep link from Android's 协作 list opens that team directly
+        open_page('&do=team&item=' + played.teams[-1]['id'], "!!document.getElementById('member-leader')")
+        assert '做一个登录页' in value("document.querySelector('dialog.rs[open]').innerText")
+        value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+        until(closed, 'closed')
+        assert not value("window.__errors.length"), value("window.__errors")
+
         evidence = []
         for width in (320, 390, 430, 1440):
             for state, query, ready in [('overview', '', "document.querySelectorAll('#chains .card:not(.add)').length===2"), ('chain', '&do=chain', opened('chain-text'))]:

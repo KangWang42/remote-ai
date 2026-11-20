@@ -386,6 +386,12 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .track { height: 6px; margin-top: 7px; border-radius: 3px; background: var(--raised); overflow: hidden; }
 .track i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
 #quotas { margin-bottom: 18px; }
+/* a team's steps, the newest first (teams.js) */
+.team-log { list-style: none; display: grid; gap: 10px; margin: 0; padding: 0; }
+.team-log li { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: baseline; }
+.team-log b { font-weight: 600; font-size: .86rem; }
+.team-log .at { justify-self: end; color: var(--muted); font-size: .76rem; }
+.team-log p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8.6em; overflow: hidden; }
 .shares li.high .track i { background: var(--bad); }
 .shares li.high span { color: var(--bad); }
 #me .hint { margin-top: 18px; }

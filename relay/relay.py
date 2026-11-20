@@ -332,7 +332,8 @@ WAKE_SECONDS = 85       # a message that is handed to a conversation where it si
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
 # What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
 # it, the questions set to be asked at a time, and one conversation handed over to another.
-WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "brief", "chains", "chain_set", "chain_remove")
+WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "brief", "chains", "chain_set", "chain_remove",
+                "teams", "team_start", "team_stop", "team_resume", "team_remove")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
 REACH = ("say", "answer", "stop")
 # What is done to a terminal that runs a conversation through its tool's structured mode (form "chat"; docs/PROTOCOL.md,
@@ -1134,6 +1135,8 @@ class Relay:
                 raise RemoteError("这台电脑的电脑端不支持接力")
             if action == "brief" and "brief" not in self._device.get("features", []):
                 raise RemoteError("这台电脑的电脑端不支持交给新对话，请更新电脑端")
+            if action.startswith("team") and "teams" not in self._device.get("features", []):
+                raise RemoteError("这台电脑的电脑端不支持协作任务，请更新电脑端")
             listed = {s["id"]: s for s in self._sessions}
             # (a conversation in one of the phone's own terminals is open too: the computer types into that terminal)
             typed = {t.get("session") for t in self._state()["threads"].values() if t["state"] == "running" and t.get("session")}
@@ -1187,6 +1190,33 @@ class Relay:
                 if type(rounds) is not int or not 1 <= rounds <= 10:
                     raise RemoteError("次数需在 1 到 10 之间")
                 question["item"] = {"id": item["id"], "from": first["id"], "from_tool": first["tool"], "to": then["id"], "to_tool": then["tool"], "text": text, "rounds": rounds}
+            elif action == "team_start":
+                # several AIs at one piece of work (agent-windows/Teams.cs): each member a conversation the computer runs
+                item = payload.get("item")
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not _id.fullmatch(item["id"]):
+                    raise RemoteError("协作任务无效")
+                mode, goal, tools, rounds, folder = item.get("mode"), item.get("goal"), item.get("tools"), item.get("rounds", 3), item.get("dir")
+                if mode not in ("review", "lead"):
+                    raise RemoteError("协作方式无效")
+                if not isinstance(folder, str) or folder not in self._device["workspaces"]:
+                    raise RemoteError("电脑没有报告这个项目")
+                if not isinstance(goal, str) or not 0 < len(goal.strip()) <= 4000 or "\0" in goal:
+                    raise RemoteError("目标需为 1 至 4000 字")
+                features = self._device.get("features", [])
+                runs = [t for t in CHAT_TOOLS if t in self._device["tools"] and "chat" in features and CHAT_FEATURES.get(t, "chat") in features]
+                if not isinstance(tools, list) or any(t not in runs for t in tools):
+                    raise RemoteError("这台电脑不能让这个工具参与协作")
+                if mode == "review" and len(tools) != 2:
+                    raise RemoteError("写审需要一个写的 AI 和一个审查的 AI")
+                if mode == "lead" and (not 2 <= len(tools) <= 4 or len(set(tools)) != len(tools)):
+                    raise RemoteError("领队需要一个领队和 1 至 3 个不同的成员")
+                if type(rounds) is not int or not 1 <= rounds <= 10:
+                    raise RemoteError("轮数需在 1 到 10 之间")
+                question["item"] = {"id": item["id"], "mode": mode, "dir": folder, "goal": goal.strip(), "tools": tools, "rounds": rounds}
+            elif action in ("team_stop", "team_resume", "team_remove"):
+                if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
+                    raise RemoteError("协作任务无效")
+                question["team"] = payload["team"]
             elif action == "chain_remove":
                 if not isinstance(payload.get("chain"), str) or not _id.fullmatch(payload["chain"]):
                     raise RemoteError("接力无效")
@@ -1265,7 +1295,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

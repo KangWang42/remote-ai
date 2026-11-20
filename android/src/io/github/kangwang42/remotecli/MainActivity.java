@@ -347,7 +347,7 @@ public final class MainActivity extends Activity {
     }
     /** One computer's own page of a tab: where what the app lists of it is seen whole and changed. */
     void computerPage(String url, String tab) { openPage(url, "", "/?tab=" + tab + ("me".equals(tab) ? "&stats=1" : "")); }
-    /** That computer's page of 协作 with one of its sheets open: "handoff", "many", "chain", "schedule" (web/together.js). */
+    /** That computer's page of 协作 with one of its sheets open: "team", "handoff", "many", "chain", "schedule" (web/together.js). */
     void together(String url, String what) { openPage(url, "", "/?tab=together&do=" + what); }
     void together(String url, String what, String item) { openPage(url, "", "/?tab=together&do=" + Uri.encode(what) + "&item=" + Uri.encode(item)); }
     boolean autoUpdate() { return updater != null && updater.automatic(); }
