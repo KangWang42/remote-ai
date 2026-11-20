@@ -13,5 +13,5 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-claude-owners-") as folder:
     agent_build.compile_check("ClaudeOwnersCheck", exe, [agent_build.ROOT / "tests/ClaudeOwnersCheck.cs"])
     for name in ("claude.exe", "Positron.exe"):
         shutil.copy2(exe, root / name)
-    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(root / "claude"), CODEX_HOME=str(root / "codex"))
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(root / "claude"), CODEX_HOME=str(root / "codex"), AGY_HOME=str(root / "agy"))
     subprocess.run([exe], env=env, check=True, timeout=60)

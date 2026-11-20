@@ -72,8 +72,8 @@ public static class ClaudeOwnersCheck {
             Require(listed.Origin == busy.Origin && listed.Status == "busy" && listed.MultipleOwners, "scan must keep the busy editor owner");
             Require(!listed.CanTakeover && Ways.Of(listed, null, null).End == "", "multiple owners cannot offer single-process takeover or end");
             bool refused = false;
-            try { typeof(TerminalAgent).GetMethod("ClaudeExclusive", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(agent, new object[] { session, true }); }
-            catch (TargetInvocationException error) { refused = error.InnerException is InvalidOperationException && error.InnerException.Message == ClaudeSessions.MultipleReason; }
+            try { Tool.Claude.Exclusive(session, true, new int[0], null, null); }
+            catch (InvalidOperationException error) { refused = error.Message == ClaudeSessions.MultipleReason; }
             Require(refused && !busyProcess.HasExited && !idleProcess.HasExited, "duplicate takeover must refuse before terminating any process");
             var idleHook = new Reach.Open { Status = "idle" };
             Require(Ways.Of(listed, idleHook, null).Status == "busy", "phone status must not be replaced by an idle copy's hook");
