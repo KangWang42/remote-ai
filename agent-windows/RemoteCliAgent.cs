@@ -2015,6 +2015,7 @@ public sealed class TerminalAgent {
                 externalAgy = enabled ? Antigravity.ExternalStarts(FindTool("agy"), terminals.Values.Where(t => !t.Pty.Closed).Select(t => t.Pty.Id).ToArray(), agySessions.LivePids()) : new long[0];
                 toolsAt = DateTime.UtcNow;
                 if (enabled && tools.Contains("codex")) Quotas.AskCodex(FindTool("codex"));      // (at most once in ten minutes)
+                if (enabled && tools.Contains("agy")) Quotas.AskAgy(FindTool("agy"));            // (at most once in ten minutes)
             }
             // An ended terminal whose conversation runs in a terminal again is no longer one of the recent ones.
             ended.RemoveAll(e => e.Session.Length > 0 && terminals.Values.Any(t => !t.Pty.Closed && t.Tool == e.Tool && t.Session == e.Session));

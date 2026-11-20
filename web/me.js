@@ -8,6 +8,7 @@
   const box = $('me'), kept = {};       // by how many days were asked for: when, and what the computer answered
   const METRIC = { prompts: '提问', active: '时长', tokens: 'token' }, WEEK = '日一二三四五六';
   let span = 7, metric = 'prompts', picked = -1, asking = 0, tried = 0, wanted = false, failed = '', drawn = '', expanded = new URLSearchParams(location.search).has('stats');
+  const expandedPools = {};
 
   // ---- numbers as they are read
   const trim = value => value >= 100 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, '');
@@ -83,9 +84,9 @@
     if (stats.hours.some(n => n > 0)) parts.push(head('时段', peak + ' 点最多'), hours(stats));
     return el('section', { id: 'period' }, ...parts);
   }
-  // ---- the limits: a line for each window of each tool, with its share used drawn under it
+  // ---- the limits: primary pool shown directly per tool; secondary pools expand on tap
   const WINDOWS = { five_hour: '5 小时', seven_day: '本周' };
-  const windowName = name => WINDOWS[name] || (/^\d+m$/.test(name) ? (parseInt(name, 10) >= 1440 ? Math.round(parseInt(name, 10) / 1440) + ' 天' : Math.round(parseInt(name, 10) / 60) + ' 小时') : name);
+  const windowName = name => WINDOWS[name] || (/_five_hour$/.test(name) ? '5 小时' : /_seven_day$/.test(name) ? '本周' : /^\d+m$/.test(name) ? (parseInt(name, 10) >= 1440 ? Math.round(parseInt(name, 10) / 1440) + ' 天' : Math.round(parseInt(name, 10) / 60) + ' 小时') : name);
   function renews(seconds) {
     if (!seconds) return '';
     const left = seconds * 1000 - Date.now();
@@ -93,16 +94,30 @@
     const minutes = Math.round(left / 60000);
     return (minutes < 60 ? minutes + ' 分钟' : minutes < 2880 ? Math.round(minutes / 60) + ' 小时' : Math.round(minutes / 1440) + ' 天') + '后重置';
   }
+  function quotaRow(title, w) {
+    return el('li', { className: w.used >= 90 ? 'high' : '' },
+      el('div', { className: 'line' }, el('b', { textContent: title }),
+        el('span', { textContent: Math.round(w.used) + '%' + (w.resets ? ' · ' + renews(w.resets) : '') })),
+      el('div', { className: 'track', role: 'img', ariaLabel: '已用 ' + Math.round(w.used) + '%' }, el('i', { style: 'width:' + Math.max(2, Math.min(100, w.used)).toFixed(1) + '%' })));
+  }
   function quotas() {
     const known = (page.data.device.quotas || []).filter(q => q.windows.length || q.why);
     if (!known.length) return '';
     const lines = [];
     known.forEach(q => {
       if (!q.windows.length) { lines.push(el('li', null, el('div', { className: 'line' }, el('b', { textContent: TOOLS[q.tool] || q.tool }), el('span', { textContent: q.why })))); return; }
-      q.windows.forEach(w => lines.push(el('li', { className: w.used >= 90 ? 'high' : '' },
-        el('div', { className: 'line' }, el('b', { textContent: (TOOLS[q.tool] || q.tool) + ' · ' + windowName(w.name) }),
-          el('span', { textContent: Math.round(w.used) + '%' + (w.resets ? ' · ' + renews(w.resets) : '') })),
-        el('div', { className: 'track', role: 'img', ariaLabel: '已用 ' + Math.round(w.used) + '%' }, el('i', { style: 'width:' + Math.max(2, Math.min(100, w.used)).toFixed(1) + '%' })))));
+      const main = q.windows.filter(w => !w.group), extra = main.length ? q.windows.filter(w => w.group) : [];
+      (main.length ? main : q.windows).forEach(w => lines.push(quotaRow((w.group || TOOLS[q.tool] || q.tool) + ' · ' + windowName(w.name), w)));
+      if (extra.length) {
+        const open = !!expandedPools[q.tool], pools = new Set(extra.map(w => w.group)).size, warn = !open && extra.some(w => w.used >= 90);
+        const toggle = el('button', { type: 'button', className: 'quota-more' + (warn ? ' warn' : ''), ariaExpanded: String(open),
+          onclick: () => { expandedPools[q.tool] = !open; draw(); } },
+          el('span', { textContent: '其他 ' + pools + ' 个池子' }),
+          el('b', { textContent: (warn ? '接近上限 · ' : '') + (open ? '收起 ▴' : '展开 ▾') }));
+        const wrap = el('li', { className: 'quota-extra-wrap' }, toggle);
+        if (open) wrap.append(el('ul', { className: 'quota-extra' }, ...extra.map(w => quotaRow(w.group + ' · ' + windowName(w.name), w))));
+        lines.push(wrap);
+      }
     });
     const newest = Math.max(...known.map(q => q.at));
     return el('section', { id: 'quotas' }, head('额度', page.ago(newest) + '更新'), el('ul', { className: 'panel shares' }, ...lines));
@@ -143,7 +158,7 @@
     // asked anew when the tab is opened, and once a minute while it stays open
     const old = have ? Date.now() - have.at : Infinity;
     if (expanded && supported && online && !asking && (old > 60000 || (wanted && old > 15000)) && Date.now() - tried > 8000) { load(span); return; }
-    const signature = JSON.stringify([expanded, span, metric, picked, have && have.at, asking, failed, supported, online, data.device.version, data.device.newer, data.device.tools, data.device.quotas, Math.floor(Date.now() / 60000)]);
+    const signature = JSON.stringify([expanded, Object.keys(expandedPools).filter(k => expandedPools[k]).sort(), span, metric, picked, have && have.at, asking, failed, supported, online, data.device.version, data.device.newer, data.device.tools, data.device.quotas, Math.floor(Date.now() / 60000)]);
     if (signature === drawn) return;
     drawn = signature;
     const parts = [quotas(), el('p', { className: 'settings-intro', textContent: '设备连接与个人偏好' }), settings()];

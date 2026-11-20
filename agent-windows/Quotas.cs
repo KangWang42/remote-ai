@@ -19,20 +19,23 @@ namespace RemoteCli {
 ///   Only an account with a subscription is told it, and only once it has been answered once.
 /// - Codex is asked (`account/rateLimits/read` of `codex app-server`): only an account signed in with ChatGPT has it;
 ///   `primary` and `secondary`, each with `usedPercent`, `windowDurationMins` and `resetsAt`.
-/// - Antigravity CLI tells of none.
+/// - Antigravity CLI is asked (`agy -p /usage --output-format json`): returns model groups (`groups`) and quota buckets
+///   (`remaining_fraction`, `reset_time`); the primary Gemini/Neon group is reported without `group` and secondary model
+///   pools carry their `group` label so the phone can keep them collapsed behind a toggle.
 /// What each source learns is written to `quotas/<tool>.json` in the program's data folder, so that the status line,
 /// which runs as a program of its own, and the conversations give it to the same place; a report reads it from there.
 public sealed class Quotas {
     public sealed class Window {
-        public string Name = "";        // five_hour, seven_day, or the length in minutes the tool gives ("300m")
+        public string Name = "";        // five_hour, seven_day, <pool>_five_hour, or the length in minutes ("300m")
         public double Used;             // percent, 0..100
         public long Resets;             // seconds since 1970, 0 where not told
+        public string Group = "";       // empty for the primary pool; short pool name for secondary pools (e.g. agy)
     }
     static readonly JavaScriptSerializer json = new JavaScriptSerializer();
     readonly string folder;
     readonly object gate = new object();
-    DateTime nextCodex = DateTime.MinValue;
-    bool askingCodex;
+    DateTime nextCodex = DateTime.MinValue, nextAgy = DateTime.MinValue;
+    bool askingCodex, askingAgy;
 
     public Quotas(string dataFolder) { folder = Path.Combine(dataFolder, "quotas"); }
     string FileOf(string tool) { return Path.Combine(folder, tool + ".json"); }
@@ -44,7 +47,11 @@ public sealed class Quotas {
     void Write(string tool, IList<Window> windows, string why) {
         var kept = new Dictionary<string, object> {
             { "tool", tool }, { "at", Milliseconds(DateTime.UtcNow) }, { "why", why ?? "" },
-            { "windows", windows.Select(w => new Dictionary<string, object> { { "name", w.Name }, { "used", Math.Round(Math.Max(0, Math.Min(100, w.Used)), 1) }, { "resets", w.Resets } }).ToArray() } };
+            { "windows", windows.Select(w => {
+                var row = new Dictionary<string, object> { { "name", w.Name }, { "used", Math.Round(Math.Max(0, Math.Min(100, w.Used)), 1) }, { "resets", w.Resets } };
+                if (!String.IsNullOrEmpty(w.Group)) row["group"] = w.Group;
+                return row;
+            }).ToArray() } };
         try {
             Directory.CreateDirectory(folder);
             string fresh = FileOf(tool) + "." + Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -56,7 +63,7 @@ public sealed class Quotas {
     /// is over is left out (it has started anew, and how much of it is used is not known).
     public object[] Report() {
         var all = new List<object>();
-        foreach (string tool in new[] { "claude", "codex" }) {
+        foreach (string tool in new[] { "claude", "codex", "agy" }) {
             try {
                 if (!File.Exists(FileOf(tool))) continue;
                 var kept = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(FileOf(tool), Encoding.UTF8));
@@ -104,8 +111,96 @@ public sealed class Quotas {
         }
         return windows;
     }
+    /// Antigravity CLI's `agy -p /usage --output-format json`: model groups (`groups`) and their quota buckets.
+    /// The primary Gemini/Neon pool is reported without a `Group` so the phone shows it directly; secondary model
+    /// pools keep a short `Group` label so the phone can fold them behind a toggle.
+    public static List<Window> FromAgy(object given) {
+        var windows = new List<Window>();
+        var data = At(At(given, "command"), "data") ?? given;
+        var rawGroups = (At(data, "groups") as System.Collections.IEnumerable ?? new object[0]).Cast<object>().OfType<Dictionary<string, object>>().ToList();
+        var parsed = new List<Tuple<string, string, List<Dictionary<string, object>>>>();
+        foreach (var g in rawGroups) {
+            string name = Convert.ToString(At(g, "name") ?? "").Trim();
+            string desc = Convert.ToString(At(g, "description") ?? "");
+            var buckets = (At(g, "buckets") as System.Collections.IEnumerable ?? new object[0]).Cast<object>().OfType<Dictionary<string, object>>()
+                .Where(b => { double rem; return Number(At(b, "remaining_fraction"), out rem) && rem >= 0 && rem <= 1; }).ToList();
+            if (buckets.Count > 0) parsed.Add(Tuple.Create(name, desc, buckets));
+        }
+        if (parsed.Count == 0) return windows;
+        int primary = parsed.FindIndex(g => g.Item2.IndexOf("neon", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (primary < 0) primary = parsed.FindIndex(g => String.Equals(g.Item1, "Gemini Models", StringComparison.OrdinalIgnoreCase));
+        if (primary < 0) primary = parsed.FindIndex(g => g.Item3.Any(b => {
+            string id = Convert.ToString(At(b, "id") ?? "");
+            return String.Equals(id, "gemini-5h", StringComparison.OrdinalIgnoreCase) || String.Equals(id, "gemini-weekly", StringComparison.OrdinalIgnoreCase);
+        }));
+        if (primary < 0) primary = 0;
 
-    // ---- Codex is asked, now and then, beside the report: never more than once in ten minutes, one at a time
+        var order = new List<int> { primary };
+        for (int i = 0; i < parsed.Count; i++) if (i != primary) order.Add(i);
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        foreach (int index in order) {
+            bool isPrimary = index == primary;
+            string groupLabel = isPrimary ? "" : AgyGroupLabel(parsed[index].Item1);
+            var buckets = parsed[index].Item3
+                .Select((b, pos) => Tuple.Create(b, pos, AgyWindowKind(Convert.ToString(At(b, "window") ?? ""), Convert.ToString(At(b, "id") ?? ""))))
+                .OrderBy(t => t.Item3 == "5h" ? 0 : t.Item3 == "weekly" ? 1 : 2).ThenBy(t => t.Item2);
+            foreach (var item in buckets) {
+                var b = item.Item1;
+                string kind = item.Item3, id = Convert.ToString(At(b, "id") ?? "");
+                double remaining; if (!Number(At(b, "remaining_fraction"), out remaining)) continue;
+                string wname = AgyWindowName(id, kind, isPrimary, taken);
+                windows.Add(new Window { Name = wname, Group = groupLabel, Used = (1.0 - Math.Max(0, Math.Min(1, remaining))) * 100.0, Resets = Seconds(At(b, "reset_time")) });
+            }
+        }
+        return windows;
+    }
+    static string AgyWindowKind(string window, string id) {
+        if (String.Equals(window, "5h", StringComparison.OrdinalIgnoreCase) || id.EndsWith("-5h", StringComparison.OrdinalIgnoreCase) || id.EndsWith("_5h", StringComparison.OrdinalIgnoreCase)) return "5h";
+        if (String.Equals(window, "weekly", StringComparison.OrdinalIgnoreCase) || id.EndsWith("-weekly", StringComparison.OrdinalIgnoreCase) || id.EndsWith("_weekly", StringComparison.OrdinalIgnoreCase)) return "weekly";
+        return "";
+    }
+    static string AgyGroupLabel(string name) {
+        if (String.Equals(name, "Claude and GPT models", StringComparison.OrdinalIgnoreCase)) return "Claude / GPT";
+        string clean = (name ?? "").Trim();
+        if (clean.Length == 0) return "其他池子";
+        return clean.Length > 24 ? clean.Substring(0, 24).TrimEnd() : clean;
+    }
+    static string AgyWindowName(string id, string kind, bool isPrimary, HashSet<string> taken) {
+        string candidate;
+        if (isPrimary && kind == "5h") candidate = "five_hour";
+        else if (isPrimary && kind == "weekly") candidate = "seven_day";
+        else {
+            string suffix = kind == "5h" ? "_five_hour" : kind == "weekly" ? "_seven_day" : "";
+            string stem = Slug(id);
+            foreach (string tail in new[] { "_five_hour", "_seven_day", "_weekly", "_5h" }) {
+                if (suffix.Length > 0 && stem.EndsWith(tail, StringComparison.Ordinal) && stem.Length > tail.Length) {
+                    stem = stem.Substring(0, stem.Length - tail.Length).TrimEnd('_');
+                    break;
+                }
+            }
+            int limit = Math.Max(1, 32 - suffix.Length);
+            if (stem.Length > limit) stem = stem.Substring(0, limit).TrimEnd('_');
+            if (stem.Length == 0) stem = "pool";
+            candidate = stem + suffix;
+        }
+        if (taken.Add(candidate)) return candidate;
+        for (int n = 2; n < 20; n++) {
+            string alt = candidate.Length > 29 ? candidate.Substring(0, 29) + "_" + n : candidate + "_" + n;
+            if (taken.Add(alt)) return alt;
+        }
+        return candidate;
+    }
+    static string Slug(string raw) {
+        var sb = new StringBuilder();
+        bool prevUnderscore = true;
+        foreach (char ch in (raw ?? "").ToLowerInvariant()) {
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) { sb.Append(ch); prevUnderscore = false; }
+            else if (!prevUnderscore) { sb.Append('_'); prevUnderscore = true; }
+        }
+        return sb.ToString().Trim('_');
+    }
+
+    // ---- Codex and Antigravity CLI are asked, now and then, beside the report: at most once in ten minutes each
     public void AskCodex(string launcher) {
         if (String.IsNullOrEmpty(launcher)) return;
         lock (gate) { if (askingCodex || DateTime.UtcNow < nextCodex) return; askingCodex = true; nextCodex = DateTime.UtcNow.AddMinutes(10); }
@@ -114,6 +209,60 @@ public sealed class Quotas {
             catch (Exception) { }
             finally { lock (gate) askingCodex = false; }
         });
+    }
+    public void AskAgy(string launcher) {
+        if (String.IsNullOrEmpty(launcher)) return;
+        lock (gate) { if (askingAgy || DateTime.UtcNow < nextAgy) return; askingAgy = true; nextAgy = DateTime.UtcNow.AddMinutes(10); }
+        Task.Run(() => {
+            try { AskAgyNow(launcher); }
+            catch (Exception) { }
+            finally { lock (gate) askingAgy = false; }
+        });
+    }
+    public void AskAgyNow(string launcher) {
+        if (String.IsNullOrEmpty(launcher)) return;
+        var info = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false) };
+        info.EnvironmentVariables["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true";
+        if (launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || launcher.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)) {
+            info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+            info.Arguments = "/d /s /c \"\"" + launcher + "\" -p /usage --output-format json\"";
+        } else {
+            info.FileName = launcher;
+            info.Arguments = "-p /usage --output-format json";
+        }
+        using (var program = Process.Start(info)) {
+            try {
+                program.StandardInput.Close();
+                var stdout = program.StandardOutput.ReadToEndAsync();
+                var stderr = program.StandardError.ReadToEndAsync();
+                if (!program.WaitForExit(30000)) { try { program.Kill(); } catch { } return; }
+                string text = (stdout.Wait(2000) ? stdout.Result : "") ?? "";
+                string err = (stderr.Wait(2000) ? stderr.Result : "") ?? "";
+                object parsed = ParseJsonPayload(text);
+                if (parsed != null) {
+                    var windows = FromAgy(parsed);
+                    if (windows.Count > 0) { Note("agy", windows); return; }
+                    if (program.ExitCode == 0) { Unknown("agy", "Antigravity CLI 没有给出额度"); return; }
+                }
+                string combined = (text + "\n" + err);
+                if (program.ExitCode == 2 || combined.IndexOf("GEMINI_API_KEY", StringComparison.OrdinalIgnoreCase) >= 0 || combined.IndexOf("api key", StringComparison.OrdinalIgnoreCase) >= 0 || combined.IndexOf("no account quota", StringComparison.OrdinalIgnoreCase) >= 0) {
+                    Unknown("agy", "Antigravity CLI 用 Google 账号登录后才能读取额度");
+                } else if (program.ExitCode != 0 && (combined.IndexOf("not logged in", StringComparison.OrdinalIgnoreCase) >= 0 || combined.IndexOf("login", StringComparison.OrdinalIgnoreCase) >= 0 || combined.IndexOf("auth", StringComparison.OrdinalIgnoreCase) >= 0)) {
+                    Unknown("agy", "Antigravity CLI 登录后才能读取额度");
+                }
+            } finally { try { if (!program.HasExited) program.Kill(); } catch { } }
+        }
+    }
+    static object ParseJsonPayload(string text) {
+        string clean = (text ?? "").Trim().TrimStart('\uFEFF');
+        if (clean.Length == 0) return null;
+        try { return json.DeserializeObject(clean); } catch (ArgumentException) { } catch (InvalidOperationException) { }
+        int start = clean.IndexOf('{');
+        int end = clean.LastIndexOf('}');
+        if (start >= 0 && end > start) {
+            try { return json.DeserializeObject(clean.Substring(start, end - start + 1)); } catch (ArgumentException) { } catch (InvalidOperationException) { }
+        }
+        return null;
     }
     void AskCodexNow(string launcher) {
         var info = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false) };

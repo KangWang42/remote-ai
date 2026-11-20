@@ -127,8 +127,13 @@
           const takers = work.list().filter(c => c.open && c.id !== from.id && work.sayable(c));
           // a new conversation of a tool the computer has, in the same project: begun with the hand-over as its first message
           const fresh = from.dir && work.has('chat') ? NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && (tool !== 'agy' || work.has('chat-agy'))) : [];
-          // how much of its limits each tool has used, where the computer knows it (the window used most)
-          const used = tool => { const q = (device.quotas || []).find(one => one.tool === tool); const most = q && q.windows.length ? Math.max(...q.windows.map(w => w.used)) : null; return most === null ? '' : ' · 额度已用 ' + Math.round(most) + '%'; };
+          // how much of its limits each tool has used, where the computer knows it (primary pool first)
+          const used = tool => {
+            const q = (device.quotas || []).find(one => one.tool === tool);
+            const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
+            const most = pool.length ? Math.max(...pool.map(w => w.used)) : null;
+            return most === null ? '' : ' · 额度已用 ' + Math.round(most) + '%';
+          };
           const offers = fresh.map(tool => ({ key: 'new:' + tool, tool, label: '新对话 · ' + TOOLS[tool], detail: '在 ' + from.dir + ' 中开始' + (tool === from.tool ? ' · 同一工具，重新开始' : '') + used(tool), tint: tool, icon: tool }))
             .concat(takers.map(c => ({ key: c.id, c, label: c.title || TOOLS[c.tool], detail: c.where + (c.place ? ' · ' + c.place : ''), tint: tint(c.tool), icon: ['claude', 'codex', 'agy'].includes(c.tool) ? c.tool : 'chat' })));
           // another tool before the one it was in: the usual reason is that one has run out

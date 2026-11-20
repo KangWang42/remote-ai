@@ -136,16 +136,26 @@ class TerminalRelayTests(unittest.TestCase):
         self.info["quotas"] = [
             {"tool": "claude", "at": 1700000000000, "why": "", "windows": [{"name": "five_hour", "used": 38.0, "resets": 1795126800}, {"name": "seven_day", "used": 9, "resets": 1795665600, "token": "x"}]},
             {"tool": "codex", "at": 1700000000000, "why": "Codex 用 ChatGPT 账号登录后才能读取额度", "windows": []},
+            {"tool": "agy", "at": 1700000000000, "why": "", "windows": [
+                {"name": "five_hour", "used": 2, "resets": 1795126800},
+                {"name": "seven_day", "used": 1, "resets": 1795665600},
+                {"name": "3p_five_hour", "used": 5, "resets": 1795126800, "group": "Claude / GPT"},
+                {"name": "3p_seven_day", "used": 3, "resets": 1795665600, "group": "Claude / GPT"},
+                {"name": "gemini_argon_wtu_seven_day", "used": 12, "resets": 1795665600, "group": "Gemini 4 Argon"}]},
             {"tool": "codex", "at": 1, "windows": [{"name": "Bad Name", "used": 5}, {"name": "x", "used": 101}, {"name": "y", "used": True}]},
             {"tool": "claude", "at": "soon", "windows": []},
             {"tool": "other", "at": 1, "windows": []},
             "not a quota"]
         self.relay.agent({"info": self.info}, now=1001)
         quotas = self.relay.overview(now=1002)["device"]["quotas"]
-        self.assertEqual([q["tool"] for q in quotas], ["claude", "codex", "codex"])
+        self.assertEqual([q["tool"] for q in quotas], ["claude", "codex", "agy", "codex"])
         self.assertEqual(quotas[0]["windows"], [{"name": "five_hour", "used": 38.0, "resets": 1795126800}, {"name": "seven_day", "used": 9.0, "resets": 1795665600}])
         self.assertEqual((quotas[1]["windows"], quotas[1]["why"]), ([], "Codex 用 ChatGPT 账号登录后才能读取额度"))
-        self.assertEqual(quotas[2]["windows"], [], "windows that are not shares are left out")
+        self.assertEqual(len(quotas[2]["windows"]), 5)
+        self.assertEqual(quotas[2]["windows"][0], {"name": "five_hour", "used": 2.0, "resets": 1795126800})
+        self.assertEqual(quotas[2]["windows"][2], {"name": "3p_five_hour", "used": 5.0, "resets": 1795126800, "group": "Claude / GPT"})
+        self.assertEqual(quotas[2]["windows"][4], {"name": "gemini_argon_wtu_seven_day", "used": 12.0, "resets": 1795665600, "group": "Gemini 4 Argon"})
+        self.assertEqual(quotas[3]["windows"], [], "windows that are not shares are left out")
         # a computer that lets nobody in tells nothing of its owner's limits
         self.relay.agent({"info": dict(self.info, enabled=False)}, now=1003)
         self.assertEqual(self.relay.overview(now=1004)["device"]["quotas"], [])

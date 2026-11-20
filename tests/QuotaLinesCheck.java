@@ -23,6 +23,17 @@ public final class QuotaLinesCheck {
         require(QuotaLines.detail(new QuotaLines.Window("five_hour", 5, now + 600), now).equals("5% · 10 分钟后重置"), "minutes");
         require(QuotaLines.window("300m").equals("5 小时") && QuotaLines.window("10080m").equals("7 天") && QuotaLines.window("primary").equals("primary"), "windows named by their length");
         require(QuotaLines.detail(new QuotaLines.Window("x", 12.4, 0), now).equals("12%"), "without a time");
+        QuotaLines.Reading agy = new QuotaLines.Reading("agy", 1800, "", Arrays.asList(
+            new QuotaLines.Window("five_hour", 2, now + 3600),
+            new QuotaLines.Window("seven_day", 1, now + 86400),
+            new QuotaLines.Window("3p_five_hour", 12, now + 3600, "Claude / GPT"),
+            new QuotaLines.Window("3p_seven_day", 91, now + 86400, "Claude / GPT"),
+            new QuotaLines.Window("gemini_argon_wtu_seven_day", 5, now + 86400, "Gemini 4 Argon")));
+        List<QuotaLines.Window> primary = QuotaLines.primary(agy), extra = QuotaLines.extra(agy);
+        require(primary.size() == 2 && extra.size() == 3 && QuotaLines.extraPoolCount(extra) == 2 && QuotaLines.anyHigh(extra), "agy primary vs secondary pools");
+        require(QuotaLines.label("agy", primary.get(0)).equals("Antigravity CLI · 5 小时"), QuotaLines.label("agy", primary.get(0)));
+        require(QuotaLines.label("agy", extra.get(0)).equals("Claude / GPT · 5 小时"), QuotaLines.label("agy", extra.get(0)));
+        require(QuotaLines.label("agy", extra.get(2)).equals("Gemini 4 Argon · 本周"), QuotaLines.label("agy", extra.get(2)));
         System.out.println("quota lines: the newest of each tool, in the page's words");
     }
 }

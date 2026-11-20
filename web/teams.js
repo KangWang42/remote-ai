@@ -30,7 +30,8 @@
 
   const used = tool => {
     const q = ((page.data.device || {}).quotas || []).find(one => one.tool === tool);
-    const most = q && q.windows && q.windows.length ? Math.max(...q.windows.map(w => w.used)) : null;
+    const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
+    const most = pool.length ? Math.max(...pool.map(w => w.used)) : null;
     return most === null ? '' : ' · ' + Math.round(most) + '%';
   };
   const namedTools = tools => tools.map(tool => [tool, TOOLS[tool] + used(tool)]);

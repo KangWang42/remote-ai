@@ -105,10 +105,15 @@ def _quotas(items):
     for item in items[:4] if isinstance(items, list) else []:
         if not isinstance(item, dict) or item.get("tool") not in ("claude", "codex", "agy") or type(item.get("at")) is not int:
             continue
-        windows = [{"name": w["name"], "used": float(w["used"]), "resets": w["resets"] if type(w.get("resets")) is int and w["resets"] >= 0 else 0}
-                   for w in (item.get("windows") if isinstance(item.get("windows"), list) else [])[:4]
-                   if isinstance(w, dict) and isinstance(w.get("name"), str) and re.fullmatch(r"[a-z0-9_]{1,20}", w["name"])
-                   and type(w.get("used")) in (int, float) and 0 <= w["used"] <= 100]
+        windows = []
+        for w in (item.get("windows") if isinstance(item.get("windows"), list) else [])[:8]:
+            if not (isinstance(w, dict) and isinstance(w.get("name"), str) and re.fullmatch(r"[a-z0-9_]{1,32}", w["name"])
+                    and type(w.get("used")) in (int, float) and 0 <= w["used"] <= 100):
+                continue
+            entry = {"name": w["name"], "used": float(w["used"]), "resets": w["resets"] if type(w.get("resets")) is int and w["resets"] >= 0 else 0}
+            if _name(w.get("group"), 32):
+                entry["group"] = w["group"].strip()
+            windows.append(entry)
         kept.append({"tool": item["tool"], "at": item["at"], "why": str(item.get("why") or "")[:80], "windows": windows})
     return kept
 

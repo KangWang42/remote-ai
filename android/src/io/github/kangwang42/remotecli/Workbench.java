@@ -407,7 +407,7 @@ final class Workbench {
             JSONArray told = one.optJSONArray("windows");
             for (int j = 0; told != null && j < told.length(); j++) {
                 JSONObject w = told.optJSONObject(j);
-                if (w != null) windows.add(new QuotaLines.Window(w.optString("name"), w.optDouble("used", 0), w.optLong("resets")));
+                if (w != null) windows.add(new QuotaLines.Window(w.optString("name"), w.optDouble("used", 0), w.optLong("resets"), w.optString("group", "")));
             }
             read.quotas.add(new QuotaLines.Reading(one.optString("tool"), one.optLong("at"), one.optString("why"), windows));
         }

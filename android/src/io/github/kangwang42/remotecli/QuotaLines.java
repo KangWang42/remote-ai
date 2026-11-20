@@ -13,8 +13,9 @@ import java.util.Map;
  */
 final class QuotaLines {
     static final class Window {
-        final String name; final double used; final long resets;
-        Window(String name, double used, long resets) { this.name = name; this.used = used; this.resets = resets; }
+        final String name, group; final double used; final long resets;
+        Window(String name, double used, long resets) { this(name, used, resets, ""); }
+        Window(String name, double used, long resets, String group) { this.name = name; this.used = used; this.resets = resets; this.group = group == null ? "" : group.trim(); }
     }
     static final class Reading {
         final String tool, why; final long at; final List<Window> windows;
@@ -39,14 +40,38 @@ final class QuotaLines {
         }
         return shown;
     }
+    /** Windows shown by default: the tool's primary pool (without group), or all windows if none are ungrouped. */
+    static List<Window> primary(Reading one) {
+        List<Window> main = new ArrayList<>();
+        for (Window w : one.windows) if (w.group.isEmpty()) main.add(w);
+        return main.isEmpty() ? one.windows : main;
+    }
+    /** Secondary model pools hidden behind a toggle until the user expands them. */
+    static List<Window> extra(Reading one) {
+        boolean hasMain = false;
+        for (Window w : one.windows) if (w.group.isEmpty()) { hasMain = true; break; }
+        if (!hasMain) return Collections.emptyList();
+        List<Window> more = new ArrayList<>();
+        for (Window w : one.windows) if (!w.group.isEmpty()) more.add(w);
+        return more;
+    }
+    static int extraPoolCount(List<Window> extra) {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        for (Window w : extra) if (!w.group.isEmpty()) names.add(w.group);
+        return names.size();
+    }
+    static boolean anyHigh(List<Window> windows) {
+        for (Window w : windows) if (high(w)) return true;
+        return false;
+    }
     static String tool(String tool) { return "claude".equals(tool) ? "Claude Code" : "codex".equals(tool) ? "Codex" : "agy".equals(tool) ? "Antigravity CLI" : tool; }
     static String window(String name) {
-        if ("five_hour".equals(name)) return "5 小时";
-        if ("seven_day".equals(name)) return "本周";
+        if ("five_hour".equals(name) || name.endsWith("_five_hour")) return "5 小时";
+        if ("seven_day".equals(name) || name.endsWith("_seven_day")) return "本周";
         if (name.matches("\\d+m")) { long minutes = Long.parseLong(name.substring(0, name.length() - 1)); return minutes >= 1440 ? Math.round(minutes / 1440.0) + " 天" : Math.round(minutes / 60.0) + " 小时"; }
         return name;
     }
-    static String label(String tool, Window w) { return tool(tool) + " · " + window(w.name); }
+    static String label(String tool, Window w) { return (w.group.isEmpty() ? tool(tool) : w.group) + " · " + window(w.name); }
     /** "38% · 2 小时后重置" */
     static String detail(Window w, long nowSeconds) {
         String used = Math.round(w.used) + "%";

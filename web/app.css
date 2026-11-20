@@ -391,6 +391,12 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .track { height: 6px; margin-top: 7px; border-radius: 3px; background: var(--raised); overflow: hidden; }
 .track i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
 #quotas { margin-bottom: 18px; }
+.quota-extra-wrap { display: grid; gap: 10px; }
+.quota-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 36px; padding: 7px 10px; border: 0; border-radius: 10px; background: var(--raised); color: var(--muted); font-size: .8rem; text-align: left; }
+.quota-more b { font-weight: 600; color: var(--accent); flex: none; }
+.quota-more.warn b { color: var(--bad); }
+.quota-more:active { opacity: .8; }
+.quota-extra { list-style: none; display: grid; gap: 12px; margin: 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); }
 /* a team's steps, the newest first (teams.js) */
 .team-log { list-style: none; display: grid; gap: 10px; margin: 0; padding: 0; }
 .team-log li { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: baseline; }

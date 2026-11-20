@@ -52,7 +52,8 @@ final class AppPages {
     }
 
     private LinearLayout quotaCard;
-    /** The tools' limits, first on 我的: a line for each window, its share used drawn under it (red above 90%). */
+    private final java.util.Set<String> expandedQuotas = new java.util.HashSet<>();
+    /** The tools' limits, first on 我的: primary pool per tool by default; secondary pools toggle open on tap. */
     void drawQuotas() {
         if (quotaCard == null) return;
         quotaCard.removeAllViews();
@@ -63,16 +64,48 @@ final class AppPages {
         head.addView(kit.semibold("额度", 13.5f, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         quotaCard.addView(head);
         for (QuotaLines.Reading one : shown) {
-            if (one.windows.isEmpty()) { quotaLine(QuotaLines.tool(one.tool), one.why, kit.MUTED, -1); continue; }
-            for (QuotaLines.Window w : one.windows) quotaLine(QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used);
+            if (one.windows.isEmpty()) { quotaLine(quotaCard, QuotaLines.tool(one.tool), one.why, kit.MUTED, -1); continue; }
+            for (QuotaLines.Window w : QuotaLines.primary(one)) {
+                quotaLine(quotaCard, QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used);
+            }
+            List<QuotaLines.Window> extra = QuotaLines.extra(one);
+            if (!extra.isEmpty()) {
+                boolean open = expandedQuotas.contains(one.tool);
+                boolean warn = !open && QuotaLines.anyHigh(extra);
+                int pools = QuotaLines.extraPoolCount(extra);
+                LinearLayout toggle = kit.row();
+                toggle.setPadding(kit.dp(10), kit.dp(8), kit.dp(10), kit.dp(8));
+                toggle.setBackground(kit.shape(kit.RAISED, 0, 10));
+                toggle.addView(kit.text("其他 " + pools + " 个池子", 12.5f, kit.MUTED), new LinearLayout.LayoutParams(0, -2, 1));
+                toggle.addView(kit.semibold((warn ? "接近上限 · " : "") + (open ? "收起 ▴" : "展开 ▾"), 12.5f, warn ? kit.BAD : kit.ACCENT));
+                final String toolKey = one.tool;
+                kit.press(toggle, () -> {
+                    if (expandedQuotas.contains(toolKey)) expandedQuotas.remove(toolKey);
+                    else expandedQuotas.add(toolKey);
+                    drawQuotas();
+                });
+                LinearLayout.LayoutParams toggleLp = new LinearLayout.LayoutParams(-1, -2);
+                toggleLp.topMargin = kit.dp(10);
+                quotaCard.addView(toggle, toggleLp);
+                if (open) {
+                    LinearLayout sub = kit.column();
+                    sub.setPadding(kit.dp(12), kit.dp(2), kit.dp(2), kit.dp(2));
+                    LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(-1, -2);
+                    subLp.topMargin = kit.dp(4);
+                    for (QuotaLines.Window w : extra) {
+                        quotaLine(sub, QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used);
+                    }
+                    quotaCard.addView(sub, subLp);
+                }
+            }
         }
     }
-    private void quotaLine(String label, String detail, int tone, double used) {
+    private void quotaLine(LinearLayout host, String label, String detail, int tone, double used) {
         LinearLayout line = kit.row();
         line.setPadding(0, kit.dp(12), 0, 0);
         line.addView(kit.semibold(label, 14, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         line.addView(kit.text(detail, 12, tone));
-        quotaCard.addView(line);
+        host.addView(line);
         if (used < 0) return;
         // the share used, as a bar
         LinearLayout track = new LinearLayout(activity);
@@ -85,7 +118,7 @@ final class AppPages {
         if (share < 100) track.addView(new View(activity), new LinearLayout.LayoutParams(0, -1, 100 - share));
         LinearLayout.LayoutParams bar = new LinearLayout.LayoutParams(-1, kit.dp(6));
         bar.topMargin = kit.dp(6);
-        quotaCard.addView(track, bar);
+        host.addView(track, bar);
     }
 
     private void buildMe(LinearLayout page, JSONArray computers) {

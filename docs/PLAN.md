@@ -50,7 +50,7 @@
 | --- | --- | --- |
 | Codex | app-server 的 `account/rateLimits/read`，变化时有 `account/rateLimits/updated` 通知；返回 `primary`、`secondary` 两个窗口，各带 `usedPercent`、`windowDurationMins`、`resetsAt`。`CodexChat` 已经在用 app-server，可顺带读取 | 接口公开，可直接做 |
 | Claude Code | 状态栏（statusLine）收到的 JSON 里有 `rate_limits.five_hour` 和 `seven_day`（`used_percentage`、`resets_at`），只对 Pro/Max 账户、且第一次回答之后才有，任一窗口可能缺失。做法二选一：给用户的状态栏套一层，记录额度后原样调用用户原来的命令；或在 stream-json 的事件里找额度（要实测） | 需要用户同意改状态栏配置 |
-| agy | 未找到公开接口 | 先查 `/usage` 一类命令和 ACP 的返回，没有就不显示 |
+| agy | `agy -p /usage --output-format json`（不开启对话、不耗额度）返回各模型池（`groups`）的 `remaining_fraction` 与 `reset_time` | 已接入：默认只显示 Gemini/Neon 主池，其余模型池点击展开 |
 
 界面：“我的”页列出每个工具两个窗口的已用百分比和重置时间；新建对话和“交给另一个 AI”的面板上，工具名旁写剩余额度；某个工具超过 90% 时在面板顶部建议交给另一个。电脑端只把百分比和重置时间交给中转，不传账户信息。**已完成（1.8.0）**：Windows `Quotas.cs`、中转、`web/me.js`、`web/ui/work.js` 与 Android 原生 `QuotaLines.java` / `AppPages.java` 已上线并通过检查。
 

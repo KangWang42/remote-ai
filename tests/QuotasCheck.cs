@@ -29,15 +29,46 @@ public static class QuotasCheck {
             var codex = Quotas.FromCodex(json.DeserializeObject("{\"primary\":{\"usedPercent\":12,\"windowDurationMins\":300,\"resetsAt\":1795126800},\"secondary\":{\"usedPercent\":64.5,\"windowDurationMins\":10080,\"resetsAt\":1795665600000}}"));
             Require(codex.Count == 2 && codex[0].Name == "five_hour" && codex[1].Name == "seven_day" && codex[1].Resets == 1795665600 && Math.Abs(codex[1].Used - 64.5) < 0.01, "Codex's limits, a time in milliseconds read as seconds");
             Require(Quotas.FromCodex(json.DeserializeObject("{\"primary\":{\"usedPercent\":5,\"windowDurationMins\":15},\"secondary\":null}"))[0].Name == "15m", "a window of another length is named by it");
+            // Antigravity CLI's `agy -p /usage --output-format json`: primary Gemini/Neon pool first (5h before weekly),
+            // secondary pools kept with their group names so the phone can fold them behind a toggle.
+            var agy = Quotas.FromAgy(json.DeserializeObject("{\"status\":\"SUCCESS\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":["
+                + "{\"name\":\"Claude and GPT models\",\"description\":\"Claude Opus, GPT-OSS\",\"buckets\":[{\"id\":\"3p-weekly\",\"window\":\"weekly\",\"remaining_fraction\":0.6,\"reset_time\":\"2026-11-27T04:33:08Z\"},{\"id\":\"3p-5h\",\"window\":\"5h\",\"remaining_fraction\":0.9,\"reset_time\":\"2026-11-20T09:33:08Z\"}]},"
+                + "{\"name\":\"Gemini Models\",\"description\":\"Models within this group: Gemini 4 Neon, Gemini 4 Hydrogen\",\"buckets\":[{\"id\":\"gemini-weekly\",\"window\":\"weekly\",\"remaining_fraction\":0.95,\"reset_time\":\"2026-11-27T04:43:04Z\"},{\"id\":\"gemini-5h\",\"window\":\"5h\",\"remaining_fraction\":0.82,\"reset_time\":\"2026-11-20T09:43:04Z\"}]},"
+                + "{\"name\":\"Gemini 4 Argon\",\"description\":\"Argon\",\"buckets\":[{\"id\":\"gemini-argon-wtu-weekly\",\"window\":\"weekly\",\"remaining_fraction\":0.25,\"reset_time\":\"2026-11-27T04:34:41Z\"}]}]}}}"));
+            Require(agy.Count == 5, "all five agy buckets parsed: " + agy.Count);
+            Require(agy[0].Name == "five_hour" && agy[0].Group == "" && Math.Abs(agy[0].Used - 18) < 0.01 && agy[0].Resets > 0, "Neon primary 5h first: " + agy[0].Name + "/" + agy[0].Used);
+            Require(agy[1].Name == "seven_day" && agy[1].Group == "" && Math.Abs(agy[1].Used - 5) < 0.01, "Neon primary weekly second");
+            Require(agy[2].Name == "3p_five_hour" && agy[2].Group == "Claude / GPT" && Math.Abs(agy[2].Used - 10) < 0.01, "secondary 3p 5h");
+            Require(agy[3].Name == "3p_seven_day" && agy[3].Group == "Claude / GPT" && Math.Abs(agy[3].Used - 40) < 0.01, "secondary 3p weekly");
+            Require(agy[4].Name == "gemini_argon_wtu_seven_day" && agy[4].Group == "Gemini 4 Argon" && Math.Abs(agy[4].Used - 75) < 0.01, "secondary Argon weekly");
 
             // ---- kept and reported; a window whose time is over is left out
             var quotas = new Quotas(folder);
             quotas.Note("claude", new[] { new Quotas.Window { Name = "five_hour", Used = 38, Resets = Now + 3600 }, new Quotas.Window { Name = "seven_day", Used = 120, Resets = Now - 10 } });
             quotas.Unknown("codex", "Codex 用 ChatGPT 账号登录后才能读取额度");
+            quotas.Note("agy", new[] { new Quotas.Window { Name = "five_hour", Used = 12, Resets = Now + 3600 }, new Quotas.Window { Name = "3p_five_hour", Group = "Claude / GPT", Used = 44, Resets = Now + 3600 } });
             var report = quotas.Report().Cast<Dictionary<string, object>>().ToList();
-            Require(report.Count == 2 && (string)report[0]["tool"] == "claude" && ((object[])report[0]["windows"]).Length == 1, "the window whose time is over is left out: " + json.Serialize(report));
+            Require(report.Count == 3 && (string)report[0]["tool"] == "claude" && ((object[])report[0]["windows"]).Length == 1, "the window whose time is over is left out: " + json.Serialize(report));
             Require((string)report[1]["why"] == "Codex 用 ChatGPT 账号登录后才能读取额度" && ((object[])report[1]["windows"]).Length == 0, "why one is not known");
+            var agyReported = (object[])report[2]["windows"];
+            Require((string)report[2]["tool"] == "agy" && agyReported.Length == 2 && !((Dictionary<string, object>)agyReported[0]).ContainsKey("group") && (string)((Dictionary<string, object>)agyReported[1])["group"] == "Claude / GPT", "agy primary ungrouped, secondary grouped");
             Require(!json.Serialize(report).Contains("token") && !json.Serialize(report).Contains("account"), "nothing of the account");
+
+            // ---- AskAgyNow against stand-in launchers: parses JSON + passes AGY_CLI_DISABLE_AUTO_UPDATE=true, and records why on API key exit code 2
+            string agyOk = Path.Combine(folder, "fake-agy-ok.cmd");
+            string agyJson = Path.Combine(folder, "fake-agy.json");
+            long future = Now + 7200;
+            File.WriteAllText(agyJson, "{\"status\":\"SUCCESS\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[{\"name\":\"Gemini Models\",\"description\":\"Gemini 4 Neon\",\"buckets\":[{\"id\":\"gemini-5h\",\"window\":\"5h\",\"remaining_fraction\":0.75,\"reset_time\":" + future + "}]},{\"name\":\"Gemini 4 Argon\",\"buckets\":[{\"id\":\"gemini-argon-wtu-weekly\",\"window\":\"weekly\",\"remaining_fraction\":0.5,\"reset_time\":" + future + "}]}]}}}", new UTF8Encoding(false));
+            File.WriteAllText(agyOk, "@echo off\r\nif not \"%AGY_CLI_DISABLE_AUTO_UPDATE%\"==\"true\" exit /b 9\r\ntype \"" + agyJson + "\"\r\n", Encoding.ASCII);
+            var agyBox = new Quotas(Path.Combine(folder, "agy-box"));
+            agyBox.AskAgyNow(agyOk);
+            var agyBoxReport = agyBox.Report().Cast<Dictionary<string, object>>().Single();
+            Require((string)agyBoxReport["tool"] == "agy" && ((object[])agyBoxReport["windows"]).Length == 2, "AskAgyNow records parsed windows: " + json.Serialize(agyBoxReport));
+            string agyKey = Path.Combine(folder, "fake-agy-key.cmd");
+            File.WriteAllText(agyKey, "@echo off\r\necho No account quota with GEMINI_API_KEY 1>&2\r\nexit /b 2\r\n", Encoding.ASCII);
+            agyBox.AskAgyNow(agyKey);
+            agyBoxReport = agyBox.Report().Cast<Dictionary<string, object>>().Single();
+            Require(((object[])agyBoxReport["windows"]).Length == 0 && ((string)agyBoxReport["why"]).Contains("Google 账号"), "AskAgyNow records why for API key login: " + json.Serialize(agyBoxReport));
 
             // ---- the status line as Claude Code runs it: its input on the standard input, the line on the standard output
             string data = Path.Combine(folder, "data");
