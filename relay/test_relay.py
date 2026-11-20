@@ -343,7 +343,7 @@ class TerminalRelayTests(unittest.TestCase):
         for wrong, said in ((dict(item, mode="vote"), "方式无效"), (dict(item, dir="elsewhere"), "没有报告这个项目"), (dict(item, goal=""), "1 至 4000"),
                             (dict(item, goal="x" * 4001), "1 至 4000"), (dict(item, tools=["claude", "agy"]), "不能让这个工具"), (dict(item, tools=["shell", "codex"]), "不能让这个工具"),
                             (dict(item, tools=["claude"]), "写审需要"), (dict(item, mode="lead", tools=["claude", "claude"]), "领队需要"),
-                            (dict(item, mode="lead", tools=["claude", "codex", "codex"]), "领队需要"), (dict(item, rounds=11), "1 到 10"), (dict(item, rounds=True), "1 到 10"), (dict(item, id="x"), "无效")):
+                            (dict(item, mode="lead", tools=["claude", "codex", "codex"]), "领队需要"), (dict(item, rounds=11), "1 到 10"), (dict(item, rounds=True), "1 到 10"), (dict(item, id="x"), "无效"), (dict(item, rules="x" * 1001), "1000")):
             with self.assertRaisesRegex(RemoteError, said):
                 self.relay.work({"id": "2" * 32, "action": "team_start", "item": wrong}, now=1003, wait=0)
         with self.assertRaisesRegex(RemoteError, "无效"):
@@ -363,8 +363,9 @@ class TerminalRelayTests(unittest.TestCase):
         # agy takes part where the computer runs it as a conversation
         self.info["features"] = ["work", "chat", "teams", "chat-agy"]
         self.relay.agent({"info": self.info}, now=1005)
-        asked, got = carried({"id": "4" * 32, "action": "team_start", "item": dict(item, mode="lead", tools=["claude", "codex", "agy"])}, {"team": {}})
+        asked, got = carried({"id": "4" * 32, "action": "team_start", "item": dict(item, mode="lead", tools=["claude", "codex", "agy"], rules="  UI 交给 Gemini  ")}, {"team": {}})
         self.assertEqual(asked["item"]["tools"], ["claude", "codex", "agy"])
+        self.assertEqual(asked["item"]["rules"], "UI 交给 Gemini")
         for action in ("team_stop", "team_resume", "team_remove"):
             asked, got = carried({"id": "5" * 32, "action": action, "team": "d" * 32}, {})
             self.assertEqual((asked["action"], asked["team"]), ("work_" + action, "d" * 32))

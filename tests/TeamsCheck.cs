@@ -76,9 +76,9 @@ public static class TeamsCheck {
 
             // ---- 领队: tasks go out at once, the results go back when every member has answered, until it says DONE
             string lead = "d4d4d4d4d4d4d4d4";
-            teams.Start(new Dictionary<string, object> { { "id", lead }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "做一个登录页" }, { "tools", new object[] { "claude", "codex", "agy" } }, { "rounds", 4 } });
+            teams.Start(new Dictionary<string, object> { { "id", lead }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "做一个登录页" }, { "rules", "UI 交给 Gemini，逻辑交给 Claude" }, { "tools", new object[] { "claude", "codex", "agy" } }, { "rounds", 4 } });
             string leader = Team(teams, lead).Members["leader"];
-            Require(Last(leader).Contains("ASSIGN 成员名") && Last(leader).Contains("- codex：Codex") && Last(leader).Contains("- agy：Antigravity CLI") && !Last(leader).Contains("- claude"), "the leader is told its members by name, without itself");
+            Require(Last(leader).Contains("ASSIGN 成员名") && Last(leader).Contains("- codex：Codex") && Last(leader).Contains("- agy：Antigravity CLI") && !Last(leader).Contains("- claude") && Last(leader).Contains("UI 交给 Gemini，逻辑交给 Claude"), "the leader is told its members by name and custom rules, without itself");
             teams.Turned(leader, "done", "我先想一下。");
             Require(Last(leader).Contains("没有在你的回答里找到分派"), "once reminded of the form");
             teams.Turned(leader, "done", "ASSIGN codex: 写登录接口\nASSIGN agy: 做登录页面");

@@ -27,7 +27,7 @@ public sealed class Teams {
     public static readonly string[] Modes = { "review", "lead" };
     public sealed class Step { public long At; public string Who = "", Text = ""; }
     public sealed class Team {
-        public string Id = "", Dir = "", Mode = "", Goal = "", State = "running", Note = "";
+        public string Id = "", Dir = "", Mode = "", Goal = "", Rules = "", State = "running", Note = "";
         public string[] Tools = new string[0];          // review: writer, reviewer; lead: leader, then the members
         public int Rounds = 3, Round = 1;
         public long Created;
@@ -82,7 +82,7 @@ public sealed class Teams {
         Func<string, IEnumerable<object>> many = name => { object value; return kept.TryGetValue(name, out value) && value is System.Collections.IEnumerable && !(value is string) ? ((System.Collections.IEnumerable)value).Cast<object>() : new object[0]; };
         Func<string, Dictionary<string, string>> map = name => { object value; var d = kept.TryGetValue(name, out value) ? value as Dictionary<string, object> : null; return d == null ? new Dictionary<string, string>() : d.ToDictionary(p => p.Key, p => Convert.ToString(p.Value)); };
         int number;
-        var team = new Team { Id = word("id"), Dir = word("dir"), Mode = word("mode"), Goal = word("goal"), State = word("state"), Note = word("note"), Reminded = word("reminded") == "True",
+        var team = new Team { Id = word("id"), Dir = word("dir"), Mode = word("mode"), Goal = word("goal"), Rules = word("rules"), State = word("state"), Note = word("note"), Reminded = word("reminded") == "True",
             Tools = many("tools").Select(Convert.ToString).ToArray(), Members = map("members"), Answers = map("answers"), Awaited = many("awaited").Select(Convert.ToString).ToList() };
         team.Rounds = Int32.TryParse(word("rounds"), out number) ? number : 3; team.Round = Int32.TryParse(word("round"), out number) ? number : 1;
         long created; team.Created = Int64.TryParse(word("created"), out created) ? created : 0;
@@ -91,7 +91,7 @@ public sealed class Teams {
     }
     void Save() {
         if (file == null) return;
-        var all = items.Select(t => new Dictionary<string, object> { { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "state", t.State }, { "note", t.Note }, { "reminded", t.Reminded },
+        var all = items.Select(t => new Dictionary<string, object> { { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "rules", t.Rules }, { "state", t.State }, { "note", t.Note }, { "reminded", t.Reminded },
             { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created }, { "members", t.Members }, { "awaited", t.Awaited }, { "answers", t.Answers },
             { "log", t.Log.Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() } }).ToArray();
         try {
@@ -106,7 +106,7 @@ public sealed class Teams {
     public Team[] All() { lock (gate) return items.Select(t => t.Copy()).ToArray(); }
     /// As the phone is shown it.
     public static Dictionary<string, object> Shown(Team t) {
-        return new Dictionary<string, object> { { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "state", t.State }, { "note", t.Note }, { "tools", t.Tools },
+        return new Dictionary<string, object> { { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "rules", t.Rules }, { "state", t.State }, { "note", t.Note }, { "tools", t.Tools },
             { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created }, { "members", t.Members }, { "awaited", t.Awaited.ToArray() },
             { "log", t.Log.Skip(Math.Max(0, t.Log.Count - 60)).Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() } };
     }
@@ -114,24 +114,28 @@ public sealed class Teams {
     // ---- what the members are told (read by the models: changed only together with runs on the real tools)
     public static string Label(string tool) { return RemoteCli.Tool.LabelOf(tool); }
     static readonly Dictionary<string, string> Strengths = new Dictionary<string, string> {
-        { "claude", "擅长理解需求、设计与较大的代码改动、重构和长任务" },
-        { "codex", "擅长按明确要求修改代码、运行命令和测试、修复失败的用例" },
-        { "agy", "Gemini 模型，擅长检索资料、通读长文件和大量上下文、前端与界面" } };
+        { "codex", "擅长决策拍板、任务拆解、精准改代码与修测试（优先负责决策，纯检查不必浪费其额度）" },
+        { "claude", "擅长主力写作（代码实现、重构与文档撰写）以及深度交叉审查" },
+        { "agy", "Gemini 模型，擅长 UI 与前端界面设计、长上下文检索，也可兼顾写作与交叉检查" } };
+    static string ExtraRules(Team t) { return String.IsNullOrEmpty(t.Rules) ? "" : "\n\n【分工偏好】\n" + Cut(t.Rules, 1000); }
     public static string WriterFirst(Team t) {
-        return "【协作任务 · 写】" + t.Goal + "\n\n完成后简要说明你做了什么、改了哪些文件。之后另一个 AI（" + Label(t.Tools[1]) + "）会审查你的改动，审查意见会发给你。";
+        return "【协作任务 · 写】" + t.Goal + ExtraRules(t)
+            + "\n\n请直接干脆地完成任务，完成后简明说明做了什么、改了哪些文件。之后 " + Label(t.Tools[1]) + " 会只读审查你的改动，有问题再交回修改。";
     }
     public static string ReviewerAsk(Team t, string words, string changes) {
-        return "【协作任务 · 审查 · 第 " + t.Round + " 轮】另一个 AI（" + Label(t.Tools[0]) + "）正在完成这项任务：\n" + t.Goal
+        return "【协作任务 · 审查 · 第 " + t.Round + " 轮】另一个 AI（" + Label(t.Tools[0]) + "）正在完成这项任务：\n" + t.Goal + ExtraRules(t)
             + "\n\n它这一轮的说明：\n" + Cut(words, 6000) + (changes.Length > 0 ? "\n\n改动：\n" + Cut(changes, 30000) : "")
-            + "\n\n请只审查，不要修改任何文件。回答的第一行只写 REVIEW: PASS（没有必须修改的问题）或 REVIEW: CHANGES（需要修改），之后逐条写出问题和修改建议。";
+            + "\n\n请只审查，不要修改任何文件。没有必须修改的实质问题就直接通过，不要吹毛求疵。回答的第一行只写 REVIEW: PASS 或 REVIEW: CHANGES，之后逐条列出必须修改的问题与建议。";
     }
     public static string WriterAgain(Team t, string review) {
         return "【协作任务 · 审查意见 · 第 " + t.Round + " 轮】" + Label(t.Tools[1]) + " 的审查意见：\n" + Cut(review, 12000) + "\n\n请据此修改，完成后简要说明改了什么。";
     }
     public static string LeaderFirst(Team t) {
         var members = t.Tools.Skip(1).Select(tool => "- " + tool + "：" + Label(tool) + (Strengths.ContainsKey(tool) ? "，" + Strengths[tool] : "")).ToArray();
-        return "【协作任务 · 领队】目标：" + t.Goal + "\n\n你负责按成员的特点拆分任务、分派、检查结果，并在最后确认目标已完成。成员都在这个项目的文件夹中工作，和你同一个文件夹：\n" + String.Join("\n", members)
-            + "\n\n分派时，在回答的最后每行写一条（成员名用上面的英文名）：\nASSIGN 成员名: 任务内容\n可以一次分派给几个成员，它们同时开始，所以分给它们的部分不要修改同一批文件；成员做完后，结果会发给你。\n全部完成时，回答的最后单独一行写：\nDONE: 总结\n分派出去的工作不要自己动手做。";
+        return "【协作任务 · 领队】目标：" + t.Goal + ExtraRules(t)
+            + "\n\n你负责决策、按任务特点高效干净地分工、验收结果并在达标时结束。成员都在同一个项目文件夹中工作：\n" + String.Join("\n", members)
+            + "\n\n分工原则：\n1. 按具体任务按需派工，不必每次把所有成员都派满；不需要的成员可以不派。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要核验时采用交叉检查（谁写不由谁审），优先让 Claude Code 或 Antigravity CLI 交叉检查，不必把纯检查浪费在 Codex 上。\n4. 结果达标后立刻结束，不要为了凑轮次空转。"
+            + "\n\n分派时，在回答的最后每行写一条（成员名用上面的英文名）：\nASSIGN 成员名: 任务内容\n全部完成时，回答的最后单独一行写：\nDONE: 总结\n分派出去的工作不要自己动手做。";
     }
     public static string MemberTask(Team t, string task) {
         return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task + "\n\n整体目标：" + t.Goal + "\n\n完成后简要说明你做了什么、改了哪些文件。";
@@ -176,7 +180,9 @@ public sealed class Teams {
         object raw; given.TryGetValue("tools", out raw);
         var tools = (raw as System.Collections.IEnumerable ?? new object[0]).Cast<object>().Select(Convert.ToString).ToArray();
         int rounds; Int32.TryParse(word("rounds"), out rounds);
-        var team = new Team { Id = word("id"), Dir = word("dir"), Mode = word("mode"), Goal = word("goal").Trim(), Tools = tools, Rounds = Math.Max(1, Math.Min(MostRounds, rounds == 0 ? 3 : rounds)), Created = Now() };
+        string rules = word("rules").Trim();
+        if (rules.Length > 1000) throw new ArgumentException("分工偏好不能超过 1000 字");
+        var team = new Team { Id = word("id"), Dir = word("dir"), Mode = word("mode"), Goal = word("goal").Trim(), Rules = rules, Tools = tools, Rounds = Math.Max(1, Math.Min(MostRounds, rounds == 0 ? 3 : rounds)), Created = Now() };
         if (!Regex.IsMatch(team.Id, @"\A[a-f0-9]{16,32}\z") || Array.IndexOf(Modes, team.Mode) < 0) throw new ArgumentException("协作任务无效");
         if (team.Goal.Length == 0 || team.Goal.Length > 4000) throw new ArgumentException("目标需为 1 至 4000 字");
         if (team.Mode == "review" ? tools.Length != 2 : tools.Length < 2 || tools.Length > 4 || tools.Skip(1).Distinct().Count() != tools.Length - 1 || tools.Skip(1).Contains(tools[0]))

@@ -28,6 +28,17 @@
     loading = false;
   }
 
+  const used = tool => {
+    const q = ((page.data.device || {}).quotas || []).find(one => one.tool === tool);
+    const most = q && q.windows && q.windows.length ? Math.max(...q.windows.map(w => w.used)) : null;
+    return most === null ? '' : ' · ' + Math.round(most) + '%';
+  };
+  const namedTools = tools => tools.map(tool => [tool, TOOLS[tool] + used(tool)]);
+
+  const RULES_KEY = 'remotecli.team.rules';
+  const savedRules = () => { try { return localStorage.getItem(RULES_KEY) || ''; } catch { return ''; } };
+  const keepRules = text => { try { if (text) localStorage.setItem(RULES_KEY, text); else localStorage.removeItem(RULES_KEY); } catch { } };
+
   // ---- a new one
   function begin() {
     if (!page.usable()) return toast('电脑离线，暂时不能开始');
@@ -35,29 +46,42 @@
     const tools = able(), projects = (page.data.device.workspaces || []);
     if (tools.length < 2) return toast('需要这台电脑能在手机上运行至少两个 AI（Claude Code、Codex、Antigravity CLI）');
     if (!projects.length) return toast('请先添加一个项目');
+    // Defaults: Claude writes + Gemini (agy) reviews when available (keeping Codex for decisions); Codex leads by default.
+    const defaultWriter = tools.includes('claude') ? 'claude' : tools[0];
+    const defaultReviewer = (tools.includes('agy') && defaultWriter !== 'agy') ? 'agy' : (tools.find(t => t !== defaultWriter) || tools[0]);
+    const defaultLeader = tools.includes('codex') ? 'codex' : tools[0];
     // the same number when it is tried again, so that a lost answer does not start two
-    const plan = { id: newId(), mode: 'review', goal: '', dir: projects.length === 1 ? projects[0] : '', writer: tools[0], reviewer: tools[1], leader: tools[0], members: tools.slice(1), rounds: 3 };
+    const plan = { id: newId(), mode: 'review', goal: '', rules: savedRules(), dir: projects.length === 1 ? projects[0] : '', writer: defaultWriter, reviewer: defaultReviewer, leader: defaultLeader, members: tools.filter(t => t !== defaultLeader), rounds: 3 };
     window.RemoteSheet.open({ title: '协作任务', build(p) {
       p.body.append(kit.section('方式', kit.seg(Object.keys(MODES).map(key => [key, MODES[key]]), plan.mode, value => { plan.mode = value; p.refresh(); }, { label: '方式', full: true }),
-        plan.mode === 'review' ? '一个写，另一个只读审查；审查意见交回去改，直到通过' : '领队按各自特点分派、检查结果，直到它确认完成'));
+        plan.mode === 'review' ? '一个写，另一个只读审查；审查意见交回去改，直到通过' : '领队负责决策并按任务按需分工、交叉检查，达标即结束'));
       const goal = kit.area({ id: 'team-goal', value: plan.goal, placeholder: '要完成什么', max: 4000, rows: 4, label: '目标' }, value => { plan.goal = value; });
       p.body.append(kit.section('目标', goal));
       p.body.append(kit.section('项目', kit.chips(projects.map(name => [name, name]), { chosen: plan.dir, label: '项目' }, value => { plan.dir = value; })));
-      const named = tools.map(tool => [tool, TOOLS[tool]]);
+      const named = namedTools(tools);
       if (plan.mode === 'review') {
-        p.body.append(kit.section('写', kit.chips(named, { chosen: plan.writer, label: '写的 AI' }, value => { plan.writer = value; })));
+        p.body.append(kit.section('写', kit.chips(named, { chosen: plan.writer, label: '写的 AI' }, value => {
+          plan.writer = value;
+          if (plan.reviewer === value && tools.length > 1) { plan.reviewer = tools.find(t => t !== value) || value; p.refresh(); }
+        })));
         p.body.append(kit.section('审查', kit.chips(named, { chosen: plan.reviewer, label: '审查的 AI' }, value => { plan.reviewer = value; }), '审查的 AI 以只读方式运行'));
       } else {
         p.body.append(kit.section('领队', kit.chips(named, { chosen: plan.leader, label: '领队' }, value => { plan.leader = value; plan.members = plan.members.filter(t => t !== value); p.refresh(); })));
-        p.body.append(kit.section('成员', kit.chips(named.filter(([tool]) => tool !== plan.leader), { chosen: plan.members, multi: true, label: '成员' }, value => { plan.members = value; }), '成员在同一个项目文件夹里工作，领队会把不重叠的部分分给它们'));
+        p.body.append(kit.section('成员', kit.chips(named.filter(([tool]) => tool !== plan.leader), { chosen: plan.members, multi: true, label: '成员' }, value => { plan.members = value; }), '领队按任务按需派工，不强求全员参与，避免改同一批文件'));
       }
       p.body.append(kit.section('最多几轮', kit.seg(ROUNDS.map(n => [n, n + ' 轮']), plan.rounds, value => { plan.rounds = value; }, { label: '轮数', full: true })));
+      const rules = kit.area({ id: 'team-rules', value: plan.rules, placeholder: '选填：默认 Codex 决策、Claude 写作、Gemini 做 UI，交叉检查优先 Claude/Gemini（自动记住）', max: 1000, rows: 2, label: '分工偏好' }, value => { plan.rules = value; });
+      p.body.append(kit.section('分工偏好（选填）', rules));
       const go = kit.go('开始', async () => {
         if (!plan.goal.trim()) { goal.box.focus(); throw new Error('请写下要完成什么'); }
         if (!plan.dir) throw new Error('请选择项目');
         const chosen = plan.mode === 'review' ? [plan.writer, plan.reviewer] : [plan.leader].concat(plan.members);
         if (plan.mode === 'lead' && chosen.length < 2) throw new Error('请至少选一个成员');
-        const made = await work('team_start', { item: { id: plan.id, mode: plan.mode, dir: plan.dir, goal: plan.goal.trim(), tools: chosen, rounds: plan.rounds } });
+        const trimmedRules = plan.rules.trim();
+        keepRules(trimmedRules);
+        const item = { id: plan.id, mode: plan.mode, dir: plan.dir, goal: plan.goal.trim(), tools: chosen, rounds: plan.rounds };
+        if (trimmedRules) item.rules = trimmedRules;
+        const made = await work('team_start', { item });
         p.sheet.close('started'); toast('已开始');
         await load(); page.refresh();
         if (made.team) show(made.team);
@@ -68,9 +92,11 @@
 
   // ---- one: how it stands, what each member said, its members' conversations, and what can be done to it
   function show(known) {
-    let confirmRemove = false;
-    window.RemoteSheet.open({ title: MODES[known.mode] + ' · ' + known.dir, build(p) {
+    let confirmRemove = false, redraw = null, lastKey = '';
+    const sheet = window.RemoteSheet.open({ title: MODES[known.mode] + ' · ' + known.dir, build(p) {
+      redraw = () => p.refresh();
       const team = (teams || []).find(t => t.id === known.id) || known, state = STATES[team.state] || [team.state, 'ended'];
+      lastKey = JSON.stringify([team.state, team.round, team.note, team.awaited, team.members, (team.log || []).length]);
       p.body.append(kit.who({ icon: 'spark', tint: 'agy', title: team.goal, line: state[0] + ' · ' + who(team) + ' · 第 ' + team.round + ' / ' + team.rounds + ' 轮', state: team.state === 'running' ? 'var(--good)' : team.state === 'paused' ? 'var(--busy)' : '' }));
       if (team.note) p.body.append(kit.summary(team.note, team.state === 'failed' || team.state === 'paused' ? 'bad' : '', team.state === 'done' ? 'tick' : 'clock'));
       // each member's conversation, to be opened as any other
@@ -99,6 +125,18 @@
         p.foot.append(...remove.nodes);
       }
     } }, '协作任务');
+    const timer = setInterval(async () => {
+      if (sheet.gone) { clearInterval(timer); return; }
+      const current = (teams || []).find(t => t.id === known.id) || known;
+      if (current.state !== 'running') return;
+      await load();
+      if (sheet.gone) return;
+      const latest = (teams || []).find(t => t.id === known.id);
+      if (!latest) return;
+      const key = JSON.stringify([latest.state, latest.round, latest.note, latest.awaited, latest.members, (latest.log || []).length]);
+      if (key !== lastKey && redraw) { redraw(); page.refresh(); }
+    }, 4000);
+    if (sheet && sheet.result && sheet.result.finally) sheet.result.finally(() => clearInterval(timer));
   }
 
   // ---- on 协作: its card for each, and one to begin another

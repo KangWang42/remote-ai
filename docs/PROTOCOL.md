@@ -511,7 +511,7 @@ on as the operation `work_<action>` and keeps nothing.
 | `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
 | `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
 | `teams` | none; needs `teams` | `{"teams": [...]}`: multi-AI collaboration tasks kept on this computer |
-| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review` or `lead`), `dir` (a workspace name), `goal` (1 to 4,000 characters), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for `lead`: `[leader, ...members]`), `rounds` (1 to 10, default 3) | `{"team": {...}}` |
+| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review` or `lead`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for `lead`: `[leader, ...members]`), `rounds` (1 to 10, default 3) | `{"team": {...}}` |
 | `team_stop` | `team`: its `id` | `{}` |
 | `team_resume` | `team`: its `id` (must be `paused`) | `{}` |
 | `team_remove` | `team`: its `id` (must not be `running`) | `{}` |

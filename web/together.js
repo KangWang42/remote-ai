@@ -231,7 +231,9 @@
     parts.working = el('section', { id: 'teams' }, el('div', { className: 'section-head' }, el('h2', { textContent: '协作任务' }), parts.teamCount), parts.teamStatus, parts.teams);
     parts.lists = el('div', null, parts.working,
       el('section', { id: 'schedules' }, el('div', { className: 'section-head' }, el('h2', { textContent: '定时提问' }), parts.scheduleCount), parts.scheduleStatus, parts.schedules), parts.passing);
+    parts.addTeam = act('add-team', '协作任务', '写审循环或领队分工，多 AI 配合完成', window.RemoteTeams.TEAM, 'team', () => window.RemoteTeams.begin());
     box.append(el('div', { className: 'acts collaboration-actions' },
+      parts.addTeam,
       act('handoff', '交给另一个 AI', '新对话或开着的对话接着做', HAND, 'hand', () => handoff()),
       act('ask-many', '同时提问', '一个问题发给几段对话', MANY, 'many', () => askMany()),
       act('add-schedule', '定时提问', '到时间由电脑替你问', CLOCK, 'time', () => editSchedule()),
@@ -254,6 +256,7 @@
     parts.lists.hidden = !supported;
     parts.passing.hidden = !page.has('chains');
     parts.working.hidden = !page.has('teams');
+    if (parts.addTeam) parts.addTeam.hidden = !page.has('teams');
     const teams = window.RemoteTeams;
     fill(parts.teams, teams.cards(), JSON.stringify([teams.teams, Math.floor(Date.now() / 60000), page.data.device.tools, page.data.device.features]));
     parts.teamCount.textContent = teams.count(); parts.teamStatus.textContent = teams.status(); parts.teamStatus.hidden = !parts.teamStatus.textContent;

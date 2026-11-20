@@ -1212,7 +1212,12 @@ class Relay:
                     raise RemoteError("领队需要一个领队和 1 至 3 个不同的成员")
                 if type(rounds) is not int or not 1 <= rounds <= 10:
                     raise RemoteError("轮数需在 1 到 10 之间")
+                rules = item.get("rules", "")
+                if not isinstance(rules, str) or len(rules.strip()) > 1000 or "\0" in rules:
+                    raise RemoteError("分工偏好不能超过 1000 字")
                 question["item"] = {"id": item["id"], "mode": mode, "dir": folder, "goal": goal.strip(), "tools": tools, "rounds": rounds}
+                if rules.strip():
+                    question["item"]["rules"] = rules.strip()
             elif action in ("team_stop", "team_resume", "team_remove"):
                 if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
                     raise RemoteError("协作任务无效")

@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         value("document.getElementById('team-new').click()")
         until(opened('team-goal'), 'the sheet of a new team')
         chips = lambda label: value("[...document.querySelector('dialog.rs[open] [aria-label=%s]').querySelectorAll('.rs-chip')].map(c => c.textContent + (c.getAttribute('aria-pressed') === 'true' ? '*' : ''))" % json.dumps(label))
-        assert chips('写的 AI') == ['Claude Code*', 'Codex', 'Antigravity CLI'] and chips('审查的 AI') == ['Claude Code', 'Codex*', 'Antigravity CLI'], chips('写的 AI')
+        assert chips('写的 AI') == ['Claude Code*', 'Codex', 'Antigravity CLI'] and chips('审查的 AI') == ['Claude Code', 'Codex', 'Antigravity CLI*'], chips('审查的 AI')
         press('开始')
         until("document.querySelector('dialog.rs[open]').innerText.includes('请写下要完成什么')", 'a goal is asked for')
         typed('team-goal', '给结算页加上优惠券，并补上测试')
@@ -171,27 +171,30 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         # it begins, and its sheet shows how it stands and its members
         until("!!document.getElementById('member-writer')", "the team's sheet, with its writer")
         made = played.teams[-1]
-        assert (made["mode"], made["dir"], made["tools"], made["rounds"], made["goal"]) == ("review", "web-shop", ["claude", "codex"], 3, "给结算页加上优惠券，并补上测试"), made
+        assert (made["mode"], made["dir"], made["tools"], made["rounds"], made["goal"]) == ("review", "web-shop", ["claude", "agy"], 3, "给结算页加上优惠券，并补上测试"), made
         assert "进行中" in value("document.querySelector('dialog.rs[open] .rs-who').innerText") and "写 · Claude Code" in value("document.getElementById('member-writer').innerText")
         assert "给结算页加上优惠券" in value("document.querySelector('dialog.rs[open] .team-log').innerText")
         browser.picture(out / 'team-sheet-390.png')
         press('停止')
         until(closed + " || document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'it says it stopped')
         assert played.teams[-1]["state"] == "stopped"
-        # 领队: a leader, and the members it may give work to (not itself)
+        # 领队: Codex leads by default (decision role), with Claude and Antigravity as members, plus custom rules
         value("document.querySelector('dialog.rs:not(.closing) .rs-close') && document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'the sheet closed')
         open_page('&do=team', opened('team-goal'))
         press('领队')
         until("!!document.querySelector('dialog.rs[open] [aria-label=成员]')", 'the members')
-        assert chips('领队') == ['Claude Code*', 'Codex', 'Antigravity CLI'] and chips('成员') == ['Codex*', 'Antigravity CLI*'], chips('成员')
+        assert chips('领队') == ['Claude Code', 'Codex*', 'Antigravity CLI'] and chips('成员') == ['Claude Code*', 'Antigravity CLI*'], chips('成员')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=领队]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'Claude Code').click()")
+        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Codex', 'Antigravity CLI'])", 'the leader is no member')
         value("[...document.querySelector('dialog.rs[open] [aria-label=领队]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'Codex').click()")
-        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Claude Code', 'Antigravity CLI'])", 'the leader is no member')
+        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Claude Code', 'Antigravity CLI'])", 'back to Codex leading')
         typed('team-goal', '做一个登录页')
+        typed('team-rules', 'UI 交给 Gemini，逻辑交给 Claude')
         value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'thesis').click()")
         press('开始')
         until("!!document.getElementById('member-leader')", "the leader's team")
-        assert played.teams[-1]["mode"] == "lead" and played.teams[-1]["tools"][0] == "codex" and played.teams[-1]["dir"] == "thesis", played.teams[-1]
+        assert played.teams[-1]["mode"] == "lead" and played.teams[-1]["tools"][0] == "codex" and played.teams[-1]["dir"] == "thesis" and played.teams[-1].get("rules") == "UI 交给 Gemini，逻辑交给 Claude", played.teams[-1]
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed')
         until("document.querySelectorAll('#teams .card:not(.add)').length === 2", 'both on 协作')

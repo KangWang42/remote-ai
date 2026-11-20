@@ -328,6 +328,8 @@ body.typing #tabs ~ #toast { bottom: calc(26px + env(safe-area-inset-bottom)); }
 .collaboration-actions .act:active { transform: scale(.985); background: var(--raised); }
 .collaboration-actions .tool { width: 38px; height: 38px; border-radius: 12px; }
 .collaboration-actions .tool svg { width: 21px; height: 21px; }
+.collaboration-actions .act.team { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; min-height: 74px; }
+.collaboration-actions .act.team .tool { --tint: #6366f1; flex: none; }
 .collaboration-actions .act.hand .tool, #schedules .card.rule .tool.hand { --tint: #d97757; }
 .collaboration-actions .act.many .tool { --tint: var(--accent); }
 .collaboration-actions .act.time .tool, #schedules .card.rule .tool { --tint: #c77c1a; }
