@@ -236,7 +236,7 @@
         el('span', { className: 'tool n-cc', textContent: 'CC' }), el('span', { className: 'flow' }),
         el('span', { className: 'node n-cx', textContent: 'CX' }), el('span', { className: 'flow' }),
         el('span', { className: 'node n-ag', textContent: 'AG' })),
-      el('span', { className: 'collab-action' }, el('b', { textContent: '协作任务' }), el('small', { textContent: '写审循环或领队分工，多 AI 配合完成' })),
+      el('span', { className: 'collab-action' }, el('b', { textContent: '协作任务' }), el('small', { textContent: '写审循环或分工协作，多 AI 配合完成' })),
       el('span', { className: 'team-cta', textContent: '＋ 新建协作任务' }));
     box.append(el('div', { className: 'acts collaboration-actions' },
       parts.addTeam,

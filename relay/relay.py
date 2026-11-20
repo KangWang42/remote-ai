@@ -63,8 +63,9 @@ class _Operations(collections.OrderedDict):
 
 _id = re.compile(r"^[a-f0-9]{16,32}$")
 _terminal = re.compile(r"^[a-f0-9]{32}$")
-# a model as a tool names it (agent-windows/Models.cs): put on the computer's command line and into its requests as it is
+# a model and reasoning effort tier as a tool names them (agent-windows/Models.cs)
 _model = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,79}")
+_effort = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _session = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 _session_re = {"opencode": re.compile(r"^ses_[A-Za-z0-9]{10,40}$"),
                "cline": re.compile(r"^[0-9]{10,16}_[A-Za-z0-9]{4,10}$")}
@@ -102,7 +103,7 @@ def _words(text, most=8000):
 def _quotas(items):
     """How much of each tool's usage limits the computer's owner has used, as the computer read it from the tools
     (agent-windows/Quotas.cs): per tool, each window's share used (0..100) and when it starts anew; or why it is not
-    known. Nothing of the account itself."""
+    known. Codex may also report its billing mode and credits."""
     kept = []
     for item in items[:4] if isinstance(items, list) else []:
         if not isinstance(item, dict) or item.get("tool") not in ("claude", "codex", "agy") or type(item.get("at")) is not int:
@@ -116,7 +117,18 @@ def _quotas(items):
             if _name(w.get("group"), 32):
                 entry["group"] = w["group"].strip()
             windows.append(entry)
-        kept.append({"tool": item["tool"], "at": item["at"], "why": str(item.get("why") or "")[:80], "windows": windows})
+        reading = {"tool": item["tool"], "at": item["at"], "why": str(item.get("why") or "")[:80], "windows": windows}
+        billing = item.get("billing")
+        if item["tool"] == "codex" and isinstance(billing, dict):
+            if billing.get("type") == "api":
+                reading["billing"] = {"type": "api"}
+            elif billing.get("type") == "credits":
+                balance = billing.get("balance")
+                if billing.get("unlimited") is True:
+                    reading["billing"] = {"type": "credits", "unlimited": True}
+                elif isinstance(balance, str) and len(balance) <= 24 and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", balance):
+                    reading["billing"] = {"type": "credits", "balance": balance}
+        kept.append(reading)
     return kept
 
 
@@ -126,18 +138,26 @@ TEAM_MEMBER_ROLES = ("member-1", "member-2", "member-3")
 
 def _team_roster(raw, tools, minimum=1, maximum=4):
     if not isinstance(raw, list) or not minimum <= len(raw) <= maximum:
-        raise RemoteError("请选择一位领队和 1 至 3 位成员，或让领队自行安排")
+        raise RemoteError("请选择一位领队和 1 至 3 位执行成员，或让领队自动组队")
     roster = []
     roles = set()
     for index, member in enumerate(raw):
         if not isinstance(member, dict):
             raise RemoteError("协作成员无效")
-        role, tool, model = member.get("role"), member.get("tool"), member.get("model", "")
+        role, tool, model, effort = member.get("role"), member.get("tool"), member.get("model", ""), member.get("effort", "")
         if (role not in (TEAM_MEMBER_ROLES if index else ("leader",)) or role in roles or tool not in tools
                 or not isinstance(model, str) or (model.strip() and not _model.fullmatch(model.strip()))):
             raise RemoteError("协作成员无效")
+        if not isinstance(effort, str):
+            raise RemoteError("思考深度无效")
+        clean_effort = effort.strip().lower()
+        if clean_effort and not _effort.fullmatch(clean_effort):
+            raise RemoteError("思考深度无效")
         roles.add(role)
-        roster.append({"role": role, "tool": tool, "model": model.strip()})
+        entry = {"role": role, "tool": tool, "model": model.strip()}
+        if clean_effort:
+            entry["effort"] = clean_effort
+        roster.append(entry)
     return roster
 
 
@@ -151,10 +171,14 @@ def _team_cards(items):
             continue
         tools = [t for t in c["tools"][:4] if t in CHAT_TOOLS] if isinstance(c.get("tools"), list) else []
         models = c.get("models") if isinstance(c.get("models"), dict) else {}
+        efforts_raw = c.get("efforts") if isinstance(c.get("efforts"), dict) else {}
+        efforts = {tool: e.strip().lower() for tool, e in efforts_raw.items() if tool in tools and isinstance(e, str) and e.strip() and _effort.fullmatch(e.strip().lower())}
         card = {"id": c["id"], "dir": str(c.get("dir") or "")[:60], "goal": str(c.get("goal") or "")[:200], "mode": c["mode"], "state": c["state"],
                 "phase": c.get("phase") if c.get("phase") in ("discuss", "verify") else "", "note": str(c.get("note") or "")[:200], "updated": c["updated"],
                 "awaited": [a for a in c["awaited"][:8] if isinstance(a, str) and re.fullmatch(r"(?:discuss:)?(?:[a-z]{1,16}|member-[123])", a)] if isinstance(c.get("awaited"), list) else [],
                 "tools": tools, "models": {tool: m for tool, m in models.items() if tool in tools and isinstance(m, str) and _model.fullmatch(m)}}
+        if efforts:
+            card["efforts"] = efforts
         if c.get("confirm") is True:
             card["confirm"] = True
         if c["mode"] == "lead" and "roster" in c:
@@ -1278,6 +1302,8 @@ class Relay:
                     roster = _team_roster(item.get("roster"), runs, 1 if auto_roster else 2, 1 if auto_roster else 4)
                     if any(member["model"] for member in roster) and "teams-models" not in features:
                         raise RemoteError("这台电脑的电脑端版本较旧，不支持为协作成员选择模型，请更新电脑端")
+                    if any(member.get("effort") for member in roster) and "teams-effort" not in features:
+                        raise RemoteError("这台电脑的电脑端版本较旧，不支持设置思考深度，请更新电脑端")
                     tools = [member["tool"] for member in roster]
                 if not isinstance(tools, list) or any(t not in runs for t in tools):
                     raise RemoteError("这台电脑不能让这个工具参与协作")
@@ -1297,16 +1323,24 @@ class Relay:
                     raise RemoteError("讨论选项无效")
                 if (mode == "compare" or discuss) and "teams-v2" not in features:
                     raise RemoteError("这台电脑的电脑端版本较旧，不支持先议后写或并行比稿，请更新电脑端")
-                # the model each tool's members begin with, by tool; empty or left out: the tool's own default
+                # the model and reasoning effort each tool's members begin with, by tool; empty or left out: the tool's own default
                 models = item.get("models", {})
                 if not isinstance(models, dict) or any(tool not in tools or not isinstance(m, str) or (m.strip() and not _model.fullmatch(m.strip())) for tool, m in models.items()):
                     raise RemoteError("模型选择无效")
                 models = {tool: m.strip() for tool, m in models.items() if m.strip()}
                 if models and "teams-models" not in features:
                     raise RemoteError("这台电脑的电脑端版本较旧，不支持为协作成员选择模型，请更新电脑端")
+                efforts = item.get("efforts", {})
+                if not isinstance(efforts, dict) or any(tool not in tools or not isinstance(e, str) or (e.strip() and not _effort.fullmatch(e.strip().lower())) for tool, e in efforts.items()):
+                    raise RemoteError("思考深度选择无效")
+                efforts = {tool: e.strip().lower() for tool, e in efforts.items() if e.strip()}
+                if efforts and "teams-effort" not in features:
+                    raise RemoteError("这台电脑的电脑端版本较旧，不支持设置思考深度，请更新电脑端")
                 question["item"] = {"id": item["id"], "mode": mode, "dir": folder, "goal": goal.strip(), "tools": tools, "rounds": rounds}
                 if models:
                     question["item"]["models"] = models
+                if efforts:
+                    question["item"]["efforts"] = efforts
                 if roster is not None:
                     question["item"]["roster"] = roster
                     question["item"]["auto_roster"] = auto_roster
@@ -1355,6 +1389,14 @@ class Relay:
                     raise RemoteError("模型名称无效")
                 if model.strip() and "teams-models" not in features:
                     raise RemoteError("这台电脑的电脑端版本较旧，不支持为协作成员选择模型，请更新电脑端")
+                effort = payload.get("effort", "")
+                if not isinstance(effort, str):
+                    raise RemoteError("思考深度无效")
+                clean_effort = effort.strip().lower()
+                if clean_effort and not _effort.fullmatch(clean_effort):
+                    raise RemoteError("思考深度无效")
+                if clean_effort and "teams-effort" not in features:
+                    raise RemoteError("这台电脑的电脑端版本较旧，不支持设置思考深度，请更新电脑端")
                 question["team"] = payload["team"]
                 if role.strip():
                     question["role"] = role.strip()
@@ -1363,6 +1405,8 @@ class Relay:
                     question["note"] = note.strip()
                 if "model" in payload:
                     question["model"] = model.strip()
+                if "effort" in payload:
+                    question["effort"] = clean_effort
             elif action == "chain_remove":
                 if not isinstance(payload.get("chain"), str) or not _id.fullmatch(payload["chain"]):
                     raise RemoteError("接力无效")
@@ -1443,7 +1487,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

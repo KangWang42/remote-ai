@@ -171,7 +171,7 @@ final class AggregateSessions {
         String shownTitle() { return title.isEmpty() ? (team ? "协作任务" : toolName()) : title; }
     }
     static String teamModeLabel(String mode) {
-        if ("lead".equals(mode)) return "领队";
+        if ("lead".equals(mode)) return "分工协作";
         if ("compare".equals(mode)) return "比稿";
         return "写审";
     }

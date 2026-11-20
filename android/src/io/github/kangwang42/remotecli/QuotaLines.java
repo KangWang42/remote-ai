@@ -18,8 +18,12 @@ final class QuotaLines {
         Window(String name, double used, long resets, String group) { this.name = name; this.used = used; this.resets = resets; this.group = group == null ? "" : group.trim(); }
     }
     static final class Reading {
-        final String tool, why; final long at; final List<Window> windows;
-        Reading(String tool, long at, String why, List<Window> windows) { this.tool = tool; this.at = at; this.why = why == null ? "" : why; this.windows = windows; }
+        final String tool, why, billingType, balance; final long at; final List<Window> windows;
+        Reading(String tool, long at, String why, List<Window> windows) { this(tool, at, why, windows, "", ""); }
+        Reading(String tool, long at, String why, List<Window> windows, String billingType, String balance) {
+            this.tool = tool; this.at = at; this.why = why == null ? "" : why; this.windows = windows;
+            this.billingType = billingType; this.balance = balance;
+        }
     }
     private static final String[] ORDER = {"claude", "codex", "agy"};
 
@@ -36,7 +40,9 @@ final class QuotaLines {
             if (one == null) continue;
             List<Window> open = new ArrayList<>();
             for (Window w : one.windows) if (w.resets == 0 || w.resets > nowSeconds) open.add(w);
-            if (!open.isEmpty() || !one.why.isEmpty()) shown.add(new Reading(one.tool, one.at, one.why, Collections.unmodifiableList(open)));
+            if (!open.isEmpty() || !one.why.isEmpty() || !one.billingType.isEmpty()) {
+                shown.add(new Reading(one.tool, one.at, one.why, Collections.unmodifiableList(open), one.billingType, one.balance));
+            }
         }
         return shown;
     }

@@ -9,12 +9,22 @@ command to the background, ends the turn, and goes on by itself when the command
     python chat_standin.py codex app-server
 """
 import json
+import os
 import sys
 import threading
 import time
 import uuid
 
 out_lock = threading.Lock()
+
+
+def record_standin(env_key, entry):
+    path = os.environ.get(env_key)
+    if not path:
+        return
+    with out_lock:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def put(message):
@@ -100,6 +110,12 @@ def claude(args):
         put({"type": "user", "message": {"role": "user", "content": text}, "session_id": session, "uuid": str(uuid.uuid4())})
         if "只读请教" in text or "继续请教" in text:
             return peer_reply(text)
+        if os.environ.get("STANDIN_TEAM_AUTO") and ("【协作任务" in text or "【用户新一轮要求" in text):
+            record_standin("STANDIN_CLAUDE_LOG", {"event": "turn", "args": args, "text": text[:160]})
+            reply = "已完成执行成员子任务并自测通过。"
+            said(reply)
+            put({"type": "result", "subtype": "success", "is_error": False, "result": reply, "session_id": session})
+            return
         if "调用请教" in text:
             return call_peer()
         if "后台" in text:
@@ -158,7 +174,15 @@ def claude(args):
             sub = message["request"].get("subtype")
             if sub == "interrupt":
                 stop.set()
-            put({"type": "control_response", "response": {"subtype": "success", "request_id": message["request_id"], "response": {}}})
+            resp = {}
+            if sub == "initialize":
+                resp = {"models": [
+                    {"value": "default", "resolvedModel": "claude-opus-5-5", "displayName": "Default", "supportsEffort": True, "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"]},
+                    {"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus 5.5", "supportsEffort": True, "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"]},
+                    {"value": "sonnet", "resolvedModel": "claude-sonnet-5-5", "displayName": "Sonnet 5.5", "supportsEffort": True, "supportedEffortLevels": ["low", "medium", "high"]},
+                    {"value": "claude-haiku-4-5", "resolvedModel": "claude-haiku-4-5", "displayName": "Haiku 4.5", "supportsEffort": False},
+                ]}
+            put({"type": "control_response", "response": {"subtype": "success", "request_id": message["request_id"], "response": resp}})
         elif kind == "control_response":
             response = message["response"]
             if response["request_id"] in answers:
@@ -195,6 +219,20 @@ def codex(args):
                 verdict = "已拒绝修改，" if dec == "decline" else "意外允许修改，"
             msg_id = "msg_" + uuid.uuid4().hex[:10]
             reply = f"codex只读回复（sandbox={state['sandbox']}，第 {state['peer_turns']} 轮）：{verdict}{text.splitlines()[-1]}"
+            note("item/started", item={"type": "agentMessage", "id": msg_id, "text": ""}, threadId=state["thread"], turnId=turn_id)
+            note("item/completed", item={"type": "agentMessage", "id": msg_id, "text": reply}, threadId=state["thread"], turnId=turn_id)
+            return ended("completed", None)
+        if os.environ.get("STANDIN_TEAM_AUTO") and ("【协作任务" in text or "【用户新一轮要求" in text):
+            msg_id = "msg_" + uuid.uuid4().hex[:10]
+            if "【协作任务 · 领队验收" in text:
+                reply = "VERIFIED: 运行单元与集成检查全部通过\nDONE: 验收通过并完成任务"
+            elif "【协作任务 · 领队】" in text or "【用户新一轮要求" in text:
+                if "ASSIGN member-1 codex:" in text:
+                    reply = "开始自动组队。\nASSIGN member-1 claude: 实现并自测目标改动"
+                else:
+                    reply = "开始分派。\nASSIGN member-1: 实现并自测目标改动"
+            else:
+                reply = "已完成执行成员子任务。"
             note("item/started", item={"type": "agentMessage", "id": msg_id, "text": ""}, threadId=state["thread"], turnId=turn_id)
             note("item/completed", item={"type": "agentMessage", "id": msg_id, "text": reply}, threadId=state["thread"], turnId=turn_id)
             return ended("completed", None)
@@ -259,13 +297,26 @@ def codex(args):
             continue
         if method == "initialize":
             put({"id": number, "result": {"userAgent": "stand-in", "platformOs": "windows"}})
+        elif method == "model/list":
+            put({"id": number, "result": {"data": [
+                {"id": "gpt-6.2-sol", "model": "gpt-6.2-sol", "displayName": "GPT-6.2 Sol", "hidden": False, "isDefault": True, "defaultReasoningEffort": "medium",
+                 "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "medium"}, {"reasoningEffort": "high"}, {"reasoningEffort": "xhigh"}, {"reasoningEffort": "ultra"}]},
+                {"id": "gpt-6.2-astra", "model": "gpt-6.2-astra", "displayName": "GPT-6.2 Astra", "hidden": False, "isDefault": False, "defaultReasoningEffort": "high",
+                 "supportedReasoningEfforts": [{"reasoningEffort": "medium"}, {"reasoningEffort": "high"}, {"reasoningEffort": "xhigh"}]},
+                {"id": "gpt-5.4", "model": "gpt-5.4", "displayName": "GPT-5.4", "hidden": False, "isDefault": False, "defaultReasoningEffort": "medium",
+                 "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "medium"}, {"reasoningEffort": "high"}]},
+                {"id": "hidden-model", "model": "hidden-model", "displayName": "Hidden", "hidden": True, "supportedReasoningEfforts": [{"reasoningEffort": "high"}]},
+            ]}})
         elif method in ("thread/start", "thread/resume"):
             state["sandbox"] = params.get("sandbox") or ""
             state["thread"] = params.get("threadId") or "0199dddd-eeee-7fff-8000-%012d" % int(time.time() * 1000 % 10 ** 12)
-            put({"id": number, "result": {"thread": {"id": state["thread"], "cwd": params.get("cwd")}}})
+            cfg = params.get("config") if isinstance(params.get("config"), dict) else {}
+            record_standin("STANDIN_CODEX_LOG", {"event": method, "model": params.get("model") or "", "config_effort": cfg.get("model_reasoning_effort") or ""})
+            put({"id": number, "result": {"thread": {"id": state["thread"], "cwd": params.get("cwd")}, "model": params.get("model") or "gpt-6.2-sol", "reasoningEffort": cfg.get("model_reasoning_effort") or "medium"}})
             note("thread/started", thread={"id": state["thread"]})
         elif method == "turn/start":
             state["turn"] = "turn-" + uuid.uuid4().hex[:8]
+            record_standin("STANDIN_CODEX_LOG", {"event": "turn/start", "model": params.get("model") or "", "effort": params.get("effort") or "", "text": params["input"][0]["text"][:160]})
             put({"id": number, "result": {"turn": {"id": state["turn"], "status": "inProgress", "items": []}}})
             threading.Thread(target=turn, args=(params["input"][0]["text"], params.get("clientUserMessageId")), daemon=True).start()
         elif method == "turn/steer":

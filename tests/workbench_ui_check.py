@@ -61,7 +61,7 @@ assert 'activity.together(task.url, "team", entry.id)' in workbench and 'activit
     "Workbench team cards must open existing team detail via activity.together"
 assert '"领队验收"' in app_pages, "AppPages team rows must display verify phase as 领队验收"
 assert "data.device.team_cards" in web and "teamCard(" in web, "Web lists must collapse team members into parent team cards"
-assert "teams-models" in teams_js and "team_models" in teams_js and "领队验收" in teams_js and "member_sessions" in teams_js, \
-    "Teams UI must support teams-models, verify phase display and member_sessions history fallback"
+assert "teams-models" in teams_js and "team_models" in teams_js and "teams-effort" in teams_js and "领队验收" in teams_js and "member_sessions" in teams_js and "分工协作" in teams_js and "执行成员" in teams_js, \
+    "Teams UI must support teams-models, teams-effort, unified terminology, verify phase display and member_sessions history fallback"
 assert "do=team&item=" in bridge_js, "Member chat back button must return to the parent team detail"
 print("Collaboration parent card and model UI guards passed")

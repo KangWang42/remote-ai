@@ -101,11 +101,14 @@
       el('div', { className: 'track', role: 'img', ariaLabel: '已用 ' + Math.round(w.used) + '%' }, el('i', { style: 'width:' + Math.max(2, Math.min(100, w.used)).toFixed(1) + '%' })));
   }
   function quotas() {
-    const known = (page.data.device.quotas || []).filter(q => q.windows.length || q.why);
+    const known = (page.data.device.quotas || []).filter(q => q.windows.length || q.why || q.billing);
     if (!known.length) return '';
     const lines = [];
     known.forEach(q => {
-      if (!q.windows.length) { lines.push(el('li', null, el('div', { className: 'line' }, el('b', { textContent: TOOLS[q.tool] || q.tool }), el('span', { textContent: q.why })))); return; }
+      const line = (title, detail) => el('li', null, el('div', { className: 'line' }, el('b', { textContent: title }), el('span', { textContent: detail })));
+      if (q.billing?.type === 'api') lines.push(line('Codex · API 余额', '请在服务商后台查看'));
+      if (q.billing?.type === 'credits') lines.push(line('Codex · 额外额度', q.billing.unlimited ? '不限量' : q.billing.balance + ' 点'));
+      if (q.why && !q.windows.length) lines.push(line(TOOLS[q.tool] || q.tool, q.why));
       const main = q.windows.filter(w => !w.group), extra = main.length ? q.windows.filter(w => w.group) : [];
       (main.length ? main : q.windows).forEach(w => lines.push(quotaRow((w.group || TOOLS[q.tool] || q.tool) + ' · ' + windowName(w.name), w)));
       if (extra.length) {

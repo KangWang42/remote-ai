@@ -458,9 +458,17 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-slot-head .dot { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex: none; }
 .team-slot-head b { font-size: .88rem; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-slot-remove { flex: none; min-height: 28px; padding: 0 9px; border-radius: 999px; background: color-mix(in srgb, var(--bad) 10%, var(--bg)); color: var(--bad); font-size: .76rem; font-weight: 600; }
-.team-slot-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
-.team-slot-controls.single { grid-template-columns: minmax(0, 1fr); }
+.team-slot-controls,
+.team-slot-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.team-slot-controls.single,
+.team-slot-fields.single,
+.team-slot-fields.leader { grid-template-columns: minmax(0, 1fr); }
+.team-field { display: grid; gap: 4px; min-width: 0; }
+.team-field label { color: var(--muted); font-size: .74rem; font-weight: 600; line-height: 1.2; padding-left: 2px; }
+.team-slot-fields.leader .team-field { grid-template-columns: 58px minmax(0, 1fr); align-items: center; gap: 8px; }
+.team-slot-fields.leader .team-field label { padding-left: 0; }
 .team-slot-select { width: 100%; max-width: none; min-width: 0; min-height: 36px; padding: 0 10px; border: 0; border-radius: 10px; background: color-mix(in srgb, var(--raised) 80%, var(--bg)); color: var(--ink); font: inherit; font-size: .84rem; text-overflow: ellipsis; }
+.team-slot-select:disabled { opacity: .62; cursor: not-allowed; }
 .team-roster-add { width: 100%; min-height: 40px; padding: 0 14px; border: 1px dashed var(--card-border, var(--line)); border-radius: 14px; background: var(--panel); color: var(--accent-ink, var(--accent)); font-size: .84rem; font-weight: 600; }
 .team-roster-meta { margin: -4px 4px 0; color: var(--muted); font-size: .78rem; line-height: 1.4; }
 .team-round-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 11px; border-radius: 14px; background: var(--panel); border: 1px solid var(--card-border, var(--line)); font-size: .76rem; }
@@ -477,8 +485,10 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-chip .dot.n-cx, .team-slot-head .dot.n-cx { background: #e6eefd; color: #1d4fbf; }
 .team-chip .dot.n-ag, .team-slot-head .dot.n-ag { background: #ece8fd; color: #5536c9; }
 .team-msg .head .model { padding: 1px 7px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: .7rem; font-weight: 550; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-msg .head .effort { padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--raised)); color: var(--accent-ink, var(--accent)); font-size: .7rem; font-weight: 600; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-chip .name { font-weight: 560; overflow-wrap: anywhere; }
 .team-chip .model { padding: 1px 7px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: .72rem; font-weight: 550; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-chip .effort { padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--raised)); color: var(--accent-ink, var(--accent)); font-size: .72rem; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-chip small { color: var(--muted); font-size: .74rem; }
 .team-chip.busy { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
 .team-chip.busy small { color: var(--good-ink, var(--good)); font-weight: 600; }
@@ -512,7 +522,7 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-msg { display: grid; gap: 6px; padding: 11px 13px; border-radius: 16px; background: var(--panel); border: 1px solid var(--card-border, var(--line)); }
 .team-msg.mine { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 28%, var(--line)); }
 .team-msg.meta { background: color-mix(in srgb, var(--raised) 70%, var(--bg)); border-style: dashed; }
-.team-msg .head { display: flex; align-items: center; gap: 7px; }
+.team-msg .head { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 7px; }
 .team-msg .badge { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex: none; }
 .team-msg .badge.n-cc { background: #fbe9e1; color: #a9441d; }
 .team-msg .badge.n-cx { background: #e6eefd; color: #1d4fbf; }

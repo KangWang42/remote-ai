@@ -539,7 +539,10 @@ final class Workbench {
                 JSONObject w = told.optJSONObject(j);
                 if (w != null) windows.add(new QuotaLines.Window(w.optString("name"), w.optDouble("used", 0), w.optLong("resets"), w.optString("group", "")));
             }
-            read.quotas.add(new QuotaLines.Reading(one.optString("tool"), one.optLong("at"), one.optString("why"), windows));
+            JSONObject billing = one.optJSONObject("billing");
+            String billingType = billing == null ? "" : billing.optString("type");
+            String balance = billing == null ? "" : billing.optBoolean("unlimited") ? "不限量" : billing.optString("balance") + " 点";
+            read.quotas.add(new QuotaLines.Reading(one.optString("tool"), one.optLong("at"), one.optString("why"), windows, billingType, balance));
         }
         return read;
     }

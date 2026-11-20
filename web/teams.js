@@ -8,10 +8,11 @@
   const page = window.RemoteCliPage, { el, svg, TOOLS, api, newId, toast } = page;
   const kit = window.RemoteSheet.ui;
   const TEAM = svg('<circle cx="8" cy="8.500" r="2.800"/><circle cx="16.500" cy="8.500" r="2.800"/><path d="M3.500 18.500c.6-3 2.400-4.500 4.500-4.500s3.900 1.500 4.500 4.500M12 18.500c.6-3 2.400-4.500 4.500-4.500s3.900 1.500 4.500 4.500"/>');
-  const MODES = { review: '写审', lead: '领队', compare: '比稿' }, ROUNDS = [1, 2, 3, 5, 10];
+  const MODES = { review: '写审', lead: '分工协作', compare: '比稿' }, ROUNDS = [1, 2, 3, 5, 10];
   const STATES = { running: ['进行中', 'starting'], choose: ['待选方案', 'confirm'], paused: ['已暂停', 'confirm'], done: ['已完成', 'ended'], stopped: ['已停止', 'ended'], failed: ['没有开始', 'ended'] };
   const ROLES = { writer: '写手', reviewer: '审查', leader: '领队', user: '你' };
   const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', user: '你' };
+  const EFFORT_LABELS = { none: '无（none）', minimal: '极低（minimal）', low: '低（low）', medium: '中（medium）', high: '高（high）', xhigh: '极高（xhigh）', max: '最高（max）', ultra: '极致（ultra）' };
   let teams = null, failure = '', loading = false;
   let modelCatalog = null, modelError = '', modelLoading = false, modelPromise = null;
 
@@ -19,6 +20,7 @@
   const hasV2 = () => page.has('teams-v2');
   const hasModels = () => page.has('teams-models');
   const hasRoster = () => page.has('teams-roster');
+  const hasEffort = () => page.has('teams-effort');
   const able = () => ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
   const phaseLabel = phase => phase === 'verify' ? '领队验收' : phase === 'discuss' ? '讨论方案' : '';
   const isUnverifiedStop = team => !!team && team.state === 'stopped' && team.mode === 'lead' && (team.phase === 'verify' || !!team.last);
@@ -41,7 +43,7 @@
     if (!role) return '';
     if (ROLES[role]) return ROLES[role];
     const m = /^member-(\d+)$/.exec(role);
-    return m ? '成员 ' + m[1] : '';
+    return m ? '执行成员 ' + m[1] : '';
   };
   const summarizeTools = list => {
     const counts = new Map();
@@ -65,9 +67,15 @@
     const tool = toolOf(team, role);
     return String((team && team.models && team.models[tool]) || '').trim();
   };
+  const effortOf = (team, role) => {
+    const entry = rosterEntry(team, role);
+    if (entry) return String(entry.effort || '').trim().toLowerCase();
+    const tool = toolOf(team, role);
+    return String((team && team.efforts && team.efforts[tool]) || '').trim().toLowerCase();
+  };
   const roleName = (team, role) => {
     if (role === 'user') return '你';
-    if (role === '目标' || role === '结果' || role === '切换') return role;
+    if (role === '目标' || role === '结果' || role === '切换' || role === '验收') return role;
     if (role.startsWith('discuss:')) {
       const inner = role.slice(8), tool = toolOf(team, role), title = roleTitle(inner);
       return '讨论 · ' + (title ? title + ' · ' : '') + (TOOLS[tool] || tool);
@@ -75,7 +83,7 @@
     const tool = toolOf(team, role);
     if (team && team.mode === 'compare') return '候选 · ' + (TOOLS[tool] || tool);
     const title = roleTitle(role);
-    return (title ? title + ' · ' : '成员 · ') + (TOOLS[tool] || tool);
+    return (title ? title + ' · ' : '执行成员 · ') + (TOOLS[tool] || tool);
   };
   const who = team => {
     const roster = rosterOf(team);
@@ -83,12 +91,12 @@
       const leader = roster.find(r => r.role === 'leader') || roster[0];
       const rest = roster.filter(r => r !== leader).map(r => r.tool);
       const leadName = TOOLS[leader.tool] || leader.tool || '';
-      return rest.length ? leadName + ' 带 ' + summarizeTools(rest) : leadName + (team.auto_roster ? ' 自行组队' : '');
+      return rest.length ? leadName + ' 带 ' + summarizeTools(rest) : leadName + (team.auto_roster ? ' 自动组队' : '');
     }
     const list = (team && team.tools) || [];
     if (team && team.mode === 'review') return (TOOLS[list[0]] || list[0] || '') + ' 写 · ' + (TOOLS[list[1]] || list[1] || '') + ' 审';
     if (team && team.mode === 'compare') return list.map(t => TOOLS[t] || t).join(' vs ');
-    return (TOOLS[list[0]] || list[0] || '') + (list.length > 1 ? ' 带 ' + summarizeTools(list.slice(1)) : team && team.auto_roster ? ' 自行组队' : '');
+    return (TOOLS[list[0]] || list[0] || '') + (list.length > 1 ? ' 带 ' + summarizeTools(list.slice(1)) : team && team.auto_roster ? ' 自动组队' : '');
   };
 
   function normalizeModels(raw) {
@@ -98,7 +106,15 @@
       if (!Array.isArray(raw[tool])) return;
       out[tool] = raw[tool]
         .filter(item => item && typeof item.id === 'string' && item.id.trim())
-        .map(item => ({ id: item.id.trim(), label: String(item.label || item.id).trim() }));
+        .map(item => ({
+          id: item.id.trim(),
+          label: String(item.label || item.id).trim(),
+          efforts: Array.isArray(item.efforts)
+            ? [...new Set(item.efforts.map(e => String(e || '').trim().toLowerCase()).filter(Boolean))]
+            : [],
+          defaultEffort: String(item.default_effort || '').trim().toLowerCase(),
+          isDefault: item.is_default === true
+        }));
     });
     return out;
   }
@@ -130,6 +146,34 @@
     const found = list.find(item => item.id === clean);
     return found ? found.label : clean;
   }
+  function effortLabel(level) {
+    const clean = String(level || '').trim().toLowerCase();
+    if (!clean) return '工具默认';
+    return EFFORT_LABELS[clean] || clean;
+  }
+  function modelEntry(tool, modelId) {
+    const list = (modelCatalog && modelCatalog[tool]) || [];
+    const clean = String(modelId || '').trim();
+    if (clean) return list.find(item => item.id === clean) || null;
+    return list.find(item => item.isDefault) || null;
+  }
+  function effortListFor(tool, modelId) {
+    const item = modelEntry(tool, modelId);
+    return item && Array.isArray(item.efforts) ? item.efforts : [];
+  }
+  function reconcileModel(tool, modelId) {
+    const clean = String(modelId || '').trim();
+    if (!clean || !hasModels()) return '';
+    if (!modelCatalog) return clean;
+    const list = modelCatalog[tool] || [];
+    return list.some(item => item.id === clean) ? clean : '';
+  }
+  function reconcileEffort(tool, modelId, effortId) {
+    const clean = String(effortId || '').trim().toLowerCase();
+    if (!clean || !hasEffort()) return '';
+    if (!modelCatalog) return clean;
+    return effortListFor(tool, modelId).includes(clean) ? clean : '';
+  }
   function modelOptions(tool, selected) {
     const list = (modelCatalog && modelCatalog[tool]) || [];
     const options = [['', '工具默认']].concat(list.map(item => [item.id, item.label]));
@@ -137,11 +181,25 @@
     if (clean && !list.some(item => item.id === clean)) options.push([clean, clean]);
     return options;
   }
-  function makeModelSelect({ id, tool, value, ariaLabel, className, onchange }) {
-    const options = modelOptions(tool, value);
-    const select = el('select', { id, className: className || 'team-model-select', 'aria-label': ariaLabel },
-      ...options.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === value })));
-    select.addEventListener('change', () => onchange(select.value));
+  function effortOptions(tool, modelId, selected) {
+    const list = effortListFor(tool, modelId);
+    const options = [['', '工具默认']].concat(list.map(level => [level, effortLabel(level)]));
+    const clean = String(selected || '').trim().toLowerCase();
+    if (clean && !list.includes(clean)) options.push([clean, effortLabel(clean)]);
+    return options;
+  }
+  function makeModelSelect({ id, tool, value, ariaLabel, className, disabled, onchange }) {
+    const options = disabled ? [['', '工具默认']] : modelOptions(tool, value);
+    const select = el('select', { id, className: className || 'team-model-select', 'aria-label': ariaLabel, disabled: !!disabled },
+      ...options.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === (disabled ? '' : value) })));
+    if (!disabled) select.addEventListener('change', () => onchange(select.value));
+    return select;
+  }
+  function makeEffortSelect({ id, tool, model, value, ariaLabel, className, disabled, onchange }) {
+    const options = disabled ? [['', '工具默认']] : effortOptions(tool, model, value);
+    const select = el('select', { id, className: className || 'team-slot-select', 'aria-label': ariaLabel, disabled: !!disabled },
+      ...options.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === (disabled ? '' : value) })));
+    if (!disabled) select.addEventListener('change', () => onchange(select.value));
     return select;
   }
   function plannedRoles(team) {
@@ -179,8 +237,21 @@
   const namedTools = tools => tools.map(tool => [tool, TOOLS[tool] + used(tool)]);
 
   const RULES_KEY = 'remotecli.team.rules';
+  const LEADER_KEY = 'remotecli.team.leader';
   const savedRules = () => { try { return localStorage.getItem(RULES_KEY) || ''; } catch { return ''; } };
   const keepRules = text => { try { if (text) localStorage.setItem(RULES_KEY, text); else localStorage.removeItem(RULES_KEY); } catch { } };
+  const savedLeader = () => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LEADER_KEY) || 'null');
+      return raw && typeof raw === 'object' ? raw : null;
+    } catch { return null; }
+  };
+  const keepLeader = prefs => {
+    try {
+      if (prefs && prefs.tool) localStorage.setItem(LEADER_KEY, JSON.stringify({ tool: prefs.tool, model: prefs.model || '', effort: prefs.effort || '', autoRoster: !!prefs.autoRoster }));
+      else localStorage.removeItem(LEADER_KEY);
+    } catch { }
+  };
 
   // ---- a new one
   function begin() {
@@ -196,7 +267,11 @@
     if (!projects.length) return toast('请先添加一个项目');
     const defaultWriter = tools.includes('claude') ? 'claude' : tools[0];
     const defaultReviewer = (tools.includes('agy') && defaultWriter !== 'agy') ? 'agy' : (tools.find(t => t !== defaultWriter) || tools[0]);
-    const defaultLeader = tools.includes('codex') ? 'codex' : tools[0];
+    const restored = savedLeader();
+    const restoredTool = restored && tools.includes(restored.tool) ? restored.tool : '';
+    const defaultLeader = restoredTool || (tools.includes('codex') ? 'codex' : tools[0]);
+    const initialLeaderModel = restoredTool && hasModels() ? reconcileModel(defaultLeader, restored.model || '') : '';
+    const initialLeaderEffort = restoredTool && hasEffort() ? reconcileEffort(defaultLeader, initialLeaderModel, restored.effort || '') : '';
     const defaultMember1 = tools.find(t => t !== defaultLeader) || tools[0];
     const defaultMember2 = tools.find(t => t !== defaultLeader && t !== defaultMember1) || '';
     const plan = {
@@ -204,8 +279,9 @@
       dir: projects.length === 1 ? projects[0] : '',
       writer: defaultWriter, reviewer: defaultReviewer, leader: defaultLeader,
       members: tools.filter(t => t !== defaultLeader),
-      autoRoster: false,
-      leaderModel: '',
+      autoRoster: restoredTool && typeof restored.autoRoster === 'boolean' ? restored.autoRoster : false,
+      leaderModel: initialLeaderModel,
+      leaderEffort: initialLeaderEffort,
       rosterMembers: [{ tool: defaultMember1, model: '' }].concat(defaultMember2 ? [{ tool: defaultMember2, model: '' }] : []),
       compareTools: tools.slice(0, 3),
       models: {},
@@ -218,25 +294,30 @@
         return [{ role: '写手', tool: plan.writer }, { role: '审查', tool: plan.reviewer }];
       }
       if (plan.mode === 'lead') {
-        return [{ role: '领队', tool: plan.leader }].concat(plan.members.map(t => ({ role: '成员', tool: t })));
+        return [{ role: '领队', tool: plan.leader }].concat(plan.members.map(t => ({ role: '执行成员', tool: t })));
       }
       return plan.compareTools.slice(0, 3).map(t => ({ role: '候选', tool: t }));
     }
     function modelNoticeNodes(onRetry) {
       const nodes = [];
       if (modelLoading && !modelCatalog) {
-        nodes.push(kit.note('正在读取可用模型，也可直接使用工具默认模型开始'));
+        nodes.push(kit.note('正在读取可用模型与思考深度，也可直接使用工具默认开始'));
       }
       if (modelError) {
         nodes.push(el('div', { className: 'team-models-error', role: 'alert' },
-          el('span', { textContent: '模型列表加载失败：' + modelError + '（仍可使用工具默认模型）' }),
+          el('span', { textContent: '模型列表加载失败：' + modelError + '（仍可使用工具默认）' }),
           el('button', {
             type: 'button', id: 'team-models-retry', className: 'team-models-retry',
             textContent: modelLoading ? '读取中…' : '重试', disabled: modelLoading,
-            onclick: () => { loadModels(true).then(onRetry); onRetry(); }
+            onclick: () => { loadModels(true).then(() => { syncLeaderCatalog(); onRetry(); }); onRetry(); }
           })));
       }
       return nodes;
+    }
+    function syncLeaderCatalog() {
+      plan.leaderModel = reconcileModel(plan.leader, plan.leaderModel);
+      plan.leaderEffort = reconcileEffort(plan.leader, plan.leaderModel, plan.leaderEffort);
+      plan.rosterMembers.forEach(slot => { slot.model = reconcileModel(slot.tool, slot.model); });
     }
     function renderModels() {
       if (!modelBox) return;
@@ -259,7 +340,10 @@
         });
         nodes.push(kit.group(...rows));
       }
-      modelBox.replaceChildren(kit.section('模型', nodes, '不选则使用各工具当前默认模型'));
+      const note = plan.mode === 'lead' && !hasEffort()
+        ? '不选则使用各工具当前默认模型；更新电脑端与中转后可独立配置领队思考深度和执行成员'
+        : '不选则使用各工具当前默认模型';
+      modelBox.replaceChildren(kit.section('模型', nodes, note));
     }
     function makeToolSelect({ id, value, ariaLabel, onchange }) {
       const options = namedTools(tools);
@@ -268,74 +352,120 @@
       select.addEventListener('change', () => onchange(select.value));
       return select;
     }
+    function makeField(labelText, control) {
+      return el('div', { className: 'team-field' },
+        el('label', { htmlFor: control.id, textContent: labelText }),
+        control);
+    }
     function renderRoster() {
       if (!rosterBox) return;
       if (plan.mode !== 'lead' || !hasRoster()) { rosterBox.replaceChildren(); return; }
-      const modelsOn = hasModels();
-      const nodes = modelsOn ? modelNoticeNodes(renderRoster) : [];
-      const makeSlotRow = ({ role, label, tool, model, onTool, onModel, onRemove }) => {
-        const toolSel = makeToolSelect({ id: 'team-roster-tool-' + role, value: tool, ariaLabel: label + '工具', onchange: onTool });
-        const controls = [toolSel];
-        if (modelsOn) {
-          controls.push(makeModelSelect({
-            id: 'team-roster-model-' + role,
-            tool,
-            value: model,
-            className: 'team-slot-select',
-            ariaLabel: label + '模型',
-            onchange: onModel
+      const modelsOn = hasModels(), effortOn = hasEffort();
+      const sections = [];
+      const leaderNodes = modelsOn ? modelNoticeNodes(renderRoster) : [];
+      const leaderEfforts = effortListFor(plan.leader, plan.leaderModel);
+      const effortSelectable = effortOn && (leaderEfforts.length > 0 || (!!plan.leaderEffort && !modelCatalog));
+      const leaderToolSel = makeToolSelect({
+        id: 'team-roster-tool-leader',
+        value: plan.leader,
+        ariaLabel: '领队工具',
+        onchange: val => { plan.leader = val; plan.leaderModel = ''; plan.leaderEffort = ''; renderRoster(); }
+      });
+      const leaderModelSel = makeModelSelect({
+        id: 'team-roster-model-leader',
+        tool: plan.leader,
+        value: modelsOn ? plan.leaderModel : '',
+        className: 'team-slot-select',
+        ariaLabel: '领队模型',
+        disabled: !modelsOn,
+        onchange: val => {
+          plan.leaderModel = val;
+          plan.leaderEffort = reconcileEffort(plan.leader, plan.leaderModel, plan.leaderEffort);
+          renderRoster();
+        }
+      });
+      const leaderEffortSel = makeEffortSelect({
+        id: 'team-roster-effort-leader',
+        tool: plan.leader,
+        model: plan.leaderModel,
+        value: effortSelectable ? plan.leaderEffort : '',
+        className: 'team-slot-select',
+        ariaLabel: '领队思考深度',
+        disabled: !effortSelectable,
+        onchange: val => { plan.leaderEffort = val; }
+      });
+      const leaderSlot = el('div', { className: 'team-slot team-leader-slot' },
+        el('div', { className: 'team-slot-head' },
+          el('span', { className: 'dot ' + (plan.leader === 'claude' ? 'n-cc' : plan.leader === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[plan.leader] || 'AI' }),
+          el('b', { textContent: '领队' })),
+        el('div', { className: 'team-slot-fields leader' },
+          makeField('工具', leaderToolSel),
+          makeField('模型', leaderModelSel),
+          makeField('思考深度', leaderEffortSel)));
+      leaderNodes.push(kit.group(leaderSlot));
+      const leaderNote = !modelsOn
+        ? '当前电脑端或中转版本较旧，不支持设置模型和思考深度，将使用工具默认'
+        : !effortOn
+        ? '当前电脑端或中转版本较旧，不支持设置思考深度，将使用工具默认（更新后可调整）'
+        : modelCatalog && !modelLoading && !modelError && !leaderEfforts.length
+        ? '当前所选模型未单独提供思考深度档位，将使用工具默认'
+        : plan.autoRoster
+        ? '领队按所选工具、模型和思考深度统筹分工与验收；执行成员在开始后由领队按需创建（最多 3 个），同账号共用额度'
+        : '不选模型或思考深度时保留工具默认；档位以工具 CLI 实际返回为准';
+      sections.push(kit.section('领队', leaderNodes, leaderNote));
+
+      if (!plan.autoRoster) {
+        const memberRows = plan.rosterMembers.map((slot, idx) => {
+          const role = 'member-' + (idx + 1), label = '执行成员 ' + (idx + 1);
+          const toolSel = makeToolSelect({
+            id: 'team-roster-tool-' + role,
+            value: slot.tool,
+            ariaLabel: label + '工具',
+            onchange: val => { slot.tool = val; slot.model = ''; renderRoster(); }
+          });
+          const fields = [makeField('工具', toolSel)];
+          if (modelsOn) {
+            fields.push(makeField('模型', makeModelSelect({
+              id: 'team-roster-model-' + role,
+              tool: slot.tool,
+              value: slot.model,
+              className: 'team-slot-select',
+              ariaLabel: label + '模型',
+              onchange: val => { slot.model = val; }
+            })));
+          }
+          const onRemove = plan.rosterMembers.length > 1 ? () => { plan.rosterMembers.splice(idx, 1); renderRoster(); } : null;
+          return el('div', { className: 'team-slot' },
+            el('div', { className: 'team-slot-head' },
+              el('span', { className: 'dot ' + (slot.tool === 'claude' ? 'n-cc' : slot.tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[slot.tool] || 'AI' }),
+              el('b', { textContent: label }),
+              onRemove ? el('button', { type: 'button', id: 'team-roster-remove-' + role, className: 'team-slot-remove', 'aria-label': '移除' + label, textContent: '移除', onclick: onRemove }) : ''),
+            el('div', { className: 'team-slot-fields' + (modelsOn ? '' : ' single') }, ...fields));
+        });
+        const memberNodes = [kit.group(...memberRows)];
+        if (plan.rosterMembers.length < 3) {
+          memberNodes.push(el('button', {
+            type: 'button', id: 'team-roster-add', className: 'team-roster-add',
+            textContent: '＋ 添加执行成员（' + plan.rosterMembers.length + ' / 3）',
+            onclick: () => {
+              if (plan.rosterMembers.length >= 3) return;
+              const usedTools = new Set([plan.leader].concat(plan.rosterMembers.map(s => s.tool)));
+              const nextTool = tools.find(t => !usedTools.has(t)) || tools[0];
+              plan.rosterMembers.push({ tool: nextTool, model: '' });
+              renderRoster();
+            }
           }));
         }
-        return el('div', { className: 'team-slot' },
-          el('div', { className: 'team-slot-head' },
-            el('span', { className: 'dot ' + (tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }),
-            el('b', { textContent: label }),
-            onRemove ? el('button', { type: 'button', id: 'team-roster-remove-' + role, className: 'team-slot-remove', 'aria-label': '移除' + label, textContent: '移除', onclick: onRemove }) : ''),
-          el('div', { className: 'team-slot-controls' + (modelsOn ? '' : ' single') }, ...controls));
-      };
-      const rows = [
-        makeSlotRow({
-          role: 'leader', label: '领队', tool: plan.leader, model: plan.leaderModel,
-          onTool: val => { plan.leader = val; plan.leaderModel = ''; renderRoster(); },
-          onModel: val => { plan.leaderModel = val; }
-        })
-      ];
-      if (!plan.autoRoster) {
-        plan.rosterMembers.forEach((slot, idx) => {
-          const role = 'member-' + (idx + 1), label = '成员 ' + (idx + 1);
-          rows.push(makeSlotRow({
-            role, label, tool: slot.tool, model: slot.model,
-            onTool: val => { slot.tool = val; slot.model = ''; renderRoster(); },
-            onModel: val => { slot.model = val; },
-            onRemove: plan.rosterMembers.length > 1 ? () => { plan.rosterMembers.splice(idx, 1); renderRoster(); } : null
-          }));
-        });
+        sections.push(kit.section('执行成员', memberNodes, '每个执行成员可独立选择工具和模型（可重复使用同一工具，不选模型则使用工具默认，同账号共用额度）'));
       }
-      nodes.push(kit.group(...rows));
-      if (!plan.autoRoster && plan.rosterMembers.length < 3) {
-        nodes.push(el('button', {
-          type: 'button', id: 'team-roster-add', className: 'team-roster-add',
-          textContent: '＋ 添加成员（' + plan.rosterMembers.length + ' / 3）',
-          onclick: () => {
-            if (plan.rosterMembers.length >= 3) return;
-            const usedTools = new Set([plan.leader].concat(plan.rosterMembers.map(s => s.tool)));
-            const nextTool = tools.find(t => !usedTools.has(t)) || tools[0];
-            plan.rosterMembers.push({ tool: nextTool, model: '' });
-            renderRoster();
-          }
-        }));
-      }
-      const note = plan.autoRoster
-        ? '成员由领队在开始后自行创建和分派（最多 3 个成员）；同账号共用额度'
-        : '每个槽位可独立选择工具和模型（可重复使用同一工具，不选模型则使用工具默认，同账号共用额度）';
-      rosterBox.replaceChildren(kit.section(plan.autoRoster ? '领队' : '团队成员', nodes, note));
+      rosterBox.replaceChildren(...sections);
     }
     if (hasModels() && (!modelCatalog || modelError)) {
-      loadModels().then(() => { if (beginSheet && !beginSheet.gone) { renderModels(); renderRoster(); } });
+      loadModels().then(() => { if (beginSheet && !beginSheet.gone) { syncLeaderCatalog(); renderModels(); renderRoster(); } });
     }
     beginSheet = window.RemoteSheet.open({ title: '协作任务', build(p) {
       const modeHint = plan.mode === 'review' ? '一个写，另一个只读审查；审查意见交回去改，直到通过'
-        : plan.mode === 'lead' ? '一轮包含领队派工、成员执行并汇报、领队汇总验收；发现问题再进入下一轮'
+        : plan.mode === 'lead' ? '一轮包含领队派工、执行成员完成并汇报、领队汇总验收；发现问题再进入下一轮'
         : '2–3 个 AI 在独立 Git worktree 副本中并行完成，互不干扰，做完后并排对比改动、任选一个合并';
       const modeKeys = hasV2() && tools.length >= 2 ? Object.keys(MODES) : tools.length >= 2 ? ['review', 'lead'] : ['lead'];
       p.body.append(kit.section('方式', kit.seg(modeKeys.map(key => [key, MODES[key]]), plan.mode, value => { plan.mode = value; p.refresh(); }, { label: '方式', full: true }), modeHint));
@@ -353,17 +483,17 @@
         p.body.append(kit.section('审查', kit.chips(named, { chosen: plan.reviewer, label: '审查的 AI' }, value => { plan.reviewer = value; renderModels(); }), '审查的 AI 以只读方式运行'));
       } else if (plan.mode === 'lead') {
         if (hasRoster()) {
-          p.body.append(kit.section('组队方式', kit.seg([['manual', '预设成员'], ['auto', '领队自行组队']], plan.autoRoster ? 'auto' : 'manual', value => {
+          p.body.append(kit.section('组队方式', kit.seg([['manual', '手动选成员'], ['auto', '自动组队']], plan.autoRoster ? 'auto' : 'manual', value => {
             plan.autoRoster = value === 'auto';
             p.refresh();
-          }, { label: '组队方式', full: true }), plan.autoRoster ? '只需选定领队，成员槽位留给领队按需创建' : '提前定好领队和 1–3 个成员槽位'));
+          }, { label: '组队方式', full: true }), plan.autoRoster ? '只需配置领队，执行成员由领队按任务按需创建' : '提前配置领队和 1–3 个执行成员'));
           rosterBox = el('div', { className: 'team-roster-host' });
           p.body.append(rosterBox);
           renderRoster();
         } else {
           rosterBox = null;
           p.body.append(kit.section('领队', kit.chips(named, { chosen: plan.leader, label: '领队' }, value => { plan.leader = value; plan.members = plan.members.filter(t => t !== value); p.refresh(); })));
-          p.body.append(kit.section('成员', kit.chips(named.filter(([tool]) => tool !== plan.leader), { chosen: plan.members, multi: true, label: '成员' }, value => { plan.members = value; renderModels(); }), '领队按任务和剩余额度按需派工，避免多人改同一批文件'));
+          p.body.append(kit.section('执行成员', kit.chips(named.filter(([tool]) => tool !== plan.leader), { chosen: plan.members, multi: true, label: '执行成员' }, value => { plan.members = value; renderModels(); }), '领队按任务和剩余额度按需派工，避免多人改同一批文件'));
         }
       } else {
         rosterBox = null;
@@ -393,13 +523,18 @@
         keepRules(trimmedRules);
         let item;
         if (plan.mode === 'lead' && hasRoster()) {
-          const roster = [{ role: 'leader', tool: plan.leader, model: hasModels() ? String(plan.leaderModel || '').trim() : '' }];
+          const leaderModel = hasModels() ? String(plan.leaderModel || '').trim() : '';
+          const leaderEffort = hasEffort() ? reconcileEffort(plan.leader, leaderModel, plan.leaderEffort) : '';
+          const leaderEntry = { role: 'leader', tool: plan.leader, model: leaderModel };
+          if (leaderEffort) leaderEntry.effort = leaderEffort;
+          const roster = [leaderEntry];
           if (!plan.autoRoster) {
-            if (!plan.rosterMembers.length) throw new Error('请至少保留一个成员，或改用领队自行组队');
+            if (!plan.rosterMembers.length) throw new Error('请至少保留一个执行成员，或改用自动组队');
             plan.rosterMembers.slice(0, 3).forEach((slot, idx) => {
               roster.push({ role: 'member-' + (idx + 1), tool: slot.tool, model: hasModels() ? String(slot.model || '').trim() : '' });
             });
           }
+          keepLeader({ tool: plan.leader, model: leaderModel, effort: leaderEffort, autoRoster: plan.autoRoster });
           item = { id: plan.id, mode: 'lead', dir: plan.dir, goal: plan.goal.trim(), tools: roster.map(r => r.tool), roster, rounds: plan.rounds };
           if (plan.autoRoster) item.auto_roster = true;
           if (plan.discuss && !plan.autoRoster) item.discuss = true;
@@ -407,7 +542,7 @@
           const chosen = plan.mode === 'review' ? [plan.writer, plan.reviewer]
             : plan.mode === 'lead' ? [plan.leader].concat(plan.members)
             : plan.compareTools.slice(0, 3);
-          if (plan.mode === 'lead' && chosen.length < 2) throw new Error('请至少选一个成员');
+          if (plan.mode === 'lead' && chosen.length < 2) throw new Error('请至少选一个执行成员');
           if (plan.mode === 'compare' && chosen.length < 2) throw new Error('并行比稿请至少选 2 个 AI');
           item = { id: plan.id, mode: plan.mode, dir: plan.dir, goal: plan.goal.trim(), tools: chosen, rounds: plan.mode === 'compare' ? 1 : plan.rounds };
           if (hasModels()) {
@@ -438,7 +573,7 @@
     const expanded = new Set();
     let streamBox = null, footBox = null, bodyScroll = null, activeSheet = null, lastKey = '';
 
-    const keyOf = t => JSON.stringify([t.state, t.phase, !!t.last, t.round, t.rounds, t.note, t.picked, t.tools, t.models || null, t.roster || null, !!t.auto_roster, t.awaited, t.members, t.member_sessions || null, t.failed, t.confirm || null, t._loading || false, t._error || '', (t.log || []).length, (t.candidates || []).map(c => [c.tool, c.stat, c.ready, (c.diff || '').length])]);
+    const keyOf = t => JSON.stringify([t.state, t.phase, !!t.last, t.round, t.rounds, t.note, t.picked, t.tools, t.models || null, t.efforts || null, t.roster || null, !!t.auto_roster, t.awaited, t.members, t.member_sessions || null, t.failed, t.confirm || null, t._loading || false, t._error || '', (t.log || []).length, (t.candidates || []).map(c => [c.tool, c.stat, c.ready, (c.diff || '').length])]);
 
     function updateTeamLocal(updated) {
       if (!updated) return;
@@ -514,7 +649,7 @@
           el('span', { className: 'team-round-tag', textContent: '第 ' + round + ' / ' + rounds + ' 轮' + (finalRound ? ' · 末轮' : '') }),
           stepNode('派工', assignState),
           el('span', { className: 'team-step-sep', ariaHidden: 'true', textContent: '→' }),
-          stepNode('成员执行', workState),
+          stepNode('执行成员', workState),
           el('span', { className: 'team-step-sep', ariaHidden: 'true', textContent: '→' }),
           stepNode(verifyState === 'fail' ? '验收未通过' : '领队验收', verifyState)));
       }
@@ -522,7 +657,7 @@
         const round = team.round || 1, rounds = team.rounds || 3;
         const finalTag = (team.last || round >= rounds) ? '（末轮验收）' : '';
         const prefix = '第 ' + round + ' / ' + rounds + ' 轮 · 领队验收' + finalTag;
-        const verifyText = team.note ? (team.note.includes('领队验收') ? team.note : prefix + '：' + team.note) : prefix + '：正在核对成员改动与结果';
+        const verifyText = team.note ? (team.note.includes('领队验收') ? team.note : prefix + '：' + team.note) : prefix + '：正在核对执行成员改动与结果';
         const banner = kit.summary(verifyText, '', 'spark');
         banner.classList.add('team-verify');
         parts.push(banner);
@@ -530,18 +665,19 @@
         parts.push(kit.summary(team.note, team.state === 'failed' || team.state === 'paused' || isUnverifiedStop(team) ? 'bad' : '', team.state === 'done' ? 'tick' : 'clock'));
       }
 
-      // Compact member chips (clear role + tool + selected/default model) + inline confirmation alerts
+      // Compact member chips (clear role + tool + selected/default model + thinking depth) + inline confirmation alerts
       const roster = rosterOf(team);
       if (team.auto_roster) {
         const assigned = roster.filter(r => r.role !== 'leader').length;
         parts.push(el('p', {
           className: 'team-roster-meta', id: 'team-auto-roster-status',
-          textContent: assigned ? '领队自行组队 · 已创建 ' + assigned + ' 个成员（同账号共用额度）'
-            : team.state === 'running' ? '领队自行组队 · 领队正在按任务创建成员…' : '领队自行组队 · 尚未创建成员'
+          textContent: assigned ? '自动组队 · 已创建 ' + assigned + ' 个执行成员（同账号共用额度）'
+            : team.state === 'running' ? '自动组队 · 领队正在按任务创建执行成员…' : '自动组队 · 尚未创建执行成员'
         }));
       }
       const memberKeys = memberRolesOf(team);
       const showModels = hasModels() || !!(team.models && Object.keys(team.models).length) || roster.some(r => r.model);
+      const showEfforts = hasEffort() || !!(team.efforts && Object.keys(team.efforts).length) || roster.some(r => r.effort);
       const pendingAsks = [];
       if (memberKeys.length) {
         const chips = memberKeys.map(role => {
@@ -553,6 +689,8 @@
           const tool = toolOf(team, role);
           const failed = team.failed && (team.failed[role] || team.failed[tool]);
           const modelId = modelOf(team, role);
+          const effortId = effortOf(team, role);
+          const showRoleEffort = !!effortId || (role === 'leader' && team.mode === 'lead' && showEfforts);
           const canOpen = !!t || !!(ms && ms.id);
           const statusText = asking ? '等你确认' : failed ? '已中断' : active ? (team.phase === 'verify' && role === 'leader' ? '验收中' : '进行中') : t && page.running(t) ? '可查看' : t ? '已结束' : (ms && ms.id) ? '历史记录' : '待开始';
           return el('button', {
@@ -564,9 +702,10 @@
             el('span', { className: 'dot ' + (tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }),
             el('span', { className: 'name', textContent: roleName(team, role) }),
             showModels ? el('span', { className: 'model', textContent: modelLabel(tool, modelId) }) : '',
+            showRoleEffort ? el('span', { className: 'effort', textContent: '思考 · ' + (effortId ? effortLabel(effortId) : '默认') }) : '',
             el('small', { textContent: statusText }));
         });
-        parts.push(el('div', { className: 'team-members', ariaLabel: '成员对话' }, ...chips));
+        parts.push(el('div', { className: 'team-members', ariaLabel: '协作成员对话' }, ...chips));
       }
 
       if (pendingAsks.length) {
@@ -646,7 +785,7 @@
       const log = team.log || [];
       if (log.length) {
         const list = log.map((step, idx) => {
-          const isUser = step.who === 'user', isMeta = step.who === '目标' || step.who === '结果' || step.who === '切换';
+          const isUser = step.who === 'user', isMeta = step.who === '目标' || step.who === '结果' || step.who === '切换' || step.who === '验收';
           const tool = isUser ? 'user' : isMeta ? '' : toolOf(team, step.who);
           const key = idx + ':' + step.at;
           const long = (step.text || '').length > 420 || (step.text || '').split('\n').length > 10;
@@ -657,11 +796,13 @@
             onclick: () => { if (expanded.has(key)) expanded.delete(key); else expanded.add(key); renderStream(false); }
           }) : '';
           const stepModel = (!isUser && !isMeta && showModels) ? modelOf(team, step.who) : '';
+          const stepEffort = (!isUser && !isMeta && showEfforts) ? effortOf(team, step.who) : '';
           return el('li', { className: 'team-msg' + (isUser ? ' mine' : isMeta ? ' meta' : '') },
             el('div', { className: 'head' },
               !isMeta ? el('span', { className: 'badge ' + (isUser ? 'n-me' : tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }) : '',
               el('b', { textContent: roleName(team, step.who) }),
               stepModel ? el('span', { className: 'model', textContent: modelLabel(tool, stepModel) }) : '',
+              stepEffort ? el('span', { className: 'effort', textContent: '思考 · ' + effortLabel(stepEffort) }) : '',
               el('span', { className: 'at', textContent: page.ago(step.at) })),
             bodyNode,
             toggleBtn);
@@ -682,14 +823,16 @@
         ? roster.map(r => [r.role, roleName(team, r.role)])
         : team.mode === 'review'
         ? [['writer', '写手 · ' + (TOOLS[team.tools[0]] || team.tools[0])], ['reviewer', '审查 · ' + (TOOLS[team.tools[1]] || team.tools[1])]]
-        : [['leader', '领队 · ' + (TOOLS[team.tools[0]] || team.tools[0])]].concat(team.tools.slice(1).map(t => [t, '成员 · ' + (TOOLS[t] || t)]));
+        : [['leader', '领队 · ' + (TOOLS[team.tools[0]] || team.tools[0])]].concat(team.tools.slice(1).map(t => [t, '执行成员 · ' + (TOOLS[t] || t)]));
       const currentOf = r => toolOf(team, r);
       const failedAwaited = (team.awaited || []).find(r => team.failed && (team.failed[r] || team.failed[currentOf(r)]));
       const initialRole = failedAwaited || ((team.awaited || []).find(r => roleChoices.some(([k]) => k === r))) || roleChoices[0][0];
       const initialTool = tools.find(t => t !== currentOf(initialRole)) || tools[0];
       const keptModels = Object.assign({}, team.models || {});
       const modelForChoice = (role, tool) => tool === currentOf(role) ? modelOf(team, role) : (keptModels[tool] || '');
-      const state = { role: initialRole, tool: initialTool, model: modelForChoice(initialRole, initialTool), models: keptModels, note: '' };
+      const effortForChoice = (role, tool, model) => tool === currentOf(role) ? reconcileEffort(tool, model, effortOf(team, role)) : '';
+      const initialModel = modelForChoice(initialRole, initialTool);
+      const state = { role: initialRole, tool: initialTool, model: initialModel, effort: effortForChoice(initialRole, initialTool, initialModel), models: keptModels, note: '' };
       let swapModelBox = null;
       function renderSwapModel() {
         if (!swapModelBox) return;
@@ -705,18 +848,40 @@
               onclick: () => { loadModels(true).then(renderSwapModel); renderSwapModel(); }
             })));
         }
+        const rows = [];
         const sel = makeModelSelect({
           id: 'team-swap-model',
           tool: state.tool,
           value: state.model,
           ariaLabel: '接手 AI 的模型',
-          onchange: val => { state.model = val; state.models[state.tool] = val; }
+          onchange: val => {
+            state.model = val;
+            state.models[state.tool] = val;
+            state.effort = reconcileEffort(state.tool, val, state.effort);
+            renderSwapModel();
+          }
         });
-        nodes.push(kit.group(kit.row({ icon: state.tool, tint: state.tool, label: '模型', detail: TOOLS[state.tool] || state.tool, end: sel })));
-        swapModelBox.replaceChildren(kit.section('接手模型', nodes, '不选则使用该工具默认模型'));
+        rows.push(kit.row({ icon: state.tool, tint: state.tool, label: '模型', detail: TOOLS[state.tool] || state.tool, end: sel }));
+        if (state.role === 'leader' && hasEffort()) {
+          const efforts = effortListFor(state.tool, state.model);
+          const selectable = efforts.length > 0 || (!!state.effort && !modelCatalog);
+          const effortSel = makeEffortSelect({
+            id: 'team-swap-effort',
+            tool: state.tool,
+            model: state.model,
+            value: selectable ? state.effort : '',
+            className: 'team-model-select',
+            ariaLabel: '领队思考深度',
+            disabled: !selectable,
+            onchange: val => { state.effort = val; }
+          });
+          rows.push(kit.row({ icon: 'spark', tint: state.tool, label: '思考深度', detail: selectable ? '按 CLI 目录' : '工具默认', end: effortSel }));
+        }
+        nodes.push(kit.group(...rows));
+        swapModelBox.replaceChildren(kit.section(state.role === 'leader' && hasEffort() ? '接手模型与思考深度' : '接手模型', nodes, '不选则使用该工具默认配置'));
       }
       if (hasModels() && (!modelCatalog || modelError)) {
-        loadModels().then(() => { if (activeSheet && !activeSheet.gone) renderSwapModel(); });
+        loadModels().then(() => { if (activeSheet && !activeSheet.gone) { state.effort = reconcileEffort(state.tool, state.model, state.effort); renderSwapModel(); } });
       }
       activeSheet.push({ title: '换 AI 接手', build(p) {
         p.body.append(kit.section('要替换或转交的角色', kit.chips(roleChoices, { chosen: state.role, label: '替换角色' }, val => {
@@ -725,12 +890,14 @@
             state.tool = tools.find(t => t !== currentOf(val)) || tools[0];
           }
           state.model = modelForChoice(state.role, state.tool);
+          state.effort = effortForChoice(state.role, state.tool, state.model);
           p.refresh();
         })));
         const choices = namedTools(isRosterLead ? tools : tools.filter(t => t !== currentOf(state.role)));
         p.body.append(kit.section('交给哪个 AI 继续', kit.chips(choices, { chosen: state.tool, label: '接手 AI' }, val => {
           state.tool = val;
           state.model = modelForChoice(state.role, val);
+          state.effort = effortForChoice(state.role, val, state.model);
           renderSwapModel();
         }), '会带上当前工作区改动和原任务上下文继续执行'));
         if (hasModels()) {
@@ -744,7 +911,11 @@
         p.body.append(kit.section('补充说明（选填）', noteBox));
         const go = kit.go('交给它继续', async () => {
           const payload = { team: currentTeam.id, role: state.role, tool: state.tool };
-          if (hasModels() && state.model) payload.model = state.model;
+          if (hasModels() && (state.model || (isRosterLead && modelOf(team, state.role)))) payload.model = state.model;
+          if (hasEffort() && state.role === 'leader') {
+            const cleanEffort = reconcileEffort(state.tool, state.model, state.effort);
+            if (cleanEffort || effortOf(team, state.role)) payload.effort = cleanEffort;
+          }
           if (state.note.trim()) payload.note = state.note.trim();
           const res = await work('team_swap', payload);
           updateTeamLocal(res.team);
@@ -950,7 +1121,7 @@
   function cards() {
     return (teams || []).map(card).concat(el('li', { className: 'card add' }, el('button', { type: 'button', className: 'open', id: 'team-new', onclick: begin, html: page.ICON.plus + '<span>新的协作任务</span>' })));
   }
-  const status = () => failure ? '读取失败，请重试；显示上次读取的任务。' : teams === null ? '正在读取协作任务…' : teams.length ? '' : '还没有协作任务。支持写审循环、领队分工、先议后写，或在独立 worktree 中并行比稿。';
+  const status = () => failure ? '读取失败，请重试；显示上次读取的任务。' : teams === null ? '正在读取协作任务…' : teams.length ? '' : '还没有协作任务。支持写审循环、分工协作、先议后写，或在独立 worktree 中并行比稿。';
   const count = () => teams && teams.length ? teams.filter(t => t.state === 'running' || t.state === 'paused' || t.state === 'choose').length + ' 个进行中 / ' + teams.length + ' 个' : '';
 
   window.RemoteTeams = { TEAM, load, loadModels, begin, show, open, cards, status, count, get teams() { return teams; }, get failure() { return failure; } };

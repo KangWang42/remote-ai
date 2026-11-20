@@ -54,6 +54,8 @@ public abstract class Chat : IRunning {
     protected McpServer mcp;
     /// The model it is started with (Models.cs), "" for its tool's own default.
     protected string model = "";
+    /// The reasoning effort tier it is started with (Models.cs), "" for its tool's own default.
+    protected string effort = "";
     /// Started only to read which models its tool offers (`Models`): it opens no conversation where it need not.
     protected bool listing;
     Models.Choice[] offered;
@@ -107,17 +109,20 @@ public abstract class Chat : IRunning {
     /// Starts the conversation: the saved one `session` gone on with (`resume`), else a new one (named `session`
     /// where the tool lets its id be chosen). `mode` is the computer's widest allowed way of working (full, edit,
     /// read), as for its terminals. `model` is the tool's name of a model it offers (Models.cs), "" for its default.
-    public static Chat Open(string tool, string launcher, string folder, string session, bool resume, string mode, Action<string> emit, Quotas quotas = null, McpServer mcp = null, string model = "") {
+    /// `effort` is an optional reasoning effort tier advertised by the tool (Models.cs), "" for its default.
+    public static Chat Open(string tool, string launcher, string folder, string session, bool resume, string mode, Action<string> emit, Quotas quotas = null, McpServer mcp = null, string model = "", string effort = "") {
         Tool kind = RemoteCli.Tool.Of(tool);
         model = model ?? "";
-        if (kind == null || !kind.Chats || (model.Length > 0 && !Models.Valid(model))) {
+        effort = (effort ?? "").Trim().ToLowerInvariant();
+        if (kind == null || !kind.Chats || (model.Length > 0 && !Models.Valid(model)) || (effort.Length > 0 && !Models.ValidEffort(effort))) {
             if (mcp != null) mcp.Dispose();
-            throw new ArgumentException(kind == null || !kind.Chats ? "这个工具不支持对话" : "模型名称无效");
+            throw new ArgumentException(kind == null || !kind.Chats ? "这个工具不支持对话" : effort.Length > 0 && !Models.ValidEffort(effort) ? "思考深度无效" : "模型名称无效");
         }
         Chat chat = kind.CreateChat(folder, emit);
         chat.quotas = quotas;
         chat.mcp = mcp;
         chat.model = model;
+        chat.effort = effort;
         try { chat.Begin(launcher, session ?? "", resume, mode ?? ""); }
         catch { chat.Dispose(); throw; }
         return chat;
@@ -398,12 +403,13 @@ public sealed class ClaudeChat : Chat {
     readonly Queue<KeyValuePair<string, string>> said = new Queue<KeyValuePair<string, string>>();   // what the phone said, and its number, until it is given back
     int requests;
 
-    public static string Arguments(string session, bool resume, string mode, string mcpConfig = null, string model = "") {
+    public static string Arguments(string session, bool resume, string mode, string mcpConfig = null, string model = "", string effort = "") {
         return "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio"
             + (resume ? " --resume " : " --session-id ") + session
             + (mode == "read" ? " --permission-mode plan" : mode == "edit" ? " --permission-mode acceptEdits" : "")
             + (!String.IsNullOrEmpty(mcpConfig) ? " --mcp-config \"" + mcpConfig + "\"" : "")
-            + (!String.IsNullOrEmpty(model) ? " --model " + model : "");      // (a safe name, Models.Valid)
+            + (!String.IsNullOrEmpty(model) ? " --model " + model : "")      // (a safe name, Models.Valid)
+            + (!String.IsNullOrEmpty(effort) ? " --effort " + effort : "");  // (a safe tier, Models.ValidEffort)
     }
     protected override void Begin(string launcher, string session, bool resume, string mode) {
         if (session.Length == 0) { if (resume) throw new ArgumentException("对话编号无效"); session = Guid.NewGuid().ToString(); }
@@ -411,7 +417,7 @@ public sealed class ClaudeChat : Chat {
         lock (gate) Known(session);
         string cfg = mcp != null && !String.IsNullOrEmpty(mcp.ConfigFile) ? mcp.ConfigFile : null;
         var extraEnv = cfg != null ? new Dictionary<string, string> { { "MCP_TOOL_TIMEOUT", "300000" } } : null;
-        Run(launcher, Arguments(session, resume, mode, cfg, model), extraEnv);
+        Run(launcher, Arguments(session, resume, mode, cfg, model, effort), extraEnv);
         Send(new Dictionary<string, object> { { "type", "control_request" }, { "request_id", "init-" + (++requests) }, { "request", new Dictionary<string, object> { { "subtype", "initialize" } } } });
         lock (gate) State("idle");
     }
@@ -437,12 +443,26 @@ public sealed class ClaudeChat : Chat {
         if (type == "assistant") { Whole(At(m, "message")); return; }
         if (type == "user") { Came(m); return; }
         if (type == "control_request") { Permission(m); return; }
-        // the answer to `initialize` names the models it offers (`models`: value, displayName), as its SDK reads them
+        // the answer to `initialize` names the models it offers (`models`: value, displayName, supportedEffortLevels), as its SDK reads them
         if (type == "control_response") {
             var response = At(m, "response");
-            if (Text(response, "request_id").StartsWith("init-", StringComparison.Ordinal) && At(At(response, "response"), "models") != null)
-                Offer(Many(At(response, "response"), "models").Where(one => Text(one, "value") != "default")
-                    .Select(one => new Models.Choice { Id = Text(one, "value"), Label = Text(one, "displayName") }));
+            if (Text(response, "request_id").StartsWith("init-", StringComparison.Ordinal) && At(At(response, "response"), "models") != null) {
+                var rawModels = Many(At(response, "response"), "models").ToList();
+                var defaultEntry = rawModels.FirstOrDefault(one => Text(one, "value") == "default");
+                string defaultResolved = defaultEntry != null ? Text(defaultEntry, "resolvedModel") : "";
+                bool markedDefault = false;
+                var choices = new List<Models.Choice>();
+                foreach (var one in rawModels) {
+                    string val = Text(one, "value");
+                    if (val == "default") continue;
+                    bool supportsEffort = !false.Equals(At(one, "supportsEffort"));
+                    var efforts = supportsEffort ? Many(one, "supportedEffortLevels").Select(Convert.ToString).ToArray() : new string[0];
+                    bool isDefault = !markedDefault && defaultResolved.Length > 0 && Text(one, "resolvedModel") == defaultResolved;
+                    if (isDefault) markedDefault = true;
+                    choices.Add(new Models.Choice { Id = val, Label = Text(one, "displayName"), Efforts = efforts, IsDefault = isDefault });
+                }
+                Offer(choices);
+            }
             else if (listing && Text(response, "request_id").StartsWith("init-", StringComparison.Ordinal)) Offer(null);
             return;
         }
@@ -681,13 +701,20 @@ public sealed class CodexChat : JsonRpcChat {
         if (mode == "read") given["sandbox"] = "read-only"; else if (mode == "edit") given["sandbox"] = "workspace-write";
         if (session.Length > 0) given["threadId"] = session;
         if (model.Length > 0) given["model"] = model;       // (thread/start and thread/resume both take it)
+        if (effort.Length > 0) given["config"] = new Dictionary<string, object> { { "model_reasoning_effort", effort } };
         Call("initialize", new Dictionary<string, object> { { "clientInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "title", "Remote AI" }, { "version", "1" } } } }, initAnswer => {
             if (At(initAnswer, "error") != null) { Unopened("Codex 初始化失败：" + Text(At(initAnswer, "error"), "message"), early.Count > 0); return; }
             Notify("initialized", new Dictionary<string, object>());
             if (listing) {
                 // the models it lists, without a conversation (hidden ones are left out, as its own pickers do)
                 Call("model/list", new Dictionary<string, object>(), answer => Offer(Many(At(answer, "result"), "data").Where(one => !(At(one, "hidden") is bool && (bool)At(one, "hidden")))
-                    .Select(one => new Models.Choice { Id = Text(one, "id").Length > 0 ? Text(one, "id") : Text(one, "model"), Label = Text(one, "displayName") })));
+                    .Select(one => new Models.Choice {
+                        Id = Text(one, "id").Length > 0 ? Text(one, "id") : Text(one, "model"),
+                        Label = Text(one, "displayName"),
+                        Efforts = Many(one, "supportedReasoningEfforts").Select(e => Text(e, "reasoningEffort")).Where(e => e.Length > 0).ToArray(),
+                        DefaultEffort = Text(one, "defaultReasoningEffort"),
+                        IsDefault = true.Equals(At(one, "isDefault"))
+                    })));
                 return;
             }
             Call(session.Length > 0 ? "thread/resume" : "thread/start", given, answer => {
@@ -717,9 +744,18 @@ public sealed class CodexChat : JsonRpcChat {
     static string Client(string id) { return String.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N") : id; }
     void Start(string text, string id) {
         State("busy");
-        Call("turn/start", new Dictionary<string, object> { { "threadId", Session }, { "input", Words(text) }, { "clientUserMessageId", Client(id) } }, answer => {
+        var turnParams = new Dictionary<string, object> { { "threadId", Session }, { "input", Words(text) }, { "clientUserMessageId", Client(id) } };
+        if (model.Length > 0) turnParams["model"] = model;
+        if (effort.Length > 0) turnParams["effort"] = effort;
+        Call("turn/start", turnParams, answer => {
             var error = At(answer, "error");
-            if (error != null) { Note("Codex 没有收下这句话：" + Text(error, "message")); State(turn.Length > 0 ? "busy" : "idle"); return; }
+            if (error != null) {
+                string msg = "Codex 没有收下这句话：" + Text(error, "message");
+                Note(msg);
+                if (turn.Length == 0) TurnEnded("failed", msg);
+                State(turn.Length > 0 ? "busy" : "idle");
+                return;
+            }
             string started = Text(At(At(answer, "result"), "turn"), "id");
             if (started.Length > 0 && turn.Length == 0) turn = started;
         });
@@ -757,7 +793,7 @@ public sealed class CodexChat : JsonRpcChat {
                 break;
             }
             case "error": Note(Text(At(p, "error"), "message").Length > 0 ? Text(At(p, "error"), "message") : "Codex 出错"); break;
-            case "account/rateLimits/updated": if (quotas != null) quotas.Note("codex", Quotas.FromCodex(At(p, "rateLimits"))); break;
+            case "account/rateLimits/updated": if (quotas != null) quotas.NoteCodex(At(p, "rateLimits")); break;
         }
     }
     readonly HashSet<string> thoughts = new HashSet<string>();

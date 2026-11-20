@@ -160,6 +160,18 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": dict(self.info, enabled=False)}, now=1003)
         self.assertEqual(self.relay.overview(now=1004)["device"]["quotas"], [])
 
+    def test_codex_billing_keeps_only_declared_fields(self):
+        self.info["quotas"] = [
+            {"tool": "codex", "at": 1001, "billing": {"type": "api", "key": "private", "balance": "50"}},
+            {"tool": "codex", "at": 1002, "billing": {"type": "credits", "balance": "0.5", "email": "private"}},
+            {"tool": "codex", "at": 1003, "billing": {"type": "credits", "balance": "NaN"}},
+            {"tool": "claude", "at": 1004, "billing": {"type": "credits", "balance": "10"}},
+        ]
+        self.relay.agent({"info": self.info}, now=1001)
+        quotas = self.relay.overview(now=1002)["device"]["quotas"]
+        self.assertEqual([q.get("billing") for q in quotas],
+                         [{"type": "api"}, {"type": "credits", "balance": "0.5"}, None, None])
+
     def test_fresh_start_never_becomes_anonymous_resume(self):
         payload = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": True}
         with self.assertRaisesRegex(RemoteError, "resume"):
@@ -486,6 +498,35 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertIn("teams-roster", overview["features"])
         self.assertEqual(overview["team_cards"][0]["awaited"], ["discuss:member-1", "member-2"])
         self.assertEqual(overview["team_cards"][0]["roster"], [dict(leader, model=""), worker, second])
+        # older computer without `teams-effort` rejects non-empty effort cleanly, allows empty effort as default
+        for older in ({"id": "6" * 32, "action": "team_start", "item": dict(item, roster=[dict(leader, effort="high"), worker])},
+                      {"id": "6" * 32, "action": "team_start", "item": dict(item, roster=[dict(leader, effort="high")], auto_roster=True)},
+                      {"id": "6" * 32, "action": "team_swap", "team": team, "role": "leader", "tool": "codex", "effort": "high"}):
+            with self.assertRaisesRegex(RemoteError, "更新电脑端"):
+                self.relay.work(older, now=1004, wait=0)
+        asked, _ = self._carried({"id": "7" * 32, "action": "team_start", "item": dict(item, roster=[dict(leader, effort=""), worker])}, {"team": {}})
+        self.assertNotIn("effort", asked["item"]["roster"][0])
+        # with `teams-effort`: roster effort (manual & auto-roster), swap effort, and team_cards preserve valid effort
+        self.info["features"] = features + ["teams-effort"]
+        self.relay.agent({"info": self.info}, now=1005)
+        leader_with_effort = {"role": "leader", "tool": "codex", "model": "gpt-6.2-sol", "effort": "HIGH"}
+        asked, _ = self._carried({"id": "8" * 32, "action": "team_start", "item": dict(item, roster=[leader_with_effort, worker])}, {"team": {}})
+        self.assertEqual(asked["item"]["roster"][0], {"role": "leader", "tool": "codex", "model": "gpt-6.2-sol", "effort": "high"})
+        asked, _ = self._carried({"id": "9" * 32, "action": "team_start", "item": dict(item, roster=[leader_with_effort], auto_roster=True)}, {"team": {}})
+        self.assertEqual(asked["item"]["roster"], [{"role": "leader", "tool": "codex", "model": "gpt-6.2-sol", "effort": "high"}])
+        asked, _ = self._carried({"id": "a" * 32, "action": "team_swap", "team": team, "role": "leader", "tool": "codex", "model": "gpt-6.2-astra", "effort": "xhigh"}, {"team": {}})
+        self.assertEqual((asked["role"], asked["model"], asked["effort"]), ("leader", "gpt-6.2-astra", "xhigh"))
+        for bad_effort in (dict(item, roster=[dict(leader, effort="bad effort"), worker]),
+                           dict(item, roster=[dict(leader, effort=123), worker])):
+            with self.assertRaisesRegex(RemoteError, "思考深度无效"):
+                self.relay.work({"id": "b" * 32, "action": "team_start", "item": bad_effort}, now=1006, wait=0)
+        with self.assertRaisesRegex(RemoteError, "思考深度无效"):
+            self.relay.work({"id": "c" * 32, "action": "team_swap", "team": team, "role": "leader", "tool": "codex", "effort": "x;y"}, now=1006, wait=0)
+        card_effort = dict(item, state="running", updated=1700000000, awaited=["leader"], roster=[{"role": "leader", "tool": "codex", "model": "gpt-6.2-sol", "effort": "high"}, worker])
+        self.relay.agent({"info": dict(self.info, team_cards=[card_effort])}, now=1007)
+        overview = self.relay.overview(now=1007)["device"]
+        self.assertIn("teams-effort", overview["features"])
+        self.assertEqual(overview["team_cards"][0]["roster"][0]["effort"], "high")
 
     def test_team_cards_and_members_are_listed_for_the_owner(self):
         team, sid = "e" * 32, "11111111-2222-3333-4444-555555555555"

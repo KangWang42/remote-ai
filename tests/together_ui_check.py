@@ -18,8 +18,16 @@ class Controlled(pictures.Played):
     lost_save = False
     failed_target = ""
     models_catalog = {
-        "codex": [{"id": "gpt-5.4", "label": "GPT-5.4"}, {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"}],
-        "claude": [{"id": "claude-opus-4-6", "label": "Claude Opus 4.6"}, {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6"}],
+        "codex": [
+            {"id": "gpt-6.2-sol", "label": "GPT-6.2 Sol", "efforts": ["low", "medium", "high", "xhigh", "ultra"], "default_effort": "medium", "is_default": True},
+            {"id": "gpt-6.2-astra", "label": "GPT-6.2 Astra", "efforts": ["medium", "high", "xhigh"], "default_effort": "high"},
+            {"id": "gpt-5.4", "label": "GPT-5.4", "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+            {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex", "efforts": ["low", "medium", "high"]},
+        ],
+        "claude": [
+            {"id": "claude-opus-4-6", "label": "Claude Opus 4.6", "efforts": ["low", "medium", "high", "max"], "is_default": True},
+            {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "efforts": ["low", "medium", "high"]},
+        ],
         "agy": [{"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"}, {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"}],
     }
     team_cards = []
@@ -34,7 +42,7 @@ class Controlled(pictures.Played):
 
         def overview_with_teams(*args, **kwargs):
             data = base_overview(*args, **kwargs)
-            for feat in ("teams-models", "teams-roster"):
+            for feat in ("teams-models", "teams-roster", "teams-effort"):
                 if feat in played.info.get("features", []) and feat not in data["device"]["features"]:
                     data["device"]["features"] = list(data["device"]["features"]) + [feat]
             if played.team_cards:
@@ -94,6 +102,11 @@ class Controlled(pictures.Played):
                         if entry["role"] == payload.get("role"):
                             entry["tool"] = payload["tool"]
                             entry["model"] = payload.get("model", "")
+                            if "effort" in payload:
+                                if payload["effort"]:
+                                    entry["effort"] = payload["effort"]
+                                else:
+                                    entry.pop("effort", None)
                     target_team["tools"] = [r["tool"] for r in target_team["roster"]]
                     target_team["log"].append({"at": int(time.time() * 1000), "who": "切换", "text": payload.get("note", "已切换")})
                     return {"team": target_team}
@@ -307,17 +320,17 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert played.teams[-1]["state"] == "running" and played.teams[-1]["round"] == 2
         press('停止')
         until("document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'stopped again')
-        # 领队 + 先讨论再动手 (discuss: true)
+        # 分工协作 + 先讨论再动手 (discuss: true)
         value("document.querySelector('dialog.rs:not(.closing) .rs-close') && document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'the sheet closed')
         open_page('&do=team', opened('team-goal'))
-        press('领队')
-        until("!!document.querySelector('dialog.rs[open] [aria-label=成员]')", 'the members')
-        assert chips('领队') == ['Claude Code', 'Codex*', 'Antigravity CLI'] and chips('成员') == ['Claude Code*', 'Antigravity CLI*'], chips('成员')
+        press('分工协作')
+        until("!!document.querySelector('dialog.rs[open] [aria-label=执行成员]')", 'the members')
+        assert chips('领队') == ['Claude Code', 'Codex*', 'Antigravity CLI'] and chips('执行成员') == ['Claude Code*', 'Antigravity CLI*'], chips('执行成员')
         value("[...document.querySelector('dialog.rs[open] [aria-label=领队]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'Claude Code').click()")
-        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Codex', 'Antigravity CLI'])", 'the leader is no member')
+        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=执行成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Codex', 'Antigravity CLI'])", 'the leader is no member')
         value("[...document.querySelector('dialog.rs[open] [aria-label=领队]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'Codex').click()")
-        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Claude Code', 'Antigravity CLI'])", 'back to Codex leading')
+        until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=执行成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Claude Code', 'Antigravity CLI'])", 'back to Codex leading')
         value("document.getElementById('team-discuss').click()")
         typed('team-goal', '做一个登录页')
         typed('team-rules', 'UI 交给 Gemini，逻辑交给 Claude')
@@ -363,8 +376,8 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until("[...document.getElementById('team-model-claude').options].some(o => o.value === 'claude-opus-4-6')", 'models loaded after retry')
         value("(s => { s.value = 'claude-opus-4-6'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-model-claude'))")
         value("(s => { s.value = 'gemini-2.5-pro'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-model-agy'))")
-        # Switch mode from 写审 -> 领队: previously chosen models for claude & agy must be preserved, codex stays default
-        press('领队')
+        # Switch mode from 写审 -> 分工协作: previously chosen models for claude & agy must be preserved, codex stays default
+        press('分工协作')
         until("!!document.getElementById('team-model-codex')", 'lead mode models rendered')
         assert value("document.getElementById('team-model-claude').value") == 'claude-opus-4-6', 'claude model preserved across mode switch'
         assert value("document.getElementById('team-model-agy').value") == 'gemini-2.5-pro', 'agy model preserved across mode switch'
@@ -428,6 +441,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         browser.open(played.origin + '/?tab=tasks', "document.querySelectorAll('#active-list .team-card').length === 1", 'home before click', **phone(390))
         value("document.querySelector('#active-list .team-card button.open').click()")
         until("!!document.getElementById('member-leader') && document.querySelector('dialog.rs[open]').innerText.includes('领队验收')", 'team detail opened from home card')
+        until("document.querySelector('dialog.rs[open]').innerText.includes('GPT-5.4')", 'model catalog display name loaded')
         detail_txt = value("document.querySelector('dialog.rs[open]').innerText")
         assert "领队验收" in detail_txt, detail_txt
         assert "GPT-5.4" in detail_txt and "custom-claude-preview" in detail_txt and "默认" in detail_txt, detail_txt
@@ -460,6 +474,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         # Open active member chat -> navigate to /chat/?id=...&team=... -> click back -> returns to team detail
         value("document.getElementById('member-leader').click()")
         until("location.pathname.endsWith('/chat/') && new URLSearchParams(location.search).get('team') === %s" % json.dumps(lead_team['id']), 'navigated to member chat with team param')
+        until("typeof document.getElementById('back')?.onclick === 'function'", 'chat back handler ready')
         value("document.getElementById('back').click()")
         until("location.search.includes('do=team') && !!document.getElementById('member-leader')", 'back from member chat returned to team detail')
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
@@ -470,27 +485,59 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert "领队对话" not in value("document.getElementById('project').innerText"), 'Project detail must collapse child member terminal'
         assert not value("window.__errors.length"), value("window.__errors")
 
-        # ---- 独立成员槽位 + 领队自行组队 (teams-roster)
+        # ---- 独立执行成员槽位 + 领队工具/模型/思考深度 + 旧端降级 + 切换模型 + 保存后恢复 + 自动组队 (teams-roster / teams-effort)
+        # First verify older agent without `teams-effort`: leader area explicitly shows 工具/模型/思考深度, effort disabled at 工具默认 with upgrade hint, and omitted from payload
         played.info["features"] = played.info["features"] + ["teams-roster"]
         open_page('&do=team', opened('team-goal'))
-        press('领队')
-        until("[...(document.getElementById('team-roster-model-member-1') || {}).options || []].some(o => o.value === 'claude-opus-4-6')", 'roster slots and models rendered')
-        # Select two Claude Code members with independent models, plus a third agy member
+        press('分工协作')
+        until("!!document.getElementById('team-roster-effort-leader')", 'leader effort field visible on older agent')
+        assert value("document.getElementById('team-roster-effort-leader').disabled") is True, 'effort select disabled without teams-effort'
+        assert value("document.getElementById('team-roster-effort-leader').value") == '', 'effort defaults to 工具默认'
+        assert "思考深度" in value("document.querySelector('dialog.rs[open]').innerText") and "版本较旧" in value("document.querySelector('dialog.rs[open]').innerText")
+        value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+        until(closed, 'closed older-agent sheet')
+
+        # Now enable `teams-effort`: test model switching, effort reconciliation, manual members, detail display, swap, and persistence/restore
+        played.info["features"] = played.info["features"] + ["teams-effort"]
+        open_page('&do=team', opened('team-goal'))
+        press('分工协作')
+        until("[...(document.getElementById('team-roster-model-member-1') || {}).options || []].some(o => o.value === 'claude-opus-4-6') && !document.getElementById('team-roster-effort-leader').disabled", 'roster slots, models and leader efforts rendered')
+        # Leader defaults to Codex with CLI default model's efforts; select gpt-6.2-sol + ultra, then switch to gpt-5.4 (no ultra -> resets to 工具默认), then gpt-6.2-astra + high
+        value("(s => { s.value = 'gpt-6.2-sol'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-model-leader'))")
+        until("[...document.getElementById('team-roster-effort-leader').options].some(o => o.value === 'ultra')", 'gpt-6.2-sol offers ultra')
+        value("(s => { s.value = 'ultra'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-effort-leader'))")
+        assert value("document.getElementById('team-roster-effort-leader').value") == 'ultra'
+        value("(s => { s.value = 'gpt-5.4'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-model-leader'))")
+        until("![...document.getElementById('team-roster-effort-leader').options].some(o => o.value === 'ultra')", 'switching to gpt-5.4 removes unsupported ultra')
+        assert value("document.getElementById('team-roster-effort-leader').value") == '', 'unsupported effort resets to 工具默认 when switching model'
+        value("(s => { s.value = 'high'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-effort-leader'))")
+        value("(s => { s.value = 'gpt-6.2-astra'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-model-leader'))")
+        until("document.getElementById('team-roster-model-leader').value === 'gpt-6.2-astra'", 'switched to gpt-6.2-astra')
+        assert value("document.getElementById('team-roster-effort-leader').value") == 'high', 'compatible effort high is preserved across model switch'
+        # Switching leader tool to agy (no separate effort tiers) disables effort at 工具默认; switching back to codex restores selectable efforts
+        value("(s => { s.value = 'agy'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-tool-leader'))")
+        until("document.getElementById('team-roster-effort-leader').disabled", 'agy leader disables effort select at 工具默认')
+        assert value("document.getElementById('team-roster-effort-leader').value") == ''
+        value("(s => { s.value = 'codex'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-tool-leader'))")
+        until("!document.getElementById('team-roster-effort-leader').disabled", 'codex leader re-enables effort select')
+        value("(s => { s.value = 'gpt-6.2-sol'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-model-leader'))")
+        value("(s => { s.value = 'high'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-effort-leader'))")
+        # Select two Claude Code execution members with independent models, plus a third agy execution member
         value("(s => { s.value = 'claude'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-tool-member-1'))")
         value("(s => { s.value = 'claude-opus-4-6'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-model-member-1'))")
         value("(s => { s.value = 'claude'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-tool-member-2'))")
         value("(s => { s.value = 'claude-sonnet-4-6'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-model-member-2'))")
         value("document.getElementById('team-roster-add').click()")
         until("!!document.getElementById('team-roster-tool-member-3') && !document.getElementById('team-roster-add')", 'third member added and capped at 3')
-        value("(s => { s.value = 'gpt-5.4'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-roster-model-leader'))")
         typed('team-goal', '两位 Claude 分别实现前后端并验收')
         value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
         press('1 轮')
+        browser.picture(out / 'team-lead-manual-390.png')
         press('开始')
         until("!!document.getElementById('member-member-1') && !!document.getElementById('member-member-2')", 'roster team detail opened')
         roster_starts = [op for op in played.asked if op['action'] == 'work_team_start_roster']
         assert roster_starts and roster_starts[-1]['item']['roster'] == [
-            {'role': 'leader', 'tool': 'codex', 'model': 'gpt-5.4'},
+            {'role': 'leader', 'tool': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'high'},
             {'role': 'member-1', 'tool': 'claude', 'model': 'claude-opus-4-6'},
             {'role': 'member-2', 'tool': 'claude', 'model': 'claude-sonnet-4-6'},
             {'role': 'member-3', 'tool': 'agy', 'model': ''},
@@ -499,15 +546,16 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         m1_tid, m2_sid = "d" * 32, pictures.uuid(12)
         roster_team["phase"] = "verify"
         roster_team["last"] = True
-        roster_team["note"] = "正在核对成员 1 和成员 2 的改动"
+        roster_team["note"] = "正在核对执行成员 1 和执行成员 2 的改动"
         roster_team["members"] = {"member-1": m1_tid}
         roster_team["member_sessions"] = {"member-2": {"id": m2_sid, "tool": "claude"}}
-        played.said[m2_sid] = [{"role": "assistant", "text": "成员 2 已完成后端校验"}]
-        played.extra_terminals.append({"id": m1_tid, "tool": "claude", "dir": "web-shop", "title": "成员 1 终端", "form": "chat", "state": "running", "phase": "idle", "status": "idle", "phase_at": played.now, "created": played.now, "team": roster_team["id"]})
+        played.said[m2_sid] = [{"role": "assistant", "text": "执行成员 2 已完成后端校验"}]
+        played.extra_terminals.append({"id": m1_tid, "tool": "claude", "dir": "web-shop", "title": "执行成员 1 终端", "form": "chat", "state": "running", "phase": "idle", "status": "idle", "phase_at": played.now, "created": played.now, "team": roster_team["id"]})
         open_page('&do=team&item=' + roster_team['id'], "!!document.getElementById('member-member-2') && !!document.getElementById('team-round-steps') && document.getElementById('member-member-1').innerText.includes('Claude Opus 4.6')")
         roster_detail_txt = value("document.querySelector('dialog.rs[open]').innerText")
-        assert "成员 1 · Claude Code" in roster_detail_txt and "Claude Opus 4.6" in roster_detail_txt, roster_detail_txt
-        assert "成员 2 · Claude Code" in roster_detail_txt and "Claude Sonnet 4.6" in roster_detail_txt, roster_detail_txt
+        assert "领队 · Codex" in roster_detail_txt and "GPT-6.2 Sol" in roster_detail_txt and "高（high）" in roster_detail_txt, roster_detail_txt
+        assert "执行成员 1 · Claude Code" in roster_detail_txt and "Claude Opus 4.6" in roster_detail_txt, roster_detail_txt
+        assert "执行成员 2 · Claude Code" in roster_detail_txt and "Claude Sonnet 4.6" in roster_detail_txt, roster_detail_txt
         assert "末轮" in value("document.getElementById('team-round-steps').innerText") and "领队验收" in roster_detail_txt, roster_detail_txt
         # Target by role (member-2)
         value("(s => { s.value = 'member-2'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-say-target'))")
@@ -518,7 +566,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         # Swap by role (member-2 -> codex with gpt-5.3-codex)
         value("document.getElementById('team-swap').click()")
         until("!!document.getElementById('team-swap-model')", 'roster swap opened')
-        value("[...document.querySelector('dialog.rs[open] [aria-label=\"替换角色\"]').querySelectorAll('.rs-chip')].find(c => c.textContent.startsWith('成员 2')).click()")
+        value("[...document.querySelector('dialog.rs[open] [aria-label=\"替换角色\"]').querySelectorAll('.rs-chip')].find(c => c.textContent.startsWith('执行成员 2')).click()")
         value("[...document.querySelector('dialog.rs[open] [aria-label=\"接手 AI\"]').querySelectorAll('.rs-chip')].find(c => c.textContent.startsWith('Codex')).click()")
         until("[...(document.getElementById('team-swap-model') || {}).options || []].some(o => o.value === 'gpt-5.3-codex')", 'swap codex models ready')
         value("(s => { s.value = 'gpt-5.3-codex'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-swap-model'))")
@@ -528,19 +576,38 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert (swap_roster.get('role'), swap_roster.get('tool'), swap_roster.get('model')) == ('member-2', 'codex', 'gpt-5.3-codex'), swap_roster
         # Link on member-2 opens its historical session
         value("document.getElementById('member-member-2').click()")
-        until("document.getElementById('sheet').open && document.getElementById('sheet').innerText.includes('成员 2 已完成后端校验')", 'member-2 history opened')
+        until("document.getElementById('sheet').open && document.getElementById('sheet').innerText.includes('执行成员 2 已完成后端校验')", 'member-2 history opened')
         value("document.querySelector('#sheet .bar button.icon').click()")
         until("!document.getElementById('sheet').open && !!document.querySelector('dialog.rs[open]')", 'returned from member-2 history')
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed roster team')
 
-        # Auto-roster with only 1 tool installed -> sends auto_roster: true and initial roster [leader], then renders dynamic members
+        # Reopen 分工协作 form: saved leader tool/model/effort must be restored cleanly, and 自动组队 preserves leader settings
+        open_page('&do=team', opened('team-goal'))
+        press('分工协作')
+        until("document.getElementById('team-roster-model-leader')?.value === 'gpt-6.2-sol' && document.getElementById('team-roster-effort-leader')?.value === 'high'", 'saved leader tool/model/effort restored')
+        press('自动组队')
+        until("!document.getElementById('team-roster-tool-member-1') && !document.getElementById('team-discuss') && !!document.getElementById('team-roster-effort-leader')", 'auto roster hides manual members while keeping leader controls')
+        assert value("document.getElementById('team-roster-model-leader').value") == 'gpt-6.2-sol'
+        assert value("document.getElementById('team-roster-effort-leader').value") == 'high'
+        typed('team-goal', '领队自动组队并保留思考深度')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
+        browser.picture(out / 'team-lead-auto-390.png')
+        press('开始')
+        until("!!document.getElementById('team-auto-roster-status')", 'auto roster team detail opened')
+        auto_start_codex = [op for op in played.asked if op['action'] == 'work_team_start_roster'][-1]['item']
+        assert auto_start_codex.get('auto_roster') is True and auto_start_codex.get('roster') == [{'role': 'leader', 'tool': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'high'}], auto_start_codex
+        assert "GPT-6.2 Sol" in value("document.getElementById('member-leader').innerText") and "高（high）" in value("document.getElementById('member-leader').innerText")
+        value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+        until(closed, 'closed codex auto roster team')
+
+        # Auto-roster with only 1 tool installed (claude, when saved codex is absent -> cleanly resets to claude default)
         saved_tools = list(played.info["tools"])
         played.info["tools"] = ["claude", "shell"]
         open_page('&do=team', opened('team-goal') + " && !!document.getElementById('team-roster-tool-leader')")
-        press('领队自行组队')
+        press('自动组队')
         until("!document.getElementById('team-roster-tool-member-1') && !document.getElementById('team-discuss')", 'auto roster hides member slots')
-        typed('team-goal', '单工具领队自行组队完成任务')
+        typed('team-goal', '单工具自动组队完成任务')
         value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
         press('开始')
         until("!!document.getElementById('team-auto-roster-status')", 'auto roster team detail opened')
@@ -551,7 +618,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
             {"role": "leader", "tool": "claude", "model": ""},
             {"role": "member-1", "tool": "claude", "model": "claude-sonnet-4-6"}
         ]
-        open_page('&do=team&item=' + auto_team['id'], "!!document.getElementById('member-member-1') && document.getElementById('team-auto-roster-status').innerText.includes('已创建 1 个成员')")
+        open_page('&do=team&item=' + auto_team['id'], "!!document.getElementById('member-member-1') && document.getElementById('team-auto-roster-status').innerText.includes('已创建 1 个执行成员')")
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed auto roster team')
         played.info["tools"] = saved_tools
@@ -562,9 +629,14 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
                 ('overview', '', "document.querySelectorAll('#chains .card:not(.add)').length===2"),
                 ('chain', '&do=chain', opened('chain-text')),
                 ('team-new', '&do=team', opened('team-goal') + " && !!document.getElementById('team-model-claude')"),
+                ('team-lead', '&do=team', opened('team-goal')),
                 ('team-detail', '&do=team&item=' + roster_team['id'], "!!document.getElementById('member-member-1') && !!document.getElementById('team-round-steps')")
             ]:
                 browser.open(played.origin + '/?tab=together' + query, ready, state, **phone(width))
+                if state == 'team-lead':
+                    press('分工协作')
+                    until("!!document.getElementById('team-roster-effort-leader')", 'lead form ready at width ' + str(width))
+                    value("document.getElementById('team-roster-tool-leader').scrollIntoView({block:'center'})")
                 time.sleep(.3)
                 metrics = value("""(() => { const p=document.documentElement, f=document.querySelector('dialog.rs[open] .rs-body'), box=(f||document.getElementById('together')).getBoundingClientRect();
                   const ids=[...document.querySelectorAll('[id]')].map(n=>n.id); return {inner:innerWidth,client:p.clientWidth,scroll:p.scrollWidth,body:document.body.scrollWidth,

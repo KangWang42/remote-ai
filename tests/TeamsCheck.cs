@@ -15,8 +15,8 @@ public static class TeamsCheck {
     static int made;
     static Teams.Hands Hands() {
         return new Teams.Hands {
-            // what a member is begun as: "<tool>[:read][@folder][#model]"
-            Begin = one => { string t = "t" + (++made); tools[t] = one.Tool + (one.Read ? ":read" : "") + (one.Folder.Length > 0 ? "@" + one.Folder : "") + (one.Model.Length > 0 ? "#" + one.Model : ""); told.Add(new[] { t, one.Tool, one.Words }); return t; },
+            // what a member is begun as: "<tool>[:read][@folder][#model][~effort]"
+            Begin = one => { string t = "t" + (++made); tools[t] = one.Tool + (one.Read ? ":read" : "") + (one.Folder.Length > 0 ? "@" + one.Folder : "") + (one.Model.Length > 0 ? "#" + one.Model : "") + (one.Effort.Length > 0 ? "~" + one.Effort : ""); told.Add(new[] { t, one.Tool, one.Words }); return t; },
             Say = (terminal, words) => { if (terminal == "gone") throw new InvalidOperationException("这个成员的对话已经结束"); told.Add(new[] { terminal, "", words }); },
             Stop = terminal => stopped.Add(terminal),
             Changes = dir => changes };
@@ -26,8 +26,10 @@ public static class TeamsCheck {
     static Dictionary<string, object> Lead(string id, object[] tools, int rounds) {
         return new Dictionary<string, object> { { "id", id }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "修好购物车" }, { "tools", tools }, { "rounds", rounds } };
     }
-    static Dictionary<string, object> Member(string role, string tool, string model = "") {
-        return new Dictionary<string, object> { { "role", role }, { "tool", tool }, { "model", model } };
+    static Dictionary<string, object> Member(string role, string tool, string model = "", string effort = "") {
+        var row = new Dictionary<string, object> { { "role", role }, { "tool", tool }, { "model", model } };
+        if (!String.IsNullOrEmpty(effort)) row["effort"] = effort;
+        return row;
     }
     static void Roster(string folder) {
         var hands = Hands();
@@ -37,8 +39,9 @@ public static class TeamsCheck {
         var teams = new Teams(file, hands);
         string id = "3333333333333333";
         var preset = Lead(id, new object[] { "codex", "claude" }, 2);
-        preset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude", "sonnet"), Member("member-2", "claude", "opus") };
+        preset["roster"] = new[] { Member("leader", "codex", "gpt-6.2-sol", "high"), Member("member-1", "claude", "sonnet"), Member("member-2", "claude", "opus") };
         string leader = teams.Start(preset).Members["leader"];
+        Require(tools[leader] == "codex#gpt-6.2-sol~high", "leader starts with chosen model and reasoning effort: " + tools[leader]);
         Require(Last(leader).Contains("- member-1：Claude Code") && Last(leader).Contains("- member-2：Claude Code"), "same tool offered as distinct members");
         teams.Turned(leader, "done", "ASSIGN member-1: 查数量\nASSIGN member-2: 查结账");
         var team = Team(teams, id);
@@ -65,15 +68,37 @@ public static class TeamsCheck {
         Require(Team(teams, id).Last && Last(leader).Contains("第 2 轮"), "last member results still enter acceptance");
         teams.Turned(leader, "done", "VERIFIED: 复测空购物车、普通购物车，均通过\nDONE: 验收完成");
         var reloaded = Team(new Teams(file, hands), id);
-        Require(reloaded.State == "done" && reloaded.Round == 2 && reloaded.Roster[2].Model == "haiku" &&
-            reloaded.Sessions["member-1"].Id == "12345678-1111-4111-8111-123456789abc", "the member identities and chosen models persist");
+        Require(reloaded.State == "done" && reloaded.Round == 2 && reloaded.Roster[0].Model == "gpt-6.2-sol" && reloaded.Roster[0].Effort == "high" && reloaded.Roster[2].Model == "haiku" &&
+            reloaded.Sessions["member-1"].Id == "12345678-1111-4111-8111-123456789abc", "the member identities, chosen models and leader effort persist");
+        // Follow-up round after restart reopens leader with the persisted model and effort
+        var reopenedHands = Hands();
+        reopenedHands.Available = hands.Available;
+        reopenedHands.Say = (terminal, words) => { throw new InvalidOperationException("gone"); };
+        var reopened = new Teams(file, reopenedHands);
+        reopened.Say(id, "再做一轮补充检查", "");
+        string nextLeader = Team(reopened, id).Members["leader"];
+        Require(tools[nextLeader] == "codex#gpt-6.2-sol~high", "subsequent round after restart preserves leader model and effort: " + tools[nextLeader]);
+        var leaderSwapped = reopened.Swap(id, "leader", "codex", "", "gpt-6.2-astra", "xhigh");
+        Require(tools[leaderSwapped.Members["leader"]] == "codex#gpt-6.2-astra~xhigh" && leaderSwapped.Roster[0].Effort == "xhigh" &&
+            leaderSwapped.Log.Any(s => s.Who == "切换" && s.Text.Contains("思考深度 xhigh")), "leader swap updates model and reasoning effort");
+        var modelOnlySwapped = reopened.Swap(id, "leader", "codex", "", "gpt-5.4", "");
+        Require(tools[modelOnlySwapped.Members["leader"]] == "codex#gpt-5.4" && modelOnlySwapped.Roster[0].Effort == "", "switching leader model with default effort clears stale effort");
 
         id = "4444444444444444";
         var automatic = Lead(id, new object[] { "codex" }, 1);
         automatic["auto_roster"] = true;
-        automatic["roster"] = new[] { Member("leader", "codex") };
+        automatic["roster"] = new[] { Member("leader", "codex", "gpt-6.2-sol", "medium") };
         var started = teams.Start(automatic);
         leader = started.Members["leader"];
+        Require(tools[leader] == "codex#gpt-6.2-sol~medium", "auto-roster leader also receives chosen model and effort: " + tools[leader]);
+        var autoShown = (Dictionary<string, string>[])Teams.Shown(started)["roster"];
+        Require(autoShown.Length == 1 && autoShown[0]["model"] == "gpt-6.2-sol" && autoShown[0]["effort"] == "medium", "auto-roster leader effort visible in detail");
+        var badAuto = Lead("4545454545454545", new object[] { "codex" }, 1);
+        badAuto["auto_roster"] = true;
+        badAuto["roster"] = new[] { Member("leader", "codex", "gpt-6.2-sol", "bad effort;") };
+        bool refusedBadEffort = false;
+        try { teams.Start(badAuto); } catch (ArgumentException) { refusedBadEffort = true; }
+        Require(refusedBadEffort, "invalid leader effort refused");
         Require(started.Roster.Length == 1 && Last(leader).Contains("ASSIGN member-1 codex:") && Last(leader).Contains("共用"), "leader receives rules for forming the team itself");
         teams.Turned(leader, "done", "ASSIGN member-1 claude: 检查数量\nASSIGN member-2 claude: 检查价格\nASSIGN member-3 agy: 帮忙");
         team = Team(teams, id);
@@ -164,18 +189,25 @@ public static class TeamsCheck {
     static void Choosing(string file) {
         Require(Models.Valid("gpt-5.1-codex") && Models.Valid("sonnet[1m]") && Models.Valid("models/gemini-3-pro") && Models.Valid("claude-opus-4-1-20250805"), "the tools' names");
         Require(!Models.Valid("") && !Models.Valid("-x") && !Models.Valid("a b") && !Models.Valid("x\"y") && !Models.Valid("x;rm") && !Models.Valid("x&y") && !Models.Valid(new string('a', 81)), "nothing a command line could take otherwise");
-        var clean = Models.Clean(new[] { new Models.Choice { Id = "gpt-5", Label = "GPT-5" }, new Models.Choice { Id = "gpt-5", Label = "again" }, new Models.Choice { Id = "bad id" }, new Models.Choice { Id = "o3" } });
-        Require(clean.Length == 2 && clean[0].Label == "GPT-5" && clean[1].Label == "o3", "each once, safe names only, named by its id where it has no name");
+        Require(Models.ValidEffort("low") && Models.ValidEffort("xhigh") && Models.ValidEffort("ultra") && !Models.ValidEffort("") && !Models.ValidEffort("HIGH") && !Models.ValidEffort("a b") && !Models.ValidEffort("x;y"), "effort validation");
+        var clean = Models.Clean(new[] {
+            new Models.Choice { Id = "gpt-5", Label = "GPT-5", Efforts = new[] { "low", "HIGH", "bad value", "low", "ultra" }, DefaultEffort = "medium", IsDefault = true },
+            new Models.Choice { Id = "gpt-5", Label = "again" },
+            new Models.Choice { Id = "bad id" },
+            new Models.Choice { Id = "o3", Efforts = new[] { "medium", "high" }, DefaultEffort = "high", IsDefault = true }
+        });
+        Require(clean.Length == 2 && clean[0].Label == "GPT-5" && clean[0].IsDefault && clean[0].Efforts.SequenceEqual(new[] { "low", "high", "ultra" }) && clean[0].DefaultEffort == "" && clean[1].Label == "o3" && !clean[1].IsDefault && clean[1].DefaultEffort == "high", "each once, safe names and efforts only, named by its id where it has no name");
 
         int asked = 0;
         var listing = new Models(tool => tool == "agy" ? null : "C:\\" + tool + ".exe", (tool, launcher, ms) => {
             asked++;
-            return tool == "codex" ? new[] { new Models.Choice { Id = "gpt-5.1-codex", Label = "GPT-5.1 Codex" }, new Models.Choice { Id = "x y" } } : null;
+            return tool == "codex" ? new[] { new Models.Choice { Id = "gpt-5.1-codex", Label = "GPT-5.1 Codex", Efforts = new[] { "low", "medium", "high" }, DefaultEffort = "medium", IsDefault = true }, new Models.Choice { Id = "x y" } } : null;
         });
         var listed = (Dictionary<string, object>)listing.Listed()["models"];
         var codexModels = (Dictionary<string, object>[])listed["codex"];
         Require(listed.Count == 2 && !listed.ContainsKey("agy") && codexModels.Length == 1 && (string)codexModels[0]["id"] == "gpt-5.1-codex" && (string)codexModels[0]["label"] == "GPT-5.1 Codex"
-            && ((Dictionary<string, object>[])listed["claude"]).Length == 0 && asked == 2, "installed tools only, as each lists them; one that says nothing offers its default only");
+            && ((string[])codexModels[0]["efforts"]).SequenceEqual(new[] { "low", "medium", "high" }) && (string)codexModels[0]["default_effort"] == "medium" && (bool)codexModels[0]["is_default"]
+            && ((Dictionary<string, object>[])listed["claude"]).Length == 0 && asked == 2, "installed tools only, as each lists them with efforts; one that says nothing offers its default only");
         listing.Listed();
         Require(asked == 2, "a list is kept a while");
 
@@ -370,7 +402,7 @@ public static class TeamsCheck {
             string w = "0808080808080808";
             weighed.Start(new Dictionary<string, object> { { "id", w }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "加搜索" }, { "tools", new object[] { "claude", "codex", "agy" } } });
             string wLeader = Team(weighed, w).Members["leader"];
-            Require(Last(wLeader).Contains("- codex：Codex，") && Last(wLeader).Contains("；额度：5 小时窗口已用 93%（") && Last(wLeader).Contains("本周已用 40%，紧张")
+            Require(Last(wLeader).Contains("- codex：Codex（工具默认模型）") && Last(wLeader).Contains("；额度：5 小时窗口已用 93%（") && Last(wLeader).Contains("本周已用 40%，紧张")
                 && Last(wLeader).Contains("- agy：Antigravity CLI") && Last(wLeader).Contains("额度未知") && Last(wLeader).Contains("你自己（Claude Code）的额度：5 小时窗口已用 12%")
                 && Last(wLeader).Contains("按额度分配工作量"), "the leader is told each member's limits and its own, a tight one called so: " + Last(wLeader));
             Require(!Last(leader).Contains("额度"), "without a way to read limits nothing of them is said");

@@ -913,7 +913,7 @@
   // and one that a program has open by what the computer says uses it (a command line inside an editor's terminal
   // is a terminal's); a computer of an earlier version says only where the program runs
   const sourceOf = s => !s.live || s.kind ? sourceOfKind(s.kind) : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'term';
-  const TEAM_MODES = { review: '写审', lead: '领队', compare: '比稿' };
+  const TEAM_MODES = { review: '写审', lead: '分工协作', compare: '比稿' };
   const teamUpdatedMs = value => { const n = Number(value) || 0; return n > 0 && n < 10000000000 ? n * 1000 : n; };
   const summarizeTeamTools = list => {
     const counts = new Map();
@@ -926,12 +926,12 @@
       const leader = roster.find(r => r.role === 'leader') || roster[0];
       const rest = roster.filter(r => r !== leader).map(r => r.tool);
       const leadName = TOOLS[leader.tool] || leader.tool || '';
-      return rest.length ? leadName + ' 带 ' + summarizeTeamTools(rest) : leadName + (card.auto_roster ? ' 自行组队' : '');
+      return rest.length ? leadName + ' 带 ' + summarizeTeamTools(rest) : leadName + (card.auto_roster ? ' 自动组队' : '');
     }
     const list = Array.isArray(card.tools) ? card.tools : [];
     if (card.mode === 'review') return (TOOLS[list[0]] || list[0] || '') + ' 写 · ' + (TOOLS[list[1]] || list[1] || '') + ' 审';
     if (card.mode === 'compare') return list.map(t => TOOLS[t] || t).join(' vs ');
-    return (TOOLS[list[0]] || list[0] || '') + (list.length > 1 ? ' 带 ' + summarizeTeamTools(list.slice(1)) : card.auto_roster ? ' 自行组队' : '');
+    return (TOOLS[list[0]] || list[0] || '') + (list.length > 1 ? ' 带 ' + summarizeTeamTools(list.slice(1)) : card.auto_roster ? ' 自动组队' : '');
   };
   const teamStatusOf = x => {
     const c = x.team;
@@ -1020,8 +1020,8 @@
   const wordsOf = x => {
     if (x.team) {
       const c = x.team, [, label] = teamStatusOf(x), models = c.models && typeof c.models === 'object' ? Object.values(c.models).join('\n') : '';
-      const rosterModels = Array.isArray(c.roster) ? c.roster.map(r => (r && r.model) || '').filter(Boolean).join('\n') : '';
-      return [x.title, x.place, '协作任务', TEAM_MODES[c.mode] || c.mode || '', c.auto_roster ? '自行组队' : '', label, c.note || '', x.teamConfirmText || '', (x.teamTools || []).map(t => TOOLS[t] || t).join('\n'), models, rosterModels, SOURCE.app].join('\n').toLowerCase();
+      const rosterModels = Array.isArray(c.roster) ? c.roster.map(r => [r && r.model, r && r.effort].filter(Boolean).join('\n')).filter(Boolean).join('\n') : '';
+      return [x.title, x.place, '协作任务', TEAM_MODES[c.mode] || c.mode || '', c.auto_roster ? '自动组队' : '', label, c.note || '', x.teamConfirmText || '', (x.teamTools || []).map(t => TOOLS[t] || t).join('\n'), models, rosterModels, SOURCE.app].join('\n').toLowerCase();
     }
     return [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
   };
@@ -1171,7 +1171,7 @@
     const meta = el('span', { className: 'meta' }, pill(kind, label));
     placed(meta, x);
     meta.append(el('span', { textContent: whereOf(x) + (x.at ? ' · ' + ago(x.at) : '') }));
-    const peekText = x.teamConfirmText || c.note || (c.state === 'running' && c.phase === 'verify' ? '领队正在验收成员改动与结果' : '');
+    const peekText = x.teamConfirmText || c.note || (c.state === 'running' && c.phase === 'verify' ? '领队正在验收执行成员改动与结果' : '');
     const iconHtml = (window.RemoteTeams && window.RemoteTeams.TEAM) || ICON.together;
     const openTeam = () => {
       if (!usable()) return toast('电脑离线，暂时无法打开');

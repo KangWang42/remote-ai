@@ -71,6 +71,17 @@ public static class QuotasCheck {
             var weighed = quotas.Of("agy");
             Require(weighed.Length == 1 && weighed[0].Name == "five_hour" && weighed[0].Used == 12 && weighed[0].Resets > Now, "a tool's main windows for the program: the other models' pool left out");
             Require(quotas.Of("claude").Length == 1 && quotas.Of("codex").Length == 0 && new Quotas(Path.Combine(folder, "none")).Of("claude").Length == 0, "only windows still running; none where nothing is known");
+            quotas.NoteCodex(json.DeserializeObject("{\"primary\":{\"usedPercent\":56,\"windowDurationMins\":300},\"credits\":{\"balance\":\"0\",\"unlimited\":false,\"hasCredits\":false}}"), "chatgpt");
+            var codexReport = quotas.Report().Cast<Dictionary<string, object>>().Single(item => (string)item["tool"] == "codex");
+            var billing = (Dictionary<string, object>)codexReport["billing"];
+            Require((string)billing["type"] == "credits" && (string)billing["balance"] == "0" && quotas.Of("codex")[0].Used == 56, "ChatGPT windows and a real zero credit balance are separate");
+            quotas.NoteCodex(json.DeserializeObject("{\"credits\":{\"balance\":\"bogus\",\"unlimited\":false}}"));
+            codexReport = quotas.Report().Cast<Dictionary<string, object>>().Single(item => (string)item["tool"] == "codex");
+            Require(!codexReport.ContainsKey("billing"), "malformed credit data is omitted");
+            quotas.NoteCodex(null, "apiKey");
+            codexReport = quotas.Report().Cast<Dictionary<string, object>>().Single(item => (string)item["tool"] == "codex");
+            billing = (Dictionary<string, object>)codexReport["billing"];
+            Require((string)billing["type"] == "api" && !billing.ContainsKey("balance") && quotas.Of("codex").Length == 0, "API billing has no inferred balance or cached subscription windows");
 
             string claudeOk = Path.Combine(folder, "fake-claude.cmd");
             string claudeJson = Path.Combine(folder, "fake-claude.json");

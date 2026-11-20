@@ -96,15 +96,18 @@ The code shown on the computer is `remotecli://connect?u=<address>&p=<password>&
 used, as the tools tell it (`Quotas.cs`): `[{"tool": "claude", "at": <ms>, "why": "", "windows": [{"name": "five_hour",
 "used": 38.0, "resets": <seconds>}, ...]}]`. `used` is a share in percent, `resets` when the window starts anew; an
 optional `group` names a secondary model pool (empty or omitted for the primary pool shown by default, so the phone can
-keep secondary pools behind an expand toggle); `why` says in words why a tool's are not known (Codex signed in otherwise
-than with ChatGPT, or Antigravity CLI signed in with a `GEMINI_API_KEY`). For Claude Code, the computer reads the
+keep secondary pools behind an expand toggle). `why` explains why a reading is unavailable. For Claude Code, the computer reads the
 subscription's `/usage` windows at most every five minutes with `claude --print --output-format json /usage`.
 If unavailable, it can use the chat's `rate_limit_event` or its status line. The owner's status line runs after
-the computer's status line and is restored when the computer removes its hook. Codex is asked by
-`account/rateLimits/read` of its app-server at most every ten minutes; Antigravity CLI is asked by
+the computer's status line and is restored when the computer removes its hook. Every ten minutes at most, the computer
+asks the Codex app-server for `account/read` and `account/rateLimits/read`. Where the selected provider does not use
+OpenAI login, it inspects `config/read` locally to distinguish an external API from a local runtime. A Codex reading
+may include `billing`. `{"type":"api"}` identifies API billing. `{"type":"credits","balance":"12.5"}` or
+`{"type":"credits","unlimited":true}` describes extra Codex credits reported with the ChatGPT rate limits.
+Antigravity CLI is asked by
 `agy -p /usage --output-format json` (with `AGY_CLI_DISABLE_AUTO_UPDATE=true`) at most every ten minutes, reporting the
-Gemini/Neon group as the primary pool (`five_hour`, `seven_day`) and other model groups with `group`. Nothing of the
-account is passed on; the relay keeps at most four entries of eight windows and leaves out any that is not a share.
+Gemini/Neon group as the primary pool (`five_hour`, `seven_day`) and other model groups with `group`. The relay keeps
+at most four entries of eight windows and accepts only the listed Codex billing fields. Account identities and credentials stay on the computer.
 
 `workspaces` are the project names a terminal may be started in. `candidates` are folders that are no projects and
 have conversations of Claude Code or Codex, for a project to be made of (`project_add` with the `path`): at most 40,
@@ -167,7 +170,7 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped` and `teams-roster`
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `file-upload`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped`, `teams-roster` and `teams-effort`
 (the work capabilities: "The owner's work", below). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 Every session and every terminal carries `team`: the id of the collaboration task it is or was a member of, `""` for
@@ -518,11 +521,11 @@ on as the operation `work_<action>` and keeps nothing.
 | `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
 | `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
 | `teams` | none; needs `teams` | `{"teams": [...]}`: multi-AI collaboration tasks kept on this computer |
-| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), `rounds` (1 to 10, default 3; 1 for `compare`), optional `models` (`{tool: model}` for tools of `tools`; a model as `team_models` lists it, in the safe form below; an empty one or a tool left out uses that tool's own default; a non-empty one needs `teams-models`) | `{"team": {...}}` |
-| `team_models` | none; needs `teams-models` | `{"models": {"codex": [{"id", "label"}], "claude": [...], "agy": [...]}}`: for each chat tool installed on the computer, the models it lists itself (an empty list where it lists none: only its default is offered) |
+| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for legacy `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), optional `roster` (for `lead` with `teams-roster`: `[{role, tool, model, effort?}]`, first entry `leader`, optional `member-1`..`member-3`; `auto_roster: true` supplies only `leader`), `rounds` (1 to 10, default 3; 1 for `compare`), optional `models` (`{tool: model}` for tools of `tools`; a non-empty model needs `teams-models`), optional `efforts` (`{tool: effort}` or `roster[*].effort`; a non-empty effort needs `teams-effort`) | `{"team": {...}}` |
+| `team_models` | none; needs `teams-models` | `{"models": {"codex": [{"id", "label", "efforts"?, "default_effort"?, "is_default"?}], "claude": [...], "agy": [...]}}`: for each chat tool installed on the computer, the models and reasoning effort tiers it lists itself (empty lists where it lists none: only its default is offered) |
 | `team_say` | `team`: its `id`, `text` (1 to 4,000 characters), optional `target` (role or tool name, max 32 chars); needs `teams-v2` | `{"team": {...}}`: interjects while `running`, resumes with guidance while `paused`, refines candidates while `choose`, or starts a follow-up round after `done`/`stopped` (`review`/`lead`) |
 | `team_pick` | `team`: its `id`, `tool`: winning tool name (from `CHAT_TOOLS`) or `""` to discard all; needs `teams-v2` | `{"team": {...}}`: checks and applies the chosen `compare` worktree patch to the main project folder (or discards all) and removes all temporary worktrees |
-| `team_swap` | `team`: its `id`, optional `role` (role or tool name, max 32 chars), `tool`: replacement chat-capable tool, optional `note` (max 1,000 chars), optional `model` (that tool's model from now on in this task; needs `teams-models`; without it the task's earlier choice for that tool stays, else its default); needs `teams-v2` | `{"team": {...}}`: swaps a role's AI or reassigns a member's task to another installed AI mid-run or while paused |
+| `team_swap` | `team`: its `id`, optional `role` (role or tool name, max 32 chars), `tool`: replacement chat-capable tool, optional `note` (max 1,000 chars), optional `model` (that role/tool's model from now on; needs `teams-models`), optional `effort` (that role/tool's reasoning effort tier, `""` to reset to tool default; non-empty needs `teams-effort`); needs `teams-v2` | `{"team": {...}}`: swaps a role's AI, model or reasoning effort, or reassigns an execution member's task to another installed AI mid-run or while paused |
 | `team_stop` | `team`: its `id` | `{}` |
 | `team_resume` | `team`: its `id` (must be `paused`) | `{}` |
 | `team_remove` | `team`: its `id` (must not be `running`) | `{}` |
@@ -612,41 +615,38 @@ for `team_resume`.
 - `team_swap` lets the owner switch a role's AI or reassign a member's task to another installed AI at any time (`review`/`lead`). When a member fails mid-run (e.g. quota exhausted), `lead` mode reports the failure and live quotas back to the leader to reassign automatically (and adds an available backup AI if needed), while `review` mode and failed leaders automatically switch to an available backup AI before falling back to `paused`.
 - Agents supporting `team_say`, `team_pick`, `team_swap`, `discuss` and `compare` advertise `teams-v2`; relays reject those actions with an upgrade prompt when talking to older `teams`-only agents.
 
-**Selecting members** (`teams-roster`). `team_start.item.roster` is an ordered array of `{role, tool, model}` entries for `lead`.
-The first role is `leader`. Preselected teams have one to three additional roles named `member-1`, `member-2` and `member-3`.
-Each role has its own conversation and model. Roles may share a tool and its account quota. `model` can be empty or omitted for
+**Selecting members** (`teams-roster`). `team_start.item.roster` is an ordered array of `{role, tool, model, effort?}` entries for `lead` (分工协作).
+The first role is `leader` (领队). Preselected teams have one to three additional roles named `member-1`, `member-2` and `member-3` (执行成员).
+Each role has its own conversation, model and optional reasoning effort (`effort`, omitted when empty for the tool's default). Roles may share a tool and its account quota. `model` can be empty or omitted for
 the tool's default. The relay derives `tools` from the roster and includes the roster in `team` and `device.team_cards`.
 `team_say.target` and `team_swap.role` use the role name. For example, `member-2` addresses only that member. A `team_swap`
-can also change a role's model while keeping the same tool. An explicit empty `model` selects the tool's default.
+can also change a role's model or reasoning effort while keeping the same tool. An explicit empty `model` or `effort` selects the tool's default.
 
-With `item.auto_roster: true`, the request supplies only a leader. The agent lists installed providers and their shared quotas.
+With `item.auto_roster: true` (自动组队), the request supplies only a `leader` entry (including its chosen `model` and `effort`). The agent lists installed providers and their shared quotas.
 The leader can work directly or write `ASSIGN member-1 claude: <task>` to create a member, `ASSIGN member-1: <task>` to reuse it,
 or specify a different provider to switch it. At most three members can be allocated. The task publishes each new member's
 role and provider as it is assigned, and uses the provider's default model. Without `roster`, legacy lead tasks keep
-their `tools` and `models` maps and use `ASSIGN <tool>: <task>`.
+their `tools`, `models` and optional `efforts` maps and use `ASSIGN <tool>: <task>`.
 
-**Models of the members** (`teams-models`, `agent-windows/Models.cs`). Tasks without a roster keep one model per tool (`team.models`,
-`{tool: model}` with the tool's default for an omitted choice). Roster tasks keep the model on each role. The agent uses the model for the
-first one, one begun anew (its conversation was gone, the program restarted, `team_resume`), one that takes over by
-`team_swap` or by failover, `discuss` and `review` readers, `compare` candidates. A model reaches the tools as:
-Claude Code `--model <id>`; Codex `model` in `thread/start` / `thread/resume`; an ACP server (`agy acp`) by
+**Models and reasoning effort** (`teams-models`, `teams-effort`, `agent-windows/Models.cs`). Tasks without a roster keep one model and optional effort per tool (`team.models`, `team.efforts`, with the tool's default for an omitted choice). Roster tasks keep `model` and optional `effort` on each role (persisted in `teams.dat` and `restart.json` across restarts and subsequent rounds). The agent uses the model and effort for the
+first turn, subsequent rounds (both continuing turns on an active conversation and sessions reopened after close/restart/`team_resume`), `team_swap` or failover, `discuss` and `review` readers, and `compare` candidates. They reach the tools as:
+Claude Code `--model <id>` and `--effort <level>`; Codex `model` and `config.model_reasoning_effort` in `thread/start` / `thread/resume`, plus `model` and `effort` on every `turn/start`; an ACP server (`agy acp`) by
 `session/set_config_option` (`configId` of the session's `configOptions` entry of category `model`) or else the
-earlier `session/set_model`, after `session/new` and before the first prompt. A model the tool does not offer or
-refuses is not replaced by another: the member's turn fails with the tool's words ("… 不能使用模型 …"), which the
+earlier `session/set_model`, after `session/new` and before the first prompt. A model or effort the tool does not offer or
+refuses is not replaced by another: the member's turn fails with the tool's words, which the
 team treats as any failed member (failover, or `paused`). `team_models` reads the lists from the tools themselves, each
-started for a moment in `<dataDir>/models`: Claude Code's `initialize` answer (`models`, `value` and `displayName`;
-`default` is left out, as no choice means the default), Codex's `model/list` (`id`, `displayName`; `hidden` ones left
+started for a moment in `<dataDir>/models`: Claude Code's `initialize` answer (`models`: `value`, `displayName`, `supportedEffortLevels` when `supportsEffort` is not false, and `default`'s `resolvedModel` marking `is_default`), Codex's `model/list` (`id`, `displayName`, `supportedReasoningEfforts[].reasoningEffort` as `efforts`, `defaultReasoningEffort` as `default_effort`, `isDefault` as `is_default`; `hidden` ones left
 out), and an ACP server's `session/new` (the `model` config option's values, or `models.availableModels`). A list is
-kept 10 minutes (a tool that said nothing is asked again after a minute); at most 40 models a tool. Model names are
-`[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,79}` (`gpt-5.1-codex`, `sonnet[1m]`, `models/gemini-3-pro`): the computer and the
-relay refuse anything else, since the name goes onto a command line as it is. A team's detail (`team`) carries
-`models`; the relay passes `models` of `team_start` and `model` of `team_swap` only to a computer with
-`teams-models` and refuses them (and `team_models`) otherwise.
+kept 10 minutes (a tool that said nothing is asked again after a minute); at most 40 models a tool and 16 effort tiers a model. Model names are
+`[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,79}` (`gpt-5.1-codex`, `sonnet[1m]`, `models/gemini-3-pro`) and effort tiers are `[a-z0-9][a-z0-9_-]{0,31}` (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`): the computer and the
+relay refuse anything else, since the values go onto a command line or RPC request as-is. A team's detail (`team`) carries
+`models`, optional `efforts`, and `roster` (including each role's `effort` when set); the relay passes `models` of `team_start` and `model` of `team_swap` only to a computer with
+`teams-models`, and non-empty `effort`/`efforts` only to a computer with `teams-effort`, refusing them otherwise.
 
 **Tasks in the lists** (`teams-grouped`). `device.team_cards` (newest first, at most 10; `[]` while remote access is
 off) gives each task as `{"id", "dir", "goal" (cut to 200), "mode", "state", "phase" ("", "discuss" or "verify"),
 "note" (cut to 200), "updated" (Unix seconds of its last step), "awaited" (roles), "tools", "models"}`, with optional
-`roster` and `auto_roster` for lead tasks, and with
+`efforts`, `roster` (carrying `effort` when set) and `auto_roster` for lead tasks, and with
 `"confirm": true` where a member whose turn it waits for asks for a confirmation. Each terminal and session carries
 `team`. A team's detail keeps `members` (role → terminal) and adds `member_sessions` (role → `{"id", "tool"}`): each
 role's conversation in its tool, learnt from the terminal that runs it and kept when the terminal is gone, so its
@@ -656,10 +656,9 @@ Once a task is removed nothing carries its id any more and its conversations are
 `team` that is not among `team_cards` (an older terminal the relay still keeps) as no task.
 
 **Older relays and computers.** A relay from before these filters `info.features` to what it knows and rebuilds each
-question field by field: it drops `teams-models`, `teams-grouped` and `teams-roster` from `device.features`, gives no `team_cards` and
-no `team` fields, refuses `team_models` as unsupported, and passes `team_start` and `team_swap` without `models` or
-`model`. A viewer therefore offers models and grouping only where `device.features` has those words, which only a
-relay and a computer that both have them give. A computer without `teams-models` is refused models by the relay, so a
+question field by field: it drops `teams-models`, `teams-grouped`, `teams-roster` and `teams-effort` from `device.features`, gives no `team_cards` and
+no `team` fields, refuses `team_models` as unsupported, and passes `team_start` and `team_swap` without `models`, `model`, `efforts` or `effort`. A viewer therefore offers models, grouping, roster and reasoning effort only where `device.features` has those words (degrading unsupported reasoning effort to tool default with an upgrade note), which only a
+relay and a computer that both have them give. A computer without `teams-models` or `teams-effort` is refused non-empty model/effort choices by the relay, so a
 team never starts silently with defaults the owner did not choose.
 
 ## Chats

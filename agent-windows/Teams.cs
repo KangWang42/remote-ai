@@ -59,6 +59,8 @@ public sealed class Teams {
         public bool Last;
         /// The model each tool's members are begun with (tool -> the tool's name of it); a tool not named uses its default.
         public Dictionary<string, string> Models = new Dictionary<string, string>();
+        /// The reasoning effort each tool's members are begun with (tool -> CLI effort tier); a tool not named uses its default.
+        public Dictionary<string, string> Efforts = new Dictionary<string, string>();
         /// Each role's conversation in its tool, once known (role -> Seat): it outlives the terminal, for the history.
         public Dictionary<string, Seat> Sessions = new Dictionary<string, Seat>();
         /// Every conversation that was ever a member, replaced ones too: they are listed under the task.
@@ -71,7 +73,8 @@ public sealed class Teams {
             copy.Summaries = new Dictionary<string, string>(Summaries); copy.Stats = new Dictionary<string, string>(Stats);
             copy.Diffs = new Dictionary<string, string>(Diffs);
             copy.Failed = new Dictionary<string, string>(Failed); copy.Pending = new Dictionary<string, string>(Pending);
-            copy.Models = new Dictionary<string, string>(Models); copy.Sessions = new Dictionary<string, Seat>(Sessions); copy.Past = Past.ToList();
+            copy.Models = new Dictionary<string, string>(Models); copy.Efforts = new Dictionary<string, string>(Efforts);
+            copy.Sessions = new Dictionary<string, Seat>(Sessions); copy.Past = Past.ToList();
             return copy;
         }
         /// When anything last happened in it, in Unix seconds.
@@ -80,16 +83,20 @@ public sealed class Teams {
     /// A member's conversation in its tool.
     public sealed class Seat { public string Tool = "", Id = ""; }
     public sealed class RosterMember {
-        public readonly string Role, Tool, Model;
-        public RosterMember(string role, string tool, string model) { Role = role; Tool = tool; Model = model; }
+        public readonly string Role, Tool, Model, Effort;
+        public RosterMember(string role, string tool, string model, string effort = "") {
+            Role = role; Tool = tool; Model = model ?? ""; Effort = effort ?? "";
+        }
         public Dictionary<string, string> Shown() {
-            return new Dictionary<string, string> { { "role", Role }, { "tool", Tool }, { "model", Model } };
+            var shown = new Dictionary<string, string> { { "role", Role }, { "tool", Tool }, { "model", Model } };
+            if (Effort.Length > 0) shown["effort"] = Effort;
+            return shown;
         }
     }
     static readonly string[] MemberRoles = { "member-1", "member-2", "member-3" };
     /// A member's conversation to begin: its tool, the project, the first words, read only or not, the folder where it
-    /// is not the project's own (a worktree, `compare`), and the model ("" for the tool's default).
-    public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = ""; public bool Read; }
+    /// is not the project's own (a worktree, `compare`), the model and reasoning effort ("" for the tool's default).
+    public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = "", Effort = ""; public bool Read; }
     /// What the program does for a team: begin a member's conversation, tell it something, stop one, read project
     /// changes, read quota limits, list available chat tools, and manage Git worktrees for `compare`.
     public sealed class Hands {
@@ -148,6 +155,7 @@ public sealed class Teams {
             Summaries = map("summaries"), Stats = map("stats"), Diffs = map("diffs"),
             Failed = map("failed"), Pending = map("pending"),
             Models = map("models").Where(p => RemoteCli.Models.Valid(p.Value)).ToDictionary(p => p.Key, p => p.Value),
+            Efforts = map("efforts").Select(p => new KeyValuePair<string, string>(p.Key, RemoteCli.Models.CleanEffort(p.Value))).Where(p => p.Value.Length > 0).ToDictionary(p => p.Key, p => p.Value),
             Past = many("past").Select(Convert.ToString).Select(SeatOf).Where(s => s != null).ToList()
         };
         object roster;
@@ -171,7 +179,7 @@ public sealed class Teams {
             { "members", t.Members }, { "awaited", t.Awaited }, { "answers", t.Answers },
             { "worktrees", t.Worktrees }, { "base_commits", t.BaseCommits },
             { "summaries", t.Summaries }, { "stats", t.Stats }, { "diffs", t.Diffs },
-            { "failed", t.Failed }, { "pending", t.Pending }, { "models", t.Models },
+            { "failed", t.Failed }, { "pending", t.Pending }, { "models", t.Models }, { "efforts", t.Efforts },
             { "sessions", t.Sessions.ToDictionary(p => p.Key, p => p.Value.Tool + ":" + p.Value.Id) }, { "past", t.Past.Select(s => s.Tool + ":" + s.Id).ToArray() },
             { "log", t.Log.Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         }).ToArray();
@@ -201,6 +209,7 @@ public sealed class Teams {
             { "member_sessions", t.Sessions.ToDictionary(p => p.Key, p => (object)new Dictionary<string, object> { { "id", p.Value.Id }, { "tool", p.Value.Tool } }) },
             { "log", t.Log.Skip(Math.Max(0, t.Log.Count - 80)).Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         };
+        if (t.Efforts.Count > 0) shown["efforts"] = new Dictionary<string, string>(t.Efforts);
         if (t.Roster.Length > 0) {
             shown["roster"] = t.Roster.Select(member => member.Shown()).ToArray();
             shown["auto_roster"] = t.AutoRoster;
@@ -226,6 +235,7 @@ public sealed class Teams {
                     { "id", t.Id }, { "dir", t.Dir }, { "goal", Short(t.Goal, 200) }, { "mode", t.Mode }, { "state", t.State }, { "phase", t.Phase },
                     { "note", Short(t.Note, 200) }, { "updated", t.Updated }, { "awaited", t.Awaited.ToArray() }, { "tools", t.Tools.ToArray() },
                     { "models", new Dictionary<string, string>(t.Models) } };
+                if (t.Efforts.Count > 0) card["efforts"] = new Dictionary<string, string>(t.Efforts);
                 if (t.Roster.Length > 0) {
                     card["roster"] = t.Roster.Select(member => member.Shown()).ToArray();
                     card["auto_roster"] = t.AutoRoster;
@@ -270,9 +280,9 @@ public sealed class Teams {
     // ---- what the members are told (read by the models: changed only together with runs on the real tools)
     public static string Label(string tool) { return RemoteCli.Tool.LabelOf(tool); }
     static readonly Dictionary<string, string> Strengths = new Dictionary<string, string> {
-        { "codex", "擅长决策拍板、任务拆解、精准改代码与修测试（优先负责决策，纯检查不必浪费其额度）" },
-        { "claude", "擅长主力写作（代码实现、重构与文档撰写）以及深度交叉审查" },
-        { "agy", "Gemini 模型，擅长 UI 与前端界面设计、长上下文检索，也可兼顾写作与交叉检查" } };
+        { "codex", "Sol 适合日常实现与任务组织，Astra 适合复杂排查和深度验收，Terra 适合范围清楚的快改与测试" },
+        { "claude", "Sonnet 适合常规实现、重构与写作，Opus 适合复杂设计和审查，Haiku 适合快速整理与提取" },
+        { "agy", "若使用 Gemini，Neon 和 Carbon 适合复杂代码、界面和多份材料，Argon 兼顾推理与速度，Hydrogen 适合日常实现和检查" } };
     /// Whether any main quota window has reached 100%.
     public static bool IsExhausted(Quotas.Window[] windows) { return windows != null && windows.Any(w => Math.Round(w.Used) >= 100); }
     static readonly Regex QuotaErrorPattern = new Regex(@"(hit your limit|rate[\s_-]*limit|usage[\s_-]*limit|quota|out of credits|credit balance|too many requests|\b429\b|overloaded|额度|限额|已达上限|额度用尽|额度已用完|额度用完)", RegexOptions.IgnoreCase);
@@ -362,8 +372,14 @@ public sealed class Teams {
         Func<string, string> room = tool => rooms.ContainsKey(tool) ? "；" + rooms[tool] : "";
         var members = LeadMembers(t).Select(role => {
             string tool = ToolOf(t, role);
-            return "- " + role + "：" + Label(tool) + (Strengths.ContainsKey(tool) ? "，" + Strengths[tool] : "") + room(tool);
+            var seat = RosterOf(t, role);
+            string model = seat != null ? seat.Model : t.Models.ContainsKey(tool) ? t.Models[tool] : "";
+            return "- " + role + "：" + Label(tool) + "（" + (model.Length > 0 ? model : "工具默认模型")
+                + (seat != null && seat.Effort.Length > 0 ? " · " + seat.Effort : "") + "）" + room(tool);
         }).ToArray();
+        var tools = t.Tools.Concat(t.AutoRoster ? rooms.Keys.AsEnumerable() : Enumerable.Empty<string>()).Distinct();
+        string modelGuide = "\n\n## 派工参考\n" + String.Join("\n", tools.Where(Strengths.ContainsKey).Select(tool => "- " + Label(tool) + "：" + Strengths[tool]))
+            + "\n按实际配置的模型和任务难度派工。普通任务可用中等思考深度，复杂排查或验收才考虑更高档位。";
         string rosterGuide = t.Roster.Length > 0 ? "\n同一工具的各成员是独立对话，共用该工具的账号额度。" : "";
         if (t.AutoRoster) rosterGuide += "\n你可以自行决定派给谁和派几个。已安装的工具：" + String.Join("、", rooms.Keys)
             + "。同批可使用 member-1、member-2、member-3。示例（工具名须从上面选）：\n"
@@ -373,9 +389,9 @@ public sealed class Teams {
             + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 成员前期方案讨论（只读）\n" + Cut(discussion, 12000))
             + "\n\n你负责决策、按任务特点高效干净地分工、验收结果并在达标时结束。成员都在同一个项目文件夹中工作：\n" + String.Join("\n", members)
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
-            + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "")
+            + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "") + modelGuide
             + "\n如果目标写明由成员执行或要求组队，请把对应工作写成 ASSIGN 行。只有回复中的 ASSIGN 行才会交给成员执行。"
-            + "\n\n分工原则：\n1. 按具体任务按需派工，不必每次把所有成员都派满；不需要的成员可以不派。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要核验时采用交叉检查（谁写不由谁审），优先让 Claude Code 或 Antigravity CLI 交叉检查，不必把纯检查浪费在 Codex 上。\n4. 结果达标后立刻结束，不要为了凑轮次空转。"
+            + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 结果达标后结束。"
             + (rooms.Count > 0 ? "\n5. 按额度分配工作量：额度已用尽或不可用的成员不要再派工；额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
             + "\n\n分派时，在回答的最后每行写一条（用上面的成员编号或英文名）：\nASSIGN 成员名: 任务内容\n若已自行完成任务，回答的最后写：\nDONE: 总结\n成员执行完或你自行完成后，会进入当轮验收。请亲自查看结果，运行相关检查，确认无误后结束。\n分派出去的工作不要自己动手做。";
     }
@@ -461,21 +477,24 @@ public sealed class Teams {
     static RosterMember[] ReadRoster(object raw, bool auto, bool stored) {
         var rows = raw as IList;
         if (rows == null || rows.Count < (auto ? 1 : 2) || rows.Count > (auto && !stored ? 1 : 4))
-            throw new ArgumentException("请选择一位领队和 1 至 3 位成员，或让领队自行安排");
+            throw new ArgumentException("请选择一位领队和 1 至 3 位执行成员，或让领队自动组队");
         var members = new List<RosterMember>();
         foreach (object row in rows) {
             var fields = row as Dictionary<string, object>;
             if (fields == null) throw new ArgumentException("协作成员无效");
-            object role, tool, model;
+            object role, tool, model, effort;
             fields.TryGetValue("role", out role);
             fields.TryGetValue("tool", out tool);
             fields.TryGetValue("model", out model);
-            string roleName = role as string, toolName = tool as string, modelName = model as string ?? "";
+            fields.TryGetValue("effort", out effort);
+            string roleName = role as string, toolName = tool as string, modelName = (model as string ?? "").Trim();
+            string rawEffort = effort as string ?? "", effortName = rawEffort.Trim().ToLowerInvariant();
             if ((members.Count == 0 ? roleName != "leader" : !MemberRoles.Contains(roleName)) ||
                 members.Any(m => m.Role == roleName) || !RemoteCli.Models.Tools.Contains(toolName) ||
-                (model != null && !(model is string)) || (modelName.Length > 0 && !RemoteCli.Models.Valid(modelName)))
-                throw new ArgumentException("协作成员无效");
-            members.Add(new RosterMember(roleName, toolName, modelName));
+                (model != null && !(model is string)) || (modelName.Length > 0 && !RemoteCli.Models.Valid(modelName)) ||
+                (effort != null && !(effort is string)) || (effortName.Length > 0 && !RemoteCli.Models.ValidEffort(effortName)))
+                throw new ArgumentException(effort != null && (!(effort is string) || (effortName.Length > 0 && !RemoteCli.Models.ValidEffort(effortName))) ? "思考深度无效" : "协作成员无效");
+            members.Add(new RosterMember(roleName, toolName, modelName, effortName));
         }
         return members.ToArray();
     }
@@ -491,11 +510,11 @@ public sealed class Teams {
         bool discuss = (mode == "review" || mode == "lead") && String.Equals(word("discuss"), "True", StringComparison.OrdinalIgnoreCase);
         object automatic;
         bool auto = given.TryGetValue("auto_roster", out automatic) && Object.Equals(automatic, true);
-        if (automatic != null && !(automatic is bool)) throw new ArgumentException("自动安排成员选项无效");
+        if (automatic != null && !(automatic is bool)) throw new ArgumentException("自动组队选项无效");
         object rosterValue;
         given.TryGetValue("roster", out rosterValue);
         if ((rosterValue != null && mode != "lead") || (auto && rosterValue == null))
-            throw new ArgumentException("仅领队模式支持按成员安排");
+            throw new ArgumentException("仅分工协作支持按成员安排");
         var roster = rosterValue == null ? new RosterMember[0] : ReadRoster(rosterValue, auto, false);
         if (roster.Length > 0) {
             tools = roster.Select(member => member.Tool).ToArray();
@@ -503,9 +522,10 @@ public sealed class Teams {
                 throw new ArgumentException("这台电脑不能让这个工具参与协作");
         }
         object models; given.TryGetValue("models", out models);
+        object efforts; given.TryGetValue("efforts", out efforts);
         var team = new Team {
             Id = word("id"), Dir = word("dir"), Mode = mode, Goal = word("goal").Trim(), Rules = rules,
-            Discuss = discuss, Tools = tools, Models = RemoteCli.Models.Chosen(models, tools), Roster = roster, AutoRoster = auto,
+            Discuss = discuss, Tools = tools, Models = RemoteCli.Models.Chosen(models, tools), Efforts = RemoteCli.Models.ChosenEfforts(efforts, tools), Roster = roster, AutoRoster = auto,
             Rounds = Math.Max(1, Math.Min(MostRounds, rounds == 0 ? (mode == "compare" ? 1 : 3) : rounds)),
             Created = Now()
         };
@@ -721,16 +741,18 @@ public sealed class Teams {
         return Of(id);
     }
 
-    /// Explicitly swaps a role's AI (or reassigns a member's task to another AI) mid-run or while paused; `model`, where
-    /// given, is what that AI's members are begun with from now on (none: as before for it, else its default).
-    public Team Swap(string id, string role, string newTool, string note = "", string model = null) {
+    /// Explicitly swaps a role's AI (or reassigns a member's task to another AI) mid-run or while paused; `model` and
+    /// `effort`, where given, are what that role/AI is begun with from now on (none: as before for it, else its default).
+    public Team Swap(string id, string role, string newTool, string note = "", string model = null, string effort = null) {
         role = (role ?? "").Trim();
         newTool = (newTool ?? "").Trim().ToLowerInvariant();
         note = (note ?? "").Trim();
         if (model != null) model = model.Trim();
+        if (effort != null) effort = effort.Trim().ToLowerInvariant();
         if (note.Length > 1000) throw new ArgumentException("补充说明不能超过 1000 字");
         if (newTool != "claude" && newTool != "codex" && newTool != "agy") throw new ArgumentException("接手 AI 无效");
         if (!String.IsNullOrEmpty(model) && !RemoteCli.Models.Valid(model)) throw new ArgumentException("模型名称无效");
+        if (!String.IsNullOrEmpty(effort) && !RemoteCli.Models.ValidEffort(effort)) throw new ArgumentException("思考深度无效");
         Team team; string resolved, oldTool, oldTerminal = null, pending = "", mode, phase, prevState;
         bool launchNow = false;
         lock (gate) {
@@ -743,13 +765,18 @@ public sealed class Teams {
             if (resolved == null) throw new ArgumentException("没有找到这个角色");
             oldTool = ToolOf(team, resolved);
             var rosterMember = RosterOf(team, resolved);
-            if (oldTool == newTool && (rosterMember == null || model == null || model == rosterMember.Model))
-                throw new ArgumentException("这个角色当前使用相同的工具和模型");
+            if (oldTool == newTool && (rosterMember == null || ((model == null || model == rosterMember.Model) && (effort == null || effort == rosterMember.Effort))))
+                throw new ArgumentException("这个角色当前使用相同的工具、模型和思考深度");
             team.Members.TryGetValue(resolved, out oldTerminal);
             team.Pending.TryGetValue(resolved, out pending);
             team.Failed.Remove(newTool);
             team.Failed.Remove(resolved);
-            if (rosterMember == null && !String.IsNullOrEmpty(model)) team.Models[newTool] = model;
+            if (rosterMember == null) {
+                if (!String.IsNullOrEmpty(model)) team.Models[newTool] = model;
+                if (effort != null) {
+                    if (effort.Length > 0) team.Efforts[newTool] = effort; else team.Efforts.Remove(newTool);
+                }
+            }
 
             bool wasActive = team.Awaited.Contains(resolved) || prevState != "running";
             if (rosterMember != null) {
@@ -759,7 +786,9 @@ public sealed class Teams {
                     team.Pending.TryGetValue(resolved, out pending);
                     wasActive = team.Awaited.Contains(resolved) || prevState != "running";
                 }
-                SetRosterMember(team, rosterMember.Role, newTool, model ?? "");
+                string nextModel = model ?? (oldTool == newTool ? rosterMember.Model : "");
+                string nextEffort = effort ?? (oldTool == newTool && nextModel == rosterMember.Model ? rosterMember.Effort : "");
+                SetRosterMember(team, rosterMember.Role, newTool, nextModel, nextEffort);
                 team.Members.Remove(resolved);
                 team.Sessions.Remove(resolved);
                 if (wasActive) {
@@ -816,6 +845,7 @@ public sealed class Teams {
             : resolved == "leader" ? "已将领队从 " + Label(oldTool) + " 切换为 " + Label(newTool)
             : "已将 " + Label(oldTool) + " 的任务转交给 " + Label(newTool);
         if (!String.IsNullOrEmpty(model)) summary += "，模型 " + model;
+        if (!String.IsNullOrEmpty(effort)) summary += "，思考深度 " + effort;
         if (note.Length > 0) summary += "（" + Cut(note, 120) + "）";
         Log(team, "切换", summary);
         if (!launchNow) return Of(id);
@@ -938,15 +968,16 @@ public sealed class Teams {
 
     // ---- the members' turns
     void Open(Team team, string role, string tool, string words, bool read, string folderOverride) {
-        string model;
+        string model, effort;
         lock (gate) {
             opening++;
             team.Pending[role] = Cut(words, 6000);
             var member = RosterOf(team, role);
             model = member != null ? member.Model : team.Models.ContainsKey(tool) ? team.Models[tool] : "";
+            effort = member != null ? member.Effort : team.Efforts.ContainsKey(tool) ? team.Efforts[tool] : "";
         }
         try {
-            string terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "" });
+            string terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "" });
             lock (gate) {
                 team.Members[role] = terminal;
                 team.Sessions.Remove(role);
@@ -1161,8 +1192,8 @@ public sealed class Teams {
         string original = role.StartsWith("discuss:", StringComparison.Ordinal) ? role.Substring(8) : role;
         return team.Roster.FirstOrDefault(member => member.Role == original);
     }
-    static void SetRosterMember(Team team, string role, string tool, string model) {
-        team.Roster = team.Roster.Where(member => member.Role != role).Concat(new[] { new RosterMember(role, tool, model) })
+    static void SetRosterMember(Team team, string role, string tool, string model, string effort = "") {
+        team.Roster = team.Roster.Where(member => member.Role != role).Concat(new[] { new RosterMember(role, tool, model, effort) })
             .OrderBy(member => member.Role == "leader" ? -1 : Array.IndexOf(MemberRoles, member.Role)).ToArray();
         team.Tools = team.Roster.Select(member => member.Tool).ToArray();
     }
