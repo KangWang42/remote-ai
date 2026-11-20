@@ -338,7 +338,7 @@ COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_tak
 # What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
 # it, the questions set to be asked at a time, and one conversation handed over to another.
 WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "brief", "chains", "chain_set", "chain_remove",
-                "teams", "team_start", "team_stop", "team_resume", "team_remove")
+                "teams", "team_start", "team_stop", "team_resume", "team_remove", "team_say", "team_pick")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
 REACH = ("say", "answer", "stop")
 # What is done to a terminal that runs a conversation through its tool's structured mode (form "chat"; docs/PROTOCOL.md,
@@ -1201,7 +1201,7 @@ class Relay:
                 if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not _id.fullmatch(item["id"]):
                     raise RemoteError("协作任务无效")
                 mode, goal, tools, rounds, folder = item.get("mode"), item.get("goal"), item.get("tools"), item.get("rounds", 3), item.get("dir")
-                if mode not in ("review", "lead"):
+                if mode not in ("review", "lead", "compare"):
                     raise RemoteError("协作方式无效")
                 if not isinstance(folder, str) or folder not in self._device["workspaces"]:
                     raise RemoteError("电脑没有报告这个项目")
@@ -1215,18 +1215,45 @@ class Relay:
                     raise RemoteError("写审需要一个写的 AI 和一个审查的 AI")
                 if mode == "lead" and (not 2 <= len(tools) <= 4 or len(set(tools)) != len(tools)):
                     raise RemoteError("领队需要一个领队和 1 至 3 个不同的成员")
+                if mode == "compare" and (not 2 <= len(tools) <= 3 or len(set(tools)) != len(tools)):
+                    raise RemoteError("并行比稿需要 2 至 3 个不同的 AI")
                 if type(rounds) is not int or not 1 <= rounds <= 10:
                     raise RemoteError("轮数需在 1 到 10 之间")
                 rules = item.get("rules", "")
                 if not isinstance(rules, str) or len(rules.strip()) > 1000 or "\0" in rules:
                     raise RemoteError("分工偏好不能超过 1000 字")
+                discuss = item.get("discuss", False)
+                if not isinstance(discuss, bool):
+                    raise RemoteError("讨论选项无效")
                 question["item"] = {"id": item["id"], "mode": mode, "dir": folder, "goal": goal.strip(), "tools": tools, "rounds": rounds}
+                if discuss and mode in ("review", "lead"):
+                    question["item"]["discuss"] = True
                 if rules.strip():
                     question["item"]["rules"] = rules.strip()
             elif action in ("team_stop", "team_resume", "team_remove"):
                 if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
                     raise RemoteError("协作任务无效")
                 question["team"] = payload["team"]
+            elif action == "team_say":
+                if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
+                    raise RemoteError("协作任务无效")
+                text, target = payload.get("text"), payload.get("target", "")
+                if not isinstance(text, str) or not 0 < len(text.strip()) <= 4000 or "\0" in text:
+                    raise RemoteError("消息需为 1 至 4000 字")
+                if not isinstance(target, str) or len(target.strip()) > 32 or "\0" in target:
+                    raise RemoteError("发送对象无效")
+                question["team"] = payload["team"]
+                question["text"] = text.strip()
+                if target.strip():
+                    question["target"] = target.strip()
+            elif action == "team_pick":
+                if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
+                    raise RemoteError("协作任务无效")
+                tool = payload.get("tool", "")
+                if not isinstance(tool, str) or (tool != "" and tool not in CHAT_TOOLS):
+                    raise RemoteError("候选方案无效")
+                question["team"] = payload["team"]
+                question["tool"] = tool
             elif action == "chain_remove":
                 if not isinstance(payload.get("chain"), str) or not _id.fullmatch(payload["chain"]):
                     raise RemoteError("接力无效")

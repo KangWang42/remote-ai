@@ -131,7 +131,10 @@ public sealed class TerminalAgent {
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
         Chains = new Chains(Path.Combine(dataDir, "chains.json"));
-        Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands { Begin = BeginMember, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of });
+        Worktrees = new Worktrees(Path.Combine(dataDir, "worktrees"));
+        Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands {
+            Begin = BeginMember, BeginIn = BeginMemberIn, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of,
+            MakeWorktree = MakeTeamWorktree, WorktreeDiff = Worktrees.Diff, WorktreeStat = Worktrees.Stat, ApplyWorktree = ApplyTeamWorktree, CleanWorktrees = CleanTeamWorktrees });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
@@ -366,10 +369,13 @@ public sealed class TerminalAgent {
     public readonly Chains Chains;
     /// Work several AIs do together (Teams.cs): their members are conversations of the phone's that this program begins.
     public readonly Teams Teams;
+    /// Isolated Git worktrees for parallel comparison tasks (Worktrees.cs).
+    public readonly Worktrees Worktrees;
     /// Local MCP service that lets an active conversation ask another AI in the same project for read-only advice (Peers.cs).
     public readonly Peers Peers;
     // ---- the members of a team: conversations the phone runs, begun and told by this program
-    string BeginMember(string tool, string dir, string words, bool read) {
+    string BeginMember(string tool, string dir, string words, bool read) { return BeginMemberIn(tool, dir, words, read, null); }
+    string BeginMemberIn(string tool, string dir, string words, bool read, string folderOverride) {
         var prefs = Preferences(); var dirs = AllDirs(prefs);
         if (!dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
         Tool kind = Tool.Named(tool);
@@ -382,13 +388,28 @@ public sealed class TerminalAgent {
             string widest = Get(prefs, "RemoteMaxMode"), mode = read ? "read" : widest;
             string first = words.Split('\n')[0].Trim();
             var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = tool, Dir = dir, Title = first.Length > 60 ? first.Substring(0, 59) + "…" : first };
-            string place = Place(live, dirs);
+            string place = !String.IsNullOrEmpty(folderOverride) ? folderOverride : Place(live, dirs);
             live.Pty = Chat.Open(tool, launcher, place, "", false, mode, Emitted(live), Quotas, read ? null : Peers.Offer(tool, place));
             Heard(live);
             terminals[live.Id] = live;
             live.Chat.Say(words, null);
             return live.Id;
         }
+    }
+    Worktrees.Created MakeTeamWorktree(string dir, string teamId, string tool) {
+        string folder;
+        if (!AllDirs(Preferences()).TryGetValue(dir, out folder)) throw new ArgumentException("目录未获允许");
+        return Worktrees.Create(folder, teamId, tool);
+    }
+    string ApplyTeamWorktree(string dir, string wtPath, string baseCommit) {
+        string folder;
+        if (!AllDirs(Preferences()).TryGetValue(dir, out folder)) throw new ArgumentException("目录未获允许");
+        return Worktrees.Apply(folder, wtPath, baseCommit);
+    }
+    void CleanTeamWorktrees(string dir, string teamId) {
+        string folder = null;
+        AllDirs(Preferences()).TryGetValue(dir, out folder);
+        Worktrees.RemoveAll(folder, teamId);
     }
     Chat Member(string terminal) {
         LiveTerminal live;
@@ -401,20 +422,7 @@ public sealed class TerminalAgent {
     /// no repository says nothing).
     string ChangesIn(string dir) {
         string folder;
-        if (!AllDirs(Preferences()).TryGetValue(dir, out folder)) return "";
-        Func<string, string> git = args => {
-            try {
-                var info = new ProcessStartInfo("git", "-C \"" + folder + "\" " + args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false) };
-                using (var program = Process.Start(info)) {
-                    var said = program.StandardOutput.ReadToEndAsync(); program.StandardError.ReadToEndAsync();
-                    if (!program.WaitForExit(15000)) { try { program.Kill(); } catch { } return ""; }
-                    return program.ExitCode == 0 ? said.Result : "";
-                }
-            } catch (System.ComponentModel.Win32Exception) { return ""; } catch (InvalidOperationException) { return ""; }
-        };
-        string files = git("status --porcelain --untracked-files=all");
-        if (files.Trim().Length == 0) return "";
-        return "文件：\n" + files.TrimEnd() + "\n\n" + git("-c core.quotepath=false diff HEAD --no-color").TrimEnd();
+        return AllDirs(Preferences()).TryGetValue(dir, out folder) ? RemoteCli.Worktrees.ChangesIn(folder) : "";
     }
     /// A conversation the phone runs tells a team when a turn of it ends.
     void Heard(LiveTerminal live) {
@@ -423,7 +431,7 @@ public sealed class TerminalAgent {
     }
     readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
     static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_brief", "work_chains", "work_chain_set", "work_chain_remove",
-        "work_teams", "work_team_start", "work_team_stop", "work_team_resume", "work_team_remove" };
+        "work_teams", "work_team_start", "work_team_stop", "work_team_resume", "work_team_remove", "work_team_say", "work_team_pick" };
     /// One rule runs: the last answer of the conversation that stopped goes to the other one, with its owner's words.
     void Pass(Chains.Item rule, Dictionary<string, object> prefs) {
         bool ok = false; string note;
@@ -568,6 +576,8 @@ public sealed class TerminalAgent {
         }
         if (action == "work_team_stop") { Teams.Stop(Get(op, "team")); return new Dictionary<string, object>(); }
         if (action == "work_team_resume") { Teams.Resume(Get(op, "team")); return new Dictionary<string, object>(); }
+        if (action == "work_team_say") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Say(Get(op, "team"), Get(op, "text"), Get(op, "target"))) } }; }
+        if (action == "work_team_pick") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Pick(Get(op, "team"), Get(op, "tool"))) } }; }
         if (action == "work_team_remove") { if (!Teams.Remove(Get(op, "team"))) throw new ArgumentException("没有找到这个协作任务"); return new Dictionary<string, object>(); }
         if (action == "work_brief") {
             // what a hand-over would say, for the phone to show, or to begin a new conversation with

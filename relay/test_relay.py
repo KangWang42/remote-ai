@@ -373,9 +373,26 @@ class TerminalRelayTests(unittest.TestCase):
         # agy takes part where the computer runs it as a conversation
         self.info["features"] = ["work", "chat", "teams", "chat-agy"]
         self.relay.agent({"info": self.info}, now=1005)
-        asked, got = carried({"id": "4" * 32, "action": "team_start", "item": dict(item, mode="lead", tools=["claude", "codex", "agy"], rules="  UI 交给 Gemini  ")}, {"team": {}})
+        asked, got = carried({"id": "4" * 32, "action": "team_start", "item": dict(item, mode="lead", tools=["claude", "codex", "agy"], rules="  UI 交给 Gemini  ", discuss=True)}, {"team": {}})
         self.assertEqual(asked["item"]["tools"], ["claude", "codex", "agy"])
         self.assertEqual(asked["item"]["rules"], "UI 交给 Gemini")
+        self.assertIs(asked["item"]["discuss"], True)
+        # parallel compare mode (2-3 distinct tools), interject/continue (`team_say`), and merge/discard (`team_pick`)
+        for wrong, said in ((dict(item, mode="compare", tools=["claude"]), "并行比稿需要"), (dict(item, mode="compare", tools=["claude", "claude"]), "并行比稿需要"), (dict(item, discuss="yes"), "讨论选项无效")):
+            with self.assertRaisesRegex(RemoteError, said):
+                self.relay.work({"id": "7" * 32, "action": "team_start", "item": wrong}, now=1005, wait=0)
+        asked, got = carried({"id": "8" * 32, "action": "team_start", "item": dict(item, mode="compare", tools=["claude", "codex", "agy"], rounds=1)}, {"team": {"state": "running"}})
+        self.assertEqual((asked["item"]["mode"], asked["item"]["tools"]), ("compare", ["claude", "codex", "agy"]))
+        with self.assertRaisesRegex(RemoteError, "1 至 4000"):
+            self.relay.work({"id": "9" * 32, "action": "team_say", "team": "d" * 32, "text": "   "}, now=1005, wait=0)
+        with self.assertRaisesRegex(RemoteError, "候选方案无效"):
+            self.relay.work({"id": "9" * 32, "action": "team_pick", "team": "d" * 32, "tool": "shell"}, now=1005, wait=0)
+        asked, got = carried({"id": "a" * 32, "action": "team_say", "team": "d" * 32, "text": "  改用浅色卡片  ", "target": "agy"}, {"team": {"state": "running"}})
+        self.assertEqual((asked["action"], asked["team"], asked["text"], asked["target"]), ("work_team_say", "d" * 32, "改用浅色卡片", "agy"))
+        asked, got = carried({"id": "b" * 32, "action": "team_pick", "team": "d" * 32, "tool": "codex"}, {"team": {"state": "done", "picked": "codex"}})
+        self.assertEqual((asked["action"], asked["team"], asked["tool"]), ("work_team_pick", "d" * 32, "codex"))
+        asked, got = carried({"id": "c" * 32, "action": "team_pick", "team": "d" * 32, "tool": ""}, {"team": {"state": "done", "picked": ""}})
+        self.assertEqual((asked["action"], asked["tool"]), ("work_team_pick", ""))
         for action in ("team_stop", "team_resume", "team_remove"):
             asked, got = carried({"id": "5" * 32, "action": action, "team": "d" * 32}, {})
             self.assertEqual((asked["action"], asked["team"]), ("work_" + action, "d" * 32))

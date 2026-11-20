@@ -158,8 +158,91 @@ public static class TeamsCheck {
             weighed.Turned(Team(weighed, w).Members["agy"], "done", "搜索框好了");
             Require(Last(wLeader).Contains("## 当前额度") && Last(wLeader).Contains("- Claude Code（你）：额度：5 小时窗口已用 12%") && Last(wLeader).Contains("- Codex：额度：5 小时窗口已用 99%"), "the results come with the limits as they are now");
             Require(Teams.Room(new[] { new Quotas.Window { Name = "seven_day", Used = 79.4 } }) == "额度：本周已用 79%" && Teams.Room(new[] { new Quotas.Window { Name = "300m", Used = 79.6 } }) == "额度：300m已用 80%，紧张" && Teams.Room(null) == "额度未知", "limits in words, tight from 80% used");
+
+            // ---- Item 3: user interjects mid-run (`Say`), resumes paused with guidance, and continues after `done`
+            string follow = "0909090909090909";
+            teams.Start(new Dictionary<string, object> { { "id", follow }, { "mode", "review" }, { "dir", "web-shop" }, { "goal", "做商品筛选" }, { "tools", new object[] { "claude", "codex" } }, { "rounds", 1 } });
+            string fw = Team(teams, follow).Members["writer"];
+            teams.Say(follow, "筛选条件还要支持按价格排序", "");
+            Require(Last(fw).Contains("【用户插话】") && Last(fw).Contains("按价格排序"), "interject delivered to active writer");
+            Require(Team(teams, follow).Log.Any(s => s.Who == "user" && s.Text.Contains("按价格排序")), "interject logged as user");
+            teams.Turned(fw, "done", "已加上筛选和价格排序");
+            string fr = Team(teams, follow).Members["reviewer"];
+            teams.Turned(fr, "done", "REVIEW: PASS\n没问题");
+            Require(Team(teams, follow).State == "done", "initial review done");
+            // Continue after done: adds round budget and sends follow-up to writer
+            var continued = teams.Say(follow, "再加一个库存仅看有货开关", "");
+            Require(continued.State == "running" && continued.Round == 2 && continued.Rounds >= 2 && Last(fw).Contains("库存仅看有货开关"), "continued after done into next round");
+            teams.Turned(fw, "done", "加上了仅看有货开关");
+            teams.Turned(fr, "done", "REVIEW: PASS\n通过");
+            Require(Team(teams, follow).State == "done" && Team(teams, follow).Note.Contains("第 2 轮"), "follow-up round completed");
+
+            // ---- Item 4a: discuss first (read-only), then act (`lead` with 3 AIs)
+            string disc = "1010101010101010";
+            teams.Start(new Dictionary<string, object> { { "id", disc }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "重构购物车" }, { "tools", new object[] { "codex", "claude", "agy" } }, { "discuss", true } });
+            var dt = Team(teams, disc);
+            Require(dt.Phase == "discuss" && dt.Awaited.OrderBy(x => x).SequenceEqual(new[] { "discuss:agy", "discuss:claude" }), "discuss phase awaits both members read-only");
+            string dClaude = dt.Members["discuss:claude"], dAgy = dt.Members["discuss:agy"];
+            Require(tools[dClaude] == "claude:read" && tools[dAgy] == "agy:read" && Last(dClaude).Contains("方案讨论（只读）"), "discussants run in read-only mode");
+            teams.Turned(dClaude, "done", "建议拆出 CartStore 模块");
+            Require(Team(teams, disc).Phase == "discuss", "still discussing while second member works");
+            teams.Turned(dAgy, "done", "建议底部栏保留快速结算按钮");
+            dt = Team(teams, disc);
+            Require(dt.Phase == "" && dt.Members.ContainsKey("leader") && Last(dt.Members["leader"]).Contains("CartStore") && Last(dt.Members["leader"]).Contains("快速结算按钮"), "leader receives both discussion proposals before assigning");
+
+            // ---- Item 4b: parallel compare in isolated worktrees + refine (`Say`) + pick/discard (`Pick`)
+            var wtDirs = new Dictionary<string, string>();
+            var appliedTo = new List<string>();
+            var cleaned = new List<string>();
+            var cmpHands = new Teams.Hands {
+                Begin = Hands().Begin,
+                BeginIn = (tool, dir, words, read, wtDir) => {
+                    string t = "t" + (++made);
+                    tools[t] = tool + (read ? ":read" : "") + (String.IsNullOrEmpty(wtDir) ? "" : "@" + wtDir);
+                    told.Add(new[] { t, tool, words });
+                    return t;
+                },
+                Say = Hands().Say, Stop = Hands().Stop, Changes = d => "",
+                MakeWorktree = (dir, tid, tool) => { string p = "/wt/" + tid + "/" + tool; wtDirs[tid + ":" + tool] = p; return new Worktrees.Created { Path = p, BaseCommit = "abc1234" }; },
+                WorktreeDiff = (p, b) => "diff for " + p,
+                WorktreeStat = (p, b) => "1 个文件改动：" + Path.GetFileName(p),
+                ApplyWorktree = (dir, p, b) => { appliedTo.Add(p); return "1 个文件改动"; },
+                CleanWorktrees = (dir, tid) => cleaned.Add(tid)
+            };
+            var cmpTeams = new Teams(null, cmpHands);
+            string cmpId = "1212121212121212";
+            cmpTeams.Start(new Dictionary<string, object> { { "id", cmpId }, { "mode", "compare" }, { "dir", "web-shop" }, { "goal", "优化商品卡片布局" }, { "tools", new object[] { "claude", "codex", "agy" } } });
+            var ct = Team(cmpTeams, cmpId);
+            Require(ct.State == "running" && ct.Awaited.OrderBy(x => x).SequenceEqual(new[] { "agy", "claude", "codex" }), "compare launches all 3 candidates in parallel");
+            Require(tools[ct.Members["claude"]].EndsWith("@/wt/" + cmpId + "/claude") && tools[ct.Members["codex"]].EndsWith("@/wt/" + cmpId + "/codex"), "each candidate runs in its own worktree folder");
+            cmpTeams.Turned(ct.Members["claude"], "done", "Claude 方案：紧凑网格");
+            cmpTeams.Turned(ct.Members["codex"], "done", "Codex 方案：分层卡片");
+            Require(Team(cmpTeams, cmpId).State == "running", "still running while agy works");
+            cmpTeams.Turned(ct.Members["agy"], "done", "Agy 方案：留白卡片");
+            ct = Team(cmpTeams, cmpId);
+            Require(ct.State == "choose" && ct.Diffs["codex"] == "diff for /wt/" + cmpId + "/codex" && ct.Summaries["agy"].Contains("留白卡片"), "all done -> choose with diffs and summaries");
+            // User refines one candidate before picking
+            cmpTeams.Say(cmpId, "把圆角改小一点", "agy");
+            Require(Team(cmpTeams, cmpId).State == "running" && Last(ct.Members["agy"]).Contains("圆角改小一点"), "refine targeted candidate");
+            cmpTeams.Turned(ct.Members["agy"], "done", "已改小圆角");
+            Require(Team(cmpTeams, cmpId).State == "choose", "back to choose after refinement");
+            // User picks codex -> applies worktree & cleans all worktrees
+            var picked = cmpTeams.Pick(cmpId, "codex");
+            Require(picked.State == "done" && picked.Picked == "codex" && appliedTo.Contains("/wt/" + cmpId + "/codex") && cleaned.Contains(cmpId), "pick applies chosen worktree and cleans up");
+            bool refusedAfterPick = false;
+            try { cmpTeams.Say(cmpId, "再来一次", ""); } catch (InvalidOperationException) { refusedAfterPick = true; }
+            Require(refusedAfterPick, "cannot continue compare after worktrees cleaned");
+            // Discard all candidates cleans up without applying
+            string discCmp = "1313131313131313";
+            cmpTeams.Start(new Dictionary<string, object> { { "id", discCmp }, { "mode", "compare" }, { "dir", "web-shop" }, { "goal", "实验布局" }, { "tools", new object[] { "claude", "codex" } } });
+            var dc = Team(cmpTeams, discCmp);
+            cmpTeams.Turned(dc.Members["claude"], "done", "方案 A");
+            cmpTeams.Turned(dc.Members["codex"], "done", "方案 B");
+            int appliedBefore = appliedTo.Count;
+            var discarded = cmpTeams.Pick(discCmp, "");
+            Require(discarded.State == "done" && discarded.Picked == "" && appliedTo.Count == appliedBefore && cleaned.Contains(discCmp), "discard cleans worktrees without applying");
         } finally { try { Directory.Delete(folder, true); } catch { } }
-        Console.WriteLine("teams: a writer and a reviewer until it passes, a leader and its members until it is done; stopped, resumed and kept");
+        Console.WriteLine("teams: review, lead, discuss-first, parallel compare/pick, interject/continue, quotas, stop/resume and persistence ok");
         return 0;
     }
 }

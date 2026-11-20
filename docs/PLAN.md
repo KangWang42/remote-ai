@@ -75,7 +75,7 @@
 - 手机：“协作”页加“协作任务”，一页时间线显示每一轮谁说了什么、改了哪些文件；可以暂停、插话、结束。
 - 中转：`/api/work` 增加 `teams`；协议写进 `docs/PROTOCOL.md`。
 
-验收：真实的 Claude Code 写、Codex 审，在临时仓库里完成一个小改动并在第二轮通过；重启电脑端后任务接着进行；手机上看到每一轮。**已完成第一版（1.8.0）**：`agent-windows/Teams.cs` 实现写审（`review`）与领队（`lead`）两种模式及加密持久化、重启暂停恢复；中转 `/api/work`、`web/teams.js`、`web/together.js` 与 Android 原生 `AppPages.java` 全部接通并通过单元、中转和浏览器 UI 检查（`tests/teams_check.py`、`relay/test_relay.py`、`tests/together_ui_check.py`）。独立 worktree 隔离与并行比稿留作下一阶段。
+验收：真实的 Claude Code 写、Codex 审，在临时仓库里完成一个小改动并在第二轮通过；重启电脑端后任务接着进行；手机上看到每一轮。**已完成**：`agent-windows/Teams.cs` 与 `agent-windows/Worktrees.cs` 实现写审（`review`）、领队（`lead`）、先议后写（`discuss`）与独立 Git worktree 并行比稿（`compare` / `team_pick`），支持加密持久化、重启恢复、实时插话与完成后续聊（`team_say`）；中转 `/api/work`、`web/teams.js` 正序时间线与底部输入框、Android 原生 `AppPages.java` 全部接通并通过单元、真实 Git worktree、中转和无界面 Chrome UI 检查（`tests/teams_check.py`、`tests/worktrees_check.py`、`relay/test_relay.py`、`tests/together_ui_check.py`）。
 
 ## 阶段 4：交互
 

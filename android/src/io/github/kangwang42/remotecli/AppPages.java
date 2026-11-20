@@ -478,14 +478,15 @@ final class AppPages {
     private void teamRows(LinearLayout body, String url, JSONArray items) {
         for (int i = 0; i < items.length(); i++) {
             JSONObject item = items.optJSONObject(i); if (item == null) continue;
-            String mode = "lead".equals(item.optString("mode")) ? "领队" : "写审";
+            String rawMode = item.optString("mode");
+            String mode = "lead".equals(rawMode) ? "领队" : "compare".equals(rawMode) ? "比稿" : "写审";
             String rawState = item.optString("state");
-            String state = "running".equals(rawState) ? "进行中" : "paused".equals(rawState) ? "已暂停" : "done".equals(rawState) ? "已完成" : "stopped".equals(rawState) ? "已停止" : "没有开始";
-            String desc = state + " · " + mode + " · 第 " + item.optInt("round", 1) + " / " + item.optInt("rounds", 3) + " 轮";
+            String state = "running".equals(rawState) ? "进行中" : "choose".equals(rawState) ? "待选方案" : "paused".equals(rawState) ? "已暂停" : "done".equals(rawState) ? "已完成" : "stopped".equals(rawState) ? "已停止" : "没有开始";
+            String desc = state + " · " + mode + ("compare".equals(rawMode) ? "" : " · 第 " + item.optInt("round", 1) + " / " + item.optInt("rounds", 3) + " 轮");
             String note = item.optString("note");
             if (!note.isEmpty()) desc += " · " + note;
             kit.setting(body, R.drawable.ic_tab_together, TINT_AGY, item.optString("goal", "协作任务"), desc, "",
-                "running".equals(rawState) ? kit.goodInk() : "paused".equals(rawState) ? TINT_WARN : kit.MUTED,
+                "running".equals(rawState) ? kit.goodInk() : ("paused".equals(rawState) || "choose".equals(rawState)) ? TINT_WARN : kit.MUTED,
                 () -> activity.together(url, "team", item.optString("id")));
         }
     }

@@ -515,7 +515,9 @@ on as the operation `work_<action>` and keeps nothing.
 | `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
 | `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
 | `teams` | none; needs `teams` | `{"teams": [...]}`: multi-AI collaboration tasks kept on this computer |
-| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review` or `lead`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for `lead`: `[leader, ...members]`), `rounds` (1 to 10, default 3) | `{"team": {...}}` |
+| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), `rounds` (1 to 10, default 3; 1 for `compare`) | `{"team": {...}}` |
+| `team_say` | `team`: its `id`, `text` (1 to 4,000 characters), optional `target` (role or tool name, max 32 chars) | `{"team": {...}}`: interjects while `running`, resumes with guidance while `paused`, refines candidates while `choose`, or starts a follow-up round after `done`/`stopped` (`review`/`lead`) |
+| `team_pick` | `team`: its `id`, `tool`: winning tool name (from `CHAT_TOOLS`) or `""` to discard all | `{"team": {...}}`: checks and applies the chosen `compare` worktree patch to the main project folder (or discards all) and removes all temporary worktrees |
 | `team_stop` | `team`: its `id` | `{}` |
 | `team_resume` | `team`: its `id` (must be `paused`) | `{}` |
 | `team_remove` | `team`: its `id` (must not be `running`) | `{}` |
@@ -588,12 +590,14 @@ an ordinary phone chat (`Chats.cs`) in the task's project folder so the owner ca
 member from the phone. Up to 3 tasks may be active (`running` or `paused`) at once and up to 10 are kept in
 `teams.dat` (encrypted for the Windows account). On restart, previously `running` tasks restore as `paused` waiting
 for `team_resume`.
-- `review` (写审): the writer makes changes; when its turn ends, the computer runs `git status`/`git diff` in the
+- `review` (写审): optionally runs a read-only `discuss` round first; then the writer makes changes; when its turn ends, the computer runs `git status`/`git diff` in the
   project folder and passes the changes plus the writer's summary to a read-only reviewer, which starts its reply with
   `REVIEW: PASS` or `REVIEW: CHANGES`. Findings loop back to the writer until it passes or `rounds` are exhausted.
-- `lead` (领队): the leader splits the goal into `ASSIGN <tool>: <task>` lines for its members (who run in parallel in
-  their own chats) and receives their combined answers and git diff until it answers `DONE: <summary>` or `rounds` are
+- `lead` (领队): optionally gathers read-only `discuss` proposals from members first; then the leader splits the goal into `ASSIGN <tool>: <task>` lines for its members (who run in parallel in
+  their own chats) and receives their combined answers, git diff and live quotas until it answers `DONE: <summary>` or `rounds` are
   exhausted.
+- `compare` (并行比稿, `agent-windows/Worktrees.cs`): creates one detached Git worktree per candidate under `<dataDir>/worktrees/<teamId>/<tool>` and runs 2–3 distinct AIs in parallel; when finished, the task enters `choose` with per-candidate summaries, file stats and diffs. `team_say` can refine one or all candidates before picking; `team_pick` verifies and applies the chosen candidate's binary-safe patch (`git apply --check` then `git apply`) to the main project folder (leaving the main folder untouched on conflict) and removes all temporary worktrees (or discards all when `tool: ""`).
+- `team_say` lets the owner interject mid-run, resume a paused task with guidance, refine `compare` candidates, or continue `review`/`lead` tasks into a new round after `done`/`stopped`.
 
 ## Chats
 

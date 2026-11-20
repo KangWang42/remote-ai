@@ -168,17 +168,31 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
         browser.picture(out / 'team-new-390.png')
         press('开始')
-        # it begins, and its sheet shows how it stands and its members
+        # it begins, and its sheet shows chronological stream, member chips, and bottom composer
         until("!!document.getElementById('member-writer')", "the team's sheet, with its writer")
         made = played.teams[-1]
         assert (made["mode"], made["dir"], made["tools"], made["rounds"], made["goal"]) == ("review", "web-shop", ["claude", "agy"], 3, "给结算页加上优惠券，并补上测试"), made
-        assert "进行中" in value("document.querySelector('dialog.rs[open] .rs-who').innerText") and "写 · Claude Code" in value("document.getElementById('member-writer').innerText")
-        assert "给结算页加上优惠券" in value("document.querySelector('dialog.rs[open] .team-log').innerText")
+        assert "进行中" in value("document.querySelector('dialog.rs[open] .rs-who').innerText") and "写手 · Claude Code" in value("document.getElementById('member-writer').innerText")
+        assert "给结算页加上优惠券" in value("document.querySelector('dialog.rs[open] .team-stream').innerText")
+        # interject mid-run via bottom composer
+        typed('team-say-input', '优惠券折扣保留两位小数')
+        value("document.getElementById('team-say-send').click()")
+        until("document.querySelector('dialog.rs[open] .team-stream').innerText.includes('优惠券折扣保留两位小数')", 'interject appears in chronological stream')
+        # verify chronological order (目标 first, user interject last)
+        items_txt = value("[...document.querySelectorAll('dialog.rs[open] .team-stream .team-msg')].map(n => n.innerText)")
+        assert "目标" in items_txt[0] and "优惠券折扣保留两位小数" in items_txt[-1], items_txt
         browser.picture(out / 'team-sheet-390.png')
         press('停止')
         until(closed + " || document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'it says it stopped')
         assert played.teams[-1]["state"] == "stopped"
-        # 领队: Codex leads by default (decision role), with Claude and Antigravity as members, plus custom rules
+        # continue after stopped/done via bottom composer
+        typed('team-say-input', '再补上过期优惠券校验')
+        value("document.getElementById('team-say-send').click()")
+        until("document.querySelector('dialog.rs[open] .rs-who').innerText.includes('进行中') && document.querySelector('dialog.rs[open] .team-stream').innerText.includes('再补上过期优惠券校验')", 'continued into next round after stop')
+        assert played.teams[-1]["state"] == "running" and played.teams[-1]["round"] == 2
+        press('停止')
+        until("document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'stopped again')
+        # 领队 + 先讨论再动手 (discuss: true)
         value("document.querySelector('dialog.rs:not(.closing) .rs-close') && document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'the sheet closed')
         open_page('&do=team', opened('team-goal'))
@@ -189,19 +203,36 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Codex', 'Antigravity CLI'])", 'the leader is no member')
         value("[...document.querySelector('dialog.rs[open] [aria-label=领队]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'Codex').click()")
         until("JSON.stringify([...document.querySelector('dialog.rs[open] [aria-label=成员]').querySelectorAll('.rs-chip')].map(c => c.textContent)) === JSON.stringify(['Claude Code', 'Antigravity CLI'])", 'back to Codex leading')
+        value("document.getElementById('team-discuss').click()")
         typed('team-goal', '做一个登录页')
         typed('team-rules', 'UI 交给 Gemini，逻辑交给 Claude')
         value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'thesis').click()")
         press('开始')
         until("!!document.getElementById('member-leader')", "the leader's team")
-        assert played.teams[-1]["mode"] == "lead" and played.teams[-1]["tools"][0] == "codex" and played.teams[-1]["dir"] == "thesis" and played.teams[-1].get("rules") == "UI 交给 Gemini，逻辑交给 Claude", played.teams[-1]
+        assert played.teams[-1]["mode"] == "lead" and played.teams[-1].get("discuss") is True and played.teams[-1]["tools"][0] == "codex" and played.teams[-1]["dir"] == "thesis" and played.teams[-1].get("rules") == "UI 交给 Gemini，逻辑交给 Claude", played.teams[-1]
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed')
-        until("document.querySelectorAll('#teams .card:not(.add)').length === 2", 'both on 协作')
-        assert "进行中" in value("document.getElementById('teams').innerText") and "1 个进行中 / 2 个" in value("document.getElementById('teams').innerText")
+        # 并行比稿 (compare): 3 AIs in isolated worktrees -> compare diffs -> merge winner
+        open_page('&do=team', opened('team-goal'))
+        press('比稿')
+        until("!!document.querySelector('dialog.rs[open] [aria-label=\"比稿 AI\"]')", 'compare tools')
+        typed('team-goal', '优化商品卡片样式')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
+        press('开始')
+        until("!!document.getElementById('team-compare') && !!document.getElementById('team-pick-winner')", 'compare picker rendered')
+        assert played.teams[-1]["mode"] == "compare" and len(played.teams[-1]["tools"]) == 3
+        value("document.getElementById('compare-tab-codex').click()")
+        until("document.querySelector('#team-compare .team-diff').innerText.includes('codex')", 'switched candidate diff tab')
+        value("document.getElementById('team-pick-winner').click()")
+        until("document.querySelector('dialog.rs[open] .rs-who').innerText.includes('已完成')", 'picked winner merged')
+        assert played.teams[-1]["state"] == "done" and played.teams[-1]["picked"] == "codex"
+        value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+        until(closed, 'closed')
+        until("document.querySelectorAll('#teams .card:not(.add)').length === 3", 'all three on 协作')
+        assert "进行中" in value("document.getElementById('teams').innerText") and "1 个进行中 / 3 个" in value("document.getElementById('teams').innerText")
         browser.picture(out / 'teams-390.png')
         # deep link from Android's 协作 list opens that team directly
-        open_page('&do=team&item=' + played.teams[-1]['id'], "!!document.getElementById('member-leader')")
+        open_page('&do=team&item=' + played.teams[1]['id'], "!!document.getElementById('member-leader')")
         assert '做一个登录页' in value("document.querySelector('dialog.rs[open]').innerText")
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed')

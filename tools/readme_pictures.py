@@ -196,11 +196,41 @@ class Played:
             return {"teams": self.teams}
         if action == "work_team_start":
             given = op["item"]
-            role = "writer" if given["mode"] == "review" else "leader"
-            item = dict(given, state="running", note="", round=1, created=now, members={role: "1" * 32}, awaited=[role],
-                        log=[{"at": now, "who": "目标", "text": given["goal"]}, {"at": now, "who": role, "text": "开始：【协作任务】" + given["goal"]}])
+            mode = given["mode"]
+            if mode == "compare":
+                members = {t: "1" * 32 for t in given["tools"]}
+                candidates = [{"tool": t, "summary": f"{t} 的候选方案说明", "stat": "1 个文件改动：card.css", "diff": f"--- a/card.css\n+++ b/card.css\n+/* {t} */", "ready": True} for t in given["tools"]]
+                item = dict(given, state="choose", phase="", picked="", note="各候选方案已完成，对比改动后选一个合并到主目录", round=1, created=now, members=members, awaited=[], candidates=candidates,
+                            log=[{"at": now, "who": "目标", "text": given["goal"]}, {"at": now + 1, "who": given["tools"][0], "text": "方案已完成"}])
+            else:
+                role = "writer" if mode == "review" else "leader"
+                item = dict(given, state="running", phase="discuss" if given.get("discuss") else "", picked="", note="", round=1, created=now, members={role: "1" * 32}, awaited=[role],
+                            log=[{"at": now, "who": "目标", "text": given["goal"]}, {"at": now + 1, "who": role, "text": "开始：【协作任务】" + given["goal"]}])
             self.teams[:] = [one for one in self.teams if one["id"] != item["id"]] + [item]
             return {"team": item}
+        if action == "work_team_say":
+            team = next((one for one in self.teams if one["id"] == op["team"]), None)
+            if team is None:
+                raise RemoteError("没有找到这个协作任务")
+            if team["state"] in ("done", "stopped"):
+                team["round"] = team.get("round", 1) + 1
+                team["rounds"] = max(team.get("rounds", 3), team["round"] + 1)
+            team["state"] = "running"
+            team["note"] = ""
+            team["log"].append({"at": now, "who": "user", "text": op["text"]})
+            return {"team": team}
+        if action == "work_team_pick":
+            team = next((one for one in self.teams if one["id"] == op["team"]), None)
+            if team is None:
+                raise RemoteError("没有找到这个协作任务")
+            tool = op.get("tool", "")
+            team["picked"] = tool
+            team["state"] = "done"
+            team["note"] = f"已合并 {tool} 的方案" if tool else "已放弃所有候选方案并清理工作区"
+            for c in team.get("candidates", []):
+                c["ready"] = False
+            team["log"].append({"at": now, "who": "结果", "text": team["note"]})
+            return {"team": team}
         if action in ("work_team_stop", "work_team_resume", "work_team_remove"):
             team = next((one for one in self.teams if one["id"] == op["team"]), None)
             if team is None:
