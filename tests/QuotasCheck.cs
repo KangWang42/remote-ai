@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -26,6 +27,20 @@ public static class QuotasCheck {
             var status = Quotas.FromClaudeStatus(json.DeserializeObject("{\"model\":{\"id\":\"x\"},\"rate_limits\":{\"five_hour\":{\"used_percentage\":23.5,\"resets_at\":1795126800},\"seven_day\":{\"used_percentage\":41,\"resets_at\":1795665600}}}"));
             Require(status.Count == 2 && Math.Abs(status[0].Used - 23.5) < 0.01 && status[1].Used == 41 && status[1].Resets == 1795665600, "Claude Code's status line");
             Require(Quotas.FromClaudeStatus(json.DeserializeObject("{\"model\":{\"id\":\"x\"}}")).Count == 0, "a status line without limits (an account without a subscription) tells of none");
+            var time = new DateTimeOffset(2026, 12, 31, 14, 0, 0, TimeSpan.Zero);
+            var china = TimeZoneInfo.CreateCustomTimeZone("test-china", TimeSpan.FromHours(8), "test-china", "test-china");
+            var usage = new Dictionary<string, object> {
+                { "local_command", "usage" },
+                { "result", "Current session: 56% used · resets Jan 1, 2:40am (Asia/Shanghai)\n"
+                    + "Current week (all models): 33% used · resets Jan 5, 12pm (Asia/Shanghai)\n"
+                    + "Current week (Sonnet only): 65% used · resets Jan 5, 12pm (Asia/Shanghai)" }
+            };
+            var subscription = Quotas.FromClaudeUsage(usage, time, china);
+            Require(subscription.Count == 2 && subscription[0].Name == "five_hour" && subscription[0].Used == 56
+                && DateTimeOffset.FromUnixTimeSeconds(subscription[0].Resets) == time.AddHours(4).AddMinutes(40)
+                && subscription[1].Name == "seven_day" && subscription[1].Used == 33
+                && DateTimeOffset.FromUnixTimeSeconds(subscription[1].Resets) == time.AddDays(4).AddHours(14), "Claude /usage resets use the local clock and roll over the year");
+            Require(Quotas.FromClaudeUsage(new Dictionary<string, object> { { "result", usage["result"] } }, time, china).Count == 0, "ordinary model results are not Claude /usage");
             var codex = Quotas.FromCodex(json.DeserializeObject("{\"primary\":{\"usedPercent\":12,\"windowDurationMins\":300,\"resetsAt\":1795126800},\"secondary\":{\"usedPercent\":64.5,\"windowDurationMins\":10080,\"resetsAt\":1795665600000}}"));
             Require(codex.Count == 2 && codex[0].Name == "five_hour" && codex[1].Name == "seven_day" && codex[1].Resets == 1795665600 && Math.Abs(codex[1].Used - 64.5) < 0.01, "Codex's limits, a time in milliseconds read as seconds");
             Require(Quotas.FromCodex(json.DeserializeObject("{\"primary\":{\"usedPercent\":5,\"windowDurationMins\":15},\"secondary\":null}"))[0].Name == "15m", "a window of another length is named by it");
@@ -56,6 +71,21 @@ public static class QuotasCheck {
             var weighed = quotas.Of("agy");
             Require(weighed.Length == 1 && weighed[0].Name == "five_hour" && weighed[0].Used == 12 && weighed[0].Resets > Now, "a tool's main windows for the program: the other models' pool left out");
             Require(quotas.Of("claude").Length == 1 && quotas.Of("codex").Length == 0 && new Quotas(Path.Combine(folder, "none")).Of("claude").Length == 0, "only windows still running; none where nothing is known");
+
+            string claudeOk = Path.Combine(folder, "fake-claude.cmd");
+            string claudeJson = Path.Combine(folder, "fake-claude.json");
+            string sessionReset = DateTime.Now.AddHours(2).ToString("MMM d, h:mmtt", CultureInfo.InvariantCulture);
+            string weeklyReset = DateTime.Now.AddDays(3).ToString("MMM d, h:mmtt", CultureInfo.InvariantCulture);
+            usage["result"] = "Current session: 56% used · resets " + sessionReset + "\nCurrent week (all models): 33% used · resets " + weeklyReset;
+            File.WriteAllText(claudeJson, json.Serialize(usage), new UTF8Encoding(false));
+            File.WriteAllText(claudeOk, "@echo off\r\nif not \"%8\"==\"/usage\" exit /b 8\r\ntype \"" + claudeJson + "\"\r\n", Encoding.ASCII);
+            quotas.AskClaudeNow(claudeOk);
+            quotas.Note("claude", new[] { new Quotas.Window { Name = "five_hour", Used = 18, Resets = Now + 3600 } });
+            var liveUsage = quotas.Of("claude");
+            Require(liveUsage.Length == 2 && liveUsage[0].Used == 56 && liveUsage[1].Used == 33, "account usage takes priority over conversation events");
+            var claudeReport = quotas.Report().Cast<Dictionary<string, object>>().First();
+            Require((string)claudeReport["tool"] == "claude" && ((object[])claudeReport["windows"]).Length == 2
+                && !json.Serialize(claudeReport).Contains("local_command"), "the phone gets only parsed Claude quota windows");
 
             // ---- AskAgyNow against stand-in launchers: parses JSON + passes AGY_CLI_DISABLE_AUTO_UPDATE=true, and records why on API key exit code 2
             string agyOk = Path.Combine(folder, "fake-agy-ok.cmd");

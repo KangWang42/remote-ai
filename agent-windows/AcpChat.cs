@@ -13,7 +13,10 @@ namespace RemoteCli {
 ///   notifications tell what is written (agent_message_chunk, agent_thought_chunk) and each step (tool_call,
 ///   tool_call_update);
 /// - `session/cancel` (a notification) ends the turn that runs: the prompt is answered `cancelled`;
-/// - `session/request_permission` asks this program whether a step may run, with the tool's own options.
+/// - `session/request_permission` asks this program whether a step may run, with the tool's own options;
+/// - the models a session offers come with `session/new` (`configOptions` of category `model`, or the earlier
+///   `models.availableModels`); one asked for is chosen before the first prompt (`session/set_config_option`, or
+///   `session/set_model`), and a session that cannot take it runs nothing (Remote AI does not fall back to another).
 /// The conversation's id is the tool's own: it is listed with the tool's other conversations and can be gone on with
 /// in a terminal. ACP has no way to add words to a turn that runs: what is said meanwhile waits for its end.
 public class AcpChat : JsonRpcChat {
@@ -41,21 +44,61 @@ public class AcpChat : JsonRpcChat {
             { "protocolVersion", 1 },
             { "clientCapabilities", new Dictionary<string, object> { { "fs", new Dictionary<string, object> { { "readTextFile", false }, { "writeTextFile", false } } }, { "terminal", false } } },
             { "clientInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "title", "Remote AI" }, { "version", "1" } } } }, initAnswer => {
-            if (At(initAnswer, "error") != null) { Note(Label + " 初始化失败：" + Text(At(initAnswer, "error"), "message")); State("ended"); return; }
+            if (At(initAnswer, "error") != null) { Unopened(Label + " 初始化失败：" + Text(At(initAnswer, "error"), "message"), queued.Count > 0); queued.Clear(); return; }
             if (session.Length > 0) loading = true;
             Call(session.Length > 0 ? "session/load" : "session/new", given, answer => {
                 loading = false;
                 string id = session.Length > 0 && At(answer, "error") == null ? session : Text(At(answer, "result"), "sessionId");
-                if (id.Length == 0) { Note(Label + " 没有打开这段对话：" + Text(At(answer, "error"), "message")); State("ended"); return; }
+                if (id.Length == 0) { Unopened(Label + " 没有打开这段对话：" + Text(At(answer, "error"), "message"), queued.Count > 0); queued.Clear(); return; }
+                if (listing) { Offer(Offered(At(answer, "result"))); return; }
                 Known(id);
-                if (queued.Count > 0) Prompt(); else State("idle");
+                if (model.Length == 0) { Ready(); return; }
+                Choose(At(answer, "result"), refused => {
+                    if (refused == null) { Ready(); return; }
+                    // not begun with another model than the one asked for: what waits for it fails, and so does what follows
+                    this.refused = refused;
+                    Note(refused);
+                    if (queued.Count > 0) { queued.Clear(); TurnEnded("failed", refused); }
+                    State("idle");
+                });
             });
         });
     }
+    void Ready() { if (queued.Count > 0) Prompt(); else State("idle"); }
     string Label { get { return RemoteCli.Tool.LabelOf(Tool); } }
+    string refused;     // why the model asked for could not be chosen
+
+    /// The models a session offers: ACP's `configOptions` entry of category `model` (its options' values, also in
+    /// groups), else the earlier `models.availableModels` (modelId, name).
+    static List<Models.Choice> Offered(object result) {
+        var config = ModelOption(result);
+        if (config != null) return Values(config).ToList();
+        return Many(At(result, "models"), "availableModels").Select(one => new Models.Choice { Id = Text(one, "modelId"), Label = Text(one, "name") }).ToList();
+    }
+    static object ModelOption(object result) { return Many(result, "configOptions").FirstOrDefault(one => Text(one, "category") == "model"); }
+    static IEnumerable<Models.Choice> Values(object option) {
+        foreach (var one in Many(option, "options")) {
+            if (At(one, "options") != null) { foreach (var inner in Values(one)) yield return inner; }
+            else yield return new Models.Choice { Id = Text(one, "value"), Label = Text(one, "name") };
+        }
+    }
+    /// Chooses the model asked for, the way the session says it can be chosen (`session/set_config_option`, else
+    /// `session/set_model`); `then` is given null once it is chosen, or why it was not.
+    void Choose(object result, Action<string> then) {
+        var config = ModelOption(result);
+        var offered = Offered(result);
+        if (offered.Count > 0 && !offered.Any(one => one.Id == model)) { then(Label + " 没有提供模型 " + model); return; }
+        Action<Dictionary<string, object>> answered = answer => {
+            var error = At(answer, "error");
+            then(error == null ? null : Label + " 不能使用模型 " + model + "：" + Text(error, "message"));
+        };
+        if (config != null) Call("session/set_config_option", new Dictionary<string, object> { { "sessionId", Session }, { "configId", Text(config, "id") }, { "value", model } }, answered);
+        else Call("session/set_model", new Dictionary<string, object> { { "sessionId", Session }, { "modelId", model } }, answered);
+    }
 
     public override void Say(string text, string id) {
         lock (gate) {
+            if (refused != null) throw new InvalidOperationException(refused);
             queued.Enqueue(new KeyValuePair<string, string>(text, id ?? ""));
             if (Session.Length == 0) { State("busy"); return; }
             if (!working) Prompt();

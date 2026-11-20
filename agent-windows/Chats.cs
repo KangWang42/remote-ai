@@ -52,6 +52,12 @@ public abstract class Chat : IRunning {
     protected Quotas quotas;
     /// Optional local MCP server attached to this conversation (Peers.cs); disposed when the conversation ends.
     protected McpServer mcp;
+    /// The model it is started with (Models.cs), "" for its tool's own default.
+    protected string model = "";
+    /// Started only to read which models its tool offers (`Models`): it opens no conversation where it need not.
+    protected bool listing;
+    Models.Choice[] offered;
+    readonly ManualResetEvent offeredSeen = new ManualResetEvent(false);
 
     public sealed class McpServer : IDisposable {
         readonly Action onDispose;
@@ -100,16 +106,47 @@ public abstract class Chat : IRunning {
 
     /// Starts the conversation: the saved one `session` gone on with (`resume`), else a new one (named `session`
     /// where the tool lets its id be chosen). `mode` is the computer's widest allowed way of working (full, edit,
-    /// read), as for its terminals.
-    public static Chat Open(string tool, string launcher, string folder, string session, bool resume, string mode, Action<string> emit, Quotas quotas = null, McpServer mcp = null) {
+    /// read), as for its terminals. `model` is the tool's name of a model it offers (Models.cs), "" for its default.
+    public static Chat Open(string tool, string launcher, string folder, string session, bool resume, string mode, Action<string> emit, Quotas quotas = null, McpServer mcp = null, string model = "") {
         Tool kind = RemoteCli.Tool.Of(tool);
-        if (kind == null || !kind.Chats) { if (mcp != null) mcp.Dispose(); throw new ArgumentException("这个工具不支持对话"); }
+        model = model ?? "";
+        if (kind == null || !kind.Chats || (model.Length > 0 && !Models.Valid(model))) {
+            if (mcp != null) mcp.Dispose();
+            throw new ArgumentException(kind == null || !kind.Chats ? "这个工具不支持对话" : "模型名称无效");
+        }
         Chat chat = kind.CreateChat(folder, emit);
         chat.quotas = quotas;
         chat.mcp = mcp;
+        chat.model = model;
         try { chat.Begin(launcher, session ?? "", resume, mode ?? ""); }
         catch { chat.Dispose(); throw; }
         return chat;
+    }
+    /// The models a chat tool offers, as it lists them itself: started in `folder` read only, asked, and ended. Null
+    /// where it said nothing within `ms`.
+    public static Models.Choice[] ListModels(string tool, string launcher, string folder, int ms) {
+        Tool kind = RemoteCli.Tool.Of(tool);
+        if (kind == null || !kind.Chats) throw new ArgumentException("这个工具不支持对话");
+        Chat chat = kind.CreateChat(folder, _ => { });
+        chat.listing = true;
+        try {
+            chat.Begin(launcher, "", false, "read");
+            return chat.offeredSeen.WaitOne(ms) ? chat.offered : null;
+        } finally { chat.Dispose(); }
+    }
+    /// What its tool said it offers (once; a tool that lists none gives an empty list).
+    protected void Offer(IEnumerable<Models.Choice> choices) {
+        if (offered != null) return;
+        offered = (choices ?? new Models.Choice[0]).ToArray();
+        offeredSeen.Set();
+    }
+    /// The conversation could not be opened: said, and a turn that was waiting for it ends failed, so that whoever
+    /// waits for that turn (Teams.cs) is told.
+    protected void Unopened(string why, bool waited) {
+        Note(why);
+        if (waited) TurnEnded("failed", why);
+        State("ended");
+        if (listing) offeredSeen.Set();     // (nothing known: asked again later)
     }
 
     protected abstract void Begin(string launcher, string session, bool resume, string mode);
@@ -198,6 +235,7 @@ public abstract class Chat : IRunning {
             State("ended");
             Flush();
             Closed = true; Drained = true;
+            if (listing) offeredSeen.Set();
         }
         var seat = Interlocked.Exchange(ref mcp, null);
         if (seat != null) seat.Dispose();
@@ -360,11 +398,12 @@ public sealed class ClaudeChat : Chat {
     readonly Queue<KeyValuePair<string, string>> said = new Queue<KeyValuePair<string, string>>();   // what the phone said, and its number, until it is given back
     int requests;
 
-    public static string Arguments(string session, bool resume, string mode, string mcpConfig = null) {
+    public static string Arguments(string session, bool resume, string mode, string mcpConfig = null, string model = "") {
         return "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio"
             + (resume ? " --resume " : " --session-id ") + session
             + (mode == "read" ? " --permission-mode plan" : mode == "edit" ? " --permission-mode acceptEdits" : "")
-            + (!String.IsNullOrEmpty(mcpConfig) ? " --mcp-config \"" + mcpConfig + "\"" : "");
+            + (!String.IsNullOrEmpty(mcpConfig) ? " --mcp-config \"" + mcpConfig + "\"" : "")
+            + (!String.IsNullOrEmpty(model) ? " --model " + model : "");      // (a safe name, Models.Valid)
     }
     protected override void Begin(string launcher, string session, bool resume, string mode) {
         if (session.Length == 0) { if (resume) throw new ArgumentException("对话编号无效"); session = Guid.NewGuid().ToString(); }
@@ -372,7 +411,7 @@ public sealed class ClaudeChat : Chat {
         lock (gate) Known(session);
         string cfg = mcp != null && !String.IsNullOrEmpty(mcp.ConfigFile) ? mcp.ConfigFile : null;
         var extraEnv = cfg != null ? new Dictionary<string, string> { { "MCP_TOOL_TIMEOUT", "300000" } } : null;
-        Run(launcher, Arguments(session, resume, mode, cfg), extraEnv);
+        Run(launcher, Arguments(session, resume, mode, cfg, model), extraEnv);
         Send(new Dictionary<string, object> { { "type", "control_request" }, { "request_id", "init-" + (++requests) }, { "request", new Dictionary<string, object> { { "subtype", "initialize" } } } });
         lock (gate) State("idle");
     }
@@ -398,6 +437,15 @@ public sealed class ClaudeChat : Chat {
         if (type == "assistant") { Whole(At(m, "message")); return; }
         if (type == "user") { Came(m); return; }
         if (type == "control_request") { Permission(m); return; }
+        // the answer to `initialize` names the models it offers (`models`: value, displayName), as its SDK reads them
+        if (type == "control_response") {
+            var response = At(m, "response");
+            if (Text(response, "request_id").StartsWith("init-", StringComparison.Ordinal) && At(At(response, "response"), "models") != null)
+                Offer(Many(At(response, "response"), "models").Where(one => Text(one, "value") != "default")
+                    .Select(one => new Models.Choice { Id = Text(one, "value"), Label = Text(one, "displayName") }));
+            else if (listing && Text(response, "request_id").StartsWith("init-", StringComparison.Ordinal)) Offer(null);
+            return;
+        }
         if (type == "control_cancel_request") { Withdrawn(Text(m, "request_id")); return; }
         // with each turn, how much of the account's limits is used (Claude Code 2.1.322)
         if (type == "rate_limit_event") { if (quotas != null) quotas.Note("claude", Quotas.FromClaudeEvent(At(m, "rate_limit_info"))); return; }
@@ -632,12 +680,19 @@ public sealed class CodexChat : JsonRpcChat {
         var given = new Dictionary<string, object> { { "cwd", Folder } };
         if (mode == "read") given["sandbox"] = "read-only"; else if (mode == "edit") given["sandbox"] = "workspace-write";
         if (session.Length > 0) given["threadId"] = session;
+        if (model.Length > 0) given["model"] = model;       // (thread/start and thread/resume both take it)
         Call("initialize", new Dictionary<string, object> { { "clientInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "title", "Remote AI" }, { "version", "1" } } } }, initAnswer => {
-            if (At(initAnswer, "error") != null) { Note("Codex 初始化失败：" + Text(At(initAnswer, "error"), "message")); State("ended"); return; }
+            if (At(initAnswer, "error") != null) { Unopened("Codex 初始化失败：" + Text(At(initAnswer, "error"), "message"), early.Count > 0); return; }
             Notify("initialized", new Dictionary<string, object>());
+            if (listing) {
+                // the models it lists, without a conversation (hidden ones are left out, as its own pickers do)
+                Call("model/list", new Dictionary<string, object>(), answer => Offer(Many(At(answer, "result"), "data").Where(one => !(At(one, "hidden") is bool && (bool)At(one, "hidden")))
+                    .Select(one => new Models.Choice { Id = Text(one, "id").Length > 0 ? Text(one, "id") : Text(one, "model"), Label = Text(one, "displayName") })));
+                return;
+            }
             Call(session.Length > 0 ? "thread/resume" : "thread/start", given, answer => {
                 string thread = Text(At(At(answer, "result"), "thread"), "id");
-                if (thread.Length == 0) { Note("Codex 没有打开这段对话：" + Text(At(answer, "error"), "message")); State("ended"); return; }
+                if (thread.Length == 0) { Unopened("Codex 没有打开这段对话：" + Text(At(answer, "error"), "message"), early.Count > 0); early.Clear(); return; }
                 Known(thread);
                 State(Status == "busy" ? "busy" : "idle");
                 foreach (var one in early.ToArray()) Start(one.Key, one.Value);

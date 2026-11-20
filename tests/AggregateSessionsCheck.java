@@ -245,6 +245,55 @@ public final class AggregateSessionsCheck {
         AggregateSessions.Entry agyFallback = new AggregateSessions.Entry(true, TERMINAL, "thesis", "Antigravity CLI · thesis", "shell", "running", "idle", "", false, "", "", "");
         require("agy".equals(agyFallback.displayTool()) && "Antigravity CLI".equals(agyFallback.toolName()), "Legacy-relay agy fallback terminal displays as agy");
         require(AggregateSessions.board(Collections.singletonList(new AggregateSessions.Thing("pc", "Computer", agyFallback, "idle")), "", "agy", "").opened.size() == 1, "Legacy-relay agy fallback matches agy filter");
-        System.out.println("Aggregate checks passed: computer isolation, active/history separation, recent ordering, locks, deduplication, stable refresh and exact terminal route.");
+
+        // Collaboration task parent cards: one entry per task (active & historical), member terminals/sessions collapsed,
+        // Unix-second updated timestamps converted, verify phase labelled "领队验收", legacy/standalone items unaffected.
+        String teamRunId = "11111111111111111111111111111111", teamDoneId = "22222222222222222222222222222222", teamConfirmId = "33333333333333333333333333333333";
+        long nowSec = now / 1000L;
+        java.util.Map<String, String> teamModels = new java.util.LinkedHashMap<>();
+        teamModels.put("codex", "gpt-5.4");
+        teamModels.put("claude", "claude-sonnet-4-6");
+        AggregateSessions.Entry teamVerify = AggregateSessions.Entry.teamCard(
+            teamRunId, "web-shop", "重构结算页并验收", "lead", "running", "verify", "正在核对改动",
+            nowSec - 120, false, Arrays.asList("codex", "claude", "agy"), teamModels, Collections.singletonList("leader"));
+        AggregateSessions.Entry teamDone = AggregateSessions.Entry.teamCard(
+            teamDoneId, "web-shop", "补充优惠券测试", "review", "done", "", "已通过",
+            nowSec - 3600, false, Arrays.asList("claude", "agy"), Collections.<String, String>emptyMap(), Collections.<String>emptyList());
+        AggregateSessions.Entry teamAsk = AggregateSessions.Entry.teamCard(
+            teamConfirmId, "web-shop", "等待成员确认的任务", "review", "running", "", "",
+            nowSec - 60, false, Arrays.asList("claude", "codex"), Collections.<String, String>emptyMap(), Collections.singletonList("writer"));
+        AggregateSessions.Entry childTerm = new AggregateSessions.Entry(true, "f" + TERMINAL.substring(1), "web-shop", "成员终端", "claude", "running", "busy", "busy", false, "", "", "child-sess");
+        childTerm.teamId = teamRunId;
+        AggregateSessions.Entry childAskTerm = new AggregateSessions.Entry(true, "e" + TERMINAL.substring(1), "web-shop", "等待确认成员", "claude", "running", "confirm", "confirm", false, "", "", "");
+        childAskTerm.teamId = teamConfirmId;
+        AggregateSessions.Entry childHist = saved("web-shop", "child-hist", "", false, "");
+        childHist.teamId = teamDoneId;
+        AggregateSessions.Entry orphanChild = saved("web-shop", "orphan-sess", "", false, "");
+        orphanChild.teamId = "99999999999999999999999999999999";
+        AggregateSessions.Entry solo = new AggregateSessions.Entry(
+            false, "solo-sess", "web-shop", "独立对话", "codex", "", "", "idle", true, "cli", "", "");
+        solo.used = now - 30_000L;
+        List<AggregateSessions.Project> teamProjects = AggregateSessions.projects(Collections.singletonList("web-shop"),
+            Arrays.asList(teamVerify, teamDone, teamAsk, childTerm, childAskTerm, childHist, orphanChild, solo));
+        AggregateSessions.Project shop = teamProjects.get(0);
+        require(shop.active.size() == 3, "Two active team cards + one standalone session, child member terminals collapsed: " + shop.active.size());
+        require(shop.history.size() == 2, "One done team card + one orphan fallback session, done child collapsed: " + shop.history.size());
+        require("team-verify".equals(teamVerify.kind(null)) && "领队验收".equals(teamVerify.label()), "Verify phase displays 领队验收: " + teamVerify.label());
+        require("confirm".equals(teamAsk.kind(null)) && teamAsk.teamConfirm, "Live child confirmation propagates to parent team card");
+        require(teamVerify.used == (nowSec - 120) * 1000L && "2 分钟前".equals(AggregateSessions.ago(teamVerify.used, now)), "Unix seconds converted to ms: " + teamVerify.used);
+        require(Arrays.equals(AggregateSessions.counts(teamProjects, null), new int[]{1, 1, 1, 3}), "Team confirm, standalone open, team verify active");
+        List<AggregateSessions.Thing> teamThings = new java.util.ArrayList<>();
+        for (AggregateSessions.Entry e : shop.active) teamThings.add(new AggregateSessions.Thing(pc, "笔记本", e, e.kind(null)));
+        for (AggregateSessions.Entry e : shop.history) teamThings.add(new AggregateSessions.Thing(pc, "笔记本", e, e.team ? e.kind(null) : "history"));
+        AggregateSessions.Board teamBoard = AggregateSessions.board(teamThings, "", "", "");
+        require(teamBoard.needs.size() == 1 && teamConfirmId.equals(teamBoard.needs.get(0).entry.id), "Confirm team card goes to needs");
+        require(teamBoard.active.size() == 1 && teamRunId.equals(teamBoard.active.get(0).entry.id), "Verify team card goes to active");
+        require(teamBoard.recent.size() == 2 && teamDoneId.equals(teamBoard.recent.get(0).entry.id), "Done team card goes to recent");
+        require(AggregateSessions.board(teamThings, "", "agy", "").active.size() == 1, "Tool filter matches secondary team member tool");
+        require(AggregateSessions.board(teamThings, "领队验收 gpt-5.4", "", "").found.size() == 1, "Search matches verify phase and selected model");
+        String sigBefore = AggregateSessions.signature(teamProjects, null);
+        teamVerify.teamPhase = "";
+        require(!sigBefore.equals(AggregateSessions.signature(teamProjects, null)), "Team phase changes update render signature");
+        System.out.println("Aggregate checks passed: computer isolation, active/history separation, recent ordering, locks, deduplication, stable refresh, collaboration parent cards and exact terminal route.");
     }
 }

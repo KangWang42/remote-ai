@@ -132,8 +132,13 @@ public sealed class TerminalAgent {
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
         Chains = new Chains(Path.Combine(dataDir, "chains.json"));
         Worktrees = new Worktrees(Path.Combine(dataDir, "worktrees"));
+        Models = new Models(FindTool, (tool, launcher, ms) => {
+            string scratch = Path.Combine(dataDir, "models");
+            Directory.CreateDirectory(scratch);
+            return Chat.ListModels(tool, launcher, scratch, ms);
+        });
         Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands {
-            Begin = BeginMember, BeginIn = BeginMemberIn, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
+            Begin = BeginMember, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
             MakeWorktree = MakeTeamWorktree, WorktreeDiff = Worktrees.Diff, WorktreeStat = Worktrees.Stat, ApplyWorktree = ApplyTeamWorktree, CleanWorktrees = CleanTeamWorktrees });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
@@ -180,7 +185,7 @@ public sealed class TerminalAgent {
     public void KeepForRestart() {
         lock (work) lock (gate) {
             foreach (var t in terminals.Values) Seal(t);
-            var open = terminals.Values.Where(t => !t.Pty.Closed).Select(t => new Dictionary<string, object> { { "id", t.Id }, { "tool", t.Tool }, { "dir", t.Dir }, { "folder", t.Folder }, { "session", t.Chat != null ? t.Chat.Session : t.Session }, { "seq", t.Seq }, { "cols", t.Pty.Cols }, { "rows", t.Pty.Rows }, { "form", t.Chat != null ? "chat" : "" } }).ToArray();
+            var open = terminals.Values.Where(t => !t.Pty.Closed).Select(t => new Dictionary<string, object> { { "id", t.Id }, { "tool", t.Tool }, { "dir", t.Dir }, { "folder", t.Folder }, { "session", t.Chat != null ? t.Chat.Session : t.Session }, { "seq", t.Seq }, { "cols", t.Pty.Cols }, { "rows", t.Pty.Rows }, { "form", t.Chat != null ? "chat" : "" }, { "model", t.Model } }).ToArray();
             try { File.WriteAllText(RestartFile, json.Serialize(new Dictionary<string, object> { { "instance", instance }, { "at", DateTime.UtcNow.ToString("o") }, { "terminals", open } }), new UTF8Encoding(false)); } catch { }
         }
     }
@@ -199,7 +204,9 @@ public sealed class TerminalAgent {
             // a conversation goes on where it was; one whose tool had not named it yet cannot be found again
             if (session.Length == 0 || !kind.Chats) return;
             live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
-            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, where));
+            string model = Get(kept, "model");
+            live.Model = Models.Valid(model) ? model : "";
+            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, where), live.Model);
             Heard(live);
             terminals[id] = live;
             return;
@@ -250,6 +257,8 @@ public sealed class TerminalAgent {
     DateTime nextLogin = DateTime.MinValue;
     public sealed class LiveTerminal {
         public string Id, Tool, Dir, Session = "", Status = "", Title = ""; public IRunning Pty; public long Seq;
+        /// The model a conversation was begun with (a team's member, Models.cs); "" for its tool's default.
+        public string Model = "";
         /// A conversation run through its tool's structured mode (Chats.cs) rather than a screen; null for a screen.
         public Chat Chat { get { return Pty as Chat; } }
         // A terminal runs in a project (Dir). One that took on a conversation that was open in a folder that is no
@@ -308,7 +317,9 @@ public sealed class TerminalAgent {
             opened = s.Live ? Desktop.CameOf(s.Tool, s.Id, s.ControlFolder, s.Created, Ways.InApplication(s.Origin)) : "",
             // what the phone said to it and it has not taken yet, each with its number: waiting, or held since it was told to stop
             queued = Reach.Outbox.Of(s.Tool, s.Id).Select(item => new { id = item.Id, text = item.Text.Length > 200 ? item.Text.Substring(0, 199) + "…" : item.Text, state = item.State, at = Milliseconds(item.At) }).ToArray(),
-            ask = asks ? new { id = known.AskId, text = known.AskText, options = known.AskOptions } : null, last = known != null ? known.Last : "" };
+            ask = asks ? new { id = known.AskId, text = known.AskText, options = known.AskOptions } : null, last = known != null ? known.Last : "",
+            // the collaboration task it is or was a member of, while the task is kept ("" for none)
+            team = Teams.TeamOf(s.Tool, s.Id) };
     }
     Ways WaysOf(SessionInfo s, Reach.Open known) { return Ways.Of(s, known, NativeState(s)); }
     readonly Dictionary<string, string[]> completions = new Dictionary<string, string[]>();
@@ -369,30 +380,31 @@ public sealed class TerminalAgent {
     public readonly Chains Chains;
     /// Work several AIs do together (Teams.cs): their members are conversations of the phone's that this program begins.
     public readonly Teams Teams;
+    /// The models a team's members can be begun with, as the tools list them (Models.cs).
+    public readonly Models Models;
     /// Isolated Git worktrees for parallel comparison tasks (Worktrees.cs).
     public readonly Worktrees Worktrees;
     /// Local MCP service that lets an active conversation ask another AI in the same project for read-only advice (Peers.cs).
     public readonly Peers Peers;
     // ---- the members of a team: conversations the phone runs, begun and told by this program
-    string BeginMember(string tool, string dir, string words, bool read) { return BeginMemberIn(tool, dir, words, read, null); }
-    string BeginMemberIn(string tool, string dir, string words, bool read, string folderOverride) {
+    string BeginMember(Teams.Opening one) {
         var prefs = Preferences(); var dirs = AllDirs(prefs);
-        if (!dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
-        Tool kind = Tool.Named(tool);
+        if (!dirs.ContainsKey(one.Project)) throw new ArgumentException("目录未获允许");
+        Tool kind = Tool.Named(one.Tool);
         if (!kind.Chats) throw new ArgumentException(kind.Label + " 不能作为协作成员");
-        string launcher = FindTool(tool);
+        string launcher = FindTool(one.Tool);
         if (launcher == null) throw new ArgumentException("电脑上没有 " + kind.Label);
         lock (work) {
             if (terminals.Values.Count(t => !t.Pty.Closed) >= 8) throw new InvalidOperationException("最多同时运行 8 个终端");
             // read only where it is asked for, and never wider than its owner allows
-            string widest = Get(prefs, "RemoteMaxMode"), mode = read ? "read" : widest;
-            string first = words.Split('\n')[0].Trim();
-            var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = tool, Dir = dir, Title = first.Length > 60 ? first.Substring(0, 59) + "…" : first };
-            string place = !String.IsNullOrEmpty(folderOverride) ? folderOverride : Place(live, dirs);
-            live.Pty = Chat.Open(tool, launcher, place, "", false, mode, Emitted(live), Quotas, read ? null : Peers.Offer(tool, place));
+            string widest = Get(prefs, "RemoteMaxMode"), mode = one.Read ? "read" : widest;
+            string first = one.Words.Split('\n')[0].Trim();
+            var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = one.Tool, Dir = one.Project, Model = one.Model, Title = first.Length > 60 ? first.Substring(0, 59) + "…" : first };
+            string place = one.Folder.Length > 0 ? one.Folder : Place(live, dirs);
+            live.Pty = Chat.Open(one.Tool, launcher, place, "", false, mode, Emitted(live), Quotas, one.Read ? null : Peers.Offer(one.Tool, place), one.Model);
             Heard(live);
             terminals[live.Id] = live;
-            live.Chat.Say(words, null);
+            live.Chat.Say(one.Words, null);
             return live.Id;
         }
     }
@@ -432,7 +444,7 @@ public sealed class TerminalAgent {
     string[] AvailableChatTools() { return new[] { "claude", "codex", "agy" }.Where(t => Tool.Named(t).Chats && FindTool(t) != null).ToArray(); }
     readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
     static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_brief", "work_chains", "work_chain_set", "work_chain_remove",
-        "work_teams", "work_team_start", "work_team_stop", "work_team_resume", "work_team_remove", "work_team_say", "work_team_pick", "work_team_swap" };
+        "work_teams", "work_team_start", "work_team_stop", "work_team_resume", "work_team_remove", "work_team_say", "work_team_pick", "work_team_swap", "work_team_models" };
     /// One rule runs: the last answer of the conversation that stopped goes to the other one, with its owner's words.
     void Pass(Chains.Item rule, Dictionary<string, object> prefs) {
         bool ok = false; string note;
@@ -579,7 +591,7 @@ public sealed class TerminalAgent {
         if (action == "work_team_resume") { Teams.Resume(Get(op, "team")); return new Dictionary<string, object>(); }
         if (action == "work_team_say") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Say(Get(op, "team"), Get(op, "text"), Get(op, "target"))) } }; }
         if (action == "work_team_pick") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Pick(Get(op, "team"), Get(op, "tool"))) } }; }
-        if (action == "work_team_swap") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Swap(Get(op, "team"), Get(op, "role"), Get(op, "tool"), Get(op, "note"))) } }; }
+        if (action == "work_team_swap") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Swap(Get(op, "team"), Get(op, "role"), Get(op, "tool"), Get(op, "note"), op.ContainsKey("model") ? Get(op, "model") : null)) } }; }
         if (action == "work_team_remove") { if (!Teams.Remove(Get(op, "team"))) throw new ArgumentException("没有找到这个协作任务"); return new Dictionary<string, object>(); }
         if (action == "work_brief") {
             // what a hand-over would say, for the phone to show, or to begin a new conversation with
@@ -757,8 +769,14 @@ public sealed class TerminalAgent {
                 && codexSessions.Get(s.Id).Pid > 0 && SessionOrigin.Descends(codexSessions.Get(s.Id).Pid, new[] { t.Pty.Id }, parents)).ToArray();
             if (mine.Length == 1) t.Session = mine[0].Id;
         }
-        // the ones a program has open and the ones their owner pinned are listed whatever their age
-        sessions = Single(found).OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated).Take(200).ToList();
+        // Keep the exact member conversations available from task details, even when their opening messages match.
+        var memberSessions = new HashSet<string>(Teams.All().SelectMany(team => team.Sessions.Values)
+            .Select(member => member.Tool + ":" + member.Id), StringComparer.OrdinalIgnoreCase);
+        var members = found.Where(s => memberSessions.Contains(s.Tool + ":" + s.Id))
+            .GroupBy(s => s.Tool + ":" + s.Id, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderByDescending(s => s.Updated).First());
+        var others = Single(found.Where(s => !memberSessions.Contains(s.Tool + ":" + s.Id)))
+            .OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated);
+        sessions = members.Concat(others).Take(200).ToList();
         foreach (var s in sessions) { string root; s.ControlFolder = dirs.TryGetValue(s.Dir, out root) ? root : s.Folder; }       // the folder it is in: its project's, or the one it was found open in
         NativeDesktop.Refresh(sessions.Where(s => s.Live && s.Tool == "codex" && s.Origin == Ways.CodexDesktop).Select(s => s.Id));
         folders.End();
@@ -1438,6 +1456,11 @@ public sealed class TerminalAgent {
                 RunAsync(id, () => Stats.Read(days, folder => NamedFolder(folder, dirs)), _ => "统计没有读出来，请稍后再试");
                 return;
             }
+            else if (action == "work_team_models") {
+                // each tool is started for a moment to say what it offers, beside the terminals' work
+                RunAsync(id, () => Models.Listed(), _ => "没有读出可选的模型，请稍后再试");
+                return;
+            }
             else if (ownWork) result = Work(action, op, prefs);
             else if (computer) { if (Computer == null) throw new InvalidOperationException("这台电脑运行的后台程序没有可在手机上更改的设置"); result = Computer(op); }
             else if (desktop) {
@@ -1697,6 +1720,7 @@ public sealed class TerminalAgent {
                 tools = Tool.All.Select(t => t.Name).Where(t => FindTool(t) != null).ToArray();
                 externalAgy = enabled ? Antigravity.ExternalStarts(FindTool("agy"), terminals.Values.Where(t => !t.Pty.Closed).Select(t => t.Pty.Id).ToArray(), agySessions.LivePids()) : new long[0];
                 toolsAt = DateTime.UtcNow;
+                if (enabled && tools.Contains("claude")) Quotas.AskClaude(FindTool("claude"));
                 if (enabled && tools.Contains("codex")) Quotas.AskCodex(FindTool("codex"));      // (at most once in ten minutes)
                 if (enabled && tools.Contains("agy")) Quotas.AskAgy(FindTool("agy"));            // (at most once in ten minutes)
             }
@@ -1704,6 +1728,8 @@ public sealed class TerminalAgent {
             ended.RemoveAll(e => e.Session.Length > 0 && terminals.Values.Any(t => !t.Pty.Closed && t.Tool == e.Tool && t.Session == e.Session));
             // a conversation says itself how it stands and which it is
             foreach (var t in terminals.Values.Where(t => t.Chat != null)) { t.Status = t.Chat.Status == "ended" ? "" : t.Chat.Status; if (t.Chat.Session.Length > 0) t.Session = t.Chat.Session; }
+            // a team's member says which conversation it is, kept with the task for its history (Teams.Learn)
+            foreach (var t in terminals.Values.Concat(ended).Where(t => t.Session.Length > 0)) Teams.Learn(t.Id, t.Tool, t.Session);
             lock (gate) { foreach (var t in terminals.Values) Seal(t); output = OutputBatch(terminals.Values.Concat(ended).SelectMany(t => t.Output.Take(30))); }
             if (output.Count > 0) lastActivity = DateTime.UtcNow;
             // Pieces of files are large: a report carries as many as fit, the rest go with the next.
@@ -1715,14 +1741,17 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
-                    candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0] } },
+                    candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0],
+                    // the collaboration tasks in short, for the lists; `confirm` where a member it waits for asks for a confirmation
+                    team_cards = enabled ? Teams.Cards(term => { LiveTerminal one; return terminals.TryGetValue(term, out one) && one.Status == "confirm"; }) : new Dictionary<string, object>[0] } },
                 // Every terminal says what it is, so that a relay that did not start it can list it: the computer may turn to another relay.
                 { "terminals", terminals.Values.Concat(ended).Select(t => new { id = t.Id, state = t.Pty.Closed ? "closed" : "running", cols = t.Pty.Cols, rows = t.Pty.Rows, session = t.Session, status = t.Status, exit_code = t.Pty.ExitCode, error = t.Pty.ExitCode.HasValue && t.Pty.ExitCode.Value != 0 ? "程序退出（代码 " + t.Pty.ExitCode.Value + "），请检查终端画面中的原因" : "",
                     tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title, completion = CompletionOf(t.Tool, t.Session, t.Status),
-                    form = t.Chat != null ? "chat" : "", said = t.Chat != null ? t.Chat.Said : "", ask = t.Chat != null ? t.Chat.Asking : "" }).ToArray() },
+                    form = t.Chat != null ? "chat" : "", said = t.Chat != null ? t.Chat.Said : "", ask = t.Chat != null ? t.Chat.Asking : "",
+                    team = t.Chat != null ? Teams.TeamOf(t.Id, t.Tool, t.Session) : "" }).ToArray() },
                 { "output", output }, { "acks", acknowledgments }
             };
             // Rebuilding and serializing all sessions is expensive during rapid terminal streaming: only recompute when

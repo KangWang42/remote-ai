@@ -478,9 +478,33 @@ final class Workbench {
                 if (!terminal) { made.origin = entry.optString("origin"); made.kind = entry.optString("kind"); made.pinned = entry.optBoolean("pinned"); made.hidden = entry.optBoolean("hidden"); }
                 for (int way = 0; reach != null && way < reach.length(); way++) made.canSay |= "say".equals(reach.optString(way));
                 made.shell = device.optString("shell");
+                made.teamId = entry.optString("team");
                 made.used = terminal ? (made.at > 0 ? made.at : entry.optLong("created")) : entry.optLong("updated");
                 entries.add(made);
             }
+        }
+        JSONArray teamCards = device.optJSONArray("team_cards");
+        for (int i = 0; teamCards != null && i < teamCards.length(); i++) {
+            JSONObject card = teamCards.optJSONObject(i);
+            if (card == null || card.optString("id").isEmpty()) continue;
+            Object rawConfirm = card.opt("confirm");
+            boolean confirm = rawConfirm instanceof Boolean ? (Boolean) rawConfirm
+                : rawConfirm instanceof String ? !((String) rawConfirm).isEmpty()
+                : rawConfirm instanceof JSONObject;
+            Map<String, String> models = new java.util.LinkedHashMap<>();
+            JSONObject rawModels = card.optJSONObject("models");
+            if (rawModels != null) {
+                for (java.util.Iterator<String> keys = rawModels.keys(); keys.hasNext(); ) {
+                    String k = keys.next();
+                    String v = rawModels.optString(k);
+                    if (!k.isEmpty() && !v.isEmpty()) models.put(k, v);
+                }
+            }
+            entries.add(AggregateSessions.Entry.teamCard(
+                card.optString("id"), card.optString("dir"), card.optString("goal"),
+                card.optString("mode"), card.optString("state"), card.optString("phase"),
+                card.optString("note"), card.optLong("updated"), confirm,
+                strings(card.optJSONArray("tools")), models, strings(card.optJSONArray("awaited"))));
         }
         prune(url, alive);
         Set<String> pinned = new HashSet<>();
@@ -549,7 +573,7 @@ final class Workbench {
             for (AggregateSessions.Project project : snapshot.projects) {
                 for (AggregateSessions.Entry entry : project.active) things.add(new AggregateSessions.Thing(url, name, entry, entry.kind(looked)));
                 for (AggregateSessions.Entry entry : project.ended) things.add(new AggregateSessions.Thing(url, name, entry, "ended"));
-                for (AggregateSessions.Entry entry : project.history) if (!entry.live) things.add(new AggregateSessions.Thing(url, name, entry, "history"));
+                for (AggregateSessions.Entry entry : project.history) if (!entry.live) things.add(new AggregateSessions.Thing(url, name, entry, entry.team ? entry.kind(looked) : "history"));
             }
         }
         if (known > 0 && summary != null) {
@@ -609,7 +633,8 @@ final class Workbench {
             for (AggregateSessions.Thing task : part) {
                 all.add(task);
                 mark.append(task.url).append('\n').append(task.entry.id).append('\n').append(task.kind).append('\n').append(task.entry.shownTitle()).append('\n').append(task.computer).append('\n')
-                    .append(AggregateSessions.where(task.entry)).append('\n').append(task.entry.pinned).append(task.entry.hidden).append(canEnd(task.url, task.entry)).append(ending.contains(task.url + '\n' + task.entry.id)).append('\n');
+                    .append(AggregateSessions.where(task.entry)).append('\n').append(task.entry.pinned).append(task.entry.hidden).append(canEnd(task.url, task.entry)).append(ending.contains(task.url + '\n' + task.entry.id))
+                    .append(task.entry.team ? "\nT:" + task.entry.teamPhase + ":" + task.entry.teamNote + ":" + task.entry.teamConfirm : "").append('\n');
                 if (!task.running()) mark.append(AggregateSessions.ago(AggregateSessions.recent(task.entry), now)).append('\n');
             }
         }
@@ -784,7 +809,7 @@ final class Workbench {
     /** Hero elevated card for running & needs-confirmation sessions, faithful to the design. */
     private View heroTaskCard(AggregateSessions.Thing task, boolean several) {
         final AggregateSessions.Entry entry = task.entry;
-        boolean confirm = "confirm".equals(task.kind);
+        boolean confirm = AggregateSessions.needs(task.kind);
         boolean closing = ending.contains(task.url + '\n' + entry.id);
 
         LinearLayout card = kit.cardBox(22);
@@ -793,7 +818,7 @@ final class Workbench {
         // Header: 42dp tool monogram badge + title + project/location row
         LinearLayout header = kit.row();
         header.setGravity(Gravity.TOP);
-        header.addView(kit.toolBadge(entry.displayTool(), 42));
+        header.addView(entry.team ? kit.tintedTile(R.drawable.ic_tab_together, kit.toolBadgeBg("agy"), kit.toolBadgeFg("agy"), 42, 13f) : kit.toolBadge(entry.displayTool(), 42));
         LinearLayout info = kit.column();
         info.setPadding(kit.dp(12), 0, 0, 0);
         info.addView(kit.title(entry.shownTitle(), 16, kit.INK, true));
@@ -804,7 +829,9 @@ final class Workbench {
             ((LinearLayout.LayoutParams) tag.getLayoutParams()).topMargin = 0;
             placeRow.addView(tag);
         }
-        String loc = entry.toolName() + (AggregateSessions.location(entry).isEmpty() ? "" : " · " + AggregateSessions.location(entry)) + (several ? " · " + task.computer : "");
+        String loc = entry.team
+            ? AggregateSessions.teamWho(entry) + (several ? " · " + task.computer : "")
+            : entry.toolName() + (AggregateSessions.location(entry).isEmpty() ? "" : " · " + AggregateSessions.location(entry)) + (several ? " · " + task.computer : "");
         placeRow.addView(kit.line(loc, 12.5f, kit.MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
         info.addView(placeRow, kit.below(6));
         header.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
@@ -826,7 +853,15 @@ final class Workbench {
         if (!when.isEmpty()) stripTop.addView(kit.mono(when, 12, stripFg));
         strip.addView(stripTop);
 
-        if (entry.terminal || entry.reached) {
+        if (entry.team) {
+            String teamPeek = !entry.said.isEmpty() ? entry.said : ("team-verify".equals(task.kind) ? "领队正在验收成员改动与结果" : "");
+            if (!teamPeek.isEmpty()) {
+                TextView peek = kit.text(teamPeek, 12, confirm ? kit.BAD : Kit.light(kit.BG) ? 0xff6e4a12 : kit.BUSY);
+                peek.setSingleLine(true);
+                peek.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                strip.addView(peek, kit.below(6));
+            }
+        } else if (entry.terminal || entry.reached) {
             TextView peek = kit.mono(entry.said, 12, confirm ? kit.BAD : Kit.light(kit.BG) ? 0xff6e4a12 : kit.BUSY);
             peek.setSingleLine(true);
             peek.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -836,16 +871,19 @@ final class Workbench {
         }
         card.addView(strip, kit.below(14));
 
-        // Bottom action bar: primary "打开会话 ›" button + quick reply + stop
+        // Bottom action bar: primary "打开会话 ›" / "查看协作 ›" button + quick reply + stop
         LinearLayout actions = kit.row();
-        TextView openBtn = kit.semibold(confirm ? "去确认 ›" : "打开会话 ›", 14, kit.onSolidInk());
+        String primaryLabel = entry.team
+            ? ("confirm".equals(task.kind) ? "去确认 ›" : "team-choose".equals(task.kind) ? "去选方案 ›" : "查看协作 ›")
+            : (confirm ? "去确认 ›" : "打开会话 ›");
+        TextView openBtn = kit.semibold(primaryLabel, 14, kit.onSolidInk());
         openBtn.setGravity(Gravity.CENTER);
         openBtn.setMinHeight(kit.dp(48));
         openBtn.setBackground(kit.shape(confirm ? kit.BAD : kit.solidInk(), 0, 14));
         kit.press(openBtn, () -> openTask(task));
         actions.addView(openBtn, new LinearLayout.LayoutParams(0, kit.dp(48), 1));
 
-        boolean canQuickSay = !confirm && ((entry.terminal && "running".equals(entry.state)) || (entry.reached && entry.canSay));
+        boolean canQuickSay = !entry.team && !confirm && ((entry.terminal && "running".equals(entry.state)) || (entry.reached && entry.canSay));
         if (canQuickSay) {
             FrameLayout sayBtn = new FrameLayout(activity);
             sayBtn.setBackground(kit.shape(kit.RAISED, 0, 14));
@@ -881,19 +919,21 @@ final class Workbench {
         LinearLayout row = kit.row();
         row.setMinimumHeight(kit.dp(64));
         row.setPadding(kit.dp(14), kit.dp(12), kit.dp(14), kit.dp(12));
-        row.addView(kit.toolBadge(entry.displayTool(), 40));
+        row.addView(entry.team ? kit.tintedTile(R.drawable.ic_tab_together, kit.toolBadgeBg("agy"), kit.toolBadgeFg("agy"), 40, 13f) : kit.toolBadge(entry.displayTool(), 40));
 
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(12), 0, kit.dp(8), 0);
         texts.addView(kit.title(entry.shownTitle(), 15, kit.INK, false));
         List<String> metaParts = new ArrayList<>();
         if (!entry.place().isEmpty()) metaParts.add(entry.place() + (entry.apart() ? " · 未加入项目" : ""));
-        metaParts.add(entry.toolName());
+        metaParts.add(entry.team ? AggregateSessions.teamWho(entry) : entry.toolName());
         if (several) metaParts.add(task.computer);
         if (entry.pinned) metaParts.add("置顶");
         texts.addView(kit.line(android.text.TextUtils.join(" · ", metaParts), 12.5f, kit.MUTED, false), kit.below(3));
 
-        if (entry.terminal || entry.reached) {
+        if (entry.team) {
+            if (!entry.said.isEmpty()) texts.addView(kit.line(entry.said, 12, kit.MUTED, false), kit.below(3));
+        } else if (entry.terminal || entry.reached) {
             TextView peek = kit.line(entry.said, 12, kit.MUTED, false);
             peek.setVisibility(entry.said.isEmpty() ? View.GONE : View.VISIBLE);
             texts.addView(peek, kit.below(3));
@@ -902,17 +942,22 @@ final class Workbench {
         row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
 
         boolean closing = ending.contains(task.url + '\n' + entry.id);
-        if ("history".equals(task.kind) || "ended".equals(task.kind)) {
+        if (AggregateSessions.isPast(task.kind)) {
             String when = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
-            row.addView(kit.text(when.isEmpty() ? AggregateSessions.label(task.kind) : when + (entry.terminal ? "结束" : ""), 12, kit.MUTED));
+            String pastText = entry.team
+                ? (when.isEmpty() ? AggregateSessions.label(task.kind) : AggregateSessions.label(task.kind) + " · " + when)
+                : (when.isEmpty() ? AggregateSessions.label(task.kind) : when + (entry.terminal ? "结束" : ""));
+            row.addView(kit.text(pastText, 12, "team-failed".equals(task.kind) ? kit.BAD : kit.MUTED));
         } else if (closing) {
             row.addView(kit.statusPill("正在结束", kit.MUTED, kit.RAISED, 0));
-        } else if ("confirm".equals(task.kind)) {
-            row.addView(kit.statusPill("等你确认", kit.BAD, kit.badSoft(), kit.BAD));
+        } else if (AggregateSessions.needs(task.kind)) {
+            row.addView(kit.statusPill(AggregateSessions.label(task.kind), kit.BAD, kit.badSoft(), kit.BAD));
         } else if ("done".equals(task.kind) || "waiting".equals(task.kind)) {
             row.addView(kit.statusPill("done".equals(task.kind) ? "已完成" : "等你回复", kit.accentInk(), kit.accentSoft(), kit.ACCENT));
-        } else if ("busy".equals(task.kind) || "starting".equals(task.kind) || "pc-busy".equals(task.kind)) {
+        } else if (AggregateSessions.working(task.kind)) {
             row.addView(kit.statusPill(AggregateSessions.label(task.kind), kit.busyInk(), kit.busySoft(), kit.busyDot()));
+        } else if ("team-paused".equals(task.kind)) {
+            row.addView(kit.statusPill("已暂停", kit.busyInk(), kit.busySoft(), 0));
         } else {
             row.addView(kit.statusPill(entry.hidden ? "已隐藏" : AggregateSessions.label(task.kind), kit.MUTED, kit.RAISED, 0));
         }
@@ -924,6 +969,7 @@ final class Workbench {
 
     private void openTask(AggregateSessions.Thing task) {
         AggregateSessions.Entry entry = task.entry;
+        if (entry.team) { activity.together(task.url, "team", entry.id); return; }
         if (!entry.terminal) { activity.openSession(task.url, entry.project, entry.id); return; }
         markSeen(task.url, entry.id, entry.at);
         activity.openTerminal(task.url, entry.id, entry.chat);
@@ -932,6 +978,7 @@ final class Workbench {
     // ---- what is done with a thing besides opening it: pinned, hidden, its folder made a project, ended
     private void manage(AggregateSessions.Thing task) {
         final AggregateSessions.Entry entry = task.entry;
+        if (entry.team) { openTask(task); return; }
         Snapshot snapshot = snapshots.get(task.url);
         boolean marks = snapshot != null && snapshot.marks && !entry.conversation().isEmpty();
         final List<String> labels = new ArrayList<>(), does = new ArrayList<>();
@@ -1290,7 +1337,7 @@ final class Workbench {
         List<AggregateSessions.Entry> confirms = new ArrayList<>(), running = new ArrayList<>(), waiting = new ArrayList<>();
         for (AggregateSessions.Entry entry : project.active) {
             String kind = entry.kind(looked);
-            if ("confirm".equals(kind)) { need++; confirms.add(entry); }
+            if (AggregateSessions.needs(kind)) { need++; confirms.add(entry); }
             else if (AggregateSessions.working(kind)) { work++; running.add(entry); }
             else { opened++; waiting.add(entry); }
         }
@@ -1345,7 +1392,7 @@ final class Workbench {
         inside.setPadding(kit.dp(6), kit.dp(2), kit.dp(6), kit.dp(6));
         inside.setBackground(kit.shape(kit.subSurface(), 0, 16));
         if (!confirms.isEmpty()) inside.addView(drawerHeading("等你确认"));
-        for (AggregateSessions.Entry entry : confirms) inside.addView(talkRow(url, entry, "confirm", true), kit.below(2));
+        for (AggregateSessions.Entry entry : confirms) inside.addView(talkRow(url, entry, entry.kind(looked), true), kit.below(2));
         if (!running.isEmpty()) inside.addView(drawerHeading("正在运行"));
         for (AggregateSessions.Entry entry : running) inside.addView(talkRow(url, entry, entry.kind(looked), true), kit.below(2));
         if (!waiting.isEmpty()) inside.addView(drawerHeading("已打开"));
@@ -1379,18 +1426,21 @@ final class Workbench {
             row.setBackground(kit.shape(kit.PANEL, 0, 12));
             kit.elevate(row, 1f);
         }
-        row.addView(kit.toolBadge(entry.displayTool(), 30));
+        row.addView(entry.team ? kit.tintedTile(R.drawable.ic_tab_together, kit.toolBadgeBg("agy"), kit.toolBadgeFg("agy"), 30, 9f) : kit.toolBadge(entry.displayTool(), 30));
         LinearLayout texts = kit.column();
         texts.setPadding(kit.dp(10), 0, kit.dp(8), 0);
-        texts.addView(kit.title(entry.shownTitle(), 14, "history".equals(kind) ? kit.MUTED : kit.INK, false));
+        texts.addView(kit.title(entry.shownTitle(), 14, AggregateSessions.isPast(kind) ? kit.MUTED : kit.INK, false));
         row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
         String used = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
-        if ("history".equals(kind) || "ended".equals(kind)) {
-            row.addView(kit.text(used.isEmpty() ? AggregateSessions.label(kind) : used + (entry.terminal ? "结束" : ""), 12, kit.MUTED));
+        if (AggregateSessions.isPast(kind)) {
+            String pastText = entry.team
+                ? (used.isEmpty() ? AggregateSessions.label(kind) : AggregateSessions.label(kind) + " · " + used)
+                : (used.isEmpty() ? AggregateSessions.label(kind) : used + (entry.terminal ? "结束" : ""));
+            row.addView(kit.text(pastText, 12, "team-failed".equals(kind) ? kit.BAD : kit.MUTED));
         } else {
             boolean closing = ending.contains(url + '\n' + entry.id);
             if (closing) row.addView(kit.statusPill("正在结束", kit.MUTED, kit.RAISED, 0));
-            else if ("confirm".equals(kind)) row.addView(kit.statusPill("等你确认", kit.BAD, kit.badSoft(), kit.BAD));
+            else if (AggregateSessions.needs(kind)) row.addView(kit.statusPill(AggregateSessions.label(kind), kit.BAD, kit.badSoft(), kit.BAD));
             else if (AggregateSessions.working(kind)) row.addView(kit.statusPill(AggregateSessions.label(kind), kit.busyInk(), kit.busySoft(), kit.busyDot()));
             else row.addView(kit.statusPill(AggregateSessions.label(kind), kit.accentInk(), kit.accentSoft(), 0));
         }
@@ -1401,6 +1451,7 @@ final class Workbench {
             row.addView(stop);
         }
         kit.press(row, () -> {
+            if (entry.team) { activity.together(url, "team", entry.id); return; }
             if (!entry.terminal) { activity.openSession(url, entry.project, entry.id); return; }
             markSeen(url, entry.id, entry.at);
             activity.openTerminal(url, entry.id, entry.chat);

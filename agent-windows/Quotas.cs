@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -12,7 +13,9 @@ using System.Web.Script.Serialization;
 namespace RemoteCli {
 /// How much of each tool's usage limits the owner's account has used, as the tools themselves tell it; only the
 /// share used of each window and when it starts anew leave the computer, never anything of the account.
-/// - Claude Code tells it with every turn: in its stream-json (`rate_limit_event`, `unifiedWindows` with
+/// - Claude Code is asked with `claude -p /usage --output-format json`. It returns the subscription windows
+///   displayed by `/usage` without running a model turn. When this reading is unavailable Claude Code also
+///   tells it in its stream-json (`rate_limit_event`, `unifiedWindows` with
 ///   `utilization` 0..1 and `resetsAt`; seen on 2.1.322), so a conversation the phone runs gives it (ClaudeChat); and to
 ///   its status line (`rate_limits.five_hour` and `seven_day` with `used_percentage` and `resets_at`, per its docs), so
 ///   every conversation open in a terminal or an editor gives it through this program's status line (`StatusLine`).
@@ -32,10 +35,15 @@ public sealed class Quotas {
         public string Group = "";       // empty for the primary pool; short pool name for secondary pools (e.g. agy)
     }
     static readonly JavaScriptSerializer json = new JavaScriptSerializer();
+    static readonly Regex ClaudeUsageRow = new Regex(
+        @"^(?<window>Current session|Current week(?: \(all models\))?):\s*(?<used>\d+(?:\.\d+)?)%\s+used\s*·\s*resets\s+(?<reset>[^(\r\n]+)", RegexOptions.Multiline);
+    static readonly string[] ClaudeResetFormats = { "MMM d, h:mmtt yyyy", "MMM d, htt yyyy" };
+    static readonly DateTimeOffset Epoch = new DateTimeOffset(1970, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    const string ClaudeUsageKey = "claude-usage";
     readonly string folder;
     readonly object gate = new object();
-    DateTime nextCodex = DateTime.MinValue, nextAgy = DateTime.MinValue;
-    bool askingCodex, askingAgy;
+    DateTime nextClaude = DateTime.MinValue, nextCodex = DateTime.MinValue, nextAgy = DateTime.MinValue;
+    bool askingClaude, askingCodex, askingAgy;
 
     public Quotas(string dataFolder) { folder = Path.Combine(dataFolder, "quotas"); }
     string FileOf(string tool) { return Path.Combine(folder, tool + ".json"); }
@@ -78,6 +86,16 @@ public sealed class Quotas {
     }
     // what was last written of a tool, its windows whose time is not over; null where nothing can be read
     Dictionary<string, object>[] Kept(string tool, out object at, out object why) {
+        if (tool == "claude") {
+            var subscription = ReadKept(ClaudeUsageKey, out at, out why);
+            long captured;
+            if (subscription != null && subscription.Length > 0 &&
+                Int64.TryParse(Convert.ToString(at), out captured) &&
+                captured >= Milliseconds(DateTime.UtcNow.AddMinutes(-15))) return subscription;
+        }
+        return ReadKept(tool, out at, out why);
+    }
+    Dictionary<string, object>[] ReadKept(string tool, out object at, out object why) {
         at = why = null;
         try {
             if (!File.Exists(FileOf(tool))) return null;
@@ -92,6 +110,27 @@ public sealed class Quotas {
     }
 
     // ---- what the tools say, read
+    public static List<Window> FromClaudeUsage(object reply, DateTimeOffset now, TimeZoneInfo zone) {
+        var windows = new List<Window>();
+        if (Convert.ToString(At(reply, "local_command")) != "usage" || Object.Equals(At(reply, "is_error"), true)) return windows;
+        DateTime local = TimeZoneInfo.ConvertTime(now, zone).DateTime;
+        foreach (Match match in ClaudeUsageRow.Matches(Convert.ToString(At(reply, "result")) ?? "")) {
+            double used;
+            if (!Number(match.Groups["used"].Value, out used) || used < 0 || used > 100) continue;
+            bool session = match.Groups["window"].Value == "Current session";
+            string reset = match.Groups["reset"].Value.Trim();
+            DateTime date;
+            if (!DateTime.TryParseExact(reset + " " + local.Year, ClaudeResetFormats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out date)) continue;
+            // On December 31 a reset date in January belongs to the next year.
+            if (date < local.AddMonths(-6)) date = date.AddYears(1);
+            if (zone.IsInvalidTime(date)) continue;
+            var instant = new DateTimeOffset(date, zone.GetUtcOffset(date));
+            if (instant <= now || instant > now.AddDays(session ? 1 : 8)) continue;
+            windows.Add(new Window { Name = session ? "five_hour" : "seven_day", Used = used, Resets = (long)(instant - Epoch).TotalSeconds });
+        }
+        return windows;
+    }
+
     /// Claude Code's `rate_limit_info` of a `rate_limit_event` in its stream-json.
     public static List<Window> FromClaudeEvent(object info) {
         var windows = new List<Window>();
@@ -214,7 +253,50 @@ public sealed class Quotas {
         return sb.ToString().Trim('_');
     }
 
-    // ---- Codex and Antigravity CLI are asked, now and then, beside the report: at most once in ten minutes each
+    // ---- Account usage is refreshed beside the report without running a model.
+    public void AskClaude(string launcher) {
+        if (String.IsNullOrEmpty(launcher)) return;
+        lock (gate) {
+            if (askingClaude || DateTime.UtcNow < nextClaude) return;
+            askingClaude = true;
+            nextClaude = DateTime.UtcNow.AddMinutes(5);
+        }
+        Task.Run(() => {
+            try { AskClaudeNow(launcher); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            catch (InvalidOperationException) { }
+            finally { lock (gate) askingClaude = false; }
+        });
+    }
+    public void AskClaudeNow(string launcher) {
+        const string usage = "--print --output-format json --no-session-persistence --setting-sources user --strict-mcp-config /usage";
+        Directory.CreateDirectory(folder);
+        var info = new ProcessStartInfo {
+            FileName = launcher, Arguments = usage, WorkingDirectory = folder,
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false)
+        };
+        if (launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || launcher.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)) {
+            info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+            info.Arguments = "/d /s /c \"\"" + launcher + "\" " + usage + "\"";
+        }
+        foreach (string key in new[] { "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT" }) info.EnvironmentVariables.Remove(key);
+        using (var program = Process.Start(info)) {
+            try {
+                program.StandardInput.Close();
+                program.ErrorDataReceived += (sender, args) => { };
+                program.BeginErrorReadLine();
+                var output = program.StandardOutput.ReadToEndAsync();
+                if (!program.WaitForExit(20000) || program.ExitCode != 0 || !output.Wait(2000)) return;
+                var windows = FromClaudeUsage(ParseJsonPayload(output.Result), DateTimeOffset.UtcNow, TimeZoneInfo.Local);
+                if (windows.Count > 0) Note(ClaudeUsageKey, windows);
+            } finally {
+                if (!program.HasExited) try { program.Kill(); } catch (InvalidOperationException) { }
+            }
+        }
+    }
     public void AskCodex(string launcher) {
         if (String.IsNullOrEmpty(launcher)) return;
         lock (gate) { if (askingCodex || DateTime.UtcNow < nextCodex) return; askingCodex = true; nextCodex = DateTime.UtcNow.AddMinutes(10); }

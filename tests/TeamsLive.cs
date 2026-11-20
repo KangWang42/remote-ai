@@ -12,6 +12,8 @@ using RemoteCli;
 ///     TeamsLive.exe review|lead <empty folder> <tool> <tool> [<tool>...]
 /// With TEAMS_TIGHT=<tool>, the leader is told that member's limits are nearly spent (the others' are not), and the
 /// run passes only where that member is given no task or one task in the whole run.
+/// With TEAMS_MODELS=<tool>=<model>,... those tools' members are begun with those models (names as `team_models`
+/// lists them). In lead mode it passes only where the leader accepted the work with what it checked (`VERIFIED`).
 /// Costs a few turns of each tool's account; not in CI.
 public static class TeamsLive {
     static void Require(bool yes, string why) { if (!yes) throw new Exception(why); }
@@ -31,13 +33,13 @@ public static class TeamsLive {
         string tight = Environment.GetEnvironmentVariable("TEAMS_TIGHT") ?? "";
         Teams teams = null;
         var hands = new Teams.Hands {
-            Begin = (tool, dir, words, read) => {
-                string id = Guid.NewGuid().ToString("N");
-                var chat = Chat.Open(tool, TerminalAgent.FindTool(tool), folder, "", false, read ? "read" : "full", text => { });
+            Begin = one => {
+                string id = Guid.NewGuid().ToString("N"), tool = one.Tool, words = one.Words; bool read = one.Read;
+                var chat = Chat.Open(tool, TerminalAgent.FindTool(tool), folder, "", false, read ? "read" : "full", text => { }, null, null, one.Model);
                 chat.Turned += (how, said) => { Console.WriteLine("[" + tool + "] " + how + ": " + said.Replace("\n", " ").Substring(0, Math.Min(200, said.Length))); teams.Turned(id, how, said); };
                 lock (chats) chats[id] = chat;
                 chat.Say(words, null);
-                Console.WriteLine("[begin " + tool + (read ? " read" : "") + "]");
+                Console.WriteLine("[begin " + tool + (read ? " read" : "") + (one.Model.Length > 0 ? " " + one.Model : "") + "]");
                 return id;
             },
             Say = (terminal, words) => { Chat chat; lock (chats) chat = chats[terminal]; chat.Say(words, null); Console.WriteLine("[told " + chat.Tool + "] " + words.Replace("\n", " ").Substring(0, Math.Min(120, words.Length))); },
@@ -47,7 +49,9 @@ public static class TeamsLive {
         teams = new Teams(null, hands);
         string goal = mode == "review" ? "修复 add.py 里 add 函数的错误（它应该返回两数之和），并新建 test_add.py，用 assert 写两个简单的测试。不要改动其它文件。"
             : "在这个项目里：1）修复 add.py 里 add 函数的错误（应返回两数之和）；2）在 README.md 里加一段“用法”说明 add 函数怎么用。两件事分给不同的成员做。";
-        var team = teams.Start(new Dictionary<string, object> { { "id", Guid.NewGuid().ToString("N") }, { "mode", mode }, { "dir", "demo" }, { "goal", goal }, { "tools", tools }, { "rounds", 3 } });
+        var models = (Environment.GetEnvironmentVariable("TEAMS_MODELS") ?? "").Split(',').Select(x => x.Split('=')).Where(x => x.Length == 2)
+            .ToDictionary(x => x[0].Trim(), x => (object)x[1].Trim());
+        var team = teams.Start(new Dictionary<string, object> { { "id", Guid.NewGuid().ToString("N") }, { "mode", mode }, { "dir", "demo" }, { "goal", goal }, { "tools", tools }, { "rounds", 3 }, { "models", models } });
         var deadline = DateTime.UtcNow.AddMinutes(20);
         while (DateTime.UtcNow < deadline) {
             team = teams.All().Single(t => t.Id == team.Id);
@@ -60,6 +64,7 @@ public static class TeamsLive {
         Require(team.State == "done", "it ended: " + team.State + " " + team.Note);
         string added = File.ReadAllText(Path.Combine(folder, "add.py"));
         Require(added.Contains("a + b"), "the work was done: " + added);
+        if (mode == "lead") Require(team.Log.Any(step => step.Who == "验收" && step.Text != "领队表示已完成，开始单独验收"), "the leader accepted it with what it checked");
         if (tight.Length > 0) {
             int given = team.Log.Count(step => step.Who == tight);
             Console.WriteLine("steps of the tight member " + tight + ": " + given);
