@@ -176,8 +176,22 @@
   function showLogin() {
     clearTimeout(timer);
     $('home').hidden = true; $('tabs').hidden = true; $('login').hidden = false;
+    const native = window.RemoteCliNative;
+    const box = $('login-native');
+    if (box) {
+      box.hidden = !native;
+      if ($('login-forget')) $('login-forget').hidden = !(native && native.forgetCurrent);
+    }
     $('password').focus();
   }
+  if ($('login-back')) $('login-back').addEventListener('click', () => {
+    const native = window.RemoteCliNative;
+    if (native && native.home) native.home();
+  });
+  if ($('login-forget')) $('login-forget').addEventListener('click', () => {
+    const native = window.RemoteCliNative;
+    if (native && native.forgetCurrent) native.forgetCurrent();
+  });
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault();
     $('login-error').textContent = '';

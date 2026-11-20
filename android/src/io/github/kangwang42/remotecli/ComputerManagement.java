@@ -55,7 +55,8 @@ final class ComputerManagement {
         kit.setting(access, R.drawable.ic_settings, kit.MUTED, "电脑设置", "连接线路、远程访问与工具", "", kit.MUTED, () -> activity.computerSettings(url));
 
         LinearLayout saved = kit.settingGroup(page, "连接管理");
-        kit.setting(saved, R.drawable.ic_link, kit.MUTED, "名称与连接", "改名、重新扫码登录或从手机移除", "", kit.MUTED, () -> activity.manageConnection(url));
+        kit.setting(saved, R.drawable.ic_link, kit.MUTED, "名称与连接", "改名或重新扫码登录", "", kit.MUTED, () -> activity.manageConnection(url));
+        kit.setting(saved, R.drawable.ic_stop, kit.BAD, "从手机移除这台电脑", "不需要电脑在线或密码，仅从手机列表删除", "", kit.BAD, () -> activity.confirmRemoveComputer(url));
         return page;
     }
 

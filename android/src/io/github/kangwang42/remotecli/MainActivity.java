@@ -374,7 +374,7 @@ public final class MainActivity extends Activity {
         final int index = found;
         final String name = list.optJSONObject(index).optString("name");
         kit.sheet(name, host(url), new String[]{"打开这台电脑", "改名", "重新扫码登录", "从列表移除"},
-            new String[]{null, null, "地址变了或登录过期时使用", "只从这部手机移除，电脑上的终端和对话不受影响"}, 3, which -> {
+            new String[]{null, null, "地址变了或登录过期时使用", "只从这部手机移除，不需要电脑在线或密码"}, 3, which -> {
             if (which == 0) open(url, "");
             else if (which == 2) { pairingRecord = computers().optJSONObject(index).optString("id"); scan(); }
             else if (which == 1) {
@@ -384,13 +384,41 @@ public final class MainActivity extends Activity {
                     home("");
                 });
             } else {
-                JSONArray now = computers();
-                JSONObject removed = now.optJSONObject(index);
-                if (removed != null) uuRemote.forget(removed.optString("id"));
-                now.remove(index); store(now); bench.forget(url);
-                home("");
+                confirmRemoveComputer(url);
             }
         });
+    }
+
+    /** Removes a saved computer from this phone only — never needs the computer online or a password. */
+    void confirmRemoveComputer(String url) {
+        if (url == null || url.isEmpty()) return;
+        String label = host(url);
+        JSONArray list = computers();
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject one = list.optJSONObject(i);
+            if (one != null && url.equals(one.optString("url"))) {
+                String given = one.optString("name");
+                if (!given.isEmpty()) label = given;
+                break;
+            }
+        }
+        kit.confirmSheet("从手机移除“" + label + "”？",
+            "只从这部手机的列表移除，不需要电脑在线或访问密码，也不会影响电脑上的程序和对话。",
+            "从手机移除", true, () -> removeComputer(url));
+    }
+
+    private void removeComputer(String url) {
+        JSONArray now = computers();
+        for (int i = now.length() - 1; i >= 0; i--) {
+            JSONObject item = now.optJSONObject(i);
+            if (item == null || !url.equals(item.optString("url"))) continue;
+            uuRemote.forget(item.optString("id"));
+            now.remove(i);
+        }
+        store(now);
+        bench.forget(url);
+        if (url.equals(currentOrigin)) currentOrigin = "";
+        home("已从手机移除");
     }
 
     String versionName() { try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception unknown) { return ""; } }
@@ -928,6 +956,11 @@ public final class MainActivity extends Activity {
             return "";
         }
         @JavascriptInterface public void disconnect() { home(); }
+        /** Removes the currently opened computer from this phone without needing its password. */
+        @JavascriptInterface public void forgetCurrent() {
+            final String target = currentOrigin;
+            if (target != null && !target.isEmpty()) runOnUiThread(() -> confirmRemoveComputer(target));
+        }
         /** The terminal page reports the finished work it has shown, so the workbench stops listing it as new. */
         @JavascriptInterface public void seen(String terminal, String at) {
             final String origin = currentOrigin;

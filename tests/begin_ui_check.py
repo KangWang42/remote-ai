@@ -24,7 +24,7 @@ APP = """window.RemoteCliNative = (() => {
   const kept = name => localStorage.getItem('app-pref-' + name) || '';
   return Object.assign({ chrome() {}, pref: kept, setPref(name, value) { localStorage.setItem('app-pref-' + name, value); }, home() { note('home', ''); }, appPage(tab) { note('appPage', tab); }, computer() { return '办公室电脑'; } }, %s);
 })();"""
-NEW_APP, OLD_APP = APP % "{ appTabs() { return 'tasks,projects,together,me'; } }", APP % "{}"
+NEW_APP, OLD_APP = APP % "{ appTabs() { return 'tasks,projects,together,me'; }, forgetCurrent() { note('forgetCurrent', ''); } }", APP % "{}"
 
 out = Path(sys.argv[2]); out.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_errors=True) as temporary:
@@ -234,7 +234,15 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         for what, ready in (("handoff", "(document.querySelector('dialog.rs[open] .rs-bar h2') || {}).textContent === '交接哪段对话'"), ("many", "!!document.querySelector('dialog.rs[open] #many-text')"),
                             ("chain", "!!document.querySelector('dialog.rs[open] #chain-from')"), ("schedule", "!!document.querySelector('dialog.rs[open] #schedule-session')")):
             browser.open(played.origin + "/?tab=together&do=" + what, ready, "协作, opened for " + what, **phone(390))
+        # expired session in the app: login screen offers direct removal and back without asking for a password
+        played.signed_in = False
+        value("sessionStorage.removeItem('app-asked')")
+        browser.open(played.origin + "/", "!document.getElementById('login').hidden && !document.getElementById('login-native').hidden && !document.getElementById('login-forget').hidden", "login screen with native forget", **phone(390))
+        value("document.getElementById('login-forget').click()")
+        value("document.getElementById('login-back').click()")
+        assert noted() == [["forgetCurrent", ""], ["home", ""]], noted()
         assert errors() == "[]", errors()
+        played.signed_in = True
         browser.ask("Page.removeScriptToEvaluateOnNewDocument", identifier=app)
 
         # ---- an app of an earlier version has lists for 协作 and 我的 only: the other two stay the page's

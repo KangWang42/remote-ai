@@ -34,6 +34,9 @@ svg { display: block; }
 #login p { color: var(--muted); }
 #login label { font-size: .85rem; color: var(--muted); margin-top: 10px; }
 #login-error { color: var(--bad); min-height: 1.5em; }
+.login-native { display: grid; gap: 10px; margin-top: 6px; }
+.login-native button.ghost { width: 100%; min-height: 46px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font-weight: 600; font-size: .94rem; }
+.login-native button.ghost.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
 .mark { width: 56px; height: 56px; border-radius: 16px; margin-bottom: 6px; background: linear-gradient(135deg, var(--raised), var(--panel)); border: 1px solid var(--line); display: grid; place-items: center; color: var(--accent); }
 input { width: 100%; min-height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 input:focus, textarea:focus { border-color: var(--accent); outline: none; }

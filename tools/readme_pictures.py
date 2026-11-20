@@ -100,6 +100,7 @@ class Played:
         threading.Thread(target=self.compute, daemon=True).start()
         played = self
 
+        self.signed_in = True
         class Handler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(ROOT / "web"), **kwargs)
@@ -114,7 +115,7 @@ class Played:
 
             def do_GET(self):
                 if self.path == "/api/session":
-                    return self.reply({"signed_in": True})
+                    return self.reply({"signed_in": played.signed_in})
                 if self.path == "/api/terminal":
                     played.relay.agent({"info": played.info, "sessions": played.sessions})
                     return self.reply(played.relay.overview())

@@ -973,12 +973,19 @@ final class Workbench {
             LinearLayout help = kit.row();
             help.setPadding(kit.dp(16), kit.dp(10), kit.dp(12), kit.dp(12));
             help.addView(kit.text("key".equals(snapshot.state) ? "登录已过期。" : "请确认电脑已开机且 Remote AI 正在运行。退出电脑端或重启电脑后，公网隧道的地址会变更。", 12.5f, kit.MUTED), new LinearLayout.LayoutParams(0, -2, 1));
+            TextView remove = kit.bold("移除", 13.5f, kit.BAD);
+            remove.setGravity(Gravity.CENTER); remove.setMinHeight(kit.dp(48)); remove.setPadding(kit.dp(14), 0, kit.dp(14), 0);
+            remove.setBackground(kit.shape(Kit.tint(kit.BAD, 28), 0, 12));
+            kit.press(remove, () -> activity.confirmRemoveComputer(url));
+            LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(-2, -2);
+            removeParams.leftMargin = kit.dp(10);
+            help.addView(remove, removeParams);
             TextView again = kit.bold("重新扫码", 13.5f, kit.ACCENT);
             again.setGravity(Gravity.CENTER); again.setMinHeight(kit.dp(48)); again.setPadding(kit.dp(14), 0, kit.dp(14), 0);
             again.setBackground(kit.shape(Kit.tint(kit.ACCENT, 34), 0, 12));
             kit.press(again, activity::scan);
             LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(-2, -2);
-            beside.leftMargin = kit.dp(10);
+            beside.leftMargin = kit.dp(8);
             help.addView(again, beside);
             card.addView(help);
         }
