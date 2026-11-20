@@ -65,7 +65,7 @@
 | 写—审循环（先做） | A 写代码；结束后把改动（diff 和 A 的说明）交给另一家的 B 以只读方式审查（Claude Code `--permission-mode plan`、Codex 只读沙箱、agy `--mode plan`）；B 的意见交回 A 修改，循环 | B 回答“通过”、到达设定轮数、或任一方等确认；每轮结果推送到手机 |
 | 并行比稿 | 同一任务交给两三个 AI，各在自己的 worktree 里做；手机上并排看每个方案的改动和说明，选一个合并，其余丢弃 | 都做完后等人选 |
 | 领队（第二步） | 指定一个 AI 为领队，它收到目标后按固定格式给出分工（子任务、交给谁、理由，例如前端交给 Claude Code、批量改写交给 Codex、查资料交给 agy）；电脑端按分工把子任务交给各成员（会写文件的成员各用一个 worktree），做完把结果交回领队，由领队审查、合并或再派。领队通过电脑端提供的 MCP 工具（`delegate`、`status`、`result`）指挥，不直接操作别的程序 | 领队宣布完成、到达设定轮数或预算、任一成员等确认；每次分工和合并前可设为先问手机 |
-| 顾问（以后） | 电脑端提供一个 MCP 服务（`ask_claude`、`ask_codex`、`ask_agy`），一个 AI 在执行中可以向另一个请教 | 由调用方决定 |
+| 顾问（以后） | 电脑端提供一个 MCP 服务（`ask_ai`），一个 AI 在执行中可以向另一个只读请教、复核或审查，结果直接作为步骤显示在同一个对话里 | **已完成（Windows）**：`agent-windows/Peers.cs` 通过命名管道与 `--mcp` 桥接按对话注入本地 MCP 服务（Claude Code `--mcp-config`、Codex `-c mcp_servers.remote_ai.*`、Antigravity CLI ACP `mcpServers`），被请教方默认只读且无递归，附带各工具实时额度提示，已通过 `tests/peers_check.py` |
 
 做法：
 

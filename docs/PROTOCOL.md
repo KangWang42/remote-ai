@@ -634,6 +634,18 @@ commands in `system` / `background_tasks_changed` (`tasks`, the whole list each 
 (Teams.cs) takes a member's turn as over only when nothing it started still runs in the background, and passes on
 what it said at the end of the turn that follows.
 
+On Windows (`agent-windows/Peers.cs`), a chat can consult another installed chat-capable AI in the same project
+mid-turn through a per-conversation local MCP server (`remote_ai`, tool `ask_ai(tool, question, fresh?)`) bridged by
+`RemoteCliAgent.exe --mcp <pipe> <token>` over a named pipe (`RemoteCli.peers.<hash>`). The server is attached only
+for that session without modifying global tool settings: Claude Code receives `--mcp-config <temp.json>` (with
+`MCP_TOOL_TIMEOUT=300000`), Codex receives `-c mcp_servers.remote_ai.{command,args,tool_timeout_sec,startup_timeout_sec}`
+on `codex app-server`, and Antigravity CLI receives `mcpServers` in ACP `session/new` / `session/load`. `tools/list`
+omits the caller itself and embeds each peer's current quota and tight (>=80%) warning from `Quotas.cs`. Calls to
+`ask_ai` are auto-approved without prompting the phone and shown as `step` items (`请教 <工具>：...`). The consulted
+peer runs in `read` mode without MCP (preventing recursion), automatically denies write/command permission prompts
+(allowing only read/search inspection on ACP), reuses its read-only session for follow-ups unless `fresh: true`, and is
+disposed together with any temporary config file when the caller chat closes.
+
 Claude permission suggestions are validated by the computer before offering `always`, both for chats
 (Windows and Python Linux) and Windows `PermissionRequest` hooks. Only a complete `addRules` / `allow`
 suggestion for `localSettings` is accepted; chats also accept `session`. Changes to user/shared settings,

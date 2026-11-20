@@ -9,7 +9,7 @@
   const $ = id => document.getElementById(id);
   const native = window.RemoteCliNative || null;
   const bridge = () => window.ProjectTerminal;
-  const TOOLS = { claude: 'Claude Code', codex: 'Codex' };
+  const TOOLS = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity CLI' };
   const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
 
   // ---- the look: the app's, as on the list pages (app.js)

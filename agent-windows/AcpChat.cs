@@ -32,18 +32,24 @@ public class AcpChat : JsonRpcChat {
         if (session.Length > 0 && !SessionLocks.IsUuid(session)) throw new ArgumentException("对话编号无效");
         Run(launcher, args);
         // nothing of this computer's files or terminals is offered: the tool works in its folder as it would alone
+        object[] servers = mcp != null && !String.IsNullOrEmpty(mcp.Command)
+            ? new object[] { new Dictionary<string, object> { { "name", mcp.Name }, { "command", mcp.Command }, { "args", mcp.Args }, { "env", new object[0] } } }
+            : new object[0];
+        var given = new Dictionary<string, object> { { "cwd", Folder }, { "mcpServers", servers } };
+        if (session.Length > 0) given["sessionId"] = session;
         Call("initialize", new Dictionary<string, object> {
             { "protocolVersion", 1 },
             { "clientCapabilities", new Dictionary<string, object> { { "fs", new Dictionary<string, object> { { "readTextFile", false }, { "writeTextFile", false } } }, { "terminal", false } } },
-            { "clientInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "title", "Remote AI" }, { "version", "1" } } } }, _ => { });
-        var given = new Dictionary<string, object> { { "cwd", Folder }, { "mcpServers", new object[0] } };
-        if (session.Length > 0) { given["sessionId"] = session; loading = true; }
-        Call(session.Length > 0 ? "session/load" : "session/new", given, answer => {
-            loading = false;
-            string id = session.Length > 0 && At(answer, "error") == null ? session : Text(At(answer, "result"), "sessionId");
-            if (id.Length == 0) { Note(Label + " 没有打开这段对话：" + Text(At(answer, "error"), "message")); State("ended"); return; }
-            Known(id);
-            if (queued.Count > 0) Prompt(); else State("idle");
+            { "clientInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "title", "Remote AI" }, { "version", "1" } } } }, initAnswer => {
+            if (At(initAnswer, "error") != null) { Note(Label + " 初始化失败：" + Text(At(initAnswer, "error"), "message")); State("ended"); return; }
+            if (session.Length > 0) loading = true;
+            Call(session.Length > 0 ? "session/load" : "session/new", given, answer => {
+                loading = false;
+                string id = session.Length > 0 && At(answer, "error") == null ? session : Text(At(answer, "result"), "sessionId");
+                if (id.Length == 0) { Note(Label + " 没有打开这段对话：" + Text(At(answer, "error"), "message")); State("ended"); return; }
+                Known(id);
+                if (queued.Count > 0) Prompt(); else State("idle");
+            });
         });
     }
     string Label { get { return RemoteCli.Tool.LabelOf(Tool); } }
@@ -110,10 +116,13 @@ public class AcpChat : JsonRpcChat {
         writing = thinking = "";
         if (!steps.Contains(id)) {
             steps.Add(id);
-            string kind = Text(u, "kind"), title = Text(u, "title");
-            string name = kind == "execute" ? "shell" : kind == "edit" || kind == "delete" || kind == "move" ? "edit" : kind == "search" || kind == "fetch" ? "search" : kind == "read" ? "read" : "tool";
-            string detail = Command(u);
-            Item(id, "step", Cut(Titled(kind, title, Text(u, "name"), detail), 200), new Dictionary<string, object> { { "name", name }, { "detail", Cut(detail, 2000) }, { "state", "run" } });
+            string kind = Text(u, "kind"), title = Text(u, "title"), rawName = Text(u, "name");
+            var input = At(u, "rawInput") ?? At(u, "args");
+            bool isPeer = IsPeerAsk(rawName, title, input);
+            string name = isPeer ? "mcp" : kind == "execute" ? "shell" : kind == "edit" || kind == "delete" || kind == "move" ? "edit" : kind == "search" || kind == "fetch" ? "search" : kind == "read" ? "read" : "tool";
+            string detail = isPeer ? Text(input, "question") : Command(u);
+            string shown = isPeer ? Peers.StepTitle(Text(input, "tool"), detail) : Titled(kind, title, rawName, detail);
+            Item(id, "step", Cut(shown, 200), new Dictionary<string, object> { { "name", name }, { "detail", Cut(detail, 2000) }, { "state", "run" } });
         }
         string back = Given(u);
         if (status == "completed" || status == "failed") Done(id, status == "completed", back);
@@ -137,23 +146,48 @@ public class AcpChat : JsonRpcChat {
         int cut = rest.LastIndexOfAny(new[] { '/', '\\' });
         return cut >= 0 && cut < rest.Length - 1 ? rest.Substring(cut + 1) : rest;
     }
-    // What a step gave back, as ACP carries it: text, or a file's change
+    // What a step gave back, as ACP carries it: text, a file's change, or MCP rawOutput
     static string Given(object u) {
         var parts = new List<string>();
         foreach (var one in Many(u, "content")) {
             string type = Text(one, "type");
             if (type == "content") { string text = Text(At(one, "content"), "text"); if (text.Length > 0) parts.Add(text); }
+            else if (type == "text") { string text = Text(one, "text"); if (text.Length > 0) parts.Add(text); }
             else if (type == "diff") parts.Add(Text(one, "path") + "\n" + Text(one, "newText"));
         }
+        if (parts.Count == 0) {
+            object raw = At(u, "rawOutput");
+            if (raw is string && ((string)raw).Length > 0) parts.Add((string)raw);
+            else if (raw != null) {
+                foreach (var one in Many(raw, "content")) { string text = Text(one, "text"); if (text.Length > 0) parts.Add(text); }
+                if (parts.Count == 0) {
+                    foreach (string key in new[] { "result", "output", "text", "message" }) { string text = Text(raw, key); if (text.Length > 0) { parts.Add(text); break; } }
+                }
+            }
+        }
         return String.Join("\n", parts);
+    }
+    static bool IsPeerAsk(string name, string title, object input) {
+        if (name == Peers.ToolName || name.EndsWith("__" + Peers.ToolName, StringComparison.Ordinal) || name.EndsWith("_" + Peers.ToolName, StringComparison.Ordinal)) return true;
+        if (title == Peers.ToolName || title.IndexOf(Peers.ToolName, StringComparison.Ordinal) >= 0) return true;
+        return Text(input, "question").Length > 0 && RemoteCli.Tool.Of(Text(input, "tool")) != null;
     }
     protected override void Requested(object id, string method, object p) {
         if (method == "session/request_permission") {
             var request = new Dictionary<string, object> { { "id", id }, { "params", p } };
-            var call = At(p, "toolCall"); string kind = Text(call, "kind"), command = Command(call), title = Text(call, "title");
+            var call = At(p, "toolCall"); string kind = Text(call, "kind"), command = Command(call), title = Text(call, "title"), rawName = Text(call, "name");
+            if (mcp != null && IsPeerAsk(rawName, title, At(call, "rawInput") ?? At(call, "args"))) {
+                var options = Many(p, "options").ToList();
+                var allow = options.FirstOrDefault(one => Text(one, "kind") == "allow_once") ?? options.FirstOrDefault(one => Text(one, "kind").StartsWith("allow", StringComparison.Ordinal));
+                if (allow != null) {
+                    RespondResult(id, new Dictionary<string, object> { { "outcome", new Dictionary<string, object> { { "outcome", "selected" }, { "optionId", Text(allow, "optionId") } } } });
+                    return;
+                }
+            }
             bool always = Many(p, "options").Any(one => Text(one, "kind") == "allow_always");
+            string heading = kind == "execute" ? "运行命令" : kind == "edit" || kind == "delete" || kind == "move" ? "修改文件" : kind == "read" ? "读取文件" : kind == "search" ? "搜索" : "使用工具";
             Ask(request, kind == "execute" ? "command" : kind == "edit" || kind == "delete" || kind == "move" ? "edit" : "tool",
-                kind == "execute" ? "运行命令" : kind == "edit" ? "修改文件" : "使用工具", command.Length > 0 ? command : title, always);
+                heading, command.Length > 0 ? command : title, always);
             return;
         }
         // nothing of this computer's files or terminals was offered (initialize)

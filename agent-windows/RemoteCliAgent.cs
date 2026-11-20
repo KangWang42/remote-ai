@@ -126,6 +126,7 @@ public sealed class TerminalAgent {
         NativeDesktop = new CodexDesktopSessions(OpenDesktopConversation);
         NativeDesktop.Changed += () => { sessionsDirty = true; Wake(); };
         Quotas = new Quotas(dataDir);
+        Peers = new Peers(RemoteCli.Peers.PipeName(dataDir), FindTool, Quotas, Path.Combine(dataDir, "mcp"));
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += () => { sessionsDirty = true; Wake(); }; Reach.Outbox.Changed += () => { sessionsDirty = true; Wake(); };
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
@@ -195,7 +196,7 @@ public sealed class TerminalAgent {
             // a conversation goes on where it was; one whose tool had not named it yet cannot be found again
             if (session.Length == 0 || !kind.Chats) return;
             live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
-            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas);
+            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, where));
             Heard(live);
             terminals[id] = live;
             return;
@@ -365,6 +366,8 @@ public sealed class TerminalAgent {
     public readonly Chains Chains;
     /// Work several AIs do together (Teams.cs): their members are conversations of the phone's that this program begins.
     public readonly Teams Teams;
+    /// Local MCP service that lets an active conversation ask another AI in the same project for read-only advice (Peers.cs).
+    public readonly Peers Peers;
     // ---- the members of a team: conversations the phone runs, begun and told by this program
     string BeginMember(string tool, string dir, string words, bool read) {
         var prefs = Preferences(); var dirs = AllDirs(prefs);
@@ -379,7 +382,8 @@ public sealed class TerminalAgent {
             string widest = Get(prefs, "RemoteMaxMode"), mode = read ? "read" : widest;
             string first = words.Split('\n')[0].Trim();
             var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = tool, Dir = dir, Title = first.Length > 60 ? first.Substring(0, 59) + "…" : first };
-            live.Pty = Chat.Open(tool, launcher, Place(live, dirs), "", false, mode, Emitted(live), Quotas);
+            string place = Place(live, dirs);
+            live.Pty = Chat.Open(tool, launcher, place, "", false, mode, Emitted(live), Quotas, read ? null : Peers.Offer(tool, place));
             Heard(live);
             terminals[live.Id] = live;
             live.Chat.Say(words, null);
@@ -1615,7 +1619,8 @@ public sealed class TerminalAgent {
                     if (!kind.Chats) throw new ArgumentException("这个工具不支持对话");
                     if (fork || Get(op, "history") == "True") throw new ArgumentException("对话选项无效");
                     bool resume = !fresh && session.Length > 0;
-                    live.Pty = Chat.Open(tool, launcher, Place(live, dirs), session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas);
+                    string place = Place(live, dirs);
+                    live.Pty = Chat.Open(tool, launcher, place, session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, place));
                     Heard(live);
                     terminals[terminal] = live;
                     if (resume) Recall(live, Place(live, dirs));
@@ -1816,6 +1821,8 @@ public sealed class TerminalAgent {
         }
         // --hook <tool> <pipe>: run by Claude Code or Codex as one of their hooks (Reach.cs)
         if (args.Length == 3 && args[0] == "--hook") return RemoteCli.Reach.Hook(args[1], args[2]);
+        // --mcp <pipe> <token>: run by a chat tool as its local MCP server for asking another AI (Peers.cs)
+        if (args.Length == 3 && args[0] == RemoteCli.Peers.Flag) return RemoteCli.Peers.Bridge(args[1], args[2]);
         string data = args.Length > 1 && args[0] == "--data" ? args[1] : null;
         bool created;
         using (var singleton = new Mutex(true, "Local\\RemoteCliAgent" + (data == null ? "" : "-" + Math.Abs(data.ToLowerInvariant().GetHashCode())), out created)) {

@@ -34,11 +34,48 @@ def lines():
 # ---- Claude Code
 def claude(args):
     session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
-    answers, stop, turns = {}, threading.Event(), []
+    answers, stop, turns, peer_turns = {}, threading.Event(), [], [0]
 
     def said(text):
         message = "msg_" + uuid.uuid4().hex[:12]
         put({"type": "assistant", "message": {"id": message, "content": [{"type": "text", "text": text}]}})
+
+    def peer_reply(text):
+        peer_turns[0] += 1
+        if "要求改文件" in text:
+            use = "toolu_" + uuid.uuid4().hex[:10]
+            put({"type": "assistant", "message": {"id": "msg_" + uuid.uuid4().hex[:12], "content": [{"type": "tool_use", "id": use, "name": "Edit", "input": {"file_path": "a.txt"}}]}})
+            req = "req-" + uuid.uuid4().hex[:8]
+            answered = threading.Event()
+            answers[req] = [answered, None]
+            put({"type": "control_request", "request_id": req, "request": {"subtype": "can_use_tool", "tool_name": "Edit", "display_name": "Edit", "input": {"file_path": "a.txt"}, "description": "Edit a.txt"}})
+            answered.wait(10)
+            dec = answers.pop(req)[1] or {}
+            verdict = "已拒绝修改" if dec.get("behavior") == "deny" else "意外允许了修改"
+            put({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use, "content": verdict, "is_error": dec.get("behavior") == "deny"}]}})
+            reply = f"claude只读回复：{verdict}，仅提供只读建议（第 {peer_turns[0]} 轮）"
+        else:
+            reply = f"claude只读回复（第 {peer_turns[0]} 轮）：收到 {text.splitlines()[-1]}"
+        said(reply)
+        put({"type": "result", "subtype": "success", "is_error": False, "result": reply, "session_id": session})
+
+    def call_peer():
+        use = "toolu_" + uuid.uuid4().hex[:10]
+        inp = {"tool": "codex", "question": "这个锁会死锁吗？"}
+        put({"type": "assistant", "message": {"id": "msg_" + uuid.uuid4().hex[:12], "content": [{"type": "tool_use", "id": use, "name": "mcp__remote_ai__ask_ai", "input": inp}]}})
+        req = "req-" + uuid.uuid4().hex[:8]
+        answered = threading.Event()
+        answers[req] = [answered, None]
+        put({"type": "control_request", "request_id": req, "request": {"subtype": "can_use_tool", "tool_name": "mcp__remote_ai__ask_ai", "display_name": "ask_ai", "input": inp, "description": "ask_ai"}})
+        answered.wait(10)
+        dec = answers.pop(req)[1] or {}
+        if dec.get("behavior") != "allow":
+            put({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use, "content": "denied", "is_error": True}]}})
+            put({"type": "result", "subtype": "success", "is_error": False, "result": "被拒", "session_id": session})
+            return
+        put({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use, "content": "不会死锁，因为锁顺序固定。", "is_error": False}]}})
+        said("Codex 确认不会死锁。")
+        put({"type": "result", "subtype": "success", "is_error": False, "result": "Codex 确认不会死锁。", "session_id": session})
 
     def background():
         # As Claude Code 2.1.322 does it: the command goes to the background and the turn ends; when the command ends
@@ -61,6 +98,10 @@ def claude(args):
     def turn(text):
         put({"type": "system", "subtype": "init", "session_id": session, "cwd": ".", "tools": ["Bash"]})
         put({"type": "user", "message": {"role": "user", "content": text}, "session_id": session, "uuid": str(uuid.uuid4())})
+        if "只读请教" in text or "继续请教" in text:
+            return peer_reply(text)
+        if "调用请教" in text:
+            return call_peer()
         if "后台" in text:
             return background()
         message = "msg_" + uuid.uuid4().hex[:12]
@@ -130,7 +171,7 @@ def claude(args):
 
 # ---- Codex
 def codex(args):
-    state = {"thread": "", "turn": "", "next": 0}
+    state = {"thread": "", "turn": "", "next": 0, "peer_turns": 0, "sandbox": ""}
     waiting, stop = {}, threading.Event()
 
     def note(method, **params):
@@ -140,6 +181,31 @@ def codex(args):
         turn_id = state["turn"]
         note("turn/started", threadId=state["thread"], turn={"id": turn_id, "status": "inProgress", "items": []})
         note("item/started", threadId=state["thread"], turnId=turn_id, item={"type": "userMessage", "id": "u-" + uuid.uuid4().hex[:8], "clientId": client, "content": [{"type": "text", "text": text}]})
+        if "只读请教" in text or "继续请教" in text:
+            state["peer_turns"] += 1
+            verdict = ""
+            if "要求改文件" in text:
+                run = "edit-" + uuid.uuid4().hex[:8]
+                state["next"] += 1
+                num, ev = state["next"], threading.Event()
+                waiting[num] = [ev, None]
+                put({"id": num, "method": "item/fileChange/requestApproval", "params": {"threadId": state["thread"], "turnId": turn_id, "itemId": run, "reason": "Edit a.txt"}})
+                ev.wait(10)
+                dec = (waiting.pop(num)[1] or {}).get("decision")
+                verdict = "已拒绝修改，" if dec == "decline" else "意外允许修改，"
+            msg_id = "msg_" + uuid.uuid4().hex[:10]
+            reply = f"codex只读回复（sandbox={state['sandbox']}，第 {state['peer_turns']} 轮）：{verdict}{text.splitlines()[-1]}"
+            note("item/started", item={"type": "agentMessage", "id": msg_id, "text": ""}, threadId=state["thread"], turnId=turn_id)
+            note("item/completed", item={"type": "agentMessage", "id": msg_id, "text": reply}, threadId=state["thread"], turnId=turn_id)
+            return ended("completed", None)
+        if "调用请教" in text:
+            call_id = "mcp-" + uuid.uuid4().hex[:8]
+            note("item/started", threadId=state["thread"], turnId=turn_id, item={"type": "mcpToolCall", "id": call_id, "server": "remote_ai", "tool": "ask_ai", "arguments": {"tool": "claude", "question": "方案可行吗？"}})
+            note("item/completed", threadId=state["thread"], turnId=turn_id, item={"type": "mcpToolCall", "id": call_id, "server": "remote_ai", "tool": "ask_ai", "status": "completed", "result": {"content": [{"type": "text", "text": "方案可行，建议拆出接口。"}], "isError": False}})
+            msg_id = "msg_" + uuid.uuid4().hex[:10]
+            note("item/started", item={"type": "agentMessage", "id": msg_id, "text": ""}, threadId=state["thread"], turnId=turn_id)
+            note("item/completed", item={"type": "agentMessage", "id": msg_id, "text": "已采纳 Claude 的建议。"}, threadId=state["thread"], turnId=turn_id)
+            return ended("completed", None)
         said = "msg_" + uuid.uuid4().hex[:10]
         note("item/started", item={"type": "agentMessage", "id": said, "text": "", "phase": "commentary"}, threadId=state["thread"], turnId=turn_id)
         for piece in ("我先", "看看。"):
@@ -194,6 +260,7 @@ def codex(args):
         if method == "initialize":
             put({"id": number, "result": {"userAgent": "stand-in", "platformOs": "windows"}})
         elif method in ("thread/start", "thread/resume"):
+            state["sandbox"] = params.get("sandbox") or ""
             state["thread"] = params.get("threadId") or "0199dddd-eeee-7fff-8000-%012d" % int(time.time() * 1000 % 10 ** 12)
             put({"id": number, "result": {"thread": {"id": state["thread"], "cwd": params.get("cwd")}}})
             note("thread/started", thread={"id": state["thread"]})
@@ -217,13 +284,48 @@ def codex(args):
 
 # ---- Antigravity CLI's ACP server (`agy acp`), in the shapes recorded from agy 1.5.12
 def agy(args):
-    state = {"session": "", "next": 0}
+    state = {"session": "", "next": 0, "peer_turns": 0, "mcp": []}
     waiting, stop = {}, threading.Event()
 
     def update(**what):
         put({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": state["session"], "update": what}})
 
     def turn(number, text):
+        if "只读请教" in text or "继续请教" in text:
+            state["peer_turns"] += 1
+            extra = ""
+            if "读取授权" in text or "要求改文件" in text:
+                kind = "read" if "读取授权" in text else "edit"
+                call = "call_" + uuid.uuid4().hex[:10]
+                state["next"] += 1
+                asked, ev = 9000 + state["next"], threading.Event()
+                waiting[asked] = [ev, None]
+                put({"jsonrpc": "2.0", "id": asked, "method": "session/request_permission", "params": {"sessionId": state["session"],
+                     "toolCall": {"toolCallId": call, "kind": kind, "title": "File README.md", "rawInput": {"Path": "README.md"}},
+                     "options": [{"optionId": "proceed_once", "name": "Allow", "kind": "allow_once"}, {"optionId": "cancel", "name": "Reject", "kind": "reject_once"}]}})
+                ev.wait(10)
+                outcome = (waiting.pop(asked)[1] or {}).get("outcome") or {}
+                extra = ("允许读取，" if outcome.get("optionId") == "proceed_once" else "拒绝读取，") if kind == "read" else ("已拒绝修改，" if outcome.get("optionId") == "cancel" else "意外允许修改，")
+            update(sessionUpdate="agent_message_chunk", content={"type": "text", "text": f"agy只读回复（第 {state['peer_turns']} 轮）：{extra}{text.splitlines()[-1]}"})
+            return ended(number, "end_turn", None)
+        if "调用请教" in text:
+            call = "call_" + uuid.uuid4().hex[:10]
+            inp = {"tool": "codex", "question": "边界条件对吗？"}
+            update(sessionUpdate="tool_call", toolCallId=call, name="ask_ai", kind="other", status="pending", title="ask_ai", rawInput=inp, args=inp)
+            state["next"] += 1
+            asked, ev = 9000 + state["next"], threading.Event()
+            waiting[asked] = [ev, None]
+            put({"jsonrpc": "2.0", "id": asked, "method": "session/request_permission", "params": {"sessionId": state["session"],
+                 "toolCall": {"toolCallId": call, "kind": "other", "name": "ask_ai", "title": "ask_ai", "rawInput": inp},
+                 "options": [{"optionId": "proceed_once", "name": "Allow", "kind": "allow_once"}, {"optionId": "cancel", "name": "Reject", "kind": "reject_once"}]}})
+            ev.wait(10)
+            outcome = (waiting.pop(asked)[1] or {}).get("outcome") or {}
+            if outcome.get("optionId") != "proceed_once":
+                update(sessionUpdate="tool_call_update", toolCallId=call, status="failed")
+                return ended(number, "end_turn", None)
+            update(sessionUpdate="tool_call_update", toolCallId=call, status="completed", content=[{"type": "content", "content": {"type": "text", "text": "边界条件正确，mcpCount=" + str(len(state["mcp"]))}}])
+            update(sessionUpdate="agent_message_chunk", content={"type": "text", "text": "Codex 确认边界条件正确。"})
+            return ended(number, "end_turn", None)
         for piece in ("我先", "看看。"):
             time.sleep(0.05)
             update(sessionUpdate="agent_message_chunk", content={"type": "text", "text": piece})
@@ -270,9 +372,11 @@ def agy(args):
         if method == "initialize":
             put({"jsonrpc": "2.0", "id": number, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}})
         elif method == "session/new":
+            state["mcp"] = params.get("mcpServers") or []
             state["session"] = str(uuid.uuid4())
             put({"jsonrpc": "2.0", "id": number, "result": {"sessionId": state["session"]}})
         elif method == "session/load":
+            state["mcp"] = params.get("mcpServers") or []
             state["session"] = params["sessionId"]
             update(sessionUpdate="user_message_chunk", content={"type": "text", "text": "replayed, not shown again"})
             put({"jsonrpc": "2.0", "id": number, "result": {}})

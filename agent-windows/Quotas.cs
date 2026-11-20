@@ -244,6 +244,7 @@ public sealed class Quotas {
             info.FileName = launcher;
             info.Arguments = "-p /usage --output-format json";
         }
+        try { if (Console.InputEncoding.GetPreamble().Length > 0) Console.InputEncoding = new UTF8Encoding(false); } catch (IOException) { }
         using (var program = Process.Start(info)) {
             try {
                 program.StandardInput.Close();
@@ -282,6 +283,7 @@ public sealed class Quotas {
         var info = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false) };
         if (launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)) { info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"); info.Arguments = "/d /s /c \"\"" + launcher + "\" app-server\""; }
         else { info.FileName = launcher; info.Arguments = "app-server"; }
+        try { if (Console.InputEncoding.GetPreamble().Length > 0) Console.InputEncoding = new UTF8Encoding(false); } catch (IOException) { }
         using (var program = Process.Start(info)) {
             program.ErrorDataReceived += (s, e) => { }; program.BeginErrorReadLine();
             try {
@@ -329,7 +331,8 @@ public sealed class Quotas {
     static string Run(string command, string given) {
         try {
             var info = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), "/d /s /c \"" + command + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, StandardOutputEncoding = new UTF8Encoding(false) };
-            using (var program = Process.Start(info)) {
+            try { if (Console.InputEncoding.GetPreamble().Length > 0) Console.InputEncoding = new UTF8Encoding(false); } catch (IOException) { }
+        using (var program = Process.Start(info)) {
                 byte[] bytes = new UTF8Encoding(false).GetBytes(given);
                 program.StandardInput.BaseStream.Write(bytes, 0, bytes.Length); program.StandardInput.Close();
                 var said = program.StandardOutput.ReadToEndAsync();
