@@ -338,7 +338,7 @@ COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_tak
 # What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
 # it, the questions set to be asked at a time, and one conversation handed over to another.
 WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "brief", "chains", "chain_set", "chain_remove",
-                "teams", "team_start", "team_stop", "team_resume", "team_remove", "team_say", "team_pick")
+                "teams", "team_start", "team_stop", "team_resume", "team_remove", "team_say", "team_pick", "team_swap")
 # What the phone can do to a conversation that a program on the computer has open, where its tool lets it be reached.
 REACH = ("say", "answer", "stop")
 # What is done to a terminal that runs a conversation through its tool's structured mode (form "chat"; docs/PROTOCOL.md,
@@ -1142,6 +1142,8 @@ class Relay:
                 raise RemoteError("这台电脑的电脑端不支持交给新对话，请更新电脑端")
             if action.startswith("team") and "teams" not in self._device.get("features", []):
                 raise RemoteError("这台电脑的电脑端不支持协作任务，请更新电脑端")
+            if action in ("team_say", "team_pick", "team_swap") and "teams-v2" not in self._device.get("features", []):
+                raise RemoteError("这台电脑的电脑端版本较旧，不支持此协作操作，请更新电脑端")
             listed = {s["id"]: s for s in self._sessions}
             # (a conversation in one of the phone's own terminals is open too: the computer types into that terminal)
             typed = {t.get("session") for t in self._state()["threads"].values() if t["state"] == "running" and t.get("session")}
@@ -1225,6 +1227,8 @@ class Relay:
                 discuss = item.get("discuss", False)
                 if not isinstance(discuss, bool):
                     raise RemoteError("讨论选项无效")
+                if (mode == "compare" or discuss) and "teams-v2" not in features:
+                    raise RemoteError("这台电脑的电脑端版本较旧，不支持先议后写或并行比稿，请更新电脑端")
                 question["item"] = {"id": item["id"], "mode": mode, "dir": folder, "goal": goal.strip(), "tools": tools, "rounds": rounds}
                 if discuss and mode in ("review", "lead"):
                     question["item"]["discuss"] = True
@@ -1254,6 +1258,24 @@ class Relay:
                     raise RemoteError("候选方案无效")
                 question["team"] = payload["team"]
                 question["tool"] = tool
+            elif action == "team_swap":
+                if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
+                    raise RemoteError("协作任务无效")
+                role, tool, note = payload.get("role", ""), payload.get("tool"), payload.get("note", "")
+                if not isinstance(role, str) or len(role.strip()) > 32 or "\0" in role:
+                    raise RemoteError("角色无效")
+                features = self._device.get("features", [])
+                runs = [t for t in CHAT_TOOLS if t in self._device["tools"] and "chat" in features and CHAT_FEATURES.get(t, "chat") in features]
+                if not isinstance(tool, str) or tool not in runs:
+                    raise RemoteError("这台电脑不能让这个工具参与协作")
+                if not isinstance(note, str) or len(note.strip()) > 1000 or "\0" in note:
+                    raise RemoteError("补充说明不能超过 1000 字")
+                question["team"] = payload["team"]
+                if role.strip():
+                    question["role"] = role.strip()
+                question["tool"] = tool
+                if note.strip():
+                    question["note"] = note.strip()
             elif action == "chain_remove":
                 if not isinstance(payload.get("chain"), str) or not _id.fullmatch(payload["chain"]):
                     raise RemoteError("接力无效")
@@ -1332,7 +1354,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

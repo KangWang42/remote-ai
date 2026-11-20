@@ -458,6 +458,8 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-chip.busy small { color: var(--good-ink, var(--good)); font-weight: 600; }
 .team-chip.ask { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, var(--panel)); }
 .team-chip.ask small { color: var(--bad); font-weight: 600; }
+.team-chip.fail { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.team-chip.fail small { color: var(--bad); font-weight: 600; }
 .team-chip:disabled { opacity: .65; }
 .team-ask-banner { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border-radius: 14px; background: color-mix(in srgb, var(--bad) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--bad) 32%, transparent); }
 .team-ask-banner .copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
@@ -503,6 +505,7 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-composer textarea { flex: 1; min-width: 0; min-height: 38px; max-height: 120px; padding: 8px 12px; border: 1px solid var(--card-border, var(--line)); border-radius: 14px; background: var(--panel); color: var(--ink); font: inherit; font-size: .9rem; line-height: 1.4; resize: none; }
 .team-send { flex: none; min-height: 38px; padding: 0 16px; border: 0; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: .88rem; }
 .team-send:disabled { opacity: .55; }
+.team-upgrade-hint { margin: 4px 2px 0; color: var(--muted); font-size: .78rem; line-height: 1.4; }
 html[data-theme="dark"] .team-chip .dot.n-cc, html[data-theme="dark"] .team-msg .badge.n-cc { background: #3a2318; color: #f7b593; }
 html[data-theme="dark"] .team-chip .dot.n-cx, html[data-theme="dark"] .team-msg .badge.n-cx { background: #17284a; color: #9dbbf7; }
 html[data-theme="dark"] .team-chip .dot.n-ag, html[data-theme="dark"] .team-msg .badge.n-ag { background: #261d4a; color: #bca9f8; }

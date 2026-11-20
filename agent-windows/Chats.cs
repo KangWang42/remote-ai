@@ -177,14 +177,23 @@ public abstract class Chat : IRunning {
     protected virtual void OnEnded() { }
     void Ended() {
         try { process.WaitForExit(5000); exit = process.ExitCode; } catch { }
+        Action<string, string> notify = null;
+        string crashNote = "";
         lock (gate) {
             OnEnded();
             foreach (var asked in asks.Keys.ToArray()) Event(new Dictionary<string, object> { { "t", "answered" }, { "id", asked }, { "decision", "gone" } });
             asks.Clear();
+            bool midTurn = !disposed && (Status == "busy" || Status == "confirm");
             if (!disposed && exit.HasValue && exit.Value != 0) {
                 string err = "工具已退出（代码 " + exit.Value + "）" + (lastErrors.Length > 0 ? "：" + lastErrors : "");
                 LastError = err;
                 Note(err);
+            }
+            if (midTurn) {
+                notify = Turned;
+                crashNote = !String.IsNullOrEmpty(LastError) ? LastError : !String.IsNullOrEmpty(lastErrors) ? lastErrors : "工具进程意外退出";
+                string partial = words.ToString().Trim();
+                if (partial.Length > 0 && partial.IndexOf(crashNote, StringComparison.OrdinalIgnoreCase) < 0) crashNote = partial + "\n" + crashNote;
             }
             State("ended");
             Flush();
@@ -192,6 +201,7 @@ public abstract class Chat : IRunning {
         }
         var seat = Interlocked.Exchange(ref mcp, null);
         if (seat != null) seat.Dispose();
+        if (notify != null) ThreadPool.QueueUserWorkItem(_ => { try { notify("failed", crashNote); } catch (Exception) { } });
     }
     public void Write(string text) { throw new InvalidOperationException("对话不接受终端输入"); }
     public void Resize(int cols, int rows) { }
@@ -285,7 +295,14 @@ public abstract class Chat : IRunning {
         stopping = false;
         if (how == "done" && background > 0) return;
         var turned = Turned;
-        if (turned != null) { string said = words.ToString(); ThreadPool.QueueUserWorkItem(_ => { try { turned(how, said); } catch (Exception) { } }); }
+        if (turned != null) {
+            string said = words.ToString();
+            if (how == "failed" && !String.IsNullOrEmpty(error)) {
+                if (String.IsNullOrWhiteSpace(said)) said = error;
+                else if (said.IndexOf(error, StringComparison.OrdinalIgnoreCase) < 0) said = said + "\n" + error;
+            }
+            ThreadPool.QueueUserWorkItem(_ => { try { turned(how, said); } catch (Exception) { } });
+        }
     }
     protected string Ask(object request, string kind, string title, string text, bool always, IList<string> choices = null) {
         var asked = new Asked { Id = Guid.NewGuid().ToString("N").Substring(0, 16), Request = request, Kind = kind, Text = (title + (text.Length > 0 ? "\n" + text : "")).Trim(), Always = always };

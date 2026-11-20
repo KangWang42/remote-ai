@@ -370,14 +370,26 @@ class TerminalRelayTests(unittest.TestCase):
         asked, got = carried({"id": "3" * 32, "action": "team_start", "item": item}, {"team": {"id": "d" * 32, "state": "running"}})
         self.assertEqual(asked, {"id": "3" * 32, "action": "work_team_start", "item": dict(item, goal="给结算页加上优惠券")})
         self.assertEqual(got["team"]["state"], "running")
-        # agy takes part where the computer runs it as a conversation
+        # agy takes part where the computer runs it as a conversation; older `teams`-only agents reject v2 actions clearly
         self.info["features"] = ["work", "chat", "teams", "chat-agy"]
+        self.relay.agent({"info": self.info}, now=1005)
+        for v2_payload in (
+            {"id": "4" * 32, "action": "team_start", "item": dict(item, mode="lead", tools=["claude", "codex", "agy"], discuss=True)},
+            {"id": "4" * 32, "action": "team_start", "item": dict(item, mode="compare", tools=["claude", "codex"], rounds=1)},
+            {"id": "4" * 32, "action": "team_say", "team": "d" * 32, "text": "补充说明"},
+            {"id": "4" * 32, "action": "team_pick", "team": "d" * 32, "tool": "codex"},
+            {"id": "4" * 32, "action": "team_swap", "team": "d" * 32, "role": "writer", "tool": "agy"},
+        ):
+            with self.assertRaisesRegex(RemoteError, "更新电脑端"):
+                self.relay.work(v2_payload, now=1005, wait=0)
+        # once computer advertises `teams-v2`, discuss/compare/say/pick/swap are validated and forwarded
+        self.info["features"] = ["work", "chat", "teams", "teams-v2", "chat-agy"]
         self.relay.agent({"info": self.info}, now=1005)
         asked, got = carried({"id": "4" * 32, "action": "team_start", "item": dict(item, mode="lead", tools=["claude", "codex", "agy"], rules="  UI 交给 Gemini  ", discuss=True)}, {"team": {}})
         self.assertEqual(asked["item"]["tools"], ["claude", "codex", "agy"])
         self.assertEqual(asked["item"]["rules"], "UI 交给 Gemini")
         self.assertIs(asked["item"]["discuss"], True)
-        # parallel compare mode (2-3 distinct tools), interject/continue (`team_say`), and merge/discard (`team_pick`)
+        # parallel compare mode (2-3 distinct tools), interject/continue (`team_say`), merge/discard (`team_pick`), and role swap (`team_swap`)
         for wrong, said in ((dict(item, mode="compare", tools=["claude"]), "并行比稿需要"), (dict(item, mode="compare", tools=["claude", "claude"]), "并行比稿需要"), (dict(item, discuss="yes"), "讨论选项无效")):
             with self.assertRaisesRegex(RemoteError, said):
                 self.relay.work({"id": "7" * 32, "action": "team_start", "item": wrong}, now=1005, wait=0)
@@ -387,8 +399,14 @@ class TerminalRelayTests(unittest.TestCase):
             self.relay.work({"id": "9" * 32, "action": "team_say", "team": "d" * 32, "text": "   "}, now=1005, wait=0)
         with self.assertRaisesRegex(RemoteError, "候选方案无效"):
             self.relay.work({"id": "9" * 32, "action": "team_pick", "team": "d" * 32, "tool": "shell"}, now=1005, wait=0)
+        with self.assertRaisesRegex(RemoteError, "不能让这个工具"):
+            self.relay.work({"id": "9" * 32, "action": "team_swap", "team": "d" * 32, "role": "writer", "tool": "shell"}, now=1005, wait=0)
+        with self.assertRaisesRegex(RemoteError, "1000"):
+            self.relay.work({"id": "9" * 32, "action": "team_swap", "team": "d" * 32, "role": "writer", "tool": "agy", "note": "x" * 1001}, now=1005, wait=0)
         asked, got = carried({"id": "a" * 32, "action": "team_say", "team": "d" * 32, "text": "  改用浅色卡片  ", "target": "agy"}, {"team": {"state": "running"}})
         self.assertEqual((asked["action"], asked["team"], asked["text"], asked["target"]), ("work_team_say", "d" * 32, "改用浅色卡片", "agy"))
+        asked, got = carried({"id": "d" * 32, "action": "team_swap", "team": "d" * 32, "role": "writer", "tool": "agy", "note": "  接手继续修  "}, {"team": {"state": "running"}})
+        self.assertEqual((asked["action"], asked["team"], asked["role"], asked["tool"], asked["note"]), ("work_team_swap", "d" * 32, "writer", "agy", "接手继续修"))
         asked, got = carried({"id": "b" * 32, "action": "team_pick", "team": "d" * 32, "tool": "codex"}, {"team": {"state": "done", "picked": "codex"}})
         self.assertEqual((asked["action"], asked["team"], asked["tool"]), ("work_team_pick", "d" * 32, "codex"))
         asked, got = carried({"id": "c" * 32, "action": "team_pick", "team": "d" * 32, "tool": ""}, {"team": {"state": "done", "picked": ""}})

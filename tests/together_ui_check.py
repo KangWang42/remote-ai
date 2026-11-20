@@ -152,7 +152,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
 
         # ---- 协作任务: only where the computer has it, and runs at least two tools as conversations of the phone's
         assert value("document.getElementById('teams').hidden"), "no teams on a computer without them"
-        played.info["features"] = played.info["features"] + ["teams", "chat", "chat-agy"]
+        played.info["features"] = played.info["features"] + ["teams", "teams-v2", "chat", "chat-agy"]
         played.info["tools"] = ["claude", "codex", "agy", "shell"]
         open_page('', "(t => !!t && !t.hidden)(document.getElementById('teams')) && !!document.getElementById('team-new')")
         assert "还没有协作任务" in value("document.getElementById('teams').innerText")
@@ -181,6 +181,14 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         # verify chronological order (目标 first, user interject last)
         items_txt = value("[...document.querySelectorAll('dialog.rs[open] .team-stream .team-msg')].map(n => n.innerText)")
         assert "目标" in items_txt[0] and "优惠券折扣保留两位小数" in items_txt[-1], items_txt
+        # swap active role mid-run via 换 AI 接手
+        value("document.getElementById('team-swap').click()")
+        until("!!document.getElementById('team-swap-note')", 'swap sub-sheet opened')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=\"接手 AI\"]').querySelectorAll('.rs-chip')].find(c => c.textContent.startsWith('Codex')).click()")
+        typed('team-swap-note', '接着补测试即可')
+        press('交给它继续')
+        until("(n => !!n && n.innerText.includes('接着补测试即可'))(document.querySelector('dialog.rs[open] .team-stream'))", 'swap logged and returned to stream')
+        assert played.teams[-1]["tools"][0] == "codex", played.teams[-1]
         browser.picture(out / 'team-sheet-390.png')
         press('停止')
         until(closed + " || document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'it says it stopped')

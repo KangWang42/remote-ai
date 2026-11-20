@@ -157,7 +157,78 @@ public static class TeamsCheck {
             codexUsed = 99;
             weighed.Turned(Team(weighed, w).Members["agy"], "done", "搜索框好了");
             Require(Last(wLeader).Contains("## 当前额度") && Last(wLeader).Contains("- Claude Code（你）：额度：5 小时窗口已用 12%") && Last(wLeader).Contains("- Codex：额度：5 小时窗口已用 99%"), "the results come with the limits as they are now");
-            Require(Teams.Room(new[] { new Quotas.Window { Name = "seven_day", Used = 79.4 } }) == "额度：本周已用 79%" && Teams.Room(new[] { new Quotas.Window { Name = "300m", Used = 79.6 } }) == "额度：300m已用 80%，紧张" && Teams.Room(null) == "额度未知", "limits in words, tight from 80% used");
+            Require(Teams.Room(new[] { new Quotas.Window { Name = "seven_day", Used = 79.4 } }) == "额度：本周已用 79%" && Teams.Room(new[] { new Quotas.Window { Name = "300m", Used = 79.6 } }) == "额度：300m已用 80%，紧张" && Teams.Room(new[] { new Quotas.Window { Name = "five_hour", Used = 100 } }) == "额度：5 小时窗口已用 100%，已用尽（不可派工）" && Teams.Room(null) == "额度未知", "limits in words, tight from 80% used and exhausted at 100%");
+            Require(Teams.IsQuotaError("You've hit your limit · resets 5pm") && Teams.IsQuotaError("HTTP 429 rate_limit_exceeded") && !Teams.IsQuotaError("syntax error on line 3"), "quota error detection");
+
+            // ---- Automatic failover when CC runs out of quota (lead mode + review mode) & manual Swap + Say recovery
+            var failHands = new Teams.Hands {
+                Begin = Hands().Begin, Say = Hands().Say, Stop = Hands().Stop, Changes = d => changes,
+                Available = () => new[] { "claude", "codex", "agy" }
+            };
+            var failTeams = new Teams(null, failHands);
+
+            // 1) Lead mode (3 tools): CC runs out of quota while agy works in parallel -> stays running, waits for agy, reports CC failure to leader -> leader reassigns CC's work to agy
+            string lf = "1414141414141414";
+            failTeams.Start(new Dictionary<string, object> { { "id", lf }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "修复导出和分页" }, { "tools", new object[] { "codex", "claude", "agy" } }, { "rounds", 3 } });
+            string lfLeader = Team(failTeams, lf).Members["leader"];
+            failTeams.Turned(lfLeader, "done", "ASSIGN claude: 修复导出\nASSIGN agy: 修复分页");
+            var lft = Team(failTeams, lf);
+            string lfClaude = lft.Members["claude"], lfAgy = lft.Members["agy"];
+            failTeams.Turned(lfClaude, "failed", "You've hit your limit · resets 23:00");
+            lft = Team(failTeams, lf);
+            Require(lft.State == "running" && lft.Failed.ContainsKey("claude") && lft.Awaited.SequenceEqual(new[] { "agy" }), "lead member quota failure keeps team running and waits for parallel agy");
+            failTeams.Turned(lfAgy, "done", "分页已修复");
+            lft = Team(failTeams, lf);
+            Require(lft.State == "running" && lft.Awaited.SequenceEqual(new[] { "leader" }) && Last(lfLeader).Contains("分页已修复") && Last(lfLeader).Contains("【执行失败】") && Last(lfLeader).Contains("额度已用尽") && Last(lfLeader).Contains("请勿再派工"), "leader receives agy result + CC failure + unavailable marker");
+            failTeams.Turned(lfLeader, "done", "ASSIGN agy: 接手修复导出");
+            Require(Last(lfAgy).Contains("接手修复导出") && Team(failTeams, lf).Awaited.SequenceEqual(new[] { "agy" }), "leader reassigns CC task to agy seamlessly");
+            failTeams.Turned(lfAgy, "done", "导出也修好了");
+            failTeams.Turned(lfLeader, "done", "DONE: 导出和分页均已修复");
+            Require(Team(failTeams, lf).State == "done", "lead task finishes cleanly after failover");
+
+            // 2) Lead mode (2 tools: codex + claude, agy installed on computer): CC fails -> agy is auto-added to roster and reported to leader without burning a round
+            string lf2 = "1515151515151515";
+            failTeams.Start(new Dictionary<string, object> { { "id", lf2 }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "修日志" }, { "tools", new object[] { "codex", "claude" } }, { "rounds", 1 } });
+            string lf2Leader = Team(failTeams, lf2).Members["leader"];
+            failTeams.Turned(lf2Leader, "done", "ASSIGN claude: 修日志格式");
+            failTeams.Turned(Team(failTeams, lf2).Members["claude"], "failed", "quota exceeded");
+            var lf2t = Team(failTeams, lf2);
+            Require(lf2t.State == "running" && lf2t.Round == 1 && lf2t.Tools.Contains("agy") && Last(lf2Leader).Contains("ASSIGN agy:"), "2-tool lead auto-adds available agy backup without burning round");
+            failTeams.Turned(lf2Leader, "done", "ASSIGN agy: 修日志格式");
+            failTeams.Turned(Team(failTeams, lf2).Members["agy"], "done", "日志修好了");
+            Require(Team(failTeams, lf2).State == "done", "auto-added backup completes work");
+
+            // 3) Review mode: writer (claude) hits quota -> automatically switches writer to agy with handoff context and continues
+            string rf = "1616161616161616";
+            changes = "文件：\n M export.js\n\n+ fixExport()";
+            failTeams.Start(new Dictionary<string, object> { { "id", rf }, { "mode", "review" }, { "dir", "web-shop" }, { "goal", "修复导出乱码" }, { "tools", new object[] { "claude", "codex" } }, { "rounds", 3 } });
+            string rfClaude = Team(failTeams, rf).Members["writer"];
+            failTeams.Turned(rfClaude, "failed", "rate limit reached");
+            var rft = Team(failTeams, rf);
+            Require(rft.State == "running" && rft.Tools[0] == "agy" && rft.Awaited.SequenceEqual(new[] { "writer" }) && tools[rft.Members["writer"]] == "agy" && Last(rft.Members["writer"]).Contains("fixExport()") && Last(rft.Members["writer"]).Contains("额度已用尽"), "review writer auto-switches to agy with diff context");
+            failTeams.Turned(rft.Members["writer"], "done", "已修好导出乱码");
+            failTeams.Turned(Team(failTeams, rf).Members["reviewer"], "done", "REVIEW: PASS\n没问题");
+            Require(Team(failTeams, rf).State == "done", "review passes after automatic writer failover");
+
+            // 4) Manual Swap mid-run: user reassigns active writer from claude to agy with custom note
+            string sw = "1717171717171717";
+            failTeams.Start(new Dictionary<string, object> { { "id", sw }, { "mode", "review" }, { "dir", "web-shop" }, { "goal", "改主题色" }, { "tools", new object[] { "claude", "codex" } }, { "rounds", 3 } });
+            string swOld = Team(failTeams, sw).Members["writer"];
+            var swapped = failTeams.Swap(sw, "writer", "agy", "顺便把暗色模式也调一下");
+            Require(stopped.Contains(swOld) && swapped.State == "running" && swapped.Tools[0] == "agy" && Last(swapped.Members["writer"]).Contains("暗色模式也调一下") && swapped.Log.Any(s => s.Who == "切换"), "manual swap stops old terminal and launches chosen AI with note");
+
+            // 5) Paused team + Say targeting leader clears stale failed member from Awaited so next round does not hang
+            string ps = "1818181818181818";
+            var noBackup = new Teams(null, new Teams.Hands { Begin = Hands().Begin, Say = Hands().Say, Stop = Hands().Stop, Changes = d => "" });
+            noBackup.Start(new Dictionary<string, object> { { "id", ps }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "排查报错" }, { "tools", new object[] { "codex", "claude" } }, { "rounds", 3 } });
+            string psLeader = Team(noBackup, ps).Members["leader"];
+            noBackup.Turned(psLeader, "done", "ASSIGN claude: 查原因");
+            noBackup.Turned(Team(noBackup, ps).Members["claude"], "failed", "hit your limit");
+            Require(Team(noBackup, ps).State == "paused", "pauses cleanly when no other member or backup exists");
+            noBackup.Say(ps, "先直接总结一下现状", "leader");
+            Require(Team(noBackup, ps).State == "running" && Team(noBackup, ps).Awaited.SequenceEqual(new[] { "leader" }), "Say on paused team clears stale failed Awaited");
+            noBackup.Turned(psLeader, "done", "DONE: 已汇总现状");
+            Require(Team(noBackup, ps).State == "done", "paused team finishes after targeted Say without hanging");
 
             // ---- Item 3: user interjects mid-run (`Say`), resumes paused with guidance, and continues after `done`
             string follow = "0909090909090909";

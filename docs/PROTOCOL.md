@@ -166,7 +166,7 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy` and `teams`
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams` and `teams-v2`
 (the work capabilities: "The owner's work", below). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 An agent verifies Codex's actual writer lock and process ownership before advertising takeover, then checks
@@ -516,8 +516,9 @@ on as the operation `work_<action>` and keeps nothing.
 | `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
 | `teams` | none; needs `teams` | `{"teams": [...]}`: multi-AI collaboration tasks kept on this computer |
 | `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), `rounds` (1 to 10, default 3; 1 for `compare`) | `{"team": {...}}` |
-| `team_say` | `team`: its `id`, `text` (1 to 4,000 characters), optional `target` (role or tool name, max 32 chars) | `{"team": {...}}`: interjects while `running`, resumes with guidance while `paused`, refines candidates while `choose`, or starts a follow-up round after `done`/`stopped` (`review`/`lead`) |
-| `team_pick` | `team`: its `id`, `tool`: winning tool name (from `CHAT_TOOLS`) or `""` to discard all | `{"team": {...}}`: checks and applies the chosen `compare` worktree patch to the main project folder (or discards all) and removes all temporary worktrees |
+| `team_say` | `team`: its `id`, `text` (1 to 4,000 characters), optional `target` (role or tool name, max 32 chars); needs `teams-v2` | `{"team": {...}}`: interjects while `running`, resumes with guidance while `paused`, refines candidates while `choose`, or starts a follow-up round after `done`/`stopped` (`review`/`lead`) |
+| `team_pick` | `team`: its `id`, `tool`: winning tool name (from `CHAT_TOOLS`) or `""` to discard all; needs `teams-v2` | `{"team": {...}}`: checks and applies the chosen `compare` worktree patch to the main project folder (or discards all) and removes all temporary worktrees |
+| `team_swap` | `team`: its `id`, optional `role` (role or tool name, max 32 chars), `tool`: replacement chat-capable tool, optional `note` (max 1,000 chars); needs `teams-v2` | `{"team": {...}}`: swaps a role's AI or reassigns a member's task to another installed AI mid-run or while paused |
 | `team_stop` | `team`: its `id` | `{}` |
 | `team_resume` | `team`: its `id` (must be `paused`) | `{}` |
 | `team_remove` | `team`: its `id` (must not be `running`) | `{}` |
@@ -598,6 +599,8 @@ for `team_resume`.
   exhausted.
 - `compare` (并行比稿, `agent-windows/Worktrees.cs`): creates one detached Git worktree per candidate under `<dataDir>/worktrees/<teamId>/<tool>` and runs 2–3 distinct AIs in parallel; when finished, the task enters `choose` with per-candidate summaries, file stats and diffs. `team_say` can refine one or all candidates before picking; `team_pick` verifies and applies the chosen candidate's binary-safe patch (`git apply --check` then `git apply`) to the main project folder (leaving the main folder untouched on conflict) and removes all temporary worktrees (or discards all when `tool: ""`).
 - `team_say` lets the owner interject mid-run, resume a paused task with guidance, refine `compare` candidates, or continue `review`/`lead` tasks into a new round after `done`/`stopped`.
+- `team_swap` lets the owner switch a role's AI or reassign a member's task to another installed AI at any time (`review`/`lead`). When a member fails mid-run (e.g. quota exhausted), `lead` mode reports the failure and live quotas back to the leader to reassign automatically (and adds an available backup AI if needed), while `review` mode and failed leaders automatically switch to an available backup AI before falling back to `paused`.
+- Agents supporting `team_say`, `team_pick`, `team_swap`, `discuss` and `compare` advertise `teams-v2`; relays reject those actions with an upgrade prompt when talking to older `teams`-only agents.
 
 ## Chats
 

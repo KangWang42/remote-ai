@@ -15,6 +15,7 @@
   let teams = null, failure = '', loading = false;
 
   const work = (action, more) => api('api/work', Object.assign({ id: newId(), action }, more));
+  const hasV2 = () => page.has('teams-v2');
   const able = () => ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
   const toolOf = (team, role) => {
     if (!role) return '';
@@ -23,7 +24,7 @@
   };
   const roleName = (team, role) => {
     if (role === 'user') return '你';
-    if (role === '目标' || role === '结果') return role;
+    if (role === '目标' || role === '结果' || role === '切换') return role;
     if (role.startsWith('discuss:')) return '讨论 · ' + (TOOLS[role.slice(8)] || role.slice(8));
     const tool = toolOf(team, role);
     if (team.mode === 'compare') return TOOLS[tool] || tool;
@@ -75,7 +76,8 @@
       const modeHint = plan.mode === 'review' ? '一个写，另一个只读审查；审查意见交回去改，直到通过'
         : plan.mode === 'lead' ? '领队负责决策并按任务与额度按需分工、交叉检查，达标即结束'
         : '2–3 个 AI 在独立 Git worktree 副本中并行完成，互不干扰，做完后并排对比改动、任选一个合并';
-      p.body.append(kit.section('方式', kit.seg(Object.keys(MODES).map(key => [key, MODES[key]]), plan.mode, value => { plan.mode = value; p.refresh(); }, { label: '方式', full: true }), modeHint));
+      const modeKeys = hasV2() ? Object.keys(MODES) : ['review', 'lead'];
+      p.body.append(kit.section('方式', kit.seg(modeKeys.map(key => [key, MODES[key]]), plan.mode, value => { plan.mode = value; p.refresh(); }, { label: '方式', full: true }), modeHint));
       const goal = kit.area({ id: 'team-goal', value: plan.goal, placeholder: '要完成什么', max: 4000, rows: 4, label: '目标' }, value => { plan.goal = value; });
       p.body.append(kit.section('目标', goal));
       p.body.append(kit.section('项目', kit.chips(projects.map(name => [name, name]), { chosen: plan.dir, label: '项目' }, value => { plan.dir = value; })));
@@ -93,9 +95,11 @@
         p.body.append(kit.section('参与比稿的 AI', kit.chips(named, { chosen: plan.compareTools, multi: true, label: '比稿 AI' }, value => { plan.compareTools = value; }), '至少选 2 个不同 AI；要求项目目录是已有提交的 Git 仓库'));
       }
       if (plan.mode !== 'compare') {
-        const discussToggle = kit.toggle(plan.discuss, on => { plan.discuss = on; }, '先议后写');
-        discussToggle.id = 'team-discuss';
-        p.body.append(kit.group(kit.row({ icon: 'chat', tint: 'agy', label: '先讨论再动手', detail: '先由各 AI 只读分析方案并汇总共识，再开始改代码', end: discussToggle })));
+        if (hasV2()) {
+          const discussToggle = kit.toggle(plan.discuss, on => { plan.discuss = on; }, '先议后写');
+          discussToggle.id = 'team-discuss';
+          p.body.append(kit.group(kit.row({ icon: 'chat', tint: 'agy', label: '先讨论再动手', detail: '先由各 AI 只读分析方案并汇总共识，再开始改代码', end: discussToggle })));
+        }
         p.body.append(kit.section('最多几轮', kit.seg(ROUNDS.map(n => [n, n + ' 轮']), plan.rounds, value => { plan.rounds = value; }, { label: '轮数', full: true })));
       }
       const rules = kit.area({ id: 'team-rules', value: plan.rules, placeholder: '选填：默认 Codex 决策、Claude 写作、Gemini 做 UI，交叉检查优先 Claude/Gemini（自动记住）', max: 1000, rows: 2, label: '分工偏好' }, value => { plan.rules = value; });
@@ -130,7 +134,7 @@
     const expanded = new Set();
     let streamBox = null, footBox = null, bodyScroll = null, activeSheet = null, lastKey = '';
 
-    const keyOf = t => JSON.stringify([t.state, t.phase, t.round, t.rounds, t.note, t.picked, t.awaited, t.members, (t.log || []).length, (t.candidates || []).map(c => [c.tool, c.stat, c.ready, (c.diff || '').length])]);
+    const keyOf = t => JSON.stringify([t.state, t.phase, t.round, t.rounds, t.note, t.picked, t.tools, t.awaited, t.members, t.failed, (t.log || []).length, (t.candidates || []).map(c => [c.tool, c.stat, c.ready, (c.diff || '').length])]);
 
     function updateTeamLocal(updated) {
       if (!updated) return;
@@ -165,15 +169,16 @@
           const asking = t && t.ask;
           if (asking) pendingAsks.push({ role, tid, ask: t.ask });
           const tool = toolOf(team, role);
+          const failed = team.failed && team.failed[tool];
           return el('button', {
             type: 'button', id: 'member-' + role.replace(/[^a-z0-9_-]/gi, '_'),
-            className: 'team-chip' + (active ? ' busy' : '') + (asking ? ' ask' : ''),
+            className: 'team-chip' + (active ? ' busy' : '') + (asking ? ' ask' : '') + (failed ? ' fail' : ''),
             disabled: !t,
             onclick: () => { if (t) page.open(tid, 'chat'); }
           },
             el('span', { className: 'dot ' + (tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }),
             el('span', { className: 'name', textContent: roleName(team, role) }),
-            el('small', { textContent: asking ? '等你确认' : active ? '进行中' : t && page.running(t) ? '可查看' : '已结束' }));
+            el('small', { textContent: asking ? '等你确认' : failed ? '已中断' : active ? '进行中' : t && page.running(t) ? '可查看' : '已结束' }));
         });
         parts.push(el('div', { className: 'team-members', ariaLabel: '成员对话' }, ...chips));
       }
@@ -247,7 +252,7 @@
       const log = team.log || [];
       if (log.length) {
         const list = log.map((step, idx) => {
-          const isUser = step.who === 'user', isMeta = step.who === '目标' || step.who === '结果';
+          const isUser = step.who === 'user', isMeta = step.who === '目标' || step.who === '结果' || step.who === '切换';
           const tool = isUser ? 'user' : isMeta ? '' : toolOf(team, step.who);
           const key = idx + ':' + step.at;
           const long = (step.text || '').length > 420 || (step.text || '').split('\n').length > 10;
@@ -272,14 +277,60 @@
       if (wasAtEnd && bodyScroll) requestAnimationFrame(() => { bodyScroll.scrollTop = bodyScroll.scrollHeight; });
     }
 
+    function openSwapSheet() {
+      if (!activeSheet) return;
+      const team = currentTeam, tools = able();
+      if (tools.length < 2) return toast('需要电脑上至少安装两个可用 AI');
+      const roleChoices = team.mode === 'review'
+        ? [['writer', '写手 · ' + (TOOLS[team.tools[0]] || team.tools[0])], ['reviewer', '审查 · ' + (TOOLS[team.tools[1]] || team.tools[1])]]
+        : [['leader', '领队 · ' + (TOOLS[team.tools[0]] || team.tools[0])]].concat(team.tools.slice(1).map(t => [t, '成员 · ' + (TOOLS[t] || t)]));
+      const failedAwaited = (team.awaited || []).find(r => team.failed && team.failed[toolOf(team, r)]);
+      const initialRole = failedAwaited || ((team.awaited || []).find(r => roleChoices.some(([k]) => k === r))) || roleChoices[0][0];
+      const currentOf = r => toolOf(team, r);
+      const state = { role: initialRole, tool: tools.find(t => t !== currentOf(initialRole)) || tools[0], note: '' };
+      activeSheet.push({ title: '换 AI 接手', build(p) {
+        p.body.append(kit.section('要替换或转交的角色', kit.chips(roleChoices, { chosen: state.role, label: '替换角色' }, val => {
+          state.role = val;
+          if (state.tool === currentOf(val)) state.tool = tools.find(t => t !== currentOf(val)) || tools[0];
+          p.refresh();
+        })));
+        const choices = namedTools(tools.filter(t => t !== currentOf(state.role)));
+        p.body.append(kit.section('交给哪个 AI 继续', kit.chips(choices, { chosen: state.tool, label: '接手 AI' }, val => { state.tool = val; }), '会带上当前工作区改动和原任务上下文继续执行'));
+        const noteBox = kit.area({ id: 'team-swap-note', value: state.note, placeholder: '选填：给接手 AI 的补充说明', max: 1000, rows: 2, label: '补充说明' }, val => { state.note = val; });
+        p.body.append(kit.section('补充说明（选填）', noteBox));
+        const go = kit.go('交给它继续', async () => {
+          const payload = { team: currentTeam.id, role: state.role, tool: state.tool };
+          if (state.note.trim()) payload.note = state.note.trim();
+          const res = await work('team_swap', payload);
+          updateTeamLocal(res.team);
+          lastKey = keyOf(currentTeam);
+          toast('已交给 ' + (TOOLS[state.tool] || state.tool) + ' 接手');
+          p.sheet.goBack();
+          page.refresh();
+        }, { busy: '正在切换…', id: 'team-swap-go' });
+        p.foot.append(...go.nodes);
+      } });
+    }
+
+    function targetOptions(team) {
+      return [['', team.mode === 'compare' ? '全部候选' : '自动分配']].concat(
+        (team.mode === 'review' ? [['writer', '写手 · ' + TOOLS[team.tools[0]]], ['reviewer', '审查 · ' + TOOLS[team.tools[1]]]]
+          : team.mode === 'lead' ? [['leader', '领队 · ' + TOOLS[team.tools[0]]]].concat(team.tools.slice(1).map(t => [t, TOOLS[t] || t]))
+          : team.tools.map(t => [t, TOOLS[t] || t]))
+      );
+    }
+
     function renderFoot() {
       if (!footBox) return;
-      const team = currentTeam;
-      const canSay = team.state !== 'failed' && !(team.mode === 'compare' && team.state === 'done');
+      const team = currentTeam, v2 = hasV2();
+      const canSay = v2 && team.state !== 'failed' && !(team.mode === 'compare' && team.state === 'done');
       const existingBox = footBox.querySelector('#team-say-input');
       const hadFocus = existingBox && document.activeElement === existingBox;
 
       const actions = [];
+      if (v2 && team.mode !== 'compare' && (team.state === 'running' || team.state === 'paused') && able().length >= 2) {
+        actions.push(el('button', { type: 'button', id: 'team-swap', className: 'team-act', onclick: openSwapSheet }, '换 AI 接手'));
+      }
       if (team.state === 'running') {
         actions.push(el('button', {
           type: 'button', id: 'team-stop', className: 'team-act danger',
@@ -320,6 +371,11 @@
       bar.replaceChildren(...actions);
       bar.hidden = !actions.length;
 
+      let hint = footBox.querySelector('.team-upgrade-hint');
+      if (!v2 && team.state !== 'failed') {
+        if (!hint) { hint = el('p', { className: 'team-upgrade-hint', textContent: '当前电脑端版本较旧，更新电脑端后支持中途补充说明、换 AI 接手与继续下一轮' }); footBox.append(hint); }
+      } else if (hint) { hint.remove(); }
+
       let form = footBox.querySelector('#team-say-form');
       if (!canSay) { if (form) form.remove(); return; }
 
@@ -328,9 +384,17 @@
         : team.state === 'choose' ? '对候选方案提修改意见（默认发给全部 AI）…'
         : '发一条新要求，接着做下一轮…';
 
+      const targets = targetOptions(team);
       if (form) {
         const input = form.querySelector('#team-say-input');
         if (input && input.placeholder !== placeholder) input.placeholder = placeholder;
+        const sel = form.querySelector('#team-say-target');
+        const sig = JSON.stringify(targets);
+        if (sel && sel.dataset.sig !== sig) {
+          sel.dataset.sig = sig;
+          if (!targets.some(([v]) => v === targetRole)) targetRole = '';
+          sel.replaceChildren(...targets.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === targetRole })));
+        }
         if (hadFocus && input) input.focus();
         return;
       }
@@ -343,13 +407,9 @@
       input.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); } });
 
       // Optional target selector for interjecting to a specific member
-      const targets = [['', team.mode === 'compare' ? '全部候选' : '自动分配']].concat(
-        (team.mode === 'review' ? [['writer', '写手 · ' + TOOLS[team.tools[0]]], ['reviewer', '审查 · ' + TOOLS[team.tools[1]]]]
-          : team.mode === 'lead' ? [['leader', '领队 · ' + TOOLS[team.tools[0]]]].concat(team.tools.slice(1).map(t => [t, TOOLS[t] || t]))
-          : team.tools.map(t => [t, TOOLS[t] || t]))
-      );
       const targetSel = el('select', { id: 'team-say-target', className: 'team-target', ariaLabel: '发送对象' },
         ...targets.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === targetRole })));
+      targetSel.dataset.sig = JSON.stringify(targets);
       targetSel.addEventListener('change', () => { targetRole = targetSel.value; });
 
       const sendBtn = el('button', { type: 'submit', id: 'team-say-send', className: 'team-send', textContent: '发送' });

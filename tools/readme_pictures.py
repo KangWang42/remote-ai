@@ -231,6 +231,30 @@ class Played:
                 c["ready"] = False
             team["log"].append({"at": now, "who": "结果", "text": team["note"]})
             return {"team": team}
+        if action == "work_team_swap":
+            team = next((one for one in self.teams if one["id"] == op["team"]), None)
+            if team is None:
+                raise RemoteError("没有找到这个协作任务")
+            role, new_tool, note = op.get("role", ""), op["tool"], op.get("note", "")
+            if team["mode"] == "review":
+                idx = 1 if role == "reviewer" else 0
+                old_tool = team["tools"][idx]
+                team["tools"][idx] = new_tool
+                team["awaited"] = [role or ("reviewer" if idx == 1 else "writer")]
+            else:
+                old_tool = team["tools"][0] if role == "leader" else (role or (team["tools"][1] if len(team["tools"]) > 1 else team["tools"][0]))
+                if role == "leader":
+                    team["tools"] = [new_tool] + [t for t in team["tools"] if t != new_tool]
+                    team["awaited"] = ["leader"]
+                else:
+                    if new_tool not in team["tools"]:
+                        team["tools"].append(new_tool)
+                    team["awaited"] = [new_tool]
+            team["state"] = "running"
+            team["note"] = ""
+            team.setdefault("failed", {}).pop(new_tool, None)
+            team["log"].append({"at": now, "who": "切换", "text": f"已将 {old_tool} 切换为 {new_tool}" + (f"（{note}）" if note else "")})
+            return {"team": team}
         if action in ("work_team_stop", "work_team_resume", "work_team_remove"):
             team = next((one for one in self.teams if one["id"] == op["team"]), None)
             if team is None:

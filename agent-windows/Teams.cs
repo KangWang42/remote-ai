@@ -44,6 +44,9 @@ public sealed class Teams {
         public Dictionary<string, string> Summaries = new Dictionary<string, string>();
         public Dictionary<string, string> Stats = new Dictionary<string, string>();
         public Dictionary<string, string> Diffs = new Dictionary<string, string>();
+        /// Tools that failed/exhausted quota in this task (tool -> brief reason), and each role's last dispatched prompt.
+        public Dictionary<string, string> Failed = new Dictionary<string, string>();
+        public Dictionary<string, string> Pending = new Dictionary<string, string>();
         public bool Reminded;
         internal Team Copy() {
             var copy = (Team)MemberwiseClone();
@@ -52,11 +55,12 @@ public sealed class Teams {
             copy.Worktrees = new Dictionary<string, string>(Worktrees); copy.BaseCommits = new Dictionary<string, string>(BaseCommits);
             copy.Summaries = new Dictionary<string, string>(Summaries); copy.Stats = new Dictionary<string, string>(Stats);
             copy.Diffs = new Dictionary<string, string>(Diffs);
+            copy.Failed = new Dictionary<string, string>(Failed); copy.Pending = new Dictionary<string, string>(Pending);
             return copy;
         }
     }
     /// What the program does for a team: begin a member's conversation (optionally in a worktree folder), tell it
-    /// something, stop one, read project changes, read quota limits, and manage Git worktrees for `compare`.
+    /// something, stop one, read project changes, read quota limits, list available chat tools, and manage Git worktrees for `compare`.
     public sealed class Hands {
         public Func<string, string, string, bool, string> Begin;                 // tool, project, first words, read only -> terminal
         public Func<string, string, string, bool, string, string> BeginIn;       // tool, project, first words, read only, folderOverride -> terminal
@@ -64,6 +68,7 @@ public sealed class Teams {
         public Action<string> Stop;                                              // terminal
         public Func<string, string> Changes;                                     // project -> what changed, in words
         public Func<string, Quotas.Window[]> Limits;                             // tool -> its main windows still running
+        public Func<string[]> Available;                                         // chat-capable tools installed on this computer
         public Func<string, string, string, Worktrees.Created> MakeWorktree;     // project, teamId, tool -> Created
         public Func<string, string, string> WorktreeDiff;                        // worktreePath, baseCommit -> diff
         public Func<string, string, string> WorktreeStat;                        // worktreePath, baseCommit -> stat
@@ -107,7 +112,8 @@ public sealed class Teams {
             Tools = many("tools").Select(Convert.ToString).ToArray(),
             Members = map("members"), Answers = map("answers"), Awaited = many("awaited").Select(Convert.ToString).ToList(),
             Worktrees = map("worktrees"), BaseCommits = map("base_commits"),
-            Summaries = map("summaries"), Stats = map("stats"), Diffs = map("diffs")
+            Summaries = map("summaries"), Stats = map("stats"), Diffs = map("diffs"),
+            Failed = map("failed"), Pending = map("pending")
         };
         team.Rounds = Int32.TryParse(word("rounds"), out number) ? number : 3; team.Round = Int32.TryParse(word("round"), out number) ? number : 1;
         long created; team.Created = Int64.TryParse(word("created"), out created) ? created : 0;
@@ -124,6 +130,7 @@ public sealed class Teams {
             { "members", t.Members }, { "awaited", t.Awaited }, { "answers", t.Answers },
             { "worktrees", t.Worktrees }, { "base_commits", t.BaseCommits },
             { "summaries", t.Summaries }, { "stats", t.Stats }, { "diffs", t.Diffs },
+            { "failed", t.Failed }, { "pending", t.Pending },
             { "log", t.Log.Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         }).ToArray();
         try {
@@ -142,7 +149,7 @@ public sealed class Teams {
             { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "rules", t.Rules },
             { "state", t.State }, { "note", t.Note }, { "phase", t.Phase }, { "discuss", t.Discuss }, { "picked", t.Picked },
             { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created },
-            { "members", t.Members }, { "awaited", t.Awaited.ToArray() },
+            { "members", t.Members }, { "awaited", t.Awaited.ToArray() }, { "failed", t.Failed },
             { "log", t.Log.Skip(Math.Max(0, t.Log.Count - 80)).Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         };
         if (t.Mode == "compare") {
@@ -163,26 +170,68 @@ public sealed class Teams {
         { "codex", "擅长决策拍板、任务拆解、精准改代码与修测试（优先负责决策，纯检查不必浪费其额度）" },
         { "claude", "擅长主力写作（代码实现、重构与文档撰写）以及深度交叉审查" },
         { "agy", "Gemini 模型，擅长 UI 与前端界面设计、长上下文检索，也可兼顾写作与交叉检查" } };
-    /// A tool's limits in words for the leader; a window used for 80% or more makes it tight.
+    /// Whether any main quota window has reached 100%.
+    public static bool IsExhausted(Quotas.Window[] windows) { return windows != null && windows.Any(w => Math.Round(w.Used) >= 100); }
+    static readonly Regex QuotaErrorPattern = new Regex(@"(hit your limit|rate[\s_-]*limit|usage[\s_-]*limit|quota|out of credits|credit balance|too many requests|\b429\b|overloaded|额度|限额|已达上限|额度用尽|额度已用完|额度用完)", RegexOptions.IgnoreCase);
+    /// Whether a member's failure message indicates quota or rate-limit exhaustion.
+    public static bool IsQuotaError(string text) { return !String.IsNullOrWhiteSpace(text) && QuotaErrorPattern.IsMatch(text); }
+    /// A tool's limits in words for the leader; 80%+ is tight and 100% is exhausted.
     public static string Room(Quotas.Window[] windows) {
         if (windows == null || windows.Length == 0) return "额度未知";
         var said = windows.Select(w => (w.Name == "five_hour" ? "5 小时窗口" : w.Name == "seven_day" ? "本周" : w.Name) + "已用 " + Math.Round(w.Used) + "%"
             + (w.Resets > 0 ? "（" + When(w.Resets) + " 重置）" : "")).ToArray();
-        return "额度：" + String.Join("，", said) + (windows.Any(w => Math.Round(w.Used) >= 80) ? "，紧张" : "");
+        string tag = IsExhausted(windows) ? "，已用尽（不可派工）" : windows.Any(w => Math.Round(w.Used) >= 80) ? "，紧张" : "";
+        return "额度：" + String.Join("，", said) + tag;
     }
     static string When(long seconds) {
         DateTime at = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(seconds).ToLocalTime();
         return at.ToString(at.Date == DateTime.Now.Date ? "HH:mm" : "M月d日 HH:mm", CultureInfo.InvariantCulture);
     }
+    Quotas.Window[] SafeLimits(string tool) {
+        if (hands.Limits == null) return null;
+        try { return hands.Limits(tool); } catch (Exception) { return null; }
+    }
     Dictionary<string, string> Rooms(Team t) {
         var rooms = new Dictionary<string, string>();
-        if (hands.Limits == null) return rooms;
-        foreach (string tool in t.Tools.Distinct()) {
-            Quotas.Window[] windows = null;
-            try { windows = hands.Limits(tool); } catch (Exception) { }
-            rooms[tool] = Room(windows);
+        Dictionary<string, string> failed;
+        string[] list;
+        lock (gate) { failed = new Dictionary<string, string>(t.Failed); list = t.Tools.Distinct().ToArray(); }
+        if (hands.Limits == null && failed.Count == 0) return rooms;
+        foreach (string tool in list) {
+            string why;
+            bool isFailed = failed.TryGetValue(tool, out why);
+            if (hands.Limits != null) {
+                string room = Room(SafeLimits(tool));
+                rooms[tool] = isFailed ? room + "；当前不可用（" + why + "，请勿再派工）" : room;
+            } else if (isFailed) {
+                rooms[tool] = "不可用（" + why + "，请勿再派工）";
+            }
         }
         return rooms;
+    }
+    /// Picks the best available backup AI when `failedTool` fails, excluding `avoidTool`, failed tools and exhausted tools.
+    string FallbackTool(Team team, string failedTool, string avoidTool = "") {
+        var candidates = new List<string>();
+        Dictionary<string, string> failed;
+        string[] current;
+        lock (gate) { failed = new Dictionary<string, string>(team.Failed); current = team.Tools.ToArray(); }
+        foreach (string t in current) if (!String.IsNullOrEmpty(t) && t != failedTool && t != avoidTool && !candidates.Contains(t)) candidates.Add(t);
+        if (hands.Available != null) {
+            try {
+                foreach (string t in hands.Available() ?? new string[0])
+                    if (!String.IsNullOrEmpty(t) && t != failedTool && t != avoidTool && !candidates.Contains(t)) candidates.Add(t);
+            } catch (Exception) { }
+        }
+        var usable = new List<Tuple<string, double, int>>();
+        for (int i = 0; i < candidates.Count; i++) {
+            string t = candidates[i];
+            if (failed.ContainsKey(t)) continue;
+            var w = SafeLimits(t);
+            if (IsExhausted(w)) continue;
+            double score = w != null && w.Length > 0 ? w.Max(one => one.Used) : 50.0;
+            usable.Add(Tuple.Create(t, score, i));
+        }
+        return usable.OrderBy(x => x.Item2).ThenBy(x => x.Item3).Select(x => x.Item1).FirstOrDefault();
     }
     static string ExtraRules(Team t) { return String.IsNullOrEmpty(t.Rules) ? "" : "\n\n【分工偏好】\n" + Cut(t.Rules, 1000); }
     static string RoomsBlock(Team t, IDictionary<string, string> rooms) {
@@ -213,7 +262,7 @@ public sealed class Teams {
             + "\n\n你负责决策、按任务特点高效干净地分工、验收结果并在达标时结束。成员都在同一个项目文件夹中工作：\n" + String.Join("\n", members)
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
             + "\n\n分工原则：\n1. 按具体任务按需派工，不必每次把所有成员都派满；不需要的成员可以不派。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要核验时采用交叉检查（谁写不由谁审），优先让 Claude Code 或 Antigravity CLI 交叉检查，不必把纯检查浪费在 Codex 上。\n4. 结果达标后立刻结束，不要为了凑轮次空转。"
-            + (rooms.Count > 0 ? "\n5. 按额度分配工作量：额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
+            + (rooms.Count > 0 ? "\n5. 按额度分配工作量：额度已用尽或不可用的成员不要再派工；额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
             + "\n\n分派时，在回答的最后每行写一条（成员名用上面的英文名）：\nASSIGN 成员名: 任务内容\n全部完成时，回答的最后单独一行写：\nDONE: 总结\n分派出去的工作不要自己动手做。";
     }
     public static string MemberTask(Team t, string task) {
@@ -379,8 +428,14 @@ public sealed class Teams {
                     string resolved = ResolveRole(team, target);
                     if (resolved == null) throw new ArgumentException("没有找到这个成员");
                     targets.Add(resolved);
+                    // Resuming a paused task with an explicit target drops stale failed members from Awaited.
+                    if (state == "paused") team.Awaited.Clear();
                     if (!team.Awaited.Contains(resolved)) team.Awaited.Add(resolved);
                 } else {
+                    if (state == "paused" && mode == "lead" && team.Awaited.Count > 0 && team.Awaited.All(r => r != "leader" && team.Failed.ContainsKey(ToolOf(team, r)))) {
+                        team.Awaited.Clear();
+                        team.Awaited.Add("leader");
+                    }
                     targets.AddRange(team.Awaited.Count > 0 ? team.Awaited : new List<string> { mode == "review" ? "writer" : mode == "lead" ? "leader" : team.Tools[0] });
                     foreach (string r in targets) if (!team.Awaited.Contains(r)) team.Awaited.Add(r);
                 }
@@ -473,6 +528,132 @@ public sealed class Teams {
         return Of(id);
     }
 
+    /// Explicitly swaps a role's AI (or reassigns a member's task to another AI) mid-run or while paused.
+    public Team Swap(string id, string role, string newTool, string note = "") {
+        role = (role ?? "").Trim();
+        newTool = (newTool ?? "").Trim().ToLowerInvariant();
+        note = (note ?? "").Trim();
+        if (note.Length > 1000) throw new ArgumentException("补充说明不能超过 1000 字");
+        if (newTool != "claude" && newTool != "codex" && newTool != "agy") throw new ArgumentException("接手 AI 无效");
+        Team team; string resolved, oldTool, oldTerminal = null, pending = "", mode, phase, prevState;
+        bool launchNow = false;
+        lock (gate) {
+            team = items.FirstOrDefault(t => t.Id == id);
+            if (team == null) throw new ArgumentException("没有找到这个协作任务");
+            if (team.State == "failed") throw new InvalidOperationException("这个协作任务没有启动成功，请重新新建");
+            if (team.Mode == "compare") throw new InvalidOperationException("并行比稿不支持替换角色");
+            mode = team.Mode; phase = team.Phase; prevState = team.State;
+            resolved = role.Length > 0 ? ResolveRole(team, role) : DefaultSwapRole(team);
+            if (resolved == null) throw new ArgumentException("没有找到这个角色");
+            oldTool = ToolOf(team, resolved);
+            if (oldTool == newTool) throw new ArgumentException("这个角色当前已经是 " + Label(newTool));
+            team.Members.TryGetValue(resolved, out oldTerminal);
+            team.Pending.TryGetValue(resolved, out pending);
+            team.Failed.Remove(newTool);
+
+            bool wasActive = team.Awaited.Contains(resolved) || prevState != "running";
+            if (mode == "review") {
+                int idx = resolved == "writer" ? 0 : 1;
+                team.Tools[idx] = newTool;
+                team.Members.Remove(resolved);
+                if (phase == "discuss") {
+                    string oldDiscuss = "discuss:" + oldTool, newDiscuss = "discuss:" + newTool;
+                    if (team.Members.ContainsKey(oldDiscuss)) { oldTerminal = team.Members[oldDiscuss]; team.Members.Remove(oldDiscuss); }
+                    if (team.Awaited.Remove(oldDiscuss) && !team.Awaited.Contains(newDiscuss)) { team.Awaited.Add(newDiscuss); resolved = newDiscuss; launchNow = true; }
+                } else if (wasActive) {
+                    team.State = "running"; team.Note = "";
+                    team.Awaited.Clear(); team.Awaited.Add(resolved);
+                    launchNow = true;
+                }
+            } else if (resolved == "leader") {
+                PromoteLeader(team, newTool);
+                team.Members.Remove("leader");
+                if (wasActive) {
+                    team.State = "running"; team.Note = "";
+                    team.Awaited.Clear(); team.Awaited.Add("leader");
+                    launchNow = true;
+                }
+            } else if (phase == "discuss" && resolved.StartsWith("discuss:", StringComparison.Ordinal)) {
+                string newDiscuss = "discuss:" + newTool;
+                if (!team.Tools.Contains(newTool)) team.Tools = team.Tools.Concat(new[] { newTool }).ToArray();
+                team.Members.Remove(resolved);
+                team.Awaited.Remove(resolved);
+                if (!team.Awaited.Contains(newDiscuss)) team.Awaited.Add(newDiscuss);
+                if (prevState != "running") { team.State = "running"; team.Note = ""; }
+                resolved = newDiscuss;
+                launchNow = true;
+            } else {
+                // Reassign a lead member's task to `newTool` (adding `newTool` to the team if needed).
+                if (!team.Tools.Contains(newTool)) team.Tools = team.Tools.Concat(new[] { newTool }).ToArray();
+                string nextRole = newTool == team.Tools[0] ? "leader" : newTool;
+                team.Awaited.Remove(resolved);
+                if (prevState == "paused") team.Awaited.Clear();
+                if (!team.Awaited.Contains(nextRole)) team.Awaited.Add(nextRole);
+                team.State = "running"; team.Note = "";
+                resolved = nextRole;
+                launchNow = true;
+            }
+            Save();
+        }
+        if (!String.IsNullOrEmpty(oldTerminal)) try { hands.Stop(oldTerminal); } catch (Exception) { }
+        string summary = mode == "review"
+            ? "已将" + (resolved == "reviewer" ? "审查" : "写手") + "从 " + Label(oldTool) + " 切换为 " + Label(newTool)
+            : resolved == "leader" ? "已将领队从 " + Label(oldTool) + " 切换为 " + Label(newTool)
+            : "已将 " + Label(oldTool) + " 的任务转交给 " + Label(newTool);
+        if (note.Length > 0) summary += "（" + Cut(note, 120) + "）";
+        Log(team, "切换", summary);
+        if (!launchNow) return Of(id);
+
+        bool readOnly = resolved == "reviewer" || resolved.StartsWith("discuss:", StringComparison.Ordinal);
+        string prompt = HandoffPrompt(team, resolved, oldTool, "用户指定切换", pending, note);
+        if (mode == "lead" && resolved != "leader" && !resolved.StartsWith("discuss:", StringComparison.Ordinal))
+            Ask(team, resolved, newTool, prompt, false, null);
+        else
+            Open(team, resolved, newTool, prompt, readOnly, null);
+        return Of(id);
+    }
+
+    static string DefaultSwapRole(Team team) {
+        string failedAwaited = team.Awaited.FirstOrDefault(r => team.Failed.ContainsKey(ToolOf(team, r)));
+        if (failedAwaited != null) return failedAwaited;
+        if (team.Awaited.Count > 0) return team.Awaited[0];
+        if (team.Mode == "review") return "writer";
+        return team.Tools.Length > 1 ? team.Tools[1] : "leader";
+    }
+    static void PromoteLeader(Team team, string newLeader) {
+        var next = new List<string> { newLeader };
+        foreach (string t in team.Tools) if (t != newLeader && !next.Contains(t)) next.Add(t);
+        team.Tools = next.ToArray();
+    }
+    string HandoffPrompt(Team team, string role, string fromTool, string why, string pending, string userNote) {
+        string changes = "";
+        try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
+        string extra = (String.IsNullOrEmpty(why) ? "" : "\n\n【接手说明】原负责成员（" + Label(fromTool) + "）" + why + "，现在由你接手继续完成。")
+            + (String.IsNullOrEmpty(userNote) ? "" : "\n【用户补充】" + userNote);
+        if (role.StartsWith("discuss:", StringComparison.Ordinal)) return DiscussFirst(team, ToolOf(team, role)) + extra;
+        if (team.Mode == "review" && role == "writer") {
+            return WriterFirst(team)
+                + (!String.IsNullOrEmpty(pending) && pending != WriterFirst(team) ? "\n\n## 当前待完成的任务/意见\n" + Cut(pending, 6000) : "")
+                + (changes.Length > 0 ? "\n\n## 当前工作区已有改动\n" + Cut(changes, 20000) : "")
+                + extra + "\n\n请基于当前工作区已有改动继续完成，不要推倒重做已经正确的部分。";
+        }
+        if (team.Mode == "review" && role == "reviewer") {
+            return ReviewerAsk(team, "原审查 AI（" + Label(fromTool) + "）未能完成本轮审查，请你接手只读审查。" + (String.IsNullOrEmpty(userNote) ? "" : "\n用户补充：" + userNote), changes);
+        }
+        if (team.Mode == "lead" && role == "leader") {
+            string recent;
+            lock (gate) recent = String.Join("\n\n", team.Log.Skip(Math.Max(0, team.Log.Count - 10)).Select(s => "[" + s.Who + "] " + Cut(s.Text, 800)));
+            return LeaderFirst(team, Rooms(team))
+                + (recent.Length > 0 ? "\n\n## 此前协作进展\n" + Cut(recent, 8000) : "")
+                + (changes.Length > 0 ? "\n\n## 当前工作区改动\n" + Cut(changes, 16000) : "")
+                + extra;
+        }
+        return "【协作任务 · 接手成员任务】\n整体目标：" + team.Goal + ExtraRules(team)
+            + (!String.IsNullOrEmpty(pending) ? "\n\n原分派给 " + Label(fromTool) + " 的任务：\n" + Cut(pending, 4000) : "")
+            + (changes.Length > 0 ? "\n\n## 当前工作区已有改动\n" + Cut(changes, 16000) : "")
+            + extra + "\n\n请基于当前进展继续完成该任务，完成后简要说明你做了什么、改了哪些文件。";
+    }
+
     public bool Remove(string id) {
         Team team; string dir = null; bool hasWorktrees = false;
         lock (gate) {
@@ -525,7 +706,7 @@ public sealed class Teams {
 
     // ---- the members' turns
     void Open(Team team, string role, string tool, string words, bool read, string folderOverride) {
-        lock (gate) opening++;
+        lock (gate) { opening++; team.Pending[role] = Cut(words, 6000); }
         try {
             string terminal = hands.BeginIn != null
                 ? hands.BeginIn(tool, team.Dir, words, read, folderOverride)
@@ -534,16 +715,18 @@ public sealed class Teams {
             Log(team, role, "开始：" + Cut(words, 240));
         } catch (Exception problem) {
             lock (gate) {
-                team.State = "failed";
+                team.State = team.Members.Count == 0 && team.Log.Count <= 1 ? "failed" : "paused";
                 team.Note = Label(tool) + " 没有开始：" + (problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "电脑端出错");
-                team.Awaited.Remove(role); opening--; Save(); Monitor.PulseAll(gate);
+                if (team.State == "failed") team.Awaited.Remove(role);
+                else if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
+                opening--; Save(); Monitor.PulseAll(gate);
             }
             Tell();
         }
     }
     void Ask(Team team, string role, string tool, string words, bool read, string folderOverride = null) {
         string terminal;
-        lock (gate) { team.Members.TryGetValue(role, out terminal); if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
+        lock (gate) { team.Members.TryGetValue(role, out terminal); team.Pending[role] = Cut(words, 6000); if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
         if (terminal != null) {
             try { hands.Say(terminal, words); Log(team, role, "收到：" + Cut(words, 240)); return; }
             catch (Exception) { }       // its conversation was closed: begun anew
@@ -580,13 +763,141 @@ public sealed class Teams {
         }
         Log(team, role, Cut(said, 4000));
         if (team.Mode == "compare") { Compared(team, role, how, said); return; }
-        if (how != "done") {
-            lock (gate) { team.State = "paused"; team.Note = Label(ToolOf(team, role)) + (how == "stopped" ? " 这一轮被停止" : " 这一轮出错") + "：点“继续”接着做"; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
+        if (how == "done") {
+            lock (gate) { if (team.Failed.Remove(ToolOf(team, role))) Save(); }
+        } else if (how == "stopped") {
+            lock (gate) { team.State = "paused"; team.Note = Label(ToolOf(team, role)) + " 这一轮被停止：点“继续”接着做，或点“换 AI 接手”"; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
             Tell();
+            return;
+        } else {
+            HandleFailure(team, role, said);
             return;
         }
         if (team.Phase == "discuss") { Discussed(team, role, said); return; }
         if (team.Mode == "review") Reviewed(team, role, said); else Led(team, role, said);
+    }
+
+    static string FailureReason(string said) {
+        if (IsQuotaError(said)) return "额度已用尽";
+        string oneLine = Regex.Replace((said ?? "").Trim(), @"\s+", " ");
+        return oneLine.Length > 0 ? Cut(oneLine, 140) : "执行出错";
+    }
+
+    /// Handles a member failure (`how == "failed"`, e.g. quota exhausted) without breaking the whole team when a
+    /// backup AI can continue: reports member failures back to the leader in `lead` mode, or auto-swaps to a backup AI.
+    void HandleFailure(Team team, string role, string said) {
+        string failedTool = ToolOf(team, role);
+        string reason = FailureReason(said);
+        string pending = "";
+        lock (gate) {
+            team.Failed[failedTool] = reason;
+            team.Pending.TryGetValue(role, out pending);
+            Save();
+        }
+
+        // Read-only discussion: do not halt the team if one participant fails.
+        if (team.Phase == "discuss") {
+            Log(team, "切换", Label(failedTool) + " 讨论阶段失败（" + reason + "），其余成员继续");
+            Discussed(team, role, "（" + Label(failedTool) + " 未完成讨论：" + reason + "）");
+            return;
+        }
+
+        // Lead mode, worker failed: collect alongside parallel members and report to leader for reassignment.
+        if (team.Mode == "lead" && role != "leader") {
+            string report = "【执行失败】" + Label(failedTool) + " 这一轮失败（" + reason + "）。"
+                + (!String.IsNullOrWhiteSpace(said) && said.Trim() != reason ? "\n报错信息：" + Cut(said, 600) : "")
+                + (pending.Length > 0 ? "\n原分派任务：" + Cut(pending, 800) : "")
+                + "\n请将该未完成任务改派给其他可用成员，不要再派给 " + Label(failedTool) + "。";
+            Dictionary<string, string> answers = null;
+            string addedBackup = null;
+            bool pauseNoMember = false;
+            lock (gate) {
+                team.Answers[role] = report;
+                if (team.Awaited.Any(r => r != "leader")) { Save(); }
+                else {
+                    answers = new Dictionary<string, string>(team.Answers);
+                    team.Answers.Clear();
+                    bool hasLiveMember = team.Tools.Skip(1).Any(t => !team.Failed.ContainsKey(t) && !IsExhausted(SafeLimits(t)));
+                    if (!hasLiveMember) {
+                        addedBackup = FallbackTool(team, failedTool, team.Tools[0]);
+                        if (addedBackup != null) {
+                            if (!team.Tools.Contains(addedBackup)) team.Tools = team.Tools.Concat(new[] { addedBackup }).ToArray();
+                        } else {
+                            pauseNoMember = true;
+                            team.State = "paused";
+                            team.Note = Label(failedTool) + " 失败（" + reason + "），且没有其他可用成员：可点“换 AI 接手”或稍后继续";
+                            team.Awaited.Clear();
+                            team.Awaited.Add("leader");
+                        }
+                    }
+                    Save();
+                }
+            }
+            Log(team, "切换", addedBackup != null
+                ? Label(failedTool) + " 失败（" + reason + "），已自动加入 " + Label(addedBackup) + " 并回报领队改派"
+                : Label(failedTool) + " 失败（" + reason + "），已回报领队改派给其他可用成员");
+            if (answers == null || pauseNoMember) { Tell(); return; }
+            bool anyOk = answers.Values.Any(v => !v.StartsWith("【执行失败】", StringComparison.Ordinal));
+            if (anyOk) {
+                if (team.Round >= team.Rounds) { End(team, "done", "已到 " + team.Rounds + " 轮，成员最后的结果没有交给领队检查"); return; }
+                lock (gate) { team.Round++; Save(); }
+            }
+            string changes = "";
+            try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
+            string body = Results(team, answers, changes, Rooms(team));
+            if (addedBackup != null) body += "\n\n【自动补充成员】已将 " + Label(addedBackup) + "（" + addedBackup + "）加入协作队伍，可直接用 ASSIGN " + addedBackup + ": 任务内容 改派。";
+            Ask(team, "leader", team.Tools[0], body, false);
+            return;
+        }
+
+        // Lead mode, leader itself failed: promote a backup AI to leader if available.
+        if (team.Mode == "lead") {
+            string backup = FallbackTool(team, failedTool);
+            if (backup != null) {
+                lock (gate) {
+                    PromoteLeader(team, backup);
+                    team.Members.Remove("leader");
+                    team.Awaited.Clear();
+                    team.Awaited.Add("leader");
+                    Save();
+                }
+                Log(team, "切换", Label(failedTool) + "（领队）失败（" + reason + "），已自动由 " + Label(backup) + " 接任领队继续");
+                Open(team, "leader", backup, HandoffPrompt(team, "leader", failedTool, "因 " + reason + " 中断", pending, ""), false, null);
+                return;
+            }
+            lock (gate) {
+                team.State = "paused";
+                team.Note = Label(failedTool) + "（领队）失败（" + reason + "），没有可用备用 AI：可点“换 AI 接手”或稍后继续";
+                if (!team.Awaited.Contains("leader")) team.Awaited.Add("leader");
+                Save();
+            }
+            Tell();
+            return;
+        }
+
+        // Review mode: auto-swap failed writer/reviewer to an available third AI if present; otherwise pause for manual swap.
+        int slot = role == "writer" ? 0 : 1;
+        string other = team.Tools[1 - slot];
+        string replacement = FallbackTool(team, failedTool, other);
+        if (replacement != null) {
+            lock (gate) {
+                team.Tools[slot] = replacement;
+                team.Members.Remove(role);
+                team.Awaited.Clear();
+                team.Awaited.Add(role);
+                Save();
+            }
+            Log(team, "切换", Label(failedTool) + "（" + (role == "writer" ? "写手" : "审查") + "）失败（" + reason + "），已自动切换为 " + Label(replacement) + " 继续");
+            Open(team, role, replacement, HandoffPrompt(team, role, failedTool, "因 " + reason + " 中断", pending, ""), role == "reviewer", null);
+            return;
+        }
+        lock (gate) {
+            team.State = "paused";
+            team.Note = Label(failedTool) + " 失败（" + reason + "），没有其他可用备用 AI：可点“换 AI 接手”指定接替，或稍后继续";
+            if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
+            Save();
+        }
+        Tell();
     }
 
     static string ToolOf(Team team, string role) {
@@ -605,8 +916,31 @@ public sealed class Teams {
             Save();
         }
         string discussion = String.Join("\n\n", collected.Select(p => "### " + Label(ToolOf(team, p.Key)) + "\n" + Cut(p.Value, 5000)));
-        if (team.Mode == "review") Open(team, "writer", team.Tools[0], WriterFirst(team, discussion), false, null);
-        else Open(team, "leader", team.Tools[0], LeaderFirst(team, Rooms(team), discussion), false, null);
+        if (team.Mode == "review") {
+            string writerTool = team.Tools[0];
+            bool writerFailed; lock (gate) writerFailed = team.Failed.ContainsKey(writerTool);
+            if (writerFailed) {
+                string backup = FallbackTool(team, writerTool, team.Tools[1]);
+                if (backup != null) {
+                    lock (gate) { team.Tools[0] = backup; Save(); }
+                    Log(team, "切换", Label(writerTool) + " 讨论阶段不可用，写手已自动切换为 " + Label(backup));
+                    writerTool = backup;
+                }
+            }
+            Open(team, "writer", writerTool, WriterFirst(team, discussion), false, null);
+        } else {
+            string leaderTool = team.Tools[0];
+            bool leaderFailed; lock (gate) leaderFailed = team.Failed.ContainsKey(leaderTool);
+            if (leaderFailed) {
+                string backup = FallbackTool(team, leaderTool);
+                if (backup != null) {
+                    lock (gate) { PromoteLeader(team, backup); Save(); }
+                    Log(team, "切换", Label(leaderTool) + " 不可用，领队已自动切换为 " + Label(backup));
+                    leaderTool = backup;
+                }
+            }
+            Open(team, "leader", leaderTool, LeaderFirst(team, Rooms(team), discussion), false, null);
+        }
     }
 
     void Compared(Team team, string tool, string how, string said) {
@@ -659,7 +993,7 @@ public sealed class Teams {
                 return;
             }
             lock (gate) {
-                team.Reminded = false; team.Answers.Clear();
+                team.Reminded = false; team.Answers.Clear(); team.Awaited.Clear();
                 foreach (string member in tasks.Keys) if (!team.Awaited.Contains(member)) team.Awaited.Add(member);
                 Save();
             }

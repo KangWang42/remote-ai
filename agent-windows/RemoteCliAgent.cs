@@ -133,7 +133,7 @@ public sealed class TerminalAgent {
         Chains = new Chains(Path.Combine(dataDir, "chains.json"));
         Worktrees = new Worktrees(Path.Combine(dataDir, "worktrees"));
         Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands {
-            Begin = BeginMember, BeginIn = BeginMemberIn, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of,
+            Begin = BeginMember, BeginIn = BeginMemberIn, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
             MakeWorktree = MakeTeamWorktree, WorktreeDiff = Worktrees.Diff, WorktreeStat = Worktrees.Stat, ApplyWorktree = ApplyTeamWorktree, CleanWorktrees = CleanTeamWorktrees });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
@@ -429,9 +429,10 @@ public sealed class TerminalAgent {
         var chat = live.Chat;
         if (chat != null) chat.Turned += (how, words) => Teams.Turned(live.Id, how, words);
     }
+    string[] AvailableChatTools() { return new[] { "claude", "codex", "agy" }.Where(t => Tool.Named(t).Chats && FindTool(t) != null).ToArray(); }
     readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
     static readonly string[] WorkActions = { "work_stats", "work_schedules", "work_schedule_set", "work_schedule_remove", "work_handoff", "work_brief", "work_chains", "work_chain_set", "work_chain_remove",
-        "work_teams", "work_team_start", "work_team_stop", "work_team_resume", "work_team_remove", "work_team_say", "work_team_pick" };
+        "work_teams", "work_team_start", "work_team_stop", "work_team_resume", "work_team_remove", "work_team_say", "work_team_pick", "work_team_swap" };
     /// One rule runs: the last answer of the conversation that stopped goes to the other one, with its owner's words.
     void Pass(Chains.Item rule, Dictionary<string, object> prefs) {
         bool ok = false; string note;
@@ -578,6 +579,7 @@ public sealed class TerminalAgent {
         if (action == "work_team_resume") { Teams.Resume(Get(op, "team")); return new Dictionary<string, object>(); }
         if (action == "work_team_say") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Say(Get(op, "team"), Get(op, "text"), Get(op, "target"))) } }; }
         if (action == "work_team_pick") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Pick(Get(op, "team"), Get(op, "tool"))) } }; }
+        if (action == "work_team_swap") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Swap(Get(op, "team"), Get(op, "role"), Get(op, "tool"), Get(op, "note"))) } }; }
         if (action == "work_team_remove") { if (!Teams.Remove(Get(op, "team"))) throw new ArgumentException("没有找到这个协作任务"); return new Dictionary<string, object>(); }
         if (action == "work_brief") {
             // what a hand-over would say, for the phone to show, or to begin a new conversation with
@@ -1422,7 +1424,9 @@ public sealed class TerminalAgent {
             bool desktop = action == "app_open";
             bool peek = action == "session_read" || action == "session_say" || action == "session_withdraw" || action == "session_release" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0, ownWork = Array.IndexOf(WorkActions, action) >= 0;
-            if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z") || (!project && !file && !update && !peek && !computer && !ownWork && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z"))) throw new ArgumentException("操作编号无效");
+            if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
+            if (!ownWork && action.StartsWith("work_", StringComparison.Ordinal)) throw new ArgumentException("这台电脑的电脑端版本不支持这项操作，请更新电脑端");
+            if (!project && !file && !update && !peek && !computer && !ownWork && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z")) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
             if (Get(prefs, "RemoteEnabled") != "True") throw new InvalidOperationException("电脑远控已关闭");
             if (project) ChangeProjects(op, prefs, action);
@@ -1711,7 +1715,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0] } },
