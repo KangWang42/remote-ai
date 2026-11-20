@@ -90,6 +90,11 @@ jobs:
           java-version: "17"
       - name: Install the SDK pieces the runner may miss
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0" "platforms;android-36" >/dev/null
+      - name: Cache ZXing core jar
+        uses: actions/cache@v4
+        with:
+          path: .cache/zxing-core-3.5.3.jar
+          key: zxing-core-3.5.3-8d8064c1636fdaef
       - name: Compile every app source against the SDK (no APK, no signing)
         run: |
           set -euo pipefail
@@ -98,7 +103,10 @@ jobs:
           build="$(mktemp -d)"
           mkdir -p "$build/classes" "$build/generated" .cache
           zxing=".cache/zxing-core-3.5.3.jar"
-          curl -fsSL --retry 2 -o "$zxing" 'https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar'
+          if [ ! -f "$zxing" ]; then
+            curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -o "$zxing" 'https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar' \
+              || curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -o "$zxing" 'https://maven-central.storage-download.googleapis.com/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar'
+          fi
           echo '8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82  '"$zxing" | sha256sum -c - >/dev/null
           (cd android && "$tools/aapt2" compile --dir res -o "$build/resources.zip")
           (cd android && "$tools/aapt2" link -o "$build/unsigned.apk" -I "$jar" --manifest AndroidManifest.xml --java "$build/generated" "$build/resources.zip")
