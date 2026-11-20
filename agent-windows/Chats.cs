@@ -83,11 +83,9 @@ public abstract class Chat : IRunning {
     /// where the tool lets its id be chosen). `mode` is the computer's widest allowed way of working (full, edit,
     /// read), as for its terminals.
     public static Chat Open(string tool, string launcher, string folder, string session, bool resume, string mode, Action<string> emit, Quotas quotas = null) {
-        Chat chat;
-        if (tool == "claude") chat = new ClaudeChat(folder, emit);
-        else if (tool == "codex") chat = new CodexChat(folder, emit);
-        else if (tool == "agy") chat = new AgyChat(folder, emit);
-        else throw new ArgumentException("这个工具不支持对话");
+        Tool kind = RemoteCli.Tool.Of(tool);
+        if (kind == null || !kind.Chats) throw new ArgumentException("这个工具不支持对话");
+        Chat chat = kind.CreateChat(folder, emit);
         chat.quotas = quotas;
         try { chat.Begin(launcher, session ?? "", resume, mode ?? ""); }
         catch { chat.Dispose(); throw; }
@@ -151,9 +149,11 @@ public abstract class Chat : IRunning {
         byte[] bytes = new UTF8Encoding(false).GetBytes(json.Serialize(message) + "\n");
         lock (input) { if (Closed || disposed) throw new IOException("对话已结束"); input.Write(bytes, 0, bytes.Length); input.Flush(); }
     }
+    protected virtual void OnEnded() { }
     void Ended() {
         try { process.WaitForExit(5000); exit = process.ExitCode; } catch { }
         lock (gate) {
+            OnEnded();
             foreach (var asked in asks.Keys.ToArray()) Event(new Dictionary<string, object> { { "t", "answered" }, { "id", asked }, { "decision", "gone" } });
             asks.Clear();
             if (!disposed && exit.HasValue && exit.Value != 0) Note("工具已退出（代码 " + exit.Value + "）" + (lastErrors.Length > 0 ? "：" + lastErrors : ""));
@@ -467,14 +467,61 @@ public sealed class ClaudeChat : Chat {
     }
 }
 
+/// Shared JSON-RPC-over-stdio transport for structured chat drivers (Codex `app-server`, ACP servers like `agy acp`).
+/// Handles request numbering, response routing, cleanup on send failure/exit, and server request replies.
+public abstract class JsonRpcChat : Chat {
+    int next;
+    readonly Dictionary<int, Action<Dictionary<string, object>>> waiting = new Dictionary<int, Action<Dictionary<string, object>>>();
+
+    protected JsonRpcChat(string tool, string folder, Action<string> emit) : base(tool, folder, emit) { }
+    protected virtual bool UseJsonRpcVersion { get { return false; } }
+
+    Dictionary<string, object> Envelope() {
+        var m = new Dictionary<string, object>();
+        if (UseJsonRpcVersion) m["jsonrpc"] = "2.0";
+        return m;
+    }
+    protected void Call(string method, object given, Action<Dictionary<string, object>> answered) {
+        int id;
+        lock (gate) { id = ++next; waiting[id] = answered; }
+        var m = Envelope(); m["id"] = id; m["method"] = method; m["params"] = given;
+        try { Send(m); }
+        catch { lock (gate) waiting.Remove(id); throw; }
+    }
+    protected void Notify(string method, object given) {
+        var m = Envelope(); m["method"] = method; m["params"] = given;
+        Send(m);
+    }
+    protected void RespondResult(object id, object result) {
+        var m = Envelope(); m["id"] = id; m["result"] = result;
+        Send(m);
+    }
+    protected void Refuse(object id, string why) {
+        var m = Envelope(); m["id"] = id; m["error"] = new Dictionary<string, object> { { "code", -32601 }, { "message", why } };
+        Send(m);
+    }
+    protected override void OnEnded() { waiting.Clear(); }
+    protected override void Received(Dictionary<string, object> m) {
+        object id = At(m, "id"); string method = Text(m, "method");
+        if (id != null && method.Length == 0) {
+            int number; Action<Dictionary<string, object>> answered;
+            if (Int32.TryParse(Convert.ToString(id), out number) && waiting.TryGetValue(number, out answered)) { waiting.Remove(number); answered(m); }
+            return;
+        }
+        var p = At(m, "params");
+        if (id != null) { Requested(id, method, p); return; }
+        Notified(method, p);
+    }
+    protected abstract void Requested(object id, string method, object p);
+    protected abstract void Notified(string method, object p);
+}
+
 /// Codex through `codex app-server`: JSON-RPC on its standard input and output, one conversation ("thread") a
 /// program here. What is said starts a turn (`turn/start`), or joins the one at work (`turn/steer`); a stop is
 /// `turn/interrupt`; the steps it wants to run and the files it wants to change are asked of this program as
 /// requests, answered with the decision. Run on Codex 0.163.0 (docs/PROTOCOL.md, "Chats").
-public sealed class CodexChat : Chat {
+public sealed class CodexChat : JsonRpcChat {
     public CodexChat(string folder, Action<string> emit) : base("codex", folder, emit) { }
-    int next;
-    readonly Dictionary<int, Action<Dictionary<string, object>>> waiting = new Dictionary<int, Action<Dictionary<string, object>>>();
     string turn = "";
     string mode = "";
     readonly List<KeyValuePair<string, string>> early = new List<KeyValuePair<string, string>>();     // said before the conversation was there
@@ -482,10 +529,10 @@ public sealed class CodexChat : Chat {
     protected override void Begin(string launcher, string session, bool resume, string mode) {
         this.mode = mode;
         if (!resume) session = "";
-        if (session.Length > 0 && !Regex.IsMatch(session, @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z")) throw new ArgumentException("对话编号无效");
+        if (session.Length > 0 && !SessionLocks.IsUuid(session)) throw new ArgumentException("对话编号无效");
         Run(launcher, "app-server");
         Call("initialize", new Dictionary<string, object> { { "clientInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "title", "Remote AI" }, { "version", "1" } } } }, _ => { });
-        Send(new Dictionary<string, object> { { "method", "initialized" }, { "params", new Dictionary<string, object>() } });
+        Notify("initialized", new Dictionary<string, object>());
         var given = new Dictionary<string, object> { { "cwd", Folder } };
         if (mode == "read") given["sandbox"] = "read-only"; else if (mode == "edit") given["sandbox"] = "workspace-write";
         if (session.Length > 0) given["threadId"] = session;
@@ -497,11 +544,6 @@ public sealed class CodexChat : Chat {
             foreach (var one in early.ToArray()) Start(one.Key, one.Value);
             early.Clear();
         });
-    }
-    void Call(string method, object given, Action<Dictionary<string, object>> answered) {
-        int id;
-        lock (gate) { id = ++next; waiting[id] = answered; }
-        Send(new Dictionary<string, object> { { "id", id }, { "method", method }, { "params", given } });
     }
     static List<object> Words(string text) { return new List<object> { new Dictionary<string, object> { { "type", "text" }, { "text", text }, { "text_elements", new object[0] } } }; }
     public override void Say(string text, string id) {
@@ -534,15 +576,7 @@ public sealed class CodexChat : Chat {
             Call("turn/interrupt", new Dictionary<string, object> { { "threadId", Session }, { "turnId", turn } }, _ => { });
         }
     }
-    protected override void Received(Dictionary<string, object> m) {
-        object id = At(m, "id"); string method = Text(m, "method");
-        if (id != null && method.Length == 0) {
-            int number; Action<Dictionary<string, object>> answered;
-            if (Int32.TryParse(Convert.ToString(id), out number) && waiting.TryGetValue(number, out answered)) { waiting.Remove(number); answered(m); }
-            return;
-        }
-        var p = At(m, "params");
-        if (id != null) { Requested(id, method, p); return; }
+    protected override void Notified(string method, object p) {
         switch (method) {
             case "turn/started": turn = Text(At(p, "turn"), "id"); State(asks.Count > 0 ? "confirm" : "busy"); break;
             case "turn/completed": {
@@ -620,7 +654,7 @@ public sealed class CodexChat : Chat {
             if (summary.Length > 0) { thoughts.Add(id); Item(id, "thought", summary); }
         }
     }
-    void Requested(object id, string method, object p) {
+    protected override void Requested(object id, string method, object p) {
         var request = new Dictionary<string, object> { { "id", id }, { "method", method }, { "params", p } };
         if (method == "item/commandExecution/requestApproval" || method == "execCommandApproval") {
             string command = Text(p, "command"); var actions = Many(p, "commandActions").Select(one => Text(one, "command")).Where(one => one.Length > 0).ToList();
@@ -639,9 +673,6 @@ public sealed class CodexChat : Chat {
         }
         else Refuse(id, "Remote AI 不支持这个请求");
     }
-    void Refuse(object id, string why) {
-        Send(new Dictionary<string, object> { { "id", id }, { "error", new Dictionary<string, object> { { "code", -32601 }, { "message", why } } } });
-    }
     protected override void Reply(Asked asked, string decision) {
         var request = (Dictionary<string, object>)asked.Request;
         string method = Text(request, "method");
@@ -653,7 +684,7 @@ public sealed class CodexChat : Chat {
         else if (method == "item/tool/requestUserInput") result = new Dictionary<string, object> { { "answers", new Dictionary<string, object>() } };
         else if (method == "execCommandApproval" || method == "applyPatchApproval") result = new Dictionary<string, object> { { "decision", decision == "deny" ? "denied" : decision == "always" ? "approved_for_session" : "approved" } };
         else result = new Dictionary<string, object> { { "decision", decision == "deny" ? "decline" : decision == "always" ? "acceptForSession" : "accept" } };
-        Send(new Dictionary<string, object> { { "id", At(request, "id") }, { "result", result } });
+        RespondResult(At(request, "id"), result);
     }
 }
 }

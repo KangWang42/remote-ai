@@ -326,7 +326,7 @@ public sealed class Reach : IDisposable {
                 WriteFrame(stream, Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string, object> { { "out", answer[0] }, { "code", Int32.Parse(answer[1]) }, { "again", closed && answer[0].Length == 0 } })));
                 bool delivered = true; try { stream.WaitForPipeDrain(); } catch (IOException) { delivered = false; }
                 if (delivered && answer[0].Contains("\"hookEventName\":\"PermissionRequest\"") && answer[0].Contains("\"decision\"") && !answer[0].Contains(Deferred)) {
-                    lock (gate) { receipt = Convert.ToString(tool) == "claude" ? "Claude Code" : "Codex"; receipt += answer[0].Contains("\"behavior\":\"allow\"") ? "：手机已允许" : "：手机已拒绝"; receiptDetail = answer[0].Contains("updatedPermissions") ? "已提交长期规则，工具将按自身权限设置处理" : "本次操作的决定已交给工具"; receiptAt = DateTime.UtcNow; }
+                    lock (gate) { receipt = ToolLabel(Convert.ToString(tool)); receipt += answer[0].Contains("\"behavior\":\"allow\"") ? "：手机已允许" : "：手机已拒绝"; receiptDetail = answer[0].Contains("updatedPermissions") ? "已提交长期规则，工具将按自身权限设置处理" : "本次操作的决定已交给工具"; receiptAt = DateTime.UtcNow; }
                     Tell();
                 }
             } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }      // a pipe that closed, or words that are not an event
@@ -369,11 +369,12 @@ public sealed class Reach : IDisposable {
         } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } catch (ArgumentException) { return false; }
     }
 
+    static string ToolLabel(string tool) { return tool == "claude" ? "Claude Code" : tool == "codex" ? "Codex" : tool == "agy" ? "Antigravity CLI" : tool; }
     /// One event of a tool. Returns what the hook writes for the tool to read, and the code it ends with.
     string[] Handle(string tool, Dictionary<string, object> hooked, Func<bool> gone, int process) {
         if (tool == "agy") hooked = FromAgy(hooked);
         string name = Text(hooked, "hook_event_name"), session = Text(hooked, "session_id");
-        if ((tool != "claude" && tool != "codex" && tool != "agy") || !Regex.IsMatch(session, Uuid)) return Nothing;
+        if ((tool != "claude" && tool != "codex" && tool != "agy") || !SessionLocks.IsUuid(session)) return Nothing;
         if (name == Step) {
             // Before a step: nothing is said, unless the phone asked for a stop. This runs at every step of every
             // conversation, so it does no more than that; one that is not known yet is told of by its other events.

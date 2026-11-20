@@ -16,10 +16,8 @@ namespace RemoteCli {
 /// - `session/request_permission` asks this program whether a step may run, with the tool's own options.
 /// The conversation's id is the tool's own: it is listed with the tool's other conversations and can be gone on with
 /// in a terminal. ACP has no way to add words to a turn that runs: what is said meanwhile waits for its end.
-public class AcpChat : Chat {
+public class AcpChat : JsonRpcChat {
     readonly string args;
-    int next;
-    readonly Dictionary<int, Action<Dictionary<string, object>>> waiting = new Dictionary<int, Action<Dictionary<string, object>>>();
     readonly Queue<KeyValuePair<string, string>> queued = new Queue<KeyValuePair<string, string>>();     // said while a turn runs, or before the conversation was there
     bool working, loading;
     // the text and the thought being written now: a new one begins where anything else came between
@@ -27,10 +25,11 @@ public class AcpChat : Chat {
     readonly HashSet<string> steps = new HashSet<string>();
 
     public AcpChat(string tool, string folder, Action<string> emit, string args) : base(tool, folder, emit) { this.args = args; }
+    protected override bool UseJsonRpcVersion { get { return true; } }
 
     protected override void Begin(string launcher, string session, bool resume, string mode) {
         if (!resume) session = "";
-        if (session.Length > 0 && !Regex.IsMatch(session, @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z")) throw new ArgumentException("对话编号无效");
+        if (session.Length > 0 && !SessionLocks.IsUuid(session)) throw new ArgumentException("对话编号无效");
         Run(launcher, args);
         // nothing of this computer's files or terminals is offered: the tool works in its folder as it would alone
         Call("initialize", new Dictionary<string, object> {
@@ -48,11 +47,6 @@ public class AcpChat : Chat {
         });
     }
     string Label { get { return RemoteCli.Tool.LabelOf(Tool); } }
-    void Call(string method, object given, Action<Dictionary<string, object>> answered) {
-        int id;
-        lock (gate) { id = ++next; waiting[id] = answered; }
-        Send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id }, { "method", method }, { "params", given } });
-    }
 
     public override void Say(string text, string id) {
         lock (gate) {
@@ -83,19 +77,11 @@ public class AcpChat : Chat {
         lock (gate) {
             if (!working) throw new InvalidOperationException("它现在没有在执行");
             stopping = true;
-            Send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "method", "session/cancel" }, { "params", new Dictionary<string, object> { { "sessionId", Session } } } });
+            Notify("session/cancel", new Dictionary<string, object> { { "sessionId", Session } });
         }
     }
 
-    protected override void Received(Dictionary<string, object> m) {
-        object id = At(m, "id"); string method = Text(m, "method");
-        if (id != null && method.Length == 0) {
-            int number; Action<Dictionary<string, object>> answered;
-            if (Int32.TryParse(Convert.ToString(id), out number) && waiting.TryGetValue(number, out answered)) { waiting.Remove(number); answered(m); }
-            return;
-        }
-        var p = At(m, "params");
-        if (id != null) { Requested(id, method, p); return; }
+    protected override void Notified(string method, object p) {
         if (method != "session/update" || loading) return;       // (what a loaded conversation said is replayed: passed over)
         var u = At(p, "update");
         switch (Text(u, "sessionUpdate")) {
@@ -161,7 +147,7 @@ public class AcpChat : Chat {
         }
         return String.Join("\n", parts);
     }
-    void Requested(object id, string method, object p) {
+    protected override void Requested(object id, string method, object p) {
         if (method == "session/request_permission") {
             var request = new Dictionary<string, object> { { "id", id }, { "params", p } };
             var call = At(p, "toolCall"); string kind = Text(call, "kind"), command = Command(call), title = Text(call, "title");
@@ -171,7 +157,7 @@ public class AcpChat : Chat {
             return;
         }
         // nothing of this computer's files or terminals was offered (initialize)
-        Send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id }, { "error", new Dictionary<string, object> { { "code", -32601 }, { "message", "Remote AI 不支持这个请求" } } } });
+        Refuse(id, "Remote AI 不支持这个请求");
     }
     protected override void Reply(Asked asked, string decision) {
         var request = (Dictionary<string, object>)asked.Request;
@@ -182,7 +168,7 @@ public class AcpChat : Chat {
         object outcome = chosen == null
             ? (object)new Dictionary<string, object> { { "outcome", "cancelled" } }
             : new Dictionary<string, object> { { "outcome", "selected" }, { "optionId", Text(chosen, "optionId") } };
-        Send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", At(request, "id") }, { "result", new Dictionary<string, object> { { "outcome", outcome } } } });
+        RespondResult(At(request, "id"), new Dictionary<string, object> { { "outcome", outcome } });
     }
 }
 

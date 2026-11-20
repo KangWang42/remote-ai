@@ -8,6 +8,13 @@ using RemoteCli;
 
 public static class CodexOwnerCheck {
     static void Require(bool condition, string message) { if (!condition) throw new Exception(message); }
+    // A test launched from Remote AI itself has a remote ancestor above this process; severing the parent link of
+    // this test process keeps real fixture process trees intact without leaking the outer launcher into them.
+    static Dictionary<int, int> IsolatedParents() {
+        var parents = SessionOrigin.Parents();
+        parents.Remove(Process.GetCurrentProcess().Id);
+        return parents;
+    }
     static Process Fixture(string mode, string id) {
         var process = Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,
             mode + " " + id) { UseShellExecute = false, CreateNoWindow = true });
@@ -54,45 +61,46 @@ public static class CodexOwnerCheck {
             Require(localClaude.FileName.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase) && localClaude.Arguments.Contains("--resume " + stale) && localClaude.WorkingDirectory == root, "Computer Claude takeover command was not resumable");
             var localCodex = TerminalAgent.ComputerProcess(new TerminalAgent.ComputerTakeover { Tool = "codex", Dir = root, Session = stale, Launcher = @"C:\tools\codex.exe" }, "read");
             Require(localCodex.FileName.EndsWith("codex.exe", StringComparison.OrdinalIgnoreCase) && localCodex.Arguments.Contains("resume " + stale) && localCodex.Arguments.Contains("--no-daemon"), "Computer Codex takeover did not isolate its CLI");
-            var idle = CodexSessions.Inspect(stale);
+            var idle = CodexSessions.Inspect(stale, IsolatedParents());
             Require(idle.Known && !idle.Live && !idle.CanTakeover, "Stale lock was considered live");
             string id = Guid.NewGuid().ToString(); var cli = Fixture("hold", id); children.Add(cli);
-            var live = CodexSessions.Inspect(id);
+            var live = CodexSessions.Inspect(id, IsolatedParents());
             Require(live.Known && live.Live && live.Pid == cli.Id && live.CanTakeover && live.Host == "cli", "Independent writer ownership failed: pid=" + live.Pid + " host=" + live.Host + " reason=" + live.Reason);
             var parents = new Dictionary<int, int> { { cli.Id, Process.GetCurrentProcess().Id } };
             bool refused = false;
             try { CodexSessions.Takeover(id, new[] { Process.GetCurrentProcess().Id }, parents); } catch (InvalidOperationException) { refused = true; }
             Require(refused && !cli.HasExited, "Protected phone descendant was terminated");
             CodexSessions.Takeover(id, new int[0], parents);
-            Require(cli.WaitForExit(3000) && !CodexSessions.Inspect(id).Live, "Takeover did not release the exact writer");
+            Require(cli.WaitForExit(3000) && !CodexSessions.Inspect(id, IsolatedParents()).Live, "Takeover did not release the exact writer");
             string sharedId = Guid.NewGuid().ToString(); var shared = Fixture("app-server", sharedId); children.Add(shared);
-            var backend = CodexSessions.Inspect(sharedId);
+            var backend = CodexSessions.Inspect(sharedId, IsolatedParents());
             Require(backend.Live && backend.Pid == shared.Id && !backend.CanTakeover && backend.Host == "shared", "Shared backend was offered for termination or classified as a window");
             refused = false;
-            try { CodexSessions.Takeover(sharedId, new int[0], new Dictionary<int, int>()); } catch (InvalidOperationException) { refused = true; }
+            try { CodexSessions.Takeover(sharedId, new int[0], IsolatedParents()); } catch (InvalidOperationException) { refused = true; }
             Require(refused && !shared.HasExited, "Shared backend was terminated");
             string remoteId = Guid.NewGuid().ToString();
             var host = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), "RemoteCliAgent.exe"), "remote-host " + remoteId) { UseShellExecute = false, CreateNoWindow = true }); children.Add(host);
             for (int n = 0; n < 100 && !File.Exists(Path.Combine(CodexSessions.Home, remoteId + ".ready")); n++) Thread.Sleep(50);
-            var remote = CodexSessions.Inspect(remoteId); children.Add(Process.GetProcessById(remote.Pid));
+            var remote = CodexSessions.Inspect(remoteId, IsolatedParents()); children.Add(Process.GetProcessById(remote.Pid));
             Require(remote.Live && remote.Host == "remote" && !remote.CanTakeover, "Other remote terminal was classified as a computer CLI");
             refused = false;
-            try { CodexSessions.Takeover(remoteId, new int[0], new Dictionary<int, int>()); } catch (InvalidOperationException) { refused = true; }
+            try { CodexSessions.Takeover(remoteId, new int[0], IsolatedParents()); } catch (InvalidOperationException) { refused = true; }
             Require(refused && !host.HasExited, "Other remote terminal was terminated");
             foreach (var hostName in new[] { new[] { "Positron", "Positron" }, new[] { "Code", "VS Code" }, new[] { "rstudio", "RStudio" } }) {
                 foreach (string mode in new[] { "editor-host", "editor-server", "editor-claude" }) {
                     string editorId = Guid.NewGuid().ToString();
                     var editor = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), hostName[0] + ".exe"), mode + " " + editorId) { UseShellExecute = false, CreateNoWindow = true }); children.Add(editor);
                     for (int n = 0; n < 100 && !File.Exists(Path.Combine(root, editorId + ".ready")); n++) Thread.Sleep(50);
+                    var isolated = IsolatedParents();
                     if (mode == "editor-claude") {
-                        var inEditor = ClaudeSessions.Inspect(Path.Combine(root, editorId + ".claude.json"));
+                        var inEditor = ClaudeSessions.Inspect(Path.Combine(root, editorId + ".claude.json"), isolated);
                         children.Add(Process.GetProcessById(inEditor.Pid));
                         Require(inEditor.Origin == hostName[1] && inEditor.CanTakeover, hostName[1] + " Claude terminal source");
                     } else {
-                        var inEditor = CodexSessions.Inspect(editorId); children.Add(Process.GetProcessById(inEditor.Pid));
+                        var inEditor = CodexSessions.Inspect(editorId, isolated); children.Add(Process.GetProcessById(inEditor.Pid));
                         bool sharedEditor = mode == "editor-server";
                         Require(inEditor.Host == (sharedEditor ? "shared" : "cli") && inEditor.Origin == hostName[1] && inEditor.CanTakeover == !sharedEditor, hostName[1] + " source and writer ownership stay independent");
-                        if (!sharedEditor) CodexSessions.Takeover(editorId, new int[0], new Dictionary<int,int>());
+                        if (!sharedEditor) CodexSessions.Takeover(editorId, new int[0], isolated);
                     }
                 }
             }
@@ -100,10 +108,25 @@ public static class CodexOwnerCheck {
             var claudeWriter = Process.Start(new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName), "claude.exe"), "claude-hold " + claudeId) { UseShellExecute = false, CreateNoWindow = true }); children.Add(claudeWriter);
             for (int n = 0; n < 100 && !File.Exists(Path.Combine(root, claudeId + ".ready")); n++) Thread.Sleep(50);
             string recordFile = Path.Combine(root, claudeId + ".claude.json");
-            var claudeOwner = ClaudeSessions.Inspect(recordFile);
+            var claudeOwner = ClaudeSessions.Inspect(recordFile, IsolatedParents());
             Require(claudeOwner.Live && claudeOwner.CanTakeover && claudeOwner.Pid == claudeWriter.Id, "Claude exact fingerprint was not verified");
             File.WriteAllText(recordFile, new JavaScriptSerializer().Serialize(new { pid = claudeWriter.Id, procStart = "1", sessionId = claudeId }));
-            Require(!ClaudeSessions.Inspect(recordFile).Live, "Stale Claude process fingerprint reused a PID");
+            Require(!ClaudeSessions.Inspect(recordFile, IsolatedParents()).Live, "Stale Claude process fingerprint reused a PID");
+            // SessionLocks.Held must detect both byte-range locks (33) and exclusive share locks (32).
+            string shareLock = Path.Combine(root, "share.lock");
+            File.WriteAllText(shareLock, "");
+            using (var exclusive = new FileStream(shareLock, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                Require(SessionLocks.Held(shareLock) == true, "Exclusive share lock should be reported held");
+            Require(SessionLocks.Held(shareLock) == false, "Released share lock should be reported not held");
+            // ClaudeSessions.Noted prefers a live verified session file over an older stale dead-PID record.
+            string prevClaude = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", root);
+            try {
+                Directory.CreateDirectory(Path.Combine(root, "sessions"));
+                File.WriteAllText(Path.Combine(root, "sessions", "0001.json"), new JavaScriptSerializer().Serialize(new { pid = 1, procStart = "1", sessionId = claudeId, version = "1.0.0", entrypoint = "stale" }));
+                File.WriteAllText(Path.Combine(root, "sessions", claudeWriter.Id + ".json"), new JavaScriptSerializer().Serialize(new { pid = claudeWriter.Id, procStart = claudeWriter.StartTime.ToUniversalTime().ToFileTimeUtc().ToString(), sessionId = claudeId, version = "2.1.300", entrypoint = "cli" }));
+                Require(ClaudeSessions.Version(claudeId) == "2.1.300" && ClaudeSessions.ProcessOf(claudeId) == claudeWriter.Id, "ClaudeSessions.Noted must prefer the live record over a stale dead record");
+            } finally { Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", prevClaude); }
             Console.WriteLine("Native checks passed: exact takeover, shared/foreign host protection, Positron source, fresh Claude command and fingerprint, isolated phone Codex.");
             return 0;
         } catch (Exception error) {

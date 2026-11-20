@@ -36,7 +36,7 @@ Android 复用 WebView，但每次打开或重试页面都建立新的 `Connecti
 
 | 目录 | 内容 |
 | --- | --- |
-| `agent-windows/` | 电脑端：`RemoteCliApp.cs`（窗口、托盘、连接方式）、`RemoteCliAgent.cs`（终端与对话扫描）、`Tools.cs`（各 AI 工具不同的地方：启动参数、记录文件、是否被别的程序占用、接管、结束、删除；每个工具一个类，加工具时在这里加一个类）、`Relays.cs`（公共中转清单和保存的中转）、`Remote.cs`（手机可以向电脑端程序本身提出的要求：读取和更改几项设置、切换连接线路）、`Controls.cs`（外观和控件）、`QrCode.cs`、`Setup.cs`（安装程序）。C#，用 Windows 自带的编译器构建 |
+| `agent-windows/` | 电脑端：`RemoteCliApp.cs`（窗口、托盘、连接方式）、`RemoteCliAgent.cs`（终端与对话扫描）、`Tools.cs`（各 AI 工具的统一适配：启动参数、记录文件、占用与接管、删除、结构化对话驱动、闲置唤醒；每个工具一个类，加工具时在这里加一个类）、`SessionLocks.cs`（Windows 锁文件探测、Restart Manager 进程归属核验与双检接管，供 Codex 和 Antigravity 共用）、`Transcripts.cs`（Claude Code、Codex、Antigravity 已保存记录的解析、标题提取与完成轮次识别）、`Chats.cs` / `AcpChat.cs`（`Chat`、`JsonRpcChat` 及各工具结构化对话驱动）、`Relays.cs`（公共中转清单和保存的中转）、`Remote.cs`（手机可以向电脑端程序本身提出的要求：读取和更改几项设置、切换连接线路）、`Controls.cs`（外观和控件）、`QrCode.cs`、`Setup.cs`（安装程序）。C#，用 Windows 自带的编译器构建 |
 | `agent-linux/` | Linux 电脑端：`agent.py`（终端、对话扫描、查看文件），一个文件，只用 Python 标准库；`install.sh` 一条命令装好中转和电脑端；`remote-cli-agent.service` 是 systemd 用户服务 |
 | `relay/` | 中转：`server.py`（登录、HTTP，以及公共中转里每台电脑各自的空间）、`relay.py`（终端状态与输出的转发：一台电脑一个 `Relay` 对象）。只用 Python 标准库；`install.sh` 把它装成服务器上的系统服务 |
 | `android/` | 安卓 App：`MainActivity`（各界面之间的跳转、扫码回调、语音识别）、`Tabs`（底部四个栏目，与电脑页面的底栏同样的图标和尺寸）、`Workbench`（“任务”和“项目”两页）、`AppPages`（“协作”和“我的”两页）、`Kit`（配色和界面部件）、`AggregateSessions`（任务分组与排序，不依赖 Android，可单独检查） |

@@ -11,7 +11,7 @@ namespace RemoteCli {
 /// here and one entry in `All` (and its lines in `Ways.Of`, its reading of the lists, its chat driver).
 public abstract class Tool {
     public static readonly Tool Claude = new ClaudeTool(), Codex = new CodexTool(), Agy = new AgyTool(), Shell = new ShellTool();
-    static readonly Tool[] All = { Claude, Codex, Agy, Shell };
+    public static readonly Tool[] All = { Claude, Codex, Agy, Shell };
 
     /// The tool by its name, null for one that is not known.
     public static Tool Of(string name) { return All.FirstOrDefault(t => t.Name == name); }
@@ -30,6 +30,8 @@ public abstract class Tool {
     public virtual bool Converses { get { return true; } }
     /// Runs as a conversation through its structured mode too (Chats.cs).
     public virtual bool Chats { get { return false; } }
+    /// Supports isolating its CLI from a shared daemon (`--no-daemon`).
+    public virtual bool SupportsStandalone { get { return false; } }
     /// Makes a copy of a conversation (a fork).
     public virtual bool Forks { get { return false; } }
     /// Is given the id of a new conversation when it starts, so its terminal knows it at once (Claude Code); the
@@ -39,6 +41,13 @@ public abstract class Tool {
     public virtual bool ReturnsUnnamed { get { return true; } }
     /// Said where a terminal's conversation has no id yet and it is to be taken to the computer.
     public virtual string Unnamed { get { return "正在等待会话编号，请刷新活动后再接管"; } }
+
+    /// Creates the structured chat driver for this tool (Chats.cs / AcpChat.cs).
+    public virtual Chat CreateChat(string folder, Action<string> emit) { throw new ArgumentException("这个工具不支持对话"); }
+    /// Delivers queued messages into a conversation that sits idle on this computer, waking it in place.
+    public virtual void Wake(string launcher, string dataDir, string session, Reach reach, int wakeSeconds) {
+        throw new InvalidOperationException(Label + " 不支持唤醒闲置对话");
+    }
 
     /// What follows the program's path on its command line.
     public abstract string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh);
@@ -63,6 +72,22 @@ sealed class ClaudeTool : Tool {
     public override string Label { get { return "Claude Code"; } }
     public override bool Chats { get { return true; } }
     public override bool NamedAtStart { get { return true; } }
+    public override Chat CreateChat(string folder, Action<string> emit) { return new ClaudeChat(folder, emit); }
+    public override void Wake(string launcher, string dataDir, string session, Reach reach, int wakeSeconds) {
+        var waiting = reach.Outbox.Of(Name, session).Where(item => item.State == Outbox.Queued).ToArray();
+        if (waiting.Length == 0) return;
+        string folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
+        // (the hooks are there once Claude Code has told something through them, or stand in its settings:
+        // a conversation opened before they did takes the words the other way, after the wait)
+        bool hooks = reach.Heard(Name) || ReachHooks.Installed(Name);
+        if (hooks) ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Wake);
+        int patience = wakeSeconds;
+        foreach (var item in waiting) {
+            if (hooks && reach.Taken(item.Id, patience)) continue;
+            patience = 0;       // its hooks did not come: the rest is not waited for either
+            reach.Outbox.Deliver(item.Id, text => ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(text)));
+        }
+    }
 
     public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh) {
         return (session.Length > 0 ? (fresh ? " --session-id " : " --resume ") + session : history ? " --resume" : "")
@@ -81,7 +106,7 @@ sealed class ClaudeTool : Tool {
     public override bool Open(string session) { return Owners(session).Any(); }
     public override bool HeldUnder(string session, int root, Dictionary<int, int> parents) {
         var owner = Owners(session).Select(item => item.Value).FirstOrDefault();
-        return owner != null && CodexSessions.Descends(owner.Pid, new[] { root }, parents);
+        return owner != null && SessionOrigin.Descends(owner.Pid, new[] { root }, parents);
     }
     // Only the verified writer of the conversation is ended, and only where it is the one program that has it.
     public override void Exclusive(string session, bool takeover, int[] roots, Dictionary<int, int> parents, string held) {
@@ -89,7 +114,7 @@ sealed class ClaudeTool : Tool {
         if (owners.Length > 1) throw new InvalidOperationException(ClaudeSessions.MultipleReason);
         foreach (var item in owners) {
             string file = item.Key; var owner = item.Value;
-            if (!takeover || !owner.CanTakeover || CodexSessions.Descends(owner.Pid, roots, parents)) throw new InvalidOperationException(owner.Reason);
+            if (!takeover || !owner.CanTakeover || SessionOrigin.Descends(owner.Pid, roots, parents)) throw new InvalidOperationException(owner.Reason);
             using (var process = Process.GetProcessById(owner.Pid)) {
                 var current = ClaudeSessions.Inspect(file);
                 if (!current.CanTakeover || current.Session != session || current.Pid != owner.Pid || current.Started != owner.Started || process.StartTime.ToUniversalTime().ToFileTimeUtc() != owner.Started) throw new InvalidOperationException("Claude Code 会话归属已变化，请刷新后重试");
@@ -107,7 +132,13 @@ sealed class CodexTool : Tool {
     public override string Name { get { return "codex"; } }
     public override string Label { get { return "Codex"; } }
     public override bool Chats { get { return true; } }
+    public override bool SupportsStandalone { get { return true; } }
     public override bool Forks { get { return true; } }
+    public override Chat CreateChat(string folder, Action<string> emit) { return new CodexChat(folder, emit); }
+    public override void Wake(string launcher, string dataDir, string session, Reach reach, int wakeSeconds) {
+        var waiting = reach.Outbox.Of(Name, session).Where(item => item.State == Outbox.Queued).ToArray();
+        foreach (var item in waiting) reach.Outbox.Deliver(item.Id, text => CodexQueue.Send(launcher, session, text));
+    }
 
     public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh) {
         return (session.Length > 0 ? (fork ? " fork " : " resume ") + session : history ? " resume --include-non-interactive" : "")
@@ -119,12 +150,12 @@ sealed class CodexTool : Tool {
     }
     public override bool Open(string session) { return CodexSessions.Inspect(session).Live; }
     public override bool HeldUnder(string session, int root, Dictionary<int, int> parents) {
-        var owner = CodexSessions.Inspect(session);
-        return owner.Live && owner.Pid > 0 && CodexSessions.Descends(owner.Pid, new[] { root }, parents);
+        var owner = CodexSessions.Inspect(session, parents);
+        return owner.Live && owner.Pid > 0 && SessionOrigin.Descends(owner.Pid, new[] { root }, parents);
     }
     public override void Exclusive(string session, bool takeover, int[] roots, Dictionary<int, int> parents, string held) {
         if (takeover) CodexSessions.Takeover(session, roots, parents);
-        var owner = CodexSessions.Inspect(session);
+        var owner = CodexSessions.Inspect(session, parents);
         if (!owner.Known || owner.Live) throw new InvalidOperationException(held ?? "原 Codex 对话仍被占用，请先在原应用结束并关闭它，再接管同一段历史；不会自动新建副本");
     }
     public override void End(string session, int[] roots, Dictionary<int, int> parents) { CodexSessions.Takeover(session, roots, parents); }
@@ -137,6 +168,7 @@ sealed class AgyTool : Tool {
     public override bool Chats { get { return true; } }     // by its ACP server (AcpChat.cs)
     public override bool ReturnsUnnamed { get { return false; } }
     public override string Unnamed { get { return "请先在 Antigravity 终端内开始对话，或通过“在电脑上打开”直接使用"; } }
+    public override Chat CreateChat(string folder, Action<string> emit) { return new AgyChat(folder, emit); }
 
     // Its own choice of mode stays: Remote AI's read/edit modes are not given to it.
     public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh) {
@@ -146,12 +178,12 @@ sealed class AgyTool : Tool {
     public override string Transcript(string session, string root) { return Antigravity.TranscriptPath(session); }
     public override bool Open(string session) { return AgySessions.Inspect(session).Live; }
     public override bool HeldUnder(string session, int root, Dictionary<int, int> parents) {
-        var owner = AgySessions.Inspect(session);
-        return owner.Live && owner.Pid > 0 && CodexSessions.Descends(owner.Pid, new[] { root }, parents);
+        var owner = AgySessions.Inspect(session, parents);
+        return owner.Live && owner.Pid > 0 && SessionOrigin.Descends(owner.Pid, new[] { root }, parents);
     }
     public override void Exclusive(string session, bool takeover, int[] roots, Dictionary<int, int> parents, string held) {
         if (takeover) AgySessions.Takeover(session, roots, parents);
-        var owner = AgySessions.Inspect(session);
+        var owner = AgySessions.Inspect(session, parents);
         if (!owner.Known || owner.Live) throw new InvalidOperationException(held ?? "原 Antigravity CLI 对话仍被占用，请选择接管原对话，或在原终端结束后重试");
     }
     public override void End(string session, int[] roots, Dictionary<int, int> parents) { AgySessions.Takeover(session, roots, parents); }

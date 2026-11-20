@@ -58,7 +58,6 @@ public sealed partial class App {
     // The first time the program runs it switches this on by itself; after that the switch says what its owner wants,
     // and while it is on the hooks are kept in place: put back when something took them out, or the program moved.
     static readonly string[] Hooked = { "claude", "codex", "agy" };
-    static readonly Dictionary<string, string> ToolNames = new Dictionary<string, string> { { "claude", "Claude Code" }, { "codex", "Codex" }, { "agy", "Antigravity CLI" } };
     static bool Used(string tool) { try { return Directory.Exists(Path.GetDirectoryName(ReachHooks.FileOf(tool))); } catch (ArgumentException) { return false; } }
     static string HookProgram { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RemoteCliAgent.exe"); } }
     bool Reaching {
@@ -84,7 +83,7 @@ public sealed partial class App {
         var kept = agent == null || !Reaching ? new Reach.Open[0] : agent.Reach.KeptNow();
         if (kept.Length == 0) { var answer = agent == null || !Reaching ? null : agent.Reach.RecentAnswer(); if (answer != null) notice.Say(answer[0], answer[1], offstage); else notice.Clear(); Noted(); return; }
         var one = kept.FirstOrDefault(o => o.Status == "confirm") ?? kept[0];
-        string tool = ToolNames.ContainsKey(one.Tool) ? ToolNames[one.Tool] : one.Tool;
+        string tool = Tool.LabelOf(one.Tool);
         if (one.Status == "confirm") notice.Say(tool + " 的确认请求已发到手机", "动一下鼠标或键盘，改在这台电脑上回答", offstage);
         else notice.Say(tool + " 做完了，在等手机的消息", "动一下鼠标或键盘即结束等待", offstage);
         Noted();
@@ -123,7 +122,7 @@ public sealed partial class App {
             bool there = ReachHooks.Installed(tool, HookProgram, agent.Reach.Pipe);
             if (!there) { try { ReachHooks.Set(tool, true, HookProgram, agent.Reach.Pipe); there = true; } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (InvalidOperationException) { } }
             if (there && agent.Reach.Heard(tool) && !told.Contains(tool)) { told.Add(tool); Keep("ReachHeard", told.Cast<object>().ToArray()); }
-            states.Add(new Dictionary<string, object> { { "tool", tool }, { "name", ToolNames[tool] }, { "state", !there ? "failed" : told.Contains(tool) ? "good" : "ready" } });
+            states.Add(new Dictionary<string, object> { { "tool", tool }, { "name", Tool.LabelOf(tool) }, { "state", !there ? "failed" : told.Contains(tool) ? "good" : "ready" } });
         }
         return states;
     }

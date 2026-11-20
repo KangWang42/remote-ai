@@ -51,6 +51,13 @@ public sealed class SessionOrigin {
         }
         return false;
     }
+    /// Whether `pid` is one of `roots` or descends from any of them in the given parent map.
+    public static bool Descends(int pid, IEnumerable<int> roots, Dictionary<int, int> parents) {
+        if (roots == null || parents == null) return false;
+        var rootSet = new HashSet<int>(roots); var seen = new HashSet<int>();
+        while (pid > 0 && seen.Add(pid)) { if (rootSet.Contains(pid)) return true; int parent; if (!parents.TryGetValue(pid, out parent)) break; pid = parent; }
+        return false;
+    }
     /// Maps a process name to the nearest user-visible host. Kept separate so new editor hosts can be tested and
     /// added without changing ownership or takeover rules.
     public static string HostOf(string processName) {
@@ -135,13 +142,22 @@ public sealed class ClaudeSessions {
     public static int ProcessOf(string session) { int pid; return Int32.TryParse(Noted(session, "pid"), out pid) ? pid : 0; }
     static string Noted(string session, string what) {
         try {
-            foreach (string file in Directory.GetFiles(Path.Combine(Home, "sessions"), "*.json")) {
+            string folder = Path.Combine(Home, "sessions");
+            if (!Directory.Exists(folder)) return "";
+            string fallback = ""; DateTime fallbackAt = DateTime.MinValue;
+            var reader = new JavaScriptSerializer();
+            foreach (string file in Directory.GetFiles(folder, "*.json")) {
                 try {
-                    var record = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
+                    var record = reader.Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
                     object value;
-                    if (record != null && record.TryGetValue("sessionId", out value) && Convert.ToString(value) == session) return record.TryGetValue(what, out value) ? Convert.ToString(value) : "";
+                    if (record == null || !record.TryGetValue("sessionId", out value) || Convert.ToString(value) != session) continue;
+                    string found = record.TryGetValue(what, out value) ? Convert.ToString(value) : "";
+                    if (Inspect(file).Live) return found;
+                    DateTime modified = File.GetLastWriteTimeUtc(file);
+                    if (fallback.Length == 0 || modified >= fallbackAt) { fallback = found; fallbackAt = modified; }
                 } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
             }
+            return fallback;
         } catch (IOException) { } catch (UnauthorizedAccessException) { }
         return "";
     }
@@ -179,85 +195,45 @@ public sealed class ClaudeSessions {
 }
 // Read-only ownership checks run outside the terminal input/report lock.
 public sealed class CodexSessions {
-    public sealed class Owner {
-        public bool Known, Live, CanTakeover;
-        public int Pid;
-        public long Started;
-        public string Host = "unknown";
-        public string Origin = "";
-        public string Reason = "正在确认电脑会话的归属，请稍后刷新";
-    }
-    [StructLayout(LayoutKind.Sequential)] struct UniqueProcess { public uint pid; public System.Runtime.InteropServices.ComTypes.FILETIME started; }
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct ProcessInfo {
-        public UniqueProcess process;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string name;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string service;
-        public uint type, status, session;
-        [MarshalAs(UnmanagedType.Bool)] public bool restartable;
-    }
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] static extern int RmStartSession(out uint session, int flags, StringBuilder key);
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] static extern int RmRegisterResources(uint session, uint files, string[] names, uint processes, IntPtr applications, uint services, IntPtr serviceNames);
-    [DllImport("rstrtmgr.dll")] static extern int RmGetList(uint session, out uint needed, ref uint count, [In, Out] ProcessInfo[] processes, ref uint reasons);
-    [DllImport("rstrtmgr.dll")] static extern int RmEndSession(uint session);
+    public sealed class Owner : LockOwner { }
     readonly object gate = new object();
     Dictionary<string, Owner> cached = new Dictionary<string, Owner>(StringComparer.OrdinalIgnoreCase);
     bool refreshing;
     DateTime next = DateTime.MinValue;
     public static string Home { get { return Environment.GetEnvironmentVariable("CODEX_HOME") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"); } }
     public static string LockPath(string id) {
-        if (!Regex.IsMatch(id ?? "", @"\A[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\z")) throw new ArgumentException("会话编号无效");
+        if (!SessionLocks.IsUuid(id)) throw new ArgumentException("会话编号无效");
         return Path.Combine(Home, "thread-writer-locks", id + ".lock");
     }
-    // Existence alone is insufficient: the Rust writer locks the file's bytes.
-    static bool? Held(string path) {
-        try {
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete)) {
-                try { stream.Lock(0, Int64.MaxValue); stream.Unlock(0, Int64.MaxValue); return false; }
-                catch (IOException ex) { return (ex.HResult & 0xffff) == 33 ? (bool?)true : null; }
-            }
-        } catch (FileNotFoundException) { return false; } catch (DirectoryNotFoundException) { return false; }
-        catch (IOException) { return null; } catch (UnauthorizedAccessException) { return null; }
-    }
-    public static Owner Inspect(string id) {
-        string path = LockPath(id); bool? held = Held(path);
+    public static Owner Inspect(string id, Dictionary<int, int> parents = null) {
+        string path = LockPath(id); bool? held = SessionLocks.Held(path);
         if (held == false) return new Owner { Known = true, Host = "", Reason = "" };
         if (held == null) return new Owner { Reason = "无法核实写入锁，请在电脑结束会话后重试，或在手机新开副本" };
         var result = new Owner { Known = true, Live = true, Reason = "无法确认独立 CLI 的归属，可在手机新开副本" };
-        uint session;
-        if (RmStartSession(out session, 0, new StringBuilder(33)) != 0) return result;
         try {
-            if (RmRegisterResources(session, 1, new[] { path }, 0, IntPtr.Zero, 0, IntPtr.Zero) != 0) return result;
-            uint needed, count = 8, reasons = 0; var records = new ProcessInfo[count];
-            int code = RmGetList(session, out needed, ref count, records, ref reasons);
-            if (code == 234 && needed <= 256) { count = needed; records = new ProcessInfo[count]; code = RmGetList(session, out needed, ref count, records, ref reasons); }
-            if (code != 0 || count != 1) return result;
-            var record = records[0];
-            long started = ((long)record.process.started.dwHighDateTime << 32) | (uint)record.process.started.dwLowDateTime;
-            using (var process = Process.GetProcessById((int)record.process.pid)) {
-                if (process.StartTime.ToUniversalTime().ToFileTimeUtc() != started) return result;
-                result.Pid = process.Id; result.Started = started;
-                if (!String.Equals(process.ProcessName, "codex", StringComparison.OrdinalIgnoreCase)) return result;
-                string command = "";
-                using (var search = new ManagementObjectSearcher("SELECT CommandLine FROM Win32_Process WHERE ProcessId=" + process.Id))
-                using (var rows = search.Get()) foreach (ManagementObject row in rows) using (row) command = Convert.ToString(row["CommandLine"]);
-                if (String.IsNullOrWhiteSpace(command)) return result;
-                var origin = SessionOrigin.Inspect(process.Id); result.Origin = origin.Name;
-                if (origin.Remote) {
-                    result.Host = "remote";
-                    result.Reason = "此对话在其它远程终端运行，请先在原远程终端结束后，再接管原对话";
-                    return result;
-                }
-                if (Regex.IsMatch(command, @"(?:^|\s)(?:app-server|mcp-server)(?:\s|$)", RegexOptions.IgnoreCase)) {
-                    result.Host = "shared";
-                    if (result.Origin == SessionOrigin.CommandLine) result.Origin = "Codex 后台服务";      // the shared background service, with no window of its own
-                    result.Reason = "此对话由共享后台占用。请先在电脑原应用中结束并关闭此对话，释放后手机才能接管同一段历史；仅切换页面可能不会释放";
-                    return result;
-                }
-                result.Host = "cli";
-                result.CanTakeover = true; result.Reason = "接手会结束电脑上的这个 CLI 会话，正在执行的任务可能中断";
+            var holder = SessionLocks.SingleHolder(path);
+            if (holder == null) return result;
+            result.Pid = holder.Pid; result.Started = holder.Started;
+            if (!String.Equals(holder.ProcessName, "codex", StringComparison.OrdinalIgnoreCase)) return result;
+            string command = "";
+            using (var search = new ManagementObjectSearcher("SELECT CommandLine FROM Win32_Process WHERE ProcessId=" + holder.Pid))
+            using (var rows = search.Get()) foreach (ManagementObject row in rows) using (row) command = Convert.ToString(row["CommandLine"]);
+            if (String.IsNullOrWhiteSpace(command)) return result;
+            var origin = SessionOrigin.Inspect(holder.Pid, parents); result.Origin = origin.Name;
+            if (origin.Remote) {
+                result.Host = "remote";
+                result.Reason = "此对话在其它远程终端运行，请先在原远程终端结束后，再接管原对话";
+                return result;
             }
+            if (Regex.IsMatch(command, @"(?:^|\s)(?:app-server|mcp-server)(?:\s|$)", RegexOptions.IgnoreCase)) {
+                result.Host = "shared";
+                if (result.Origin == SessionOrigin.CommandLine) result.Origin = "Codex 后台服务";      // the shared background service, with no window of its own
+                result.Reason = "此对话由共享后台占用。请先在电脑原应用中结束并关闭此对话，释放后手机才能接管同一段历史；仅切换页面可能不会释放";
+                return result;
+            }
+            result.Host = "cli";
+            result.CanTakeover = true; result.Reason = "接手会结束电脑上的这个 CLI 会话，正在执行的任务可能中断";
         } catch { /* Unknown ownership cannot authorize process termination. */ }
-        finally { RmEndSession(session); }
         return result;
     }
     public void Refresh() {
@@ -266,9 +242,12 @@ public sealed class CodexSessions {
             var fresh = new Dictionary<string, Owner>(StringComparer.OrdinalIgnoreCase);
             try {
                 string folder = Path.Combine(Home, "thread-writer-locks");
-                if (Directory.Exists(folder)) foreach (string path in Directory.GetFiles(folder, "*.lock")) {
-                    string id = Path.GetFileNameWithoutExtension(path);
-                    if (Regex.IsMatch(id, @"\A[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\z")) fresh[id] = Inspect(id);
+                if (Directory.Exists(folder)) {
+                    var parents = SessionOrigin.Parents();
+                    foreach (string path in Directory.GetFiles(folder, "*.lock")) {
+                        string id = Path.GetFileNameWithoutExtension(path);
+                        if (SessionLocks.IsUuid(id)) fresh[id] = Inspect(id, parents);
+                    }
                 }
                 lock (gate) cached = fresh;
             } catch { /* Keep the last verified snapshot; actions always recheck. */ }
@@ -278,26 +257,11 @@ public sealed class CodexSessions {
     public Owner Get(string id) {
         lock (gate) { Owner owner; return cached.TryGetValue(id, out owner) ? owner : new Owner { Known = !File.Exists(LockPath(id)), Reason = "正在确认电脑会话的归属，请稍后刷新" }; }
     }
-    public static bool Descends(int pid, IEnumerable<int> roots, Dictionary<int, int> parents) {
-        var rootSet = new HashSet<int>(roots); var seen = new HashSet<int>();
-        while (pid > 0 && seen.Add(pid)) { if (rootSet.Contains(pid)) return true; int parent; if (!parents.TryGetValue(pid, out parent)) break; pid = parent; }
-        return false;
-    }
     public static void Takeover(string id, IEnumerable<int> protectedRoots, Dictionary<int, int> parents) {
-        Owner owner = Inspect(id);
-        if (!owner.Known) throw new InvalidOperationException(owner.Reason);
-        if (!owner.Live) return;
-        if (!owner.CanTakeover || Descends(owner.Pid, protectedRoots, parents)) throw new InvalidOperationException("无法安全结束这个电脑会话，请先在电脑结束，或在手机新开副本");
-        // Process.Kill uses the opened process handle; never invoke a global name-based kill.
-        using (var process = Process.GetProcessById(owner.Pid)) {
-            if (process.StartTime.ToUniversalTime().ToFileTimeUtc() != owner.Started) throw new InvalidOperationException("会话进程已变化，请刷新后重试");
-            Owner current = Inspect(id);
-            if (!current.CanTakeover || current.Pid != owner.Pid || current.Started != owner.Started) throw new InvalidOperationException("会话归属已变化，请刷新后重试");
-            process.Kill();
-            if (!process.WaitForExit(5000)) throw new InvalidOperationException("电脑会话没有结束，已取消接手");
-        }
-        for (int n = 0; n < 50; n++) { if (Held(LockPath(id)) == false) return; Thread.Sleep(50); }
-        throw new InvalidOperationException("写入锁尚未释放，已取消接手，请稍后重试");
+        SessionLocks.Takeover(() => Inspect(id, parents), LockPath(id), protectedRoots, parents,
+            "无法安全结束这个电脑会话，请先在电脑结束，或在手机新开副本",
+            "电脑会话没有结束，已取消接手",
+            "写入锁尚未释放，已取消接手，请稍后重试");
     }
 }
 }

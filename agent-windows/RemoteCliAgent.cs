@@ -123,6 +123,8 @@ public sealed class TerminalAgent {
         dataDir = dataFolder ?? DefaultData;
         Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter(), new ClaudeDesktopAdapter());
         OpenDesktopConversation = desktopConversation ?? (() => CodexDesktopControl.Connect());
+        NativeDesktop = new CodexDesktopSessions(OpenDesktopConversation);
+        NativeDesktop.Changed += () => { sessionsDirty = true; Wake(); };
         Quotas = new Quotas(dataDir);
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += () => { sessionsDirty = true; Wake(); }; Reach.Outbox.Changed += () => { sessionsDirty = true; Wake(); };
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
@@ -160,7 +162,7 @@ public sealed class TerminalAgent {
     static readonly string[] ComputerActions = { "settings_read", "settings_change", "line_switch", "line_take", "line_keep" };
     readonly DesktopOperations Desktop;
     readonly Func<IDesktopConversation> OpenDesktopConversation;
-    readonly CodexDesktopSessions NativeDesktop = new CodexDesktopSessions();
+    readonly CodexDesktopSessions NativeDesktop;
     /// Whether the relay has been given the answer to this operation.
     public bool Reported(string id) { lock (work) return reported.Contains(id); }
     /// Whether nothing has been typed or printed for a while and no tool says it is working: a moment to restart in.
@@ -199,7 +201,7 @@ public sealed class TerminalAgent {
             return;
         }
         live.Pending.Append("\r\n\x1b[2m" + (!kind.Converses ? "Remote AI 已更新，这是重新打开的 PowerShell。" : session.Length > 0 ? "Remote AI 已更新，正在接回原来的对话…" : "Remote AI 已更新；原对话保存在电脑上，可从历史对话继续。") + "\x1b[0m\r\n");
-        live.Pty = new PseudoTerminal(Command(tool, launcher, session, false, Get(prefs, "RemoteMaxMode"), false, tool == "codex" && SupportsStandalone(launcher), false), where,
+        live.Pty = new PseudoTerminal(Command(tool, launcher, session, false, Get(prefs, "RemoteMaxMode"), false, kind.SupportsStandalone && SupportsStandalone(launcher), false), where,
             Math.Max(20, Math.Min(240, Convert.ToInt32(kept["cols"]))), Math.Max(6, Math.Min(100, Convert.ToInt32(kept["rows"]))), Emitted(live));
         terminals[id] = live;
     }
@@ -291,7 +293,7 @@ public sealed class TerminalAgent {
         var native = NativeState(s);
         if (native != null) Reach.ObserveDesktop(s.Id, native.Ready, native.Takes, native.At);
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
-        var ways = WaysOf(s, known);
+        var ways = Ways.Of(s, known, native);
         bool asks = known != null && known.Status == "confirm";
         return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, kind = s.Kind, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = ways.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = ways.Status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
             reach = ways.Reach, ways = s.Live ? ways.Named : null,
@@ -324,56 +326,19 @@ public sealed class TerminalAgent {
             return completedTurn;
         } catch (IOException) { return ""; } catch (UnauthorizedAccessException) { return ""; }
     }
-    public static string CompletedTurn(string record) {
-        string completedTurn = "";
-        var reader = new JavaScriptSerializer { MaxJsonLength = 1024 * 1024 };
-        foreach (string line in (record ?? "").Split('\n')) {
-            if (!line.StartsWith("{", StringComparison.Ordinal) || line.Length > 1024 * 1024) continue;
-            try {
-                var row = reader.Deserialize<Dictionary<string, object>>(line); object value;
-                var payload = row.TryGetValue("payload", out value) ? value as Dictionary<string, object> : null;
-                if (payload == null) continue;
-                string type = Get(payload, "type");
-                if (Get(row, "type") == "event_msg") {
-                    if (type == "task_started" || type == "turn_aborted") completedTurn = "";
-                    else if (type == "task_complete") completedTurn = Get(payload, "turn_id");
-                } else if (Get(row, "type") == "response_item" && type == "message" && Get(payload, "role") == "user") completedTurn = "";
-            } catch (ArgumentException) { } catch (InvalidOperationException) { }
-        }
-        return completedTurn;
-    }
+    public static string CompletedTurn(string record) { return Transcripts.CompletedTurn(record); }
     // How a message stands, for the phone: the same answer whatever carries it, and for one that is asked after again.
     static Dictionary<string, object> Told(Outbox.Item item, string way) {
         return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", item.State == Outbox.Handed }, { "way", way }, { "state", item.State }, { "message", item.Id } };
     }
     readonly Dictionary<string, object> awakening = new Dictionary<string, object>();      // one at a time for each conversation
     readonly HashSet<string> retried = new HashSet<string>();                              // items this run has tried to hand over by itself
-    /// Hands what waits for a conversation that sits idle to it, by its tool's own way: it is woken where it is, and
-    /// stays where it is. Codex takes each message into its queue. Claude Code is only woken where it runs this
-    /// program's hooks: its own Stop hook then gives it the words as its user's; where its hooks do not come for
-    /// them, they are handed over as the message itself. Throws what the tool refuses, in words for the person.
+    /// Hands what waits for a conversation that sits idle to it, by its tool's own way (Tools.cs): it is woken where
+    /// it is, and stays where it is. Throws what the tool refuses, in words for the person.
     void Awaken(string tool, string session) {
         object one;
         lock (awakening) { string key = tool + " " + session.ToLowerInvariant(); if (!awakening.TryGetValue(key, out one)) awakening[key] = one = new object(); }
-        lock (one) {
-            var waiting = Reach.Outbox.Of(tool, session).Where(item => item.State == Outbox.Queued).ToArray();
-            if (waiting.Length == 0) return;
-            string launcher = FindTool(tool), folder = Path.Combine(dataDir, "relay", "remote-cli-phone");       // Claude Code names the sender after this folder
-            if (tool == "codex") {
-                foreach (var item in waiting) Reach.Outbox.Deliver(item.Id, text => CodexQueue.Send(launcher, session, text));
-                return;
-            }
-            // (the hooks are there once Claude Code has told something through them, or stand in its settings:
-            // a conversation opened before they did takes the words the other way, after the wait)
-            bool hooks = Reach.Heard("claude") || ReachHooks.Installed("claude");
-            if (hooks) ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Wake);
-            int patience = WakeSeconds;
-            foreach (var item in waiting) {
-                if (hooks && Reach.Taken(item.Id, patience)) continue;
-                patience = 0;       // its hooks did not come: the rest is not waited for either
-                Reach.Outbox.Deliver(item.Id, text => ClaudeRelay.Send(launcher, folder, ClaudeRelay.Address(session), ClaudeRelay.Framed(text)));
-            }
-        }
+        lock (one) Tool.Named(tool).Wake(FindTool(tool), dataDir, session, Reach, WakeSeconds);
     }
     /// What waited when this program stopped, or was released while nothing was at hand to carry it, is handed over
     /// once the conversations have been looked at: each item is tried once by this, and stays for the phone to see
@@ -709,43 +674,11 @@ public sealed class TerminalAgent {
     }
 
     public static Dictionary<int, int> Parents() { return SessionOrigin.Parents(); }
-    static string ReadPart(string path, bool tail, int limit) {
-        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
-            if (tail && stream.Length > limit) stream.Seek(-limit, SeekOrigin.End);
-            byte[] bytes = new byte[(int)Math.Min(limit, stream.Length - stream.Position)]; int read = 0, n;
-            while (read < bytes.Length && (n = stream.Read(bytes, read, bytes.Length - read)) > 0) read += n;
-            return Encoding.UTF8.GetString(bytes, 0, read);
-        }
-    }
-    // The value of a JSON string field, found without parsing lines that may be megabytes long or cut off.
-    static string JsonText(string text, string field, bool last) {
-        var matches = Regex.Matches(text, field + @"\s*""((?:[^""\\]|\\.)*)""");
-        if (matches.Count == 0) return "";
-        try { return new JavaScriptSerializer().Deserialize<string>("\"" + matches[last ? matches.Count - 1 : 0].Groups[1].Value + "\"") ?? ""; } catch { return ""; }
-    }
-    public static string Tidy(string title) {
-        title = Regex.Replace(Regex.Replace(title ?? "", @"<[^>]{1,40}>", " "), @"[\s\p{C}]+", " ").Trim();
-        if (title.Length > 60) title = title.Substring(0, Char.IsHighSurrogate(title[58]) ? 58 : 59) + "…";
-        return title;
-    }
-    // The name the tool itself shows for a conversation; without one, what the owner last asked.
-    public static string ClaudeTitleOf(string path) { string same; return ClaudeTitleOf(path, out same); }
-    // same tells copies of one conversation apart from others: Claude Code writes a branch or a second run of the
-    // same request as a file of its own. It is the name where the conversation has one, else what it began with;
-    // the last request alone ("continue") is shared by conversations that have nothing to do with each other.
-    public static string ClaudeTitleOf(string path, out string same) {
-        string tail = ReadPart(path, true, 256 * 1024);
-        string title = JsonText(tail, @"""customTitle"":", true);
-        if (title.Length == 0) title = JsonText(tail, @"""aiTitle"":", true);
-        same = Tidy(title);
-        if (title.Length > 0) return same;
-        title = JsonText(tail, @"""lastPrompt"":", true);
-        string head = ReadPart(path, false, 768 * 1024);
-        string began = JsonText(head, @"""role"":""user"",""content"":", false);
-        if (began.Length == 0) began = JsonText(head, @"""operation"":""enqueue"",[^\n]{0,200}?""content"":", false);
-        same = began.Length > 0 ? "began " + Tidy(began) : "";
-        return Tidy(title.Length > 0 ? title : began);
-    }
+    static string ReadPart(string path, bool tail, int limit) { return Transcripts.ReadPart(path, tail, limit); }
+    static string JsonText(string text, string field, bool last) { return Transcripts.JsonText(text, field, last); }
+    public static string Tidy(string title) { return Transcripts.Tidy(title); }
+    public static string ClaudeTitleOf(string path) { return Transcripts.ClaudeTitleOf(path); }
+    public static string ClaudeTitleOf(string path, out string same) { return Transcripts.ClaudeTitleOf(path, out same); }
     string ClaudeTitle(FileInfo file, out string same) {
         TitleCache cached; same = "";
         if (titles.TryGetValue(file.FullName, out cached) && cached.Stamp == file.LastWriteTimeUtc.Ticks && cached.Length == file.Length) { same = cached.Same; return cached.Title; }
@@ -788,14 +721,40 @@ public sealed class TerminalAgent {
     // Conversations of the allowed folders: what each tool saved, and which of them a program on this computer has open.
     List<SessionInfo> ScanAll(Dictionary<string, string> dirs, LiveTerminal[] running) {
         var found = new List<SessionInfo>();
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var open = new Dictionary<string, ClaudeSessions.Owner>();
         var ownerCounts = new Dictionary<string, int>();
+        var parents = Parents();
         // every folder a conversation is found in is noted, a project or not, with by what it is used
         folders.Begin();
         Action<string, string, DateTime, bool, string> note = folders.Note;
+        ScanClaude(dirs, running, parents, found, ownerCounts, note);
+        ScanCodex(dirs, running, parents, found, note);
+        ScanAgy(dirs, running, parents, found, note);
+        foreach (SessionInfo held in found.Where(s => s.Live)) {
+            int count;
+            held.MultipleOwners = held.Tool == "claude" && ownerCounts.TryGetValue(held.Id, out count) && count > 1;
+            if (held.MultipleOwners) { held.CanTakeover = false; held.TakeoverReason = ClaudeSessions.MultipleReason; }
+            held.Now = InUse(held.Host, held.Origin, ObservedStatus(held, Reach.Of(held.Tool, held.Id)), null, held.Updated, DateTime.UtcNow);
+        }
+        // Associate a phone terminal only with the verified writer process in its own process tree.
+        foreach (LiveTerminal t in running.Where(t => t.Tool == "codex" && t.Session.Length == 0 && !t.Pty.Closed)) {
+            var mine = found.Where(s => s.Tool == "codex" && s.Dir == t.Dir && !running.Any(o => o.Session == s.Id)
+                && codexSessions.Get(s.Id).Pid > 0 && SessionOrigin.Descends(codexSessions.Get(s.Id).Pid, new[] { t.Pty.Id }, parents)).ToArray();
+            if (mine.Length == 1) t.Session = mine[0].Id;
+        }
+        // the ones a program has open and the ones their owner pinned are listed whatever their age
+        sessions = Single(found).OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated).Take(200).ToList();
+        foreach (var s in sessions) { string root; s.ControlFolder = dirs.TryGetValue(s.Dir, out root) ? root : s.Folder; }       // the folder it is in: its project's, or the one it was found open in
+        NativeDesktop.Refresh(sessions.Where(s => s.Live && s.Tool == "codex" && s.Origin == Ways.CodexDesktop).Select(s => s.Id));
+        folders.End();
+        candidates = Offer(dirs, false, 40);
+        // (what the folders are used by is read with the folders, and forgotten with them)
+        if (claudeFolders.Count > 500 || codexFolders.Count > 3000) { claudeFolders.Clear(); codexFolders.Clear(); usedBy.Clear(); codexOrigins.Clear(); codexFiles.Clear(); }
+        if (titles.Count > 600) titles.Clear();
+        return sessions;
+    }
+    void ScanClaude(Dictionary<string, string> dirs, LiveTerminal[] running, Dictionary<int, int> parents, List<SessionInfo> found, Dictionary<string, int> ownerCounts, Action<string, string, DateTime, bool, string> note) {
+        var open = new Dictionary<string, ClaudeSessions.Owner>();
         try {
-            var parents = Parents();
             foreach (string file in Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json")) {
                 try {
                     var source = ClaudeSessions.Inspect(file, parents);
@@ -870,6 +829,8 @@ public sealed class TerminalAgent {
                 if (path.Length > 0 && ProjectFolder(path) == folder.Name) note(path, "claude", folder.Newest.LastWriteTimeUtc, false, usedBy.TryGetValue("claude\n" + folder.Name, out claudeKind) ? claudeKind : Folders.Terminal);
             }
         } catch { }
+    }
+    void ScanCodex(Dictionary<string, string> dirs, LiveTerminal[] running, Dictionary<int, int> parents, List<SessionInfo> found, Action<string, string, DateTime, bool, string> note) {
         try {
             var index = new FileInfo(Path.Combine(CodexSessions.Home, "session_index.jsonl"));
             if (index.Exists && index.LastWriteTimeUtc.Ticks != codexNamesStamp) {
@@ -882,7 +843,6 @@ public sealed class TerminalAgent {
             var root = new DirectoryInfo(Path.Combine(CodexSessions.Home, "sessions"));
             var counts = new Dictionary<string, int>();
             codexSessions.Refresh();
-            var ownerParents = Parents();
             bool queues = CodexQueue.Supported(FindTool("codex"));
             int listed = 0;
             if (root.Exists) foreach (FileInfo file in root.GetFiles("rollout-*.jsonl", SearchOption.AllDirectories).OrderByDescending(f => f.LastWriteTimeUtc).Take(1500)) {
@@ -911,7 +871,7 @@ public sealed class TerminalAgent {
                 }
                 bool live = owner.Live;
                 if (++listed > 150 && !live) { note(folder, "codex", file.LastWriteTimeUtc, false, codexKind); continue; }
-                bool phone = owner.Pid > 0 && CodexSessions.Descends(owner.Pid, running.Select(t => t.Pty.Id), ownerParents);
+                bool phone = owner.Pid > 0 && SessionOrigin.Descends(owner.Pid, running.Select(t => t.Pty.Id), parents);
                 string title; codexNames.TryGetValue(id, out title); title = Tidy(title);
                 if (live && !phone) codexKind = Folders.Held(origin, codexKind);
                 note(folder, "codex", file.LastWriteTimeUtc, live, codexKind);
@@ -930,15 +890,16 @@ public sealed class TerminalAgent {
                 found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
+    }
+    void ScanAgy(Dictionary<string, string> dirs, LiveTerminal[] running, Dictionary<int, int> parents, List<SessionInfo> found, Action<string, string, DateTime, bool, string> note) {
         try {
             agySessions.Refresh();
-            var agyParents = Parents();
             var agyCounts = new Dictionary<string, int>();
             foreach (var item in Antigravity.Summaries(null, agySessions.LiveIds())) {
                 var owner = agySessions.Get(item.Id);
                 bool live = owner.Live;
                 LiveTerminal phoneOwner = live && owner.Pid > 0
-                    ? running.FirstOrDefault(t => !t.Pty.Closed && CodexSessions.Descends(owner.Pid, new[] { t.Pty.Id }, agyParents))
+                    ? running.FirstOrDefault(t => !t.Pty.Closed && SessionOrigin.Descends(owner.Pid, new[] { t.Pty.Id }, parents))
                     : null;
                 if (phoneOwner != null) {
                     phoneOwner.Session = item.Id;
@@ -961,29 +922,6 @@ public sealed class TerminalAgent {
                 found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir, Kind = agyKind, Title = item.Title, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = item.Title });
             }
         } catch { }
-        foreach (SessionInfo held in found.Where(s => s.Live)) {
-            int count;
-            held.MultipleOwners = held.Tool == "claude" && ownerCounts.TryGetValue(held.Id, out count) && count > 1;
-            if (held.MultipleOwners) { held.CanTakeover = false; held.TakeoverReason = ClaudeSessions.MultipleReason; }
-            held.Now = InUse(held.Host, held.Origin, ObservedStatus(held, Reach.Of(held.Tool, held.Id)), null, held.Updated, DateTime.UtcNow);
-        }
-        // Associate a phone terminal only with the verified writer process in its own process tree.
-        var codexParents = Parents();
-        foreach (LiveTerminal t in running.Where(t => t.Tool == "codex" && t.Session.Length == 0 && !t.Pty.Closed)) {
-            var mine = found.Where(s => s.Tool == "codex" && s.Dir == t.Dir && !running.Any(o => o.Session == s.Id)
-                && codexSessions.Get(s.Id).Pid > 0 && CodexSessions.Descends(codexSessions.Get(s.Id).Pid, new[] { t.Pty.Id }, codexParents)).ToArray();
-            if (mine.Length == 1) t.Session = mine[0].Id;
-        }
-        // the ones a program has open and the ones their owner pinned are listed whatever their age
-        sessions = Single(found).OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated).Take(200).ToList();
-        foreach (var s in sessions) { string root; s.ControlFolder = dirs.TryGetValue(s.Dir, out root) ? root : s.Folder; }       // the folder it is in: its project's, or the one it was found open in
-        NativeDesktop.Refresh(sessions.Where(s => s.Live && s.Tool == "codex" && s.Origin == Ways.CodexDesktop).Select(s => s.Id));
-        folders.End();
-        candidates = Offer(dirs, false, 40);
-        // (what the folders are used by is read with the folders, and forgotten with them)
-        if (claudeFolders.Count > 500 || codexFolders.Count > 3000) { claudeFolders.Clear(); codexFolders.Clear(); usedBy.Clear(); codexOrigins.Clear(); codexFiles.Clear(); }
-        if (titles.Count > 600) titles.Clear();
-        return sessions;
     }
     // A program says once that it draws on the alternate screen, reads the mouse or takes pasted text in brackets.
     // When the output that said so is dropped from the history kept here, the switch is remembered, in the order
@@ -1184,265 +1122,12 @@ public sealed class TerminalAgent {
         catch (NotSupportedException) { throw new ArgumentException("路径无效"); }
         catch (IOException) { throw new ArgumentException("读取失败，文件可能正被占用"); }
     }
-    // The last things said in a saved conversation, oldest first, for the phone to look at before anything is done to
-    // the program that has it open: what the person asked, what the tool answered, and the name of each thing it did.
-    // What the tools put into a conversation for themselves (reminders, command output, results) is left out.
-    public static Dictionary<string, object> Said(string path, string tool) {
-        // limit: how much of the file's end is read. most: how many things said by the user and the tool are given;
-        // what the tool did between them goes with them, of one unbroken run the last `runs`.
-        const int limit = 4 * 1024 * 1024, most = 40, runs = 30, chars = 128 * 1024;
-        var reader = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
-        var said = new List<Dictionary<string, object>>();
-        Func<Dictionary<string, object>, string, object> at = (d, k) => { object v; return d != null && d.TryGetValue(k, out v) ? v : null; };
-        Action<string, string> add = (role, text) => {
-            text = role == "tool" ? Regex.Replace(text ?? "", @"\s+", " ").Trim() : (text ?? "").Trim();
-            if (text.Length == 0) return;
-            int room = role == "tool" ? 1500 : chars;
-            bool truncated = text.Length > room;
-            if (text.Length > room) text = text.Substring(0, Char.IsHighSurrogate(text[room - 2]) ? room - 2 : room - 1) + "…";
-            said.Add(new Dictionary<string, object> { { "role", role }, { "text", text } });
-            if (truncated) said[said.Count - 1]["truncated"] = true;
-        };
-        Func<object, object, string> brief = (name, given) => {
-            var input = given as Dictionary<string, object>; string about = "";
-            // what the step is for, where the tool says it (Bash's description), before the command itself
-            foreach (string key in new[] { "description", "toolSummary", "command", "CommandLine", "file_path", "path", "Path", "pattern", "query", "url" }) { about = at(input, key) as string ?? ""; if (about.Length > 0) break; }
-            return (Convert.ToString(name) + (about.Length > 0 ? "：" + (about.Length > 160 ? about.Substring(0, 160) : about) : "")).Trim();
-        };
-        // A step as a terminal would show it: besides what it is for, the command itself (`detail`, where the step
-        // is told by something else) and the first lines of what came back (`result`).
-        var steps = new Dictionary<string, Dictionary<string, object>>();
-        Func<string, string, Dictionary<string, object>> step = (text, detail) => {
-            int before = said.Count;
-            add("tool", text);
-            if (said.Count == before) return null;
-            var made = said[said.Count - 1];
-            detail = (detail ?? "").Trim();
-            if (detail.Length > 0 && text.IndexOf(detail.Length > 40 ? detail.Substring(0, 40) : detail, StringComparison.Ordinal) < 0) made["detail"] = detail.Length > 400 ? detail.Substring(0, 400) + "…" : detail;
-            return made;
-        };
-        Action<Dictionary<string, object>, string> came = (made, back) => { string first = First(back); if (made != null && first.Length > 0) made["result"] = first; };
-        bool woken = false;
-        long began = 0;       // when its user said the last thing: the work it is at began then
-        Action<Dictionary<string, object>> stamped = written => {
-            DateTime when;
-            string raw = (at(written, "timestamp") as string) ?? (at(written, "created_at") as string);
-            if (DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out when)) began = Milliseconds(when);
-        };
-        string read = ReadPart(path, true, limit);
-        // Codex notes each step for its own window as it ends (the command that ran, the files changed). Where it
-        // does, the steps are told by those, and the calls that only wrap them ("exec", "shell") are passed over.
-        bool itemized = tool == "codex" && read.IndexOf("\"item_completed\"", StringComparison.Ordinal) >= 0;
-        foreach (string line in read.Split('\n')) {
-            if (!line.StartsWith("{", StringComparison.Ordinal)) continue;
-            // What a tool gave back fills most of a long conversation: of such a row only the beginning is taken, unread.
-            if (tool != "agy" && line.Length > 4096 && line.IndexOf(tool == "claude" ? "\"type\":\"tool_result\"" : "\"type\":\"function_call_output\"", 0, 1200, StringComparison.Ordinal) >= 0) {
-                if (tool == "claude") {
-                    var whose = Regex.Match(line.Substring(0, 1200), "\"tool_use_id\":\"([^\"]+)\"");
-                    Dictionary<string, object> asked;
-                    if (whose.Success && steps.TryGetValue(whose.Groups[1].Value, out asked)) came(asked, Begins(line, line.IndexOf("\"type\":\"tool_result\"", StringComparison.Ordinal)));
-                }
-                continue;
-            }
-            if (tool == "agy" && line.IndexOf("\"type\":\"GENERIC\"", 0, Math.Min(line.Length, 200), StringComparison.Ordinal) >= 0) continue;
-            Dictionary<string, object> row;
-            try { row = reader.Deserialize<Dictionary<string, object>>(line); } catch (Exception) { continue; }
-            string type = at(row, "type") as string;
-            if (tool == "agy") {
-                if (type == "USER_INPUT") {
-                    string text = Antigravity.ExtractUserRequest(at(row, "content") as string);
-                    if (text.Length > 0) { add("user", text); stamped(row); }
-                } else if (type == "PLANNER_RESPONSE") {
-                    string thinking = at(row, "thinking") as string;
-                    if (!String.IsNullOrWhiteSpace(thinking)) add("thought", thinking);
-                    var calls = at(row, "tool_calls") as IEnumerable;
-                    if (calls != null && !(at(row, "tool_calls") is string)) {
-                        foreach (object one in calls) {
-                            var call = one as Dictionary<string, object>;
-                            var args = at(call, "args") as Dictionary<string, object>;
-                            string name = at(call, "name") as string;
-                            if (!String.IsNullOrEmpty(name)) step(brief(name, args), at(args, "CommandLine") as string ?? at(args, "Path") as string);
-                        }
-                    }
-                    string reply = at(row, "content") as string;
-                    if (!String.IsNullOrWhiteSpace(reply)) add("assistant", reply);
-                }
-                continue;
-            }
-            if (tool == "claude") {
-                var message = at(row, "message") as Dictionary<string, object>;
-                if (type == "attachment") {
-                    // What a hook handed the conversation as added context: the phone's words, where they came that
-                    // way, when it stopped or between two of its steps.
-                    var attached = at(row, "attachment") as Dictionary<string, object>;
-                    object contextValue = at(attached, "content");
-                    var handed = contextValue is string ? new object[] { contextValue } : contextValue as IEnumerable;
-                    string hookName = at(attached, "hookName") as string ?? "";
-                    if (handed == null || !"hook_additional_context".Equals(at(attached, "type")) || !(hookName == "Stop" || hookName.StartsWith("Stop:", StringComparison.Ordinal) || "Stop".Equals(at(attached, "hookEvent")) || Reach.Step.Equals(at(attached, "hookEvent")))) continue;
-                    foreach (object one in handed) {
-                        string context = one as string ?? ""; int from = context.IndexOf("\n\n", StringComparison.Ordinal);
-                        if (from < 0 || context.IndexOf("from their phone", StringComparison.Ordinal) < 0 || !Reach.Names.Any(name => context.IndexOf(name, StringComparison.Ordinal) >= 0)) continue;
-                        add("user", context.Substring(from + 2)); woken = false; stamped(row);
-                    }
-                    continue;
-                }
-                if ((type != "user" && type != "assistant") || true.Equals(at(row, "isSidechain")) || message == null) continue;
-                if (true.Equals(at(row, "isMeta"))) {
-                    // What Claude Code notes for itself is left out, but for what the phone said: it reached the
-                    // conversation through a hook or as a message from another session, and is the user's all the same.
-                    var origin = at(row, "origin") as Dictionary<string, object>;
-                    string noted = at(message, "content") as string ?? "", body = at(origin, "body") as string ?? noted;
-                    // (under this program's name, or the one it had before: conversations written then are still read)
-                    if (type != "user" || body.IndexOf("from their phone", StringComparison.Ordinal) < 0 || !Reach.Names.Any(name => body.IndexOf(name, StringComparison.Ordinal) >= 0)) continue;
-                    if (Reach.Names.Any(name => body.StartsWith(name + " wake-up", StringComparison.Ordinal))) { woken = true; continue; }       // only woke it: the words follow
-                    int words = body.IndexOf("\n\n", StringComparison.Ordinal);
-                    if (words >= 0) { add("user", body.Substring(words + 2)); woken = false; stamped(row); }
-                    continue;
-                }
-                if (woken && type == "assistant") continue;         // what it answered to being woken, before the words reached it
-                woken = false;
-                object content = at(message, "content");
-                IEnumerable parts = content is string ? new object[] { new Dictionary<string, object> { { "type", "text" }, { "text", content } } } : content as IEnumerable;
-                if (parts == null) continue;
-                foreach (object item in parts) {
-                    var part = item as Dictionary<string, object>; string kind = at(part, "type") as string, text = at(part, "text") as string;
-                    if (kind == "text" && text != null) { if (type == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal)) { add(type, text); if (type == "user") stamped(row); } }
-                    else if (kind == "tool_use" && type == "assistant") {
-                        var made = step(brief(at(part, "name"), at(part, "input")), at(at(part, "input") as Dictionary<string, object>, "command") as string);
-                        string id = at(part, "id") as string;
-                        if (made != null && !String.IsNullOrEmpty(id)) steps[id] = made;
-                    }
-                    else if (kind == "tool_result" && type == "user") {
-                        Dictionary<string, object> asked; string id = at(part, "tool_use_id") as string ?? "";
-                        if (!steps.TryGetValue(id, out asked)) continue;
-                        object back = at(part, "content");
-                        came(asked, back as string ?? (back is IEnumerable ? String.Join("\n", ((IEnumerable)back).Cast<object>().Select(one => at(one as Dictionary<string, object>, "text") as string ?? "")) : ""));
-                    }
-                    // what it says of its work between the steps, where Claude Code keeps a summary of it
-                    else if (kind == "thinking" && type == "assistant") add("thought", at(part, "thinking") as string);
-                }
-            } else {
-                var payload = at(row, "payload") as Dictionary<string, object>;
-                if (payload == null) continue;
-                string kind = at(payload, "type") as string, role = at(payload, "role") as string;
-                if (type == "event_msg" && kind == "item_completed") {
-                    var item = at(payload, "item") as Dictionary<string, object>; string what = at(item, "type") as string;
-                    if (what == "CommandExecution") {
-                        var parsed = (at(item, "parsed_cmd") as IEnumerable ?? new object[0]).Cast<object>().Select(one => one as Dictionary<string, object>).Where(one => one != null).ToList();
-                        var reads = parsed.Where(one => "read".Equals(at(one, "type"))).Select(one => at(one, "name") as string ?? at(one, "path") as string ?? "").Where(one => one.Length > 0).ToList();
-                        string ran = parsed.Select(one => at(one, "cmd") as string ?? "").FirstOrDefault(one => one.Length > 0)
-                            ?? String.Join(" ", (at(item, "command") as IEnumerable ?? new object[0]).Cast<object>().Select(Convert.ToString));
-                        if (parsed.Count > 0 && reads.Count == parsed.Count) add("tool", "读取：" + String.Join("、", reads.Take(3)) + (reads.Count > 3 ? " 等 " + reads.Count + " 个文件" : ""));
-                        else if (ran.Length > 0) {
-                            string code = Convert.ToString(at(item, "exit_code") ?? "");
-                            came(step("运行：" + (ran.Length > 160 ? ran.Substring(0, 160) : ran), ran.Length > 160 ? ran : ""), (code.Length > 0 && code != "0" ? "（退出码 " + code + "）\n" : "") + (at(item, "aggregated_output") as string ?? ""));
-                        }
-                    } else if (what == "FileChange") {
-                        var changed = at(item, "changes") as Dictionary<string, object>;
-                        var names = changed == null ? new List<string>() : changed.Keys.Select(one => one.TrimEnd('/', '\\')).Select(one => one.Substring(one.LastIndexOfAny(new[] { '/', '\\' }) + 1)).Where(one => one.Length > 0).ToList();
-                        if (names.Count > 0) add("tool", "修改：" + String.Join("、", names.Take(3)) + (names.Count > 3 ? " 等 " + names.Count + " 个文件" : ""));
-                    }
-                    continue;
-                }
-                if (type != "response_item") continue;
-                if (kind == "message" && (role == "user" || role == "assistant")) {
-                    var parts = at(payload, "content") as IEnumerable;
-                    if (parts == null || at(payload, "content") is string) continue;
-                    foreach (object item in parts) {
-                        string text = at(item as Dictionary<string, object>, "text") as string;
-                        if (text != null && (role == "assistant" || !text.TrimStart().StartsWith("<", StringComparison.Ordinal))) { add(role, text); if (role == "user") stamped(row); }
-                    }
-                }
-                else if (kind == "function_call" || kind == "custom_tool_call" || kind == "local_shell_call") {
-                    string called = at(payload, "name") as string ?? "shell";
-                    if (!(itemized && (kind == "local_shell_call" || called == "exec" || called == "shell" || called == "local_shell"))) add("tool", brief(called, null));
-                }
-                else if (kind == "reasoning") {
-                    // the summary Codex keeps of its reasoning: what it says of its work between the steps
-                    var summary = at(payload, "summary") as IEnumerable;
-                    if (summary != null && !(at(payload, "summary") is string)) add("thought", String.Join("\n\n", summary.Cast<object>().Select(one => at(one as Dictionary<string, object>, "text") as string).Where(one => !String.IsNullOrWhiteSpace(one))));
-                }
-            }
-        }
-        var file = new FileInfo(path);
-        var kept = Talk(said, most, runs);
-        // Keep complete normal replies while bounding the relay payload, including JSON escaping.
-        // Drop older turns before shortening a reply; exceptionally large single blocks are explicitly marked.
-        int letters = kept.Sum(m => Convert.ToString(m["text"]).Length);
-        var sizes = kept.Select(m => Encoding.UTF8.GetByteCount(reader.Serialize(m)) + 1).ToArray();
-        int bytes = sizes.Sum(), removed = 0;
-        while (removed < kept.Count - 1 && (letters > 256 * 1024 || bytes > 3 * 1024 * 1024)) {
-            letters -= Convert.ToString(kept[removed]["text"]).Length; bytes -= sizes[removed++];
-        }
-        if (removed > 0) kept.RemoveRange(0, removed);
-        // What came back is given with the latest steps only: a window that follows a conversation at work is sent
-        // it anew whenever it changes, and the output of every step of a long one is too much for that.
-        int withResult = 0;
-        for (int i = kept.Count - 1; i >= 0; i--) if (kept[i].ContainsKey("result") && ++withResult > Results) kept[i].Remove("result");
-        return new Dictionary<string, object> { { "messages", kept }, { "more", kept.Count < said.Count || file.Length > limit }, { "updated", Milliseconds(file.LastWriteTimeUtc) }, { "asked", began } };
-    }
+    public static Dictionary<string, object> Said(string path, string tool) { return Transcripts.Said(path, tool); }
     /// Of how many steps, counted from the last, what came back is given.
-    public const int Results = 40;
-    /// The first lines of what came back from a step, as a terminal shows them: six lines at most, none longer than
-    /// two hundred letters, and a mark where there is more.
-    public static string First(string back) {
-        back = (back ?? "").Replace("\r\n", "\n").TrimStart('\n', '\r').TrimEnd();
-        if (back.Length == 0) return "";
-        var lines = back.Split('\n'); var kept = new List<string>(); int letters = 0;
-        foreach (string one in lines) {
-            if (kept.Count == 6 || letters > 500) break;
-            string cut = one.TrimEnd();
-            if (cut.Length > 200) cut = cut.Substring(0, Char.IsHighSurrogate(cut[199]) ? 199 : 200) + "…";
-            kept.Add(cut); letters += cut.Length;
-        }
-        return String.Join("\n", kept) + (kept.Count < lines.Length ? "\n…" : "");
-    }
-    /// The beginning of what a tool gave back, taken from a row without reading the row: the text that follows
-    /// `"content":` after `from` (a string, or the first text of a list), as far as a few hundred letters go.
-    public static string Begins(string row, int from) {
-        if (from < 0) return "";
-        int at = row.IndexOf("\"content\":", from, StringComparison.Ordinal);
-        if (at < 0) return "";
-        at += 10;
-        if (at < row.Length && row[at] == '[') { at = row.IndexOf("\"text\":\"", at, StringComparison.Ordinal); if (at < 0 || at > from + 400) return ""; at += 7; }
-        if (at >= row.Length || row[at] != '"') return "";
-        var text = new StringBuilder();
-        for (int i = at + 1; i < row.Length && text.Length < 1600; i++) {
-            char c = row[i];
-            if (c == '"') break;
-            if (c != '\\') { text.Append(c); continue; }
-            if (++i >= row.Length) break;
-            switch (row[i]) {
-                case 'n': text.Append('\n'); break;
-                case 't': text.Append('\t'); break;
-                case 'r': break;
-                case 'b': case 'f': break;
-                case 'u':
-                    int code;
-                    if (i + 4 < row.Length && Int32.TryParse(row.Substring(i + 1, 4), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out code)) { text.Append((char)code); i += 4; }
-                    break;
-                default: text.Append(row[i]); break;
-            }
-        }
-        return text.ToString();
-    }
-    /// (What the tool said of its work between its steps, "thought", is counted as said.)
-    /// The last `most` things said by the user and the tool, oldest first, with what the tool did between them. A
-    /// conversation at work is mostly things done: counted with the rest they would leave no room for what was
-    /// said. Of one unbroken run of them the last `runs` are given, and a line says how many came before.
-    public static List<Dictionary<string, object>> Talk(List<Dictionary<string, object>> said, int most, int runs) {
-        var kept = new List<Dictionary<string, object>>();
-        int talk = 0, run = 0, passed = 0;
-        Action earlier = () => { if (passed > 0) kept.Add(new Dictionary<string, object> { { "role", "tool" }, { "text", "更早的 " + passed + " 个操作" } }); passed = 0; };
-        for (int i = said.Count - 1; i >= 0; i--) {
-            if ((string)said[i]["role"] == "tool") { if (++run > runs) { passed++; continue; } }
-            else { earlier(); run = 0; if (++talk > most) break; }
-            kept.Add(said[i]);
-        }
-        earlier();
-        kept.Reverse();
-        return kept;
-    }
+    public const int Results = Transcripts.Results;
+    public static string First(string back) { return Transcripts.First(back); }
+    public static string Begins(string row, int from) { return Transcripts.Begins(row, from); }
+    public static List<Dictionary<string, object>> Talk(List<Dictionary<string, object>> said, int most, int runs) { return Transcripts.Talk(said, most, runs); }
     Dictionary<string, object> ReadConversation(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string session = Get(op, "session"), tool = Get(op, "tool"), dir = Get(op, "dir"), root;
         var saved = sessions.FirstOrDefault(s => s.Id == session && s.Tool == tool && s.Dir == dir);
@@ -1537,7 +1222,7 @@ public sealed class TerminalAgent {
     }
     public static ProcessStartInfo ComputerProcess(ComputerTakeover takeover, string mode) {
         if (takeover == null || String.IsNullOrEmpty(takeover.Launcher)) throw new InvalidOperationException("电脑上没有找到这个工具");
-        string args = Arguments(takeover.Tool, takeover.Session, false, mode, false, takeover.Tool == "codex", false);
+        string args = Arguments(takeover.Tool, takeover.Session, false, mode, false, Tool.Named(takeover.Tool).SupportsStandalone, false);
         var info = new ProcessStartInfo();
         info.WorkingDirectory = takeover.Dir; info.UseShellExecute = false; info.CreateNoWindow = false;
         if (takeover.Launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)) {
@@ -1684,6 +1369,27 @@ public sealed class TerminalAgent {
                 return r.IsSuccessStatusCode;
         } finally { Array.Clear(bytes, 0, bytes.Length); }
     }
+    /// Runs a blocking operation off the agent's report lock with optional concurrency limit and consistent completion reporting.
+    void RunAsync(string id, Func<Dictionary<string, object>> run, Func<Exception, string> describeError, bool rescan = false, TimeSpan? rescanDelay = null, bool markActivity = false, bool limited = true) {
+        if (limited && relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
+        if (!relaying.Add(id)) return;
+        Task.Run(() => {
+            string failed = ""; Dictionary<string, object> answer = null;
+            try { answer = run(); }
+            catch (Exception problem) { failed = describeError(problem); }
+            lock (work) {
+                completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
+                if (answer != null && failed.Length == 0) completed[id]["result"] = answer;
+                relaying.Remove(id); reported.Remove(id); soon = true;
+                if (markActivity) lastActivity = DateTime.UtcNow;
+                if (rescan) nextScan = rescanDelay.HasValue ? DateTime.UtcNow + rescanDelay.Value : DateTime.MinValue;
+            }
+            Wake();
+        });
+    }
+    static string DesktopError(Exception problem) {
+        return problem is InvalidOperationException || problem is ArgumentException ? problem.Message : "桌面操作结果无法确认，请检查电脑上的应用";
+    }
     void Execute(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string id = Get(op, "id"), terminal = Get(op, "terminal"), action = Get(op, "action");
         bool nativeControl = Get(op, "transport") == Ways.App && (action == "session_say" || action == "session_stop");
@@ -1711,18 +1417,7 @@ public sealed class TerminalAgent {
                 // read from the tools' records beside the terminals' work: the first reading of many records takes a while
                 int days; if (!Int32.TryParse(Get(op, "days"), out days)) days = 14;
                 var dirs = AllDirs(prefs);
-                if (relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
-                relaying.Add(id);
-                Task.Run(() => {
-                    string failed = ""; Dictionary<string, object> answer = null;
-                    try { answer = Stats.Read(days, folder => NamedFolder(folder, dirs)); } catch (Exception) { failed = "统计没有读出来，请稍后再试"; }
-                    lock (work) {
-                        completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
-                        if (answer != null) completed[id]["result"] = answer;
-                        relaying.Remove(id); reported.Remove(id); soon = true;
-                    }
-                    Wake();
-                });
+                RunAsync(id, () => Stats.Read(days, folder => NamedFolder(folder, dirs)), _ => "统计没有读出来，请稍后再试");
                 return;
             }
             else if (ownWork) result = Work(action, op, prefs);
@@ -1732,62 +1427,37 @@ public sealed class TerminalAgent {
                 if (!Desktop.Available(tool)) throw new InvalidOperationException("这台电脑暂不支持此桌面应用入口");
                 if (!AllDirs(prefs).TryGetValue(Get(op, "dir"), out folder) || !Directory.Exists(folder)) throw new ArgumentException("项目文件夹未获允许或已不存在");
                 Desktop.Check(tool, folder, draft); // validate before reserving the operation
-                if (relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
-                relaying.Add(id);
-                Task.Run(() => {
-                    string failed = ""; Dictionary<string, object> answer = null;
-                    try { answer = Desktop.Open(id, tool, folder, draft); }
-                    catch (Exception problem) { failed = problem is InvalidOperationException || problem is ArgumentException ? problem.Message : "桌面操作结果无法确认，请检查电脑上的应用"; }
-                    lock (work) {
-                        completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
-                        if (answer != null) completed[id]["result"] = answer;
-                        relaying.Remove(id); reported.Remove(id); soon = true;
-                    }
-                    Wake();
-                });
+                RunAsync(id, () => Desktop.Open(id, tool, folder, draft), DesktopError);
                 return;
             }
             else if (nativeControl) {
                 string session = Get(op, "session"), dir = Get(op, "dir"), text = Get(op, "text"), expectedTurn = Get(op, "turn"), root;
                 var saved = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Dir == dir);
-                if (Get(op, "tool") != "codex" || saved == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话");
+                if (Get(op, "tool") != "codex" || saved == null || !SessionLocks.IsUuid(session)) throw new ArgumentException("电脑上没有找到这个对话");
                 root = DesktopFolder(saved, prefs);
-                if (relaying.Count >= 4) throw new InvalidOperationException("电脑正在处理其它操作，请稍后再试");
                 bool queryOnly = Get(op, "receipt") == "True";
                 string server = Get(prefs, "Server");
-                relaying.Add(id);
-                Task.Run(() => {
-                    string failed = ""; Dictionary<string, object> answer = null;
-                    try {
-                        answer = Desktop.Run(id, new[] { action, "codex", session, dir, text, expectedTurn }, () => {
-                            ValidateDesktopConversation(session, dir, root, server);
-                            if (action == "session_say") {
-                                lock (work) {
-                                    var current = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Live && s.Dir == dir);
-                                    if (current != null && SamePath(current.ControlFolder, root) && WaysOf(current, Reach.Of("codex", session)).Say == Ways.Hook) {
-                                        ValidateDesktopConversation(session, dir, root, server);
-                                        return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", Reach.Say("codex", session, text, id) }, { "way", Ways.Hook }, { "state", Outbox.Queued }, { "message", id } };
-                                    }
-                                }
-                            }
-                            using (var control = OpenDesktopConversation()) {
-                                var state = control.Inspect(session);
-                                if (!SamePath(CodexDesktopControl.Folder(state), root)) throw new InvalidOperationException("桌面对话的工作目录已变化");
+                RunAsync(id, () => Desktop.Run(id, new[] { action, "codex", session, dir, text, expectedTurn }, () => {
+                    ValidateDesktopConversation(session, dir, root, server);
+                    if (action == "session_say") {
+                        lock (work) {
+                            var current = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Live && s.Dir == dir);
+                            if (current != null && SamePath(current.ControlFolder, root) && WaysOf(current, Reach.Of("codex", session)).Say == Ways.Hook) {
                                 ValidateDesktopConversation(session, dir, root, server);
-                                if (action == "session_say") return control.Send(id, text);
-                                var stopped = control.Interrupt(expectedTurn);
-                                Reach.Outbox.Pause("codex", session);
-                                return stopped;
+                                return new Dictionary<string, object> { { "status", "accepted" }, { "sent", true }, { "now", Reach.Say("codex", session, text, id) }, { "way", Ways.Hook }, { "state", Outbox.Queued }, { "message", id } };
                             }
-                        }, true, queryOnly);
-                    } catch (Exception problem) { failed = problem is InvalidOperationException || problem is ArgumentException ? problem.Message : "桌面操作结果无法确认，请检查电脑上的应用"; }
-                    lock (work) {
-                        completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
-                        if (answer != null) completed[id]["result"] = answer;
-                        relaying.Remove(id); reported.Remove(id); soon = true; nextScan = DateTime.MinValue;
+                        }
                     }
-                    Wake();
-                });
+                    using (var control = OpenDesktopConversation()) {
+                        var state = control.Inspect(session);
+                        if (!SamePath(CodexDesktopControl.Folder(state), root)) throw new InvalidOperationException("桌面对话的工作目录已变化");
+                        ValidateDesktopConversation(session, dir, root, server);
+                        if (action == "session_say") return control.Send(id, text);
+                        var stopped = control.Interrupt(expectedTurn);
+                        Reach.Outbox.Pause("codex", session);
+                        return stopped;
+                    }
+                }, true, queryOnly), DesktopError, rescan: true);
                 return;
             }
             else if (action == "session_stop") {
@@ -1864,24 +1534,18 @@ public sealed class TerminalAgent {
                         // beside the terminals' work, and the operation is answered when it has been taken or has failed.
                         string text = (Get(op, "text") ?? "").Trim();
                         if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字");
-                        if (!relaying.Add(id)) return;
                         Reach.Leave(tool, session, text, id);
-                        Task.Run(() => {
-                            string failed = "";
+                        RunAsync(id, () => {
                             try { Awaken(tool, session); }
-                            catch (InvalidOperationException refused) { failed = refused.Message; }
-                            catch (IOException) { failed = "消息没有送出：电脑上启动不了这个工具"; }
-                            catch (System.ComponentModel.Win32Exception) { failed = "消息没有送出：电脑上启动不了这个工具"; }
-                            // what could not be handed over does not stay waiting (unless its hooks came for it meanwhile)
-                            if (failed.Length > 0 && !Reach.Outbox.Forget(id)) failed = "";
-                            var stands = Reach.Outbox.Find(id);
-                            lock (work) {
-                                completed[id] = new Dictionary<string, object> { { "id", id }, { "error", failed } };
-                                if (failed.Length == 0) { var answer = Told(stands ?? new Outbox.Item { Id = id, State = Outbox.Handed }, Ways.Wake); answer["woke"] = true; completed[id]["result"] = answer; }
-                                relaying.Remove(id); lastActivity = DateTime.UtcNow; soon = true; nextScan = DateTime.UtcNow.AddSeconds(1);
+                            catch (Exception) {
+                                // what could not be handed over does not stay waiting (unless its hooks came for it meanwhile)
+                                if (Reach.Outbox.Forget(id)) throw;
                             }
-                            Wake();
-                        });
+                            var answer = Told(Reach.Outbox.Find(id) ?? new Outbox.Item { Id = id, State = Outbox.Handed }, Ways.Wake);
+                            answer["woke"] = true;
+                            return answer;
+                        }, problem => problem is InvalidOperationException ? problem.Message : "消息没有送出：电脑上启动不了这个工具",
+                            rescan: true, rescanDelay: TimeSpan.FromSeconds(1), markActivity: true, limited: false);
                         return;
                     }
                     bool now = Reach.Say(tool, session, Get(op, "text"), id);
@@ -1958,7 +1622,7 @@ public sealed class TerminalAgent {
                     string first = Get(op, "text").Trim();
                     if (first.Length > 0) live.Chat.Say(first, id);
                 } else {
-                    live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, tool == "codex" && SupportsStandalone(launcher), fresh), Place(live, dirs), 80, 24, Emitted(live));
+                    live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, kind.SupportsStandalone && SupportsStandalone(launcher), fresh), Place(live, dirs), 80, 24, Emitted(live));
                     terminals[terminal] = live;
                 }
             } else {
@@ -2011,7 +1675,7 @@ public sealed class TerminalAgent {
                 }
             }
             if (DateTime.UtcNow - toolsAt > TimeSpan.FromSeconds(30)) {
-                tools = new[] { "claude", "codex", "agy", "shell" }.Where(t => FindTool(t) != null).ToArray();
+                tools = Tool.All.Select(t => t.Name).Where(t => FindTool(t) != null).ToArray();
                 externalAgy = enabled ? Antigravity.ExternalStarts(FindTool("agy"), terminals.Values.Where(t => !t.Pty.Closed).Select(t => t.Pty.Id).ToArray(), agySessions.LivePids()) : new long[0];
                 toolsAt = DateTime.UtcNow;
                 if (enabled && tools.Contains("codex")) Quotas.AskCodex(FindTool("codex"));      // (at most once in ten minutes)

@@ -141,6 +141,29 @@ public static class CodexDesktopControlCheck {
         Require((string)Object(run(outsideClaude)["result"])["way"] == Ways.Hook && agent.Reach.Outbox.Find((string)outsideClaude["id"]) != null, "outside Claude receives messages through its own hook");
         outsideClaude["id"] = Guid.NewGuid().ToString("N"); outsideClaude["action"] = "session_stop"; outsideClaude.Remove("text");
         Require((string)Object(run(outsideClaude)["result"])["transport"] == Ways.Hook, "outside Claude stops through its own hook");
+        // Waking an idle conversation is not blocked by 4 unrelated in-flight async operations.
+        heard.Clear();
+        sessions[0].Wakes = true;
+        var inflight = (HashSet<string>)Field(agent, "relaying");
+        var placeholders = new[] { "0000000000000001", "0000000000000002", "0000000000000003", "0000000000000004" };
+        foreach (string p in placeholders) inflight.Add(p);
+        try {
+            var wakeOp = request(); wakeOp["dir"] = ""; wakeOp["tool"] = "claude"; wakeOp.Remove("transport");
+            string wakeErr = (string)run(wakeOp)["error"];
+            Require(!wakeErr.Contains("其它操作"), "idle wake send must not hit the 4-op throttle: " + wakeErr);
+        } finally { foreach (string p in placeholders) inflight.Remove(p); }
+        // CodexDesktopSessions pushes Changed only when a probed state actually changes.
+        int notifications = 0; var changedEvent = new ManualResetEventSlim();
+        var probe = new CodexDesktopSessions(() => new Conversation { Folder = root });
+        probe.Changed += () => { Interlocked.Increment(ref notifications); changedEvent.Set(); };
+        probe.Refresh(new[] { Session });
+        Require(changedEvent.Wait(2000) && notifications == 1 && probe.Get(Session) != null, "initial native probe fires Changed");
+        changedEvent.Reset();
+        probe.Refresh(new[] { Session });
+        Require(!changedEvent.Wait(200) && notifications == 1, "unchanged native probe does not spam Changed");
+        changedEvent.Reset();
+        probe.Refresh(new string[0]);
+        Require(changedEvent.Wait(2000) && notifications == 2 && probe.Get(Session) == null, "removed desktop session fires Changed");
         Console.WriteLine("native agent: async dispatch, receipt identity, project/cwd checks and permission revocation passed");
     }
     sealed class Peer : Stream {

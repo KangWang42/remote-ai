@@ -306,7 +306,7 @@ public static class Antigravity {
                 try {
                     if (process.SessionId != current.SessionId || !String.Equals(executable, process.MainModule.FileName, StringComparison.OrdinalIgnoreCase)) continue;
                     if (known != null && known.Contains(process.Id)) continue;
-                    if (ownedRoots.Contains(process.Id) || CodexSessions.Descends(process.Id, ownedRoots, parents)) continue;
+                    if (ownedRoots.Contains(process.Id) || SessionOrigin.Descends(process.Id, ownedRoots, parents)) continue;
                     starts.Add(new DateTimeOffset(process.StartTime).ToUnixTimeMilliseconds());
                 } catch (System.ComponentModel.Win32Exception) { } catch (InvalidOperationException) { }
             }
@@ -317,90 +317,44 @@ public static class Antigravity {
 
 /// Read-only ownership checks and verified takeover for Antigravity CLI conversations via presence/<id>.lock.
 public sealed class AgySessions {
-    public sealed class Owner {
-        public bool Known, Live, CanTakeover;
-        public int Pid;
-        public long Started;
-        public string Host = "unknown";
-        public string Origin = "";
-        public string Reason = "正在确认电脑会话的归属，请稍后刷新";
-    }
+    public sealed class Owner : LockOwner { }
 
-    [StructLayout(LayoutKind.Sequential)] struct UniqueProcess { public uint pid; public System.Runtime.InteropServices.ComTypes.FILETIME started; }
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct ProcessInfo {
-        public UniqueProcess process;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string name;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string service;
-        public uint type, status, session;
-        [MarshalAs(UnmanagedType.Bool)] public bool restartable;
-    }
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] static extern int RmStartSession(out uint session, int flags, StringBuilder key);
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] static extern int RmRegisterResources(uint session, uint files, string[] names, uint processes, IntPtr applications, uint services, IntPtr serviceNames);
-    [DllImport("rstrtmgr.dll")] static extern int RmGetList(uint session, out uint needed, ref uint count, [In, Out] ProcessInfo[] processes, ref uint reasons);
-    [DllImport("rstrtmgr.dll")] static extern int RmEndSession(uint session);
-
-    static readonly Regex Uuid = new Regex(@"\A[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\z");
     readonly object gate = new object();
     Dictionary<string, Owner> cached;
     bool refreshing;
     DateTime next = DateTime.MinValue;
 
     public static string LockPath(string id, string homeOverride = null) {
-        if (!Uuid.IsMatch(id ?? "")) throw new ArgumentException("会话编号无效");
+        if (!SessionLocks.IsUuid(id)) throw new ArgumentException("会话编号无效");
         string home = String.IsNullOrWhiteSpace(homeOverride) ? Antigravity.Home : homeOverride;
         return Path.Combine(home, "presence", id + ".lock");
     }
 
     /// True if an agy process currently holds the exclusive lock on presence/<id>.lock.
-    public static bool? Held(string path) {
-        try {
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete)) {
-                try { stream.Lock(0, Int64.MaxValue); stream.Unlock(0, Int64.MaxValue); return false; }
-                catch (IOException ex) { return (ex.HResult & 0xffff) == 33 ? (bool?)true : null; }
-            }
-        } catch (FileNotFoundException) { return false; }
-        catch (DirectoryNotFoundException) { return false; }
-        catch (IOException ex) {
-            int code = ex.HResult & 0xffff;
-            if (code == 32 || code == 33) return true;
-            return null;
-        }
-        catch (UnauthorizedAccessException) { return null; }
-    }
+    public static bool? Held(string path) { return SessionLocks.Held(path); }
 
     public static Owner Inspect(string id, Dictionary<int, int> parents = null, string homeOverride = null) {
         string path = LockPath(id, homeOverride);
-        bool? held = Held(path);
+        bool? held = SessionLocks.Held(path);
         if (held == false) return new Owner { Known = true, Host = "", Reason = "" };
         if (held == null) return new Owner { Reason = "无法核实 Antigravity CLI 锁文件，请在电脑结束会话后重试" };
         var result = new Owner { Known = true, Live = true, Reason = "无法确认电脑上 Antigravity CLI 进程的归属，请先在原终端结束后重试" };
-        uint session;
-        if (RmStartSession(out session, 0, new StringBuilder(33)) != 0) return result;
         try {
-            if (RmRegisterResources(session, 1, new[] { path }, 0, IntPtr.Zero, 0, IntPtr.Zero) != 0) return result;
-            uint needed, count = 8, reasons = 0; var records = new ProcessInfo[count];
-            int code = RmGetList(session, out needed, ref count, records, ref reasons);
-            if (code == 234 && needed <= 256) { count = needed; records = new ProcessInfo[count]; code = RmGetList(session, out needed, ref count, records, ref reasons); }
-            if (code != 0 || count != 1) return result;
-            var record = records[0];
-            long started = ((long)record.process.started.dwHighDateTime << 32) | (uint)record.process.started.dwLowDateTime;
-            using (var process = Process.GetProcessById((int)record.process.pid)) {
-                if (process.StartTime.ToUniversalTime().ToFileTimeUtc() != started) return result;
-                result.Pid = process.Id; result.Started = started;
-                if (!String.Equals(process.ProcessName, "agy", StringComparison.OrdinalIgnoreCase)) return result;
-                var origin = SessionOrigin.Inspect(process.Id, parents);
-                result.Origin = origin.Name;
-                if (origin.Remote) {
-                    result.Host = "remote";
-                    result.Reason = "此对话在其它远程终端运行，请先在原远程终端结束后，再接管原对话";
-                    return result;
-                }
-                result.Host = "cli";
-                result.CanTakeover = true;
-                result.Reason = "接管会结束原终端中的这段 Antigravity CLI 对话，再在手机恢复同一段历史";
+            var holder = SessionLocks.SingleHolder(path);
+            if (holder == null) return result;
+            result.Pid = holder.Pid; result.Started = holder.Started;
+            if (!String.Equals(holder.ProcessName, "agy", StringComparison.OrdinalIgnoreCase)) return result;
+            var origin = SessionOrigin.Inspect(holder.Pid, parents);
+            result.Origin = origin.Name;
+            if (origin.Remote) {
+                result.Host = "remote";
+                result.Reason = "此对话在其它远程终端运行，请先在原远程终端结束后，再接管原对话";
+                return result;
             }
+            result.Host = "cli";
+            result.CanTakeover = true;
+            result.Reason = "接管会结束原终端中的这段 Antigravity CLI 对话，再在手机恢复同一段历史";
         } catch { /* Unknown ownership cannot authorize process termination. */ }
-        finally { RmEndSession(session); }
         return result;
     }
 
@@ -413,7 +367,7 @@ public sealed class AgySessions {
             var parents = SessionOrigin.Parents();
             foreach (string path in Directory.GetFiles(folder, "*.lock")) {
                 string id = Path.GetFileNameWithoutExtension(path);
-                if (Uuid.IsMatch(id)) fresh[id] = Inspect(id, parents, home);
+                if (SessionLocks.IsUuid(id)) fresh[id] = Inspect(id, parents, home);
             }
         } catch { }
         return fresh;
@@ -459,19 +413,10 @@ public sealed class AgySessions {
     }
 
     public static void Takeover(string id, IEnumerable<int> protectedRoots, Dictionary<int, int> parents, string homeOverride = null) {
-        Owner owner = Inspect(id, parents, homeOverride);
-        if (!owner.Known) throw new InvalidOperationException(owner.Reason);
-        if (!owner.Live) return;
-        if (!owner.CanTakeover || CodexSessions.Descends(owner.Pid, protectedRoots, parents)) throw new InvalidOperationException("无法安全结束这个电脑会话，请先在原终端结束后重试");
-        using (var process = Process.GetProcessById(owner.Pid)) {
-            if (process.StartTime.ToUniversalTime().ToFileTimeUtc() != owner.Started) throw new InvalidOperationException("会话进程已变化，请刷新后重试");
-            Owner current = Inspect(id, parents, homeOverride);
-            if (!current.CanTakeover || current.Pid != owner.Pid || current.Started != owner.Started) throw new InvalidOperationException("会话归属已变化，请刷新后重试");
-            process.Kill();
-            if (!process.WaitForExit(5000)) throw new InvalidOperationException("电脑会话没有结束，已取消接管");
-        }
-        for (int n = 0; n < 50; n++) { if (Held(LockPath(id, homeOverride)) == false) return; Thread.Sleep(50); }
-        throw new InvalidOperationException("Antigravity CLI 会话锁尚未释放，已取消接管，请稍后重试");
+        SessionLocks.Takeover(() => Inspect(id, parents, homeOverride), LockPath(id, homeOverride), protectedRoots, parents,
+            "无法安全结束这个电脑会话，请先在原终端结束后重试",
+            "电脑会话没有结束，已取消接管",
+            "Antigravity CLI 会话锁尚未释放，已取消接管，请稍后重试");
     }
 }
 }

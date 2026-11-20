@@ -188,24 +188,42 @@ public sealed class CodexDesktopControl : IDesktopConversation {
 
 // Only short capability summaries survive a probe. Prompts, settings and history stay off the relay.
 public sealed class CodexDesktopSessions {
-    public sealed class State { public string Folder, Turn; public bool Ready, Busy, Takes, CompletionReady; public DateTime At; }       // Takes: at work, and takes a message (TakesAtWork)
+    public sealed class State {
+        public string Folder, Turn; public bool Ready, Busy, Takes, CompletionReady; public DateTime At;       // Takes: at work, and takes a message (TakesAtWork)
+        internal bool SameAs(State other) {
+            return other != null && Folder == other.Folder && Turn == other.Turn && Ready == other.Ready && Busy == other.Busy && Takes == other.Takes && CompletionReady == other.CompletionReady;
+        }
+    }
     readonly object gate = new object();
     readonly Dictionary<string, State> states = new Dictionary<string, State>();
+    readonly Func<IDesktopConversation> connect;
     bool refreshing;
+    /// A probed desktop conversation changed state, became reachable, or dropped out.
+    public event Action Changed;
+    public CodexDesktopSessions(Func<IDesktopConversation> connect = null) { this.connect = connect ?? (() => CodexDesktopControl.Connect()); }
     public State Get(string id) { lock (gate) { State state; return states.TryGetValue(id, out state) && DateTime.UtcNow - state.At < TimeSpan.FromSeconds(15) ? state : null; } }
     public void Refresh(IEnumerable<string> ids) {
-        lock (gate) { if (refreshing) return; refreshing = true; }
         var wanted = ids.Distinct().Take(20).ToArray();
+        lock (gate) {
+            if (refreshing || (wanted.Length == 0 && states.Count == 0)) return;
+            refreshing = true;
+        }
         Task.Run(() => {
+            bool changed = false;
             try {
                 Parallel.ForEach(wanted, new ParallelOptions { MaxDegreeOfParallelism = 2 }, id => {
                     State state = null;
-                    try { using (var control = CodexDesktopControl.Connect()) { var value = control.Inspect(id); state = new State { Folder = CodexDesktopControl.Folder(value), Ready = CodexDesktopControl.Ready(value), Busy = CodexDesktopControl.Busy(value), Takes = CodexDesktopControl.TakesAtWork(value), CompletionReady = CodexDesktopControl.CompletionReady(value), Turn = CodexDesktopControl.ActiveTurn(value), At = DateTime.UtcNow }; } }
+                    try { using (var control = connect()) { var value = control.Inspect(id); state = new State { Folder = CodexDesktopControl.Folder(value), Ready = CodexDesktopControl.Ready(value), Busy = CodexDesktopControl.Busy(value), Takes = CodexDesktopControl.TakesAtWork(value), CompletionReady = CodexDesktopControl.CompletionReady(value), Turn = CodexDesktopControl.ActiveTurn(value), At = DateTime.UtcNow }; } }
                     catch (Exception) { /* No capability is inferred from an unavailable or incompatible endpoint. */ }
-                    lock (gate) { if (state == null) states.Remove(id); else states[id] = state; }
+                    lock (gate) {
+                        State prior;
+                        if (state == null) { if (states.Remove(id)) changed = true; }
+                        else { if (!states.TryGetValue(id, out prior) || !state.SameAs(prior)) changed = true; states[id] = state; }
+                    }
                 });
-                lock (gate) foreach (string old in states.Keys.Where(id => !wanted.Contains(id)).ToArray()) states.Remove(old);
+                lock (gate) foreach (string old in states.Keys.Where(id => !wanted.Contains(id)).ToArray()) { states.Remove(old); changed = true; }
             } finally { lock (gate) refreshing = false; }
+            if (changed) { var told = Changed; if (told != null) { try { told(); } catch { } } }
         });
     }
 }
