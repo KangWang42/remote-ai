@@ -162,7 +162,7 @@ final class AppPages {
             LinearLayout row = kit.row();
             row.setPadding(kit.dp(14), kit.dp(12), kit.dp(12), kit.dp(12));
             row.setMinimumHeight(kit.dp(60));
-            View badge = kit.tintedTile(R.drawable.ic_computer, kit.heroBg(), kit.heroFg(), 36, 11);
+            View badge = kit.tintedTile(R.drawable.ic_computer, kit.accentSoft(), kit.accentInk(), 36, 11);
             ((LinearLayout.LayoutParams) badge.getLayoutParams()).rightMargin = kit.dp(12);
             row.addView(badge);
             LinearLayout copy = kit.column();
@@ -263,28 +263,29 @@ final class AppPages {
         }
     }
 
-    /** Dark hero collaboration card with CC -> CX -> AG pipeline strip and inverted white CTA. */
+    /** Soft tinted hero collaboration card with CC -> CX -> AG pipeline strip and brand accent CTA. */
     private View heroCollabCard() {
         LinearLayout card = kit.column();
         card.setPadding(kit.dp(18), kit.dp(18), kit.dp(18), kit.dp(18));
-        card.setBackground(kit.shape(kit.heroBg(), Kit.light(kit.BG) ? 0 : kit.LINE, 24));
+        card.setBackground(kit.shape(kit.heroTintBg(), kit.heroBorder(), 24));
+        kit.elevate(card, 1.5f);
 
         // Pipeline strip: [CC] --- [CX] --- [AG]
         LinearLayout pipe = kit.row();
-        pipe.addView(heroBadge("CC", 0xff3a2318, 0xfff7b593));
+        pipe.addView(heroBadge("CC", kit.toolBadgeBg("claude"), kit.toolBadgeFg("claude")));
         pipe.addView(flowLine(), flowLp());
-        pipe.addView(heroBadge("CX", 0xff17284a, 0xff9dbbf7));
+        pipe.addView(heroBadge("CX", kit.toolBadgeBg("codex"), kit.toolBadgeFg("codex")));
         pipe.addView(flowLine(), flowLp());
-        pipe.addView(heroBadge("AG", 0xff261d4a, 0xffbca9f8));
+        pipe.addView(heroBadge("AG", kit.toolBadgeBg("agy"), kit.toolBadgeFg("agy")));
         card.addView(pipe);
 
         card.addView(kit.semibold("协作任务", 19, kit.heroFg()), kit.below(16));
         card.addView(kit.text("写审循环或领队分工，让多个 AI 配合完成一件事", 13.5f, kit.heroMuted()), kit.below(4));
 
-        TextView cta = kit.semibold("＋ 新建协作任务", 14, Kit.light(kit.BG) ? 0xff0e1116 : kit.ON_ACCENT);
+        TextView cta = kit.semibold("＋ 新建协作任务", 14, kit.onSolidInk());
         cta.setGravity(Gravity.CENTER);
         cta.setMinHeight(kit.dp(48));
-        cta.setBackground(kit.shape(Kit.light(kit.BG) ? 0xffffffff : kit.ACCENT, 0, 14));
+        cta.setBackground(kit.shape(kit.solidInk(), 0, 14));
         kit.press(cta, () -> pickTogether("协作任务", "team"));
         card.addView(cta, kit.below(16));
         return card;
@@ -303,7 +304,7 @@ final class AppPages {
         View line = new View(activity);
         GradientDrawable dash = new GradientDrawable();
         dash.setShape(GradientDrawable.LINE);
-        dash.setStroke(kit.dp(2), 0x59ffffff, kit.dp(5), kit.dp(4));
+        dash.setStroke(kit.dp(2), Kit.tint(kit.ACCENT, Kit.light(kit.BG) ? 84 : 110), kit.dp(5), kit.dp(4));
         line.setBackground(dash);
         line.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         return line;

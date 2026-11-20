@@ -67,14 +67,15 @@ final class ComputerManagement {
         boolean ready = state.online && state.enabled;
         LinearLayout hero = kit.column();
         hero.setPadding(kit.dp(16), kit.dp(16), kit.dp(16), kit.dp(16));
-        hero.setBackground(kit.shape(kit.heroBg(), Kit.light(kit.BG) ? 0 : kit.LINE, 22));
+        hero.setBackground(kit.shape(kit.heroBg(), kit.heroBorder(), 22));
+        kit.elevate(hero, 1.5f);
 
         LinearLayout top = kit.row();
         FrameLayout iconWrap = new FrameLayout(activity);
-        iconWrap.setBackground(kit.shape(kit.heroChipBg(), 0, 14));
-        iconWrap.addView(kit.icon(R.drawable.ic_computer, kit.heroFg(), 22), new FrameLayout.LayoutParams(kit.dp(22), kit.dp(22), Gravity.CENTER));
+        iconWrap.setBackground(kit.shape(kit.accentSoft(), 0, 14));
+        iconWrap.addView(kit.icon(R.drawable.ic_computer, kit.accentInk(), 22), new FrameLayout.LayoutParams(kit.dp(22), kit.dp(22), Gravity.CENTER));
         View dot = new View(activity);
-        GradientDrawable dotShape = kit.shape(ready ? 0xff22c55e : state.online ? 0xfff59e0b : 0xffef4444, 0, 6);
+        GradientDrawable dotShape = kit.shape(ready ? kit.goodDot() : state.online ? kit.busyDot() : kit.BAD, 0, 6);
         dotShape.setStroke(kit.dp(2.5f), kit.heroBg());
         dot.setBackground(dotShape);
         FrameLayout.LayoutParams dotLp = new FrameLayout.LayoutParams(kit.dp(12), kit.dp(12), Gravity.BOTTOM | Gravity.END);
@@ -87,7 +88,9 @@ final class ComputerManagement {
         LinearLayout meta = kit.column();
         LinearLayout titleRow = kit.row();
         titleRow.addView(kit.line(currentName, 16, kit.heroFg(), true));
-        TextView onlineTag = kit.medium(state.connection, 12, ready ? 0xff86efac : state.online ? 0xfffcd34d : 0xfffca5a5);
+        int tagFg = ready ? kit.goodInk() : state.online ? kit.busyInk() : kit.BAD;
+        int tagBg = ready ? kit.goodSoft() : state.online ? kit.busySoft() : kit.badSoft();
+        TextView onlineTag = kit.statusPill(state.connection, tagFg, tagBg, 0);
         LinearLayout.LayoutParams tagLp = new LinearLayout.LayoutParams(-2, -2);
         tagLp.leftMargin = kit.dp(8);
         titleRow.addView(onlineTag, tagLp);
@@ -96,7 +99,7 @@ final class ComputerManagement {
         top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
 
         String versionLabel = state.version.isEmpty() ? "版本未知" : "v" + state.version;
-        top.addView(kit.statusPill(versionLabel, kit.heroFg(), kit.heroChipBg(), 0));
+        top.addView(kit.statusPill(versionLabel, kit.MUTED, kit.RAISED, 0));
         hero.addView(top);
 
         String hint = !state.online ? "保持电脑开机并运行 Remote AI 后，可查看版本并发起远程更新。"
@@ -104,17 +107,17 @@ final class ComputerManagement {
             : !state.supported ? "此电脑端暂不支持手机更新，请先在电脑上安装新版。"
             : state.version.isEmpty() ? "暂未读取到版本号，点右上角刷新重试。"
             : state.newer.isEmpty() ? "电脑端版本正常，可随时检查更新。" : "发现新版本 v" + state.newer + "，可远程安装。";
-        hero.addView(kit.text(hint, 13, state.newer.isEmpty() ? kit.heroMuted() : 0xff9dbbf7), kit.below(12));
+        hero.addView(kit.text(hint, 13, state.newer.isEmpty() ? kit.heroMuted() : kit.accentInk()), kit.below(12));
         if (!state.note.isEmpty()) hero.addView(kit.text(state.note, 12.5f, kit.heroMuted()), kit.below(6));
 
         final String url = current;
         if (state.canUpdate() || state.busy()) {
             String actionLabel = state.busy() ? "正在等待电脑更新…"
                 : state.newer.isEmpty() ? "检查电脑端更新" : "更新电脑至 v" + state.newer;
-            TextView cta = kit.semibold(loading.contains(url) ? "正在读取版本…" : actionLabel, 14, Kit.light(kit.BG) ? 0xff0e1116 : kit.ON_ACCENT);
+            TextView cta = kit.semibold(loading.contains(url) ? "正在读取版本…" : actionLabel, 14, kit.onSolidInk());
             cta.setGravity(Gravity.CENTER);
             cta.setMinHeight(kit.dp(48));
-            cta.setBackground(kit.shape(Kit.light(kit.BG) ? 0xffffffff : kit.ACCENT, 0, 14));
+            cta.setBackground(kit.shape(kit.solidInk(), 0, 14));
             kit.press(cta, () -> { if (state.canUpdate()) confirm(url); });
             hero.addView(cta, kit.below(14));
         }

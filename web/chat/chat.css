@@ -3,7 +3,7 @@
 :root {
   --bg: #f2f3f7; --panel: #ffffff; --raised: #f1f3f6; --line: #e6e8ec; --ink: #0e1116; --muted: #5b6270;
   --accent: #2f54eb; --on-accent: #ffffff; --good: #15803d; --busy: #9a5b00; --bad: #c0261a;
-  --ink-solid: #0e1116; --on-ink-solid: #ffffff; --surface-sub: #f6f7f9; --reader-bg: #ffffff;
+  --ink-solid: #2f54eb; --on-ink-solid: #ffffff; --surface-sub: #f6f7f9; --reader-bg: #ffffff;
   --card-border: #e9ebef; --divider: #eef0f3;
   --accent-soft: #eef1ff; --accent-ink: #2445c8;
   --busy-soft: #fff7ea; --busy-ink: #8a4b00; --busy-dot: #f59e0b;

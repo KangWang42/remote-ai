@@ -61,12 +61,14 @@ final class Kit {
     }
 
     // ---- Semantic design tokens derived from the active skin
-    int solidInk() { return light(BG) ? 0xff0e1116 : ACCENT; }
-    int onSolidInk() { return light(BG) ? 0xffffffff : ON_ACCENT; }
-    int heroBg() { return light(BG) ? 0xff0e1116 : PANEL; }
-    int heroFg() { return light(BG) ? 0xffffffff : INK; }
-    int heroMuted() { return light(BG) ? 0xffb9bec8 : MUTED; }
-    int heroChipBg() { return light(BG) ? 0x1affffff : RAISED; }
+    int solidInk() { return ACCENT; }
+    int onSolidInk() { return ON_ACCENT; }
+    int heroBg() { return PANEL; }
+    int heroTintBg() { return light(BG) ? mix(ACCENT, PANEL, .06f) : PANEL; }
+    int heroBorder() { return light(BG) ? mix(ACCENT, cardBorder(), .20f) : LINE; }
+    int heroFg() { return INK; }
+    int heroMuted() { return MUTED; }
+    int heroChipBg() { return RAISED; }
     int cardBorder() { return light(BG) ? 0xffe9ebef : LINE; }
     int dividerColor() { return light(BG) ? 0xffeef0f3 : rim(); }
     int subSurface() { return light(BG) ? 0xfff6f7f9 : BG; }

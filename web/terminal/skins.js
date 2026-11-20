@@ -60,8 +60,10 @@
     const bg = s.bg || s.t.background;
     const vars = { bg, 'term-bg': s.t.background, panel: s.panel, raised: s.raised, line: s.line, ink: s.t.foreground, muted: s.muted, accent: s.accent, 'on-accent': s.onAccent,
       good: s.t.green, busy: s.t.yellow, bad: s.t.red, 'warn-ink': s.t.yellow, 'warn-bg': s.raised,
-      'ink-solid': s.light ? '#0e1116' : s.accent, 'on-ink-solid': s.light ? '#ffffff' : s.onAccent,
-      'hero-bg': s.light ? '#0e1116' : s.panel, 'hero-fg': s.light ? '#ffffff' : s.t.foreground, 'hero-muted': s.light ? '#b9bec8' : s.muted,
+      'ink-solid': s.accent, 'on-ink-solid': s.onAccent,
+      'hero-bg': s.light ? 'color-mix(in srgb, ' + s.accent + ' 6%, ' + s.panel + ')' : s.panel,
+      'hero-border': s.light ? 'color-mix(in srgb, ' + s.accent + ' 18%, ' + s.line + ')' : s.line,
+      'hero-fg': s.t.foreground, 'hero-muted': s.muted,
       'surface-sub': s.light ? '#f6f7f9' : bg, 'reader-bg': s.light ? s.panel : bg,
       'card-border': s.light ? '#e9ebef' : s.line, divider: s.light ? '#eef0f3' : s.line,
       'accent-soft': s.light ? '#eef1ff' : 'color-mix(in srgb, var(--accent) 16%, transparent)',

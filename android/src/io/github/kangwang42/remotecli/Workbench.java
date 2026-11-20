@@ -755,21 +755,21 @@ final class Workbench {
         wrap.setMinimumHeight(kit.dp(48));
         LinearLayout pill = kit.row();
         String mono = toolKey.isEmpty() ? "" : Kit.toolMono(toolKey);
-        int bg = on ? kit.solidInk() : kit.PANEL;
-        int fg = on ? kit.onSolidInk() : kit.INK;
-        int bd = on ? kit.solidInk() : kit.cardBorder();
+        int bg = on ? kit.accentSoft() : kit.PANEL;
+        int fg = on ? kit.accentInk() : kit.INK;
+        int bd = on ? Kit.mix(kit.ACCENT, kit.cardBorder(), .32f) : kit.cardBorder();
         pill.setBackground(kit.shape(bg, bd, 99));
         pill.setPadding(kit.dp(mono.isEmpty() ? 16 : 7), 0, kit.dp(16), 0);
         if (!mono.isEmpty()) {
-            TextView badge = kit.bold(mono, 10, on ? kit.onSolidInk() : kit.toolBadgeFg(toolKey));
+            TextView badge = kit.bold(mono, 10, kit.toolBadgeFg(toolKey));
             badge.setGravity(Gravity.CENTER);
             badge.setIncludeFontPadding(false);
-            badge.setBackground(kit.shape(on ? 0x29ffffff : kit.toolBadgeBg(toolKey), 0, 13));
+            badge.setBackground(kit.shape(kit.toolBadgeBg(toolKey), on ? Kit.tint(kit.ACCENT, 40) : 0, 13));
             LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(kit.dp(26), kit.dp(26));
             bLp.rightMargin = kit.dp(8);
             pill.addView(badge, bLp);
         }
-        TextView text = kit.medium(label, 13.5f, fg);
+        TextView text = on ? kit.semibold(label, 13.5f, fg) : kit.medium(label, 13.5f, fg);
         text.setSingleLine(true);
         pill.addView(text);
         wrap.addView(pill, new FrameLayout.LayoutParams(-2, kit.dp(40), Gravity.CENTER_VERTICAL));
@@ -1157,16 +1157,17 @@ final class Workbench {
         boolean folded = collapsed.contains(url);
         int[] counts = on ? AggregateSessions.counts(snapshot.projects, looked) : new int[4];
 
-        // Dark feature computer banner (matching Projects screen design)
+        // Elevated computer status banner (calm surface matching paper/dark themes)
         LinearLayout hero = kit.row();
         hero.setPadding(kit.dp(14), kit.dp(14), kit.dp(10), kit.dp(14));
-        hero.setBackground(kit.shape(kit.heroBg(), Kit.light(kit.BG) ? 0 : kit.LINE, 22));
+        hero.setBackground(kit.shape(kit.heroBg(), kit.heroBorder(), 22));
+        kit.elevate(hero, 1.5f);
 
         FrameLayout iconWrap = new FrameLayout(activity);
-        iconWrap.setBackground(kit.shape(kit.heroChipBg(), 0, 14));
-        iconWrap.addView(kit.icon(R.drawable.ic_computer, kit.heroFg(), 22), new FrameLayout.LayoutParams(kit.dp(22), kit.dp(22), Gravity.CENTER));
+        iconWrap.setBackground(kit.shape(kit.accentSoft(), 0, 14));
+        iconWrap.addView(kit.icon(R.drawable.ic_computer, kit.accentInk(), 22), new FrameLayout.LayoutParams(kit.dp(22), kit.dp(22), Gravity.CENTER));
         View dot = new View(activity);
-        int dotColor = snapshot == null ? kit.MUTED : !on ? ("key".equals(snapshot.state) ? 0xfff59e0b : 0xffef4444) : counts[0] > 0 ? 0xffef4444 : 0xff22c55e;
+        int dotColor = snapshot == null ? kit.MUTED : !on ? ("key".equals(snapshot.state) ? kit.busyDot() : kit.BAD) : counts[0] > 0 ? kit.BAD : kit.goodDot();
         GradientDrawable dotShape = kit.shape(dotColor, 0, 6);
         dotShape.setStroke(kit.dp(2.5f), kit.heroBg());
         dot.setBackground(dotShape);
@@ -1180,8 +1181,9 @@ final class Workbench {
         LinearLayout nameRow = kit.row();
         nameRow.addView(kit.line(name, 16, kit.heroFg(), true));
         String tagText = snapshot == null ? "连接中" : on ? "在线" : "key".equals(snapshot.state) ? "需登录" : "离线";
-        int tagColor = snapshot == null ? kit.heroMuted() : on ? 0xff86efac : "key".equals(snapshot.state) ? 0xfffcd34d : 0xfffca5a5;
-        TextView onlineTag = kit.medium(tagText, 12, tagColor);
+        int tagFg = snapshot == null ? kit.MUTED : on ? kit.goodInk() : "key".equals(snapshot.state) ? kit.busyInk() : kit.BAD;
+        int tagBg = snapshot == null ? kit.RAISED : on ? kit.goodSoft() : "key".equals(snapshot.state) ? kit.busySoft() : kit.badSoft();
+        TextView onlineTag = kit.statusPill(tagText, tagFg, tagBg, 0);
         LinearLayout.LayoutParams tagLp = new LinearLayout.LayoutParams(-2, -2);
         tagLp.leftMargin = kit.dp(8);
         nameRow.addView(onlineTag, tagLp);
@@ -1196,12 +1198,12 @@ final class Workbench {
         texts.addView(kit.line(status, 12.5f, kit.heroMuted(), false), kit.below(3));
         hero.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
 
-        // Fold toggle + Manage options button on dark hero
+        // Fold toggle + Manage options button
         FrameLayout foldBtn = new FrameLayout(activity);
         View foldDisc = new View(activity);
         foldDisc.setBackground(kit.shape(kit.heroChipBg(), 0, 12));
         foldBtn.addView(foldDisc, new FrameLayout.LayoutParams(kit.dp(38), kit.dp(38), Gravity.CENTER));
-        View foldIcon = kit.icon(R.drawable.ic_chevron, kit.heroFg(), 17);
+        View foldIcon = kit.icon(R.drawable.ic_chevron, kit.MUTED, 17);
         foldIcon.setRotation(folded ? 0 : 90);
         foldBtn.addView(foldIcon, new FrameLayout.LayoutParams(kit.dp(17), kit.dp(17), Gravity.CENTER));
         foldBtn.setContentDescription(folded ? "展开" + name : "收起" + name);
@@ -1212,7 +1214,7 @@ final class Workbench {
         View moreDisc = new View(activity);
         moreDisc.setBackground(kit.shape(kit.heroChipBg(), 0, 12));
         moreBtn.addView(moreDisc, new FrameLayout.LayoutParams(kit.dp(38), kit.dp(38), Gravity.CENTER));
-        moreBtn.addView(kit.icon(R.drawable.ic_more, kit.heroFg(), 17), new FrameLayout.LayoutParams(kit.dp(17), kit.dp(17), Gravity.CENTER));
+        moreBtn.addView(kit.icon(R.drawable.ic_more, kit.MUTED, 17), new FrameLayout.LayoutParams(kit.dp(17), kit.dp(17), Gravity.CENTER));
         moreBtn.setContentDescription(name + " 的选项");
         kit.press(moreBtn, () -> activity.manage(url));
         hero.addView(moreBtn, new LinearLayout.LayoutParams(kit.dp(48), kit.dp(48)));
