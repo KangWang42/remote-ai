@@ -627,6 +627,13 @@ windows find it: it is listed with the others, and can be gone on with in a term
 is closed. While a chat has it, the computer lists it as held by the phone's own program. Requests of the tools that
 this protocol does not answer are refused, so that the tool does not wait.
 
+A command the model sends to the background ends the turn before the command does. Claude Code 2.1.322 lists such
+commands in `system` / `background_tasks_changed` (`tasks`, the whole list each time); when one ends it sends
+`task_notification`, an empty list, and goes on by itself in a turn of its own (`result` with `origin`). Codex
+0.163.0 waits for its command within the same turn. The phone is shown every turn as it ends; a collaboration task
+(Teams.cs) takes a member's turn as over only when nothing it started still runs in the background, and passes on
+what it said at the end of the turn that follows.
+
 Claude permission suggestions are validated by the computer before offering `always`, both for chats
 (Windows and Python Linux) and Windows `PermissionRequest` hooks. Only a complete `addRules` / `allow`
 suggestion for `localSettings` is accepted; chats also accept `session`. Changes to user/shared settings,

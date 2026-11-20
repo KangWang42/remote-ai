@@ -233,13 +233,20 @@ public abstract class Chat : IRunning {
     readonly StringBuilder words = new StringBuilder();
     /// A turn has ended: how ("done", "stopped", "failed"), and what it said last in it. Told on a thread of its own,
     /// outside the conversation's lock, so that whoever listens may tell this or another conversation something.
+    /// A turn that ends while commands it started still run in the background is not told: the tool goes on by
+    /// itself when they end, and what it says at the end of that is the turn's outcome ("I am running the tests,
+    /// I will report" is not).
     public event Action<string, string> Turned;
+    int background;
+    /// How many commands the tool now runs in the background of this conversation, as the tool says it.
+    protected void Background(int running) { background = Math.Max(0, running); }
     protected void Note(string text) { Event(new Dictionary<string, object> { { "t", "note" }, { "text", text }, { "at", Now() } }); }
     protected void TurnEnded(string how, string error) {
         var turn = new Dictionary<string, object> { { "t", "turn" }, { "end", how }, { "at", Now() } };
         if (!String.IsNullOrEmpty(error)) turn["error"] = error;
         Event(turn);
         stopping = false;
+        if (how == "done" && background > 0) return;
         var turned = Turned;
         if (turned != null) { string said = words.ToString(); ThreadPool.QueueUserWorkItem(_ => { try { turned(how, said); } catch (Exception) { } }); }
     }
@@ -323,6 +330,9 @@ public sealed class ClaudeChat : Chat {
         if (type == "system") {
             if (Text(m, "subtype") == "init") Known(Text(m, "session_id"));
             else if (Text(m, "subtype") == "status" && Text(m, "status") == "requesting" && Status == "idle") State("busy");
+            // the commands it runs in the background (Claude Code 2.1.322: the whole list, each time it changes); when
+            // one ends it goes on by itself, in a turn of its own
+            else if (Text(m, "subtype") == "background_tasks_changed") { var tasks = At(m, "tasks") as System.Collections.ICollection; Background(tasks == null ? 0 : tasks.Count); }
             return;
         }
         if (type == "stream_event") { Streamed(At(m, "event")); return; }

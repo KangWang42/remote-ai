@@ -2,7 +2,8 @@
 shapes recorded from the real tools (Claude Code 2.1.283, Codex 0.163.0): what a conversation run by the computer
 (agent-windows/Chats.cs, agent-linux/agent.py) is checked against. Every turn goes the same way: it says a few
 words in pieces, wants to run one command and asks first, prints what the command printed, and says it is done. A
-message with "慢" in it runs a command that only ends when the turn is stopped.
+message with "慢" in it runs a command that only ends when the turn is stopped; one with "后台" (Claude Code) sends a
+command to the background, ends the turn, and goes on by itself when the command ends.
 
     python chat_standin.py claude -p --input-format stream-json ... --session-id <id>
     python chat_standin.py codex app-server
@@ -35,9 +36,33 @@ def claude(args):
     session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
     answers, stop, turns = {}, threading.Event(), []
 
+    def said(text):
+        message = "msg_" + uuid.uuid4().hex[:12]
+        put({"type": "assistant", "message": {"id": message, "content": [{"type": "text", "text": text}]}})
+
+    def background():
+        # As Claude Code 2.1.322 does it: the command goes to the background and the turn ends; when the command ends
+        # it says so and goes on by itself, in a turn of its own.
+        use = "toolu_" + uuid.uuid4().hex[:10]
+        put({"type": "assistant", "message": {"id": "msg_" + uuid.uuid4().hex[:12], "content": [{"type": "tool_use", "id": use, "name": "Bash", "input": {"command": "run-tests", "run_in_background": True}}]}})
+        put({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "b1", "task_type": "local_bash", "description": "测试"}]})
+        put({"type": "system", "subtype": "task_started", "task_id": "b1", "tool_use_id": use, "is_backgrounded": True})
+        put({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use, "content": "Command running in background with ID: b1.", "is_error": False}]}})
+        said("测试在后台运行，跑完后汇报。")
+        put({"type": "result", "subtype": "success", "is_error": False, "result": "测试在后台运行，跑完后汇报。", "session_id": session})
+        time.sleep(0.8)
+        put({"type": "system", "subtype": "task_notification", "task_id": "b1", "status": "completed", "tool_use_id": use})
+        put({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
+        put({"type": "system", "subtype": "init", "session_id": session, "cwd": ".", "tools": ["Bash"]})
+        put({"type": "system", "subtype": "status", "status": "requesting"})
+        said("测试全部通过，改了 checkout.js。")
+        put({"type": "result", "subtype": "success", "is_error": False, "result": "测试全部通过，改了 checkout.js。", "session_id": session, "origin": "task-notification"})
+
     def turn(text):
         put({"type": "system", "subtype": "init", "session_id": session, "cwd": ".", "tools": ["Bash"]})
         put({"type": "user", "message": {"role": "user", "content": text}, "session_id": session, "uuid": str(uuid.uuid4())})
+        if "后台" in text:
+            return background()
         message = "msg_" + uuid.uuid4().hex[:12]
         put({"type": "stream_event", "event": {"type": "message_start", "message": {"id": message}}})
         put({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}})
