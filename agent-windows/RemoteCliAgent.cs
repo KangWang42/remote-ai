@@ -130,7 +130,7 @@ public sealed class TerminalAgent {
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
         Chains = new Chains(Path.Combine(dataDir, "chains.json"));
-        Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands { Begin = BeginMember, Say = SayToMember, Stop = StopMember, Changes = ChangesIn });
+        Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands { Begin = BeginMember, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));

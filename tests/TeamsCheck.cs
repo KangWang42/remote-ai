@@ -138,6 +138,26 @@ public static class TeamsCheck {
             revAgain.Resume(revLost);
             string revTerminal = revAgain.All().Single(t => t.Id == revLost).Members["reviewer"];
             Require(tools[revTerminal] == "codex:read" && Last(revTerminal).Contains("REVIEW: PASS") && Last(revTerminal).Contains("+ ttl()"), "a restarted reviewer keeps read-only mode, diff and format");
+
+            // ---- 领队 weighs the members' limits: told them at the start and with every round's results
+            long later = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds + 3600;
+            double codexUsed = 93;
+            var limits = new Teams.Hands { Begin = Hands().Begin, Say = Hands().Say, Stop = t => { }, Changes = d => "",
+                Limits = tool => tool == "codex" ? new[] { new Quotas.Window { Name = "five_hour", Used = codexUsed, Resets = later }, new Quotas.Window { Name = "seven_day", Used = 40 } }
+                    : tool == "claude" ? new[] { new Quotas.Window { Name = "five_hour", Used = 12 } } : new Quotas.Window[0] };
+            var weighed = new Teams(null, limits);
+            string w = "0808080808080808";
+            weighed.Start(new Dictionary<string, object> { { "id", w }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "加搜索" }, { "tools", new object[] { "claude", "codex", "agy" } } });
+            string wLeader = Team(weighed, w).Members["leader"];
+            Require(Last(wLeader).Contains("- codex：Codex，") && Last(wLeader).Contains("；额度：5 小时窗口已用 93%（") && Last(wLeader).Contains("本周已用 40%，紧张")
+                && Last(wLeader).Contains("- agy：Antigravity CLI") && Last(wLeader).Contains("额度未知") && Last(wLeader).Contains("你自己（Claude Code）的额度：5 小时窗口已用 12%")
+                && Last(wLeader).Contains("按额度分配工作量"), "the leader is told each member's limits and its own, a tight one called so: " + Last(wLeader));
+            Require(!Last(leader).Contains("额度"), "without a way to read limits nothing of them is said");
+            weighed.Turned(wLeader, "done", "ASSIGN agy: 做搜索框");
+            codexUsed = 99;
+            weighed.Turned(Team(weighed, w).Members["agy"], "done", "搜索框好了");
+            Require(Last(wLeader).Contains("## 当前额度") && Last(wLeader).Contains("- Claude Code（你）：额度：5 小时窗口已用 12%") && Last(wLeader).Contains("- Codex：额度：5 小时窗口已用 99%"), "the results come with the limits as they are now");
+            Require(Teams.Room(new[] { new Quotas.Window { Name = "seven_day", Used = 79.4 } }) == "额度：本周已用 79%" && Teams.Room(new[] { new Quotas.Window { Name = "300m", Used = 79.6 } }) == "额度：300m已用 80%，紧张" && Teams.Room(null) == "额度未知", "limits in words, tight from 80% used");
         } finally { try { Directory.Delete(folder, true); } catch { } }
         Console.WriteLine("teams: a writer and a reviewer until it passes, a leader and its members until it is done; stopped, resumed and kept");
         return 0;

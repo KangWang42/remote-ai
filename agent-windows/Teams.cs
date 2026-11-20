@@ -18,7 +18,9 @@ namespace RemoteCli {
 ///   first line; its findings go back to the writer, until it passes or the rounds are spent.
 /// - lead (领队): the leader is told the goal and the members and answers with lines ASSIGN <member>: <task>, or
 ///   DONE: <summary>. Each task goes to that member's conversation (one for each tool); when every member given one
-///   has answered, what they said goes back to the leader, until it says DONE or the rounds are spent.
+///   has answered, what they said goes back to the leader, until it says DONE or the rounds are spent. The leader is
+///   told how much of each member's usage limits (and its own) is used, at the start and with every round's results,
+///   to give less to one whose limits are near (Quotas.cs).
 /// Every member works in the project's own folder: the leader is told to give out parts that do not overlap.
 /// The tasks are kept in one file of the data folder, encrypted for the Windows account; a task whose members were
 /// at work when this program stopped waits to be gone on with (`Resume`), since their turns were cut.
@@ -45,13 +47,14 @@ public sealed class Teams {
         }
     }
     /// What the program does for a team: begin a member's conversation in the project with its first words (returns
-    /// its terminal; `read` asks for a read-only one), tell a member's conversation something, stop one, and read what
-    /// changed in the project's folder.
+    /// its terminal; `read` asks for a read-only one), tell a member's conversation something, stop one, read what
+    /// changed in the project's folder, and read how much of a tool's limits is used (none given: nothing is told).
     public sealed class Hands {
         public Func<string, string, string, bool, string> Begin;        // tool, project, first words, read only -> terminal
         public Action<string, string> Say;                               // terminal, words
         public Action<string> Stop;                                      // terminal
         public Func<string, string> Changes;                             // project -> what changed, in words
+        public Func<string, Quotas.Window[]> Limits;                     // tool -> its main windows still running
     }
 
     readonly string file;
@@ -117,6 +120,28 @@ public sealed class Teams {
         { "codex", "擅长决策拍板、任务拆解、精准改代码与修测试（优先负责决策，纯检查不必浪费其额度）" },
         { "claude", "擅长主力写作（代码实现、重构与文档撰写）以及深度交叉审查" },
         { "agy", "Gemini 模型，擅长 UI 与前端界面设计、长上下文检索，也可兼顾写作与交叉检查" } };
+    /// A tool's limits in words for the leader; a window used for 80% or more makes it tight.
+    public static string Room(Quotas.Window[] windows) {
+        if (windows == null || windows.Length == 0) return "额度未知";
+        var said = windows.Select(w => (w.Name == "five_hour" ? "5 小时窗口" : w.Name == "seven_day" ? "本周" : w.Name) + "已用 " + Math.Round(w.Used) + "%"
+            + (w.Resets > 0 ? "（" + When(w.Resets) + " 重置）" : "")).ToArray();
+        return "额度：" + String.Join("，", said) + (windows.Any(w => Math.Round(w.Used) >= 80) ? "，紧张" : "");
+    }
+    static string When(long seconds) {
+        DateTime at = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(seconds).ToLocalTime();
+        return at.ToString(at.Date == DateTime.Now.Date ? "HH:mm" : "M月d日 HH:mm", CultureInfo.InvariantCulture);
+    }
+    /// Each tool of a team's limits in words; none where the program does not read limits.
+    Dictionary<string, string> Rooms(Team t) {
+        var rooms = new Dictionary<string, string>();
+        if (hands.Limits == null) return rooms;
+        foreach (string tool in t.Tools.Distinct()) {
+            Quotas.Window[] windows = null;
+            try { windows = hands.Limits(tool); } catch (Exception) { }
+            rooms[tool] = Room(windows);
+        }
+        return rooms;
+    }
     static string ExtraRules(Team t) { return String.IsNullOrEmpty(t.Rules) ? "" : "\n\n【分工偏好】\n" + Cut(t.Rules, 1000); }
     public static string WriterFirst(Team t) {
         return "【协作任务 · 写】" + t.Goal + ExtraRules(t)
@@ -130,19 +155,23 @@ public sealed class Teams {
     public static string WriterAgain(Team t, string review) {
         return "【协作任务 · 审查意见 · 第 " + t.Round + " 轮】" + Label(t.Tools[1]) + " 的审查意见：\n" + Cut(review, 12000) + "\n\n请据此修改，完成后简要说明改了什么。";
     }
-    public static string LeaderFirst(Team t) {
-        var members = t.Tools.Skip(1).Select(tool => "- " + tool + "：" + Label(tool) + (Strengths.ContainsKey(tool) ? "，" + Strengths[tool] : "")).ToArray();
+    public static string LeaderFirst(Team t, IDictionary<string, string> rooms) {
+        Func<string, string> room = tool => rooms.ContainsKey(tool) ? "；" + rooms[tool] : "";
+        var members = t.Tools.Skip(1).Select(tool => "- " + tool + "：" + Label(tool) + (Strengths.ContainsKey(tool) ? "，" + Strengths[tool] : "") + room(tool)).ToArray();
         return "【协作任务 · 领队】目标：" + t.Goal + ExtraRules(t)
             + "\n\n你负责决策、按任务特点高效干净地分工、验收结果并在达标时结束。成员都在同一个项目文件夹中工作：\n" + String.Join("\n", members)
+            + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
             + "\n\n分工原则：\n1. 按具体任务按需派工，不必每次把所有成员都派满；不需要的成员可以不派。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要核验时采用交叉检查（谁写不由谁审），优先让 Claude Code 或 Antigravity CLI 交叉检查，不必把纯检查浪费在 Codex 上。\n4. 结果达标后立刻结束，不要为了凑轮次空转。"
+            + (rooms.Count > 0 ? "\n5. 按额度分配工作量：额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
             + "\n\n分派时，在回答的最后每行写一条（成员名用上面的英文名）：\nASSIGN 成员名: 任务内容\n全部完成时，回答的最后单独一行写：\nDONE: 总结\n分派出去的工作不要自己动手做。";
     }
     public static string MemberTask(Team t, string task) {
         return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task + "\n\n整体目标：" + t.Goal + "\n\n完成后简要说明你做了什么、改了哪些文件。";
     }
-    public static string Results(Team t, Dictionary<string, string> answers, string changes) {
+    public static string Results(Team t, Dictionary<string, string> answers, string changes, IDictionary<string, string> rooms) {
         return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + Label(p.Key) + "\n" + Cut(p.Value, 8000)))
             + (changes.Length > 0 ? "\n\n## 文件夹中的改动\n" + Cut(changes, 20000) : "")
+            + (rooms.Count > 0 ? "\n\n## 当前额度\n" + String.Join("\n", t.Tools.Distinct().Where(rooms.ContainsKey).Select(tool => "- " + Label(tool) + (tool == t.Tools[0] ? "（你）" : "") + "：" + rooms[tool])) : "")
             + "\n\n请检查结果，再分派下一步（ASSIGN 成员名: 任务）或结束（DONE: 总结）。";
     }
     const string Remind = "【协作任务】没有在你的回答里找到分派或结束。请在回答的最后按格式写：\nASSIGN 成员名: 任务内容（可以多行）\n或单独一行：\nDONE: 总结";
@@ -196,7 +225,7 @@ public sealed class Teams {
         }
         string role = team.Mode == "review" ? "writer" : "leader";
         Log(team, "目标", team.Goal);
-        Open(team, role, team.Tools[0], team.Mode == "review" ? WriterFirst(team) : LeaderFirst(team), false);
+        Open(team, role, team.Tools[0], team.Mode == "review" ? WriterFirst(team) : LeaderFirst(team, Rooms(team)), false);
         return Of(team.Id);
     }
     public void Stop(string id) {
@@ -233,7 +262,7 @@ public sealed class Teams {
                     string changes = "";
                     try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
                     prompt = ReviewerAsk(team, "（电脑端重启后继续审查）", changes);
-                } else if (team.Mode == "lead" && one.Key == "leader") prompt = LeaderFirst(team);
+                } else if (team.Mode == "lead" && one.Key == "leader") prompt = LeaderFirst(team, Rooms(team));
                 else prompt = "【协作任务】继续完成这项工作：" + team.Goal;
                 Open(team, one.Key, tool, prompt, one.Key == "reviewer");
             }
@@ -354,7 +383,7 @@ public sealed class Teams {
         lock (gate) { team.Round++; Save(); }
         string changes = "";
         try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
-        Ask(team, "leader", team.Tools[0], Results(team, answers, changes), false);
+        Ask(team, "leader", team.Tools[0], Results(team, answers, changes, Rooms(team)), false);
     }
     static long Now() { return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds; }
 }

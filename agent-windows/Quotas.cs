@@ -64,17 +64,31 @@ public sealed class Quotas {
     public object[] Report() {
         var all = new List<object>();
         foreach (string tool in new[] { "claude", "codex", "agy" }) {
-            try {
-                if (!File.Exists(FileOf(tool))) continue;
-                var kept = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(FileOf(tool), Encoding.UTF8));
-                long now = Milliseconds(DateTime.UtcNow) / 1000;
-                object raw; kept.TryGetValue("windows", out raw);
-                var windows = (raw as System.Collections.IEnumerable ?? new object[0]).Cast<object>().OfType<Dictionary<string, object>>()
-                    .Where(w => { long resets = Convert.ToInt64(w["resets"]); return resets == 0 || resets > now; }).ToArray();
-                all.Add(new Dictionary<string, object> { { "tool", tool }, { "at", kept["at"] }, { "why", kept["why"] }, { "windows", windows } });
-            } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { } catch (InvalidOperationException) { } catch (KeyNotFoundException) { } catch (FormatException) { } catch (InvalidCastException) { }
+            object at, why; var windows = Kept(tool, out at, out why);
+            if (windows != null) all.Add(new Dictionary<string, object> { { "tool", tool }, { "at", at }, { "why", why }, { "windows", windows } });
         }
         return all.ToArray();
+    }
+    /// A tool's main windows that are still running (an Antigravity CLI pool of other models left out), for what the
+    /// program itself weighs; none where nothing is known.
+    public Window[] Of(string tool) {
+        object at, why; var windows = Kept(tool, out at, out why);
+        if (windows == null) return new Window[0];
+        return windows.Where(w => !w.ContainsKey("group")).Select(w => new Window { Name = Convert.ToString(w["name"]), Used = Convert.ToDouble(w["used"], CultureInfo.InvariantCulture), Resets = Convert.ToInt64(w["resets"]) }).ToArray();
+    }
+    // what was last written of a tool, its windows whose time is not over; null where nothing can be read
+    Dictionary<string, object>[] Kept(string tool, out object at, out object why) {
+        at = why = null;
+        try {
+            if (!File.Exists(FileOf(tool))) return null;
+            var kept = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(FileOf(tool), Encoding.UTF8));
+            long now = Milliseconds(DateTime.UtcNow) / 1000;
+            object raw; kept.TryGetValue("windows", out raw);
+            at = kept["at"]; why = kept["why"];
+            return (raw as System.Collections.IEnumerable ?? new object[0]).Cast<object>().OfType<Dictionary<string, object>>()
+                .Where(w => { long resets = Convert.ToInt64(w["resets"]); return resets == 0 || resets > now; }).ToArray();
+        } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { } catch (InvalidOperationException) { } catch (KeyNotFoundException) { } catch (FormatException) { } catch (InvalidCastException) { }
+        return null;
     }
 
     // ---- what the tools say, read

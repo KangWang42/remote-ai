@@ -53,6 +53,9 @@ public static class QuotasCheck {
             var agyReported = (object[])report[2]["windows"];
             Require((string)report[2]["tool"] == "agy" && agyReported.Length == 2 && !((Dictionary<string, object>)agyReported[0]).ContainsKey("group") && (string)((Dictionary<string, object>)agyReported[1])["group"] == "Claude / GPT", "agy primary ungrouped, secondary grouped");
             Require(!json.Serialize(report).Contains("token") && !json.Serialize(report).Contains("account"), "nothing of the account");
+            var weighed = quotas.Of("agy");
+            Require(weighed.Length == 1 && weighed[0].Name == "five_hour" && weighed[0].Used == 12 && weighed[0].Resets > Now, "a tool's main windows for the program: the other models' pool left out");
+            Require(quotas.Of("claude").Length == 1 && quotas.Of("codex").Length == 0 && new Quotas(Path.Combine(folder, "none")).Of("claude").Length == 0, "only windows still running; none where nothing is known");
 
             // ---- AskAgyNow against stand-in launchers: parses JSON + passes AGY_CLI_DISABLE_AUTO_UPDATE=true, and records why on API key exit code 2
             string agyOk = Path.Combine(folder, "fake-agy-ok.cmd");
