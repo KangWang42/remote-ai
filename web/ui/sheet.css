@@ -45,10 +45,10 @@ dialog.rs.closing { display: block; z-index: 2147483000; pointer-events: none; }
 .rs-note { margin: 0 6px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .rs-note.bad { color: var(--bad); }
 .rs-note.good { color: var(--good); }
-.rs-group { display: grid; border-radius: 16px; background: var(--panel); overflow: hidden; box-shadow: var(--elevate, none); border: 0.5px solid var(--rim, transparent); }
-.rs-group > * + * { box-shadow: inset 0 0.5px 0 var(--rim, color-mix(in srgb, var(--line) 80%, transparent)); }
+.rs-group { display: grid; border-radius: 20px; background: var(--panel); overflow: hidden; box-shadow: var(--elevate, none); border: 1px solid var(--card-border, var(--rim, transparent)); }
+.rs-group > * + * { box-shadow: inset 0 1px 0 var(--divider, color-mix(in srgb, var(--line) 80%, transparent)); }
 .rs-group.inset > * + * { box-shadow: none; position: relative; }
-.rs-group.inset > * + *::before { content: ""; position: absolute; top: 0; left: 58px; right: 0; border-top: 0.5px solid var(--rim, color-mix(in srgb, var(--line) 80%, transparent)); }
+.rs-group.inset > * + *::before { content: ""; position: absolute; top: 0; left: 58px; right: 0; border-top: 1px solid var(--divider, color-mix(in srgb, var(--line) 80%, transparent)); }
 
 /* a row: what it is, what it is set to, and where a press leads */
 .rs-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 14px; text-align: left; line-height: 1.35; }

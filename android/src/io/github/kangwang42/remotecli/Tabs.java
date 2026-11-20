@@ -3,6 +3,7 @@ package io.github.kangwang42.remotecli;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Build;
 import android.util.TypedValue;
@@ -16,10 +17,9 @@ import android.widget.TextView;
 import java.util.function.Consumer;
 
 /**
- * The tabs at the foot of the app's own lists: 任务, 项目, 协作, 我的. They are the ones a computer's pages draw at
- * their foot (web/index.html, and "#tabs" in web/app.css): the same four in the same order, with the same marks,
- * sizes and colours, so that the foot of the screen stays as it is between the app's lists and a computer's pages.
- * On 任务 stands how many things wait for an answer. While the keyboard is up the tabs make room for it, as there.
+ * The floating pill dock at the foot of the app's own lists: 任务, 项目, 协作, 我的. Matches the floating
+ * navigation bar on the embedded pages (web/index.html, "#tabs" in web/app.css), so that the foot of the
+ * screen stays cohesive between the app's lists and a computer's pages.
  */
 final class Tabs {
     /** A tab by the name of its screen, and by the name a computer's pages call it. */
@@ -47,45 +47,50 @@ final class Tabs {
 
     View build(String current, Consumer<String> picked) {
         LinearLayout bar = kit.column();
-        bar.setBackgroundColor(Kit.light(kit.BG) ? Kit.mix(kit.PANEL, kit.BG, .78f) : kit.BG);
-        View line = new View(activity);
-        line.setBackgroundColor(kit.rim());
-        bar.addView(line, new LinearLayout.LayoutParams(-1, kit.hairline()));
+        bar.setBackgroundColor(kit.BG);
+        bar.setClipChildren(false);
+        bar.setClipToPadding(false);
+        bar.setPadding(kit.dp(14), kit.dp(6), kit.dp(14), kit.dp(12));
+
         LinearLayout inner = new LinearLayout(activity);
-        inner.setPadding(kit.dp(10), kit.dp(5), kit.dp(10), kit.dp(5));
+        inner.setPadding(kit.dp(6), kit.dp(6), kit.dp(6), kit.dp(6));
+        int dockFill = Kit.light(kit.BG) ? Kit.tint(kit.PANEL, 242) : kit.PANEL;
+        inner.setBackground(kit.shape(dockFill, kit.rim(), 24));
+        kit.elevate(inner, 6f);
+
         for (int i = 0; i < KEYS.length; i++) {
             final String key = KEYS[i];
             boolean on = key.equals(current);
-            int shade = on ? kit.ACCENT : kit.MUTED;
+            int shade = on ? kit.accentInk() : kit.MUTED;
             FrameLayout tab = new FrameLayout(activity);
             tab.setMinimumHeight(kit.dp(52));
-            StateListDrawable pressed = new StateListDrawable();
-            pressed.addState(new int[]{android.R.attr.state_pressed}, kit.shape(kit.RAISED, 0, 14));
-            pressed.addState(new int[]{}, new ColorDrawable(0));
-            tab.setBackground(pressed);
+            StateListDrawable bg = new StateListDrawable();
+            bg.addState(new int[]{android.R.attr.state_pressed}, kit.shape(on ? kit.accentSoft() : kit.RAISED, 0, 18));
+            bg.addState(new int[]{}, on ? kit.shape(kit.accentSoft(), 0, 18) : new ColorDrawable(0));
+            tab.setBackground(bg);
+
             LinearLayout both = kit.column();
             both.setGravity(Gravity.CENTER_HORIZONTAL);
-            FrameLayout glyph = new FrameLayout(activity);
-            if (on) glyph.setBackground(kit.shape(Kit.mix(kit.ACCENT, kit.BG, .12f), 0, 14));
-            glyph.addView(kit.icon(ICONS[i], shade, 22), new FrameLayout.LayoutParams(kit.dp(22), kit.dp(22), Gravity.CENTER));
-            both.addView(glyph, new LinearLayout.LayoutParams(kit.dp(48), kit.dp(28)));
+            both.addView(kit.icon(ICONS[i], shade, 22), new LinearLayout.LayoutParams(kit.dp(22), kit.dp(22)));
             TextView label = kit.text(LABELS[i], 11, shade);
             label.setTextSize(TypedValue.COMPLEX_UNIT_SP, .7f * root());
-            label.setTypeface(Build.VERSION.SDK_INT >= 28 ? Typeface.create(Typeface.DEFAULT, 600, false) : Typeface.DEFAULT_BOLD);
+            label.setTypeface(Build.VERSION.SDK_INT >= 28 ? Typeface.create(Typeface.DEFAULT, on ? 600 : 500, false) : (on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT));
             label.setIncludeFontPadding(false); label.setLineSpacing(0, 1f); label.setSingleLine(true);
             LinearLayout.LayoutParams under = new LinearLayout.LayoutParams(-2, -2);
-            under.topMargin = kit.dp(2);
+            under.topMargin = kit.dp(3);
             both.addView(label, under);
             tab.addView(both, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+
             if (i == 0) {
-                // how many wait for an answer: at the upper right of the mark, its left edge 6dp right of the middle
                 count = kit.bold("", 10, 0xffffffff);
-                count.setTextSize(TypedValue.COMPLEX_UNIT_SP, .66f * root());
+                count.setTextSize(TypedValue.COMPLEX_UNIT_SP, .64f * root());
                 count.setGravity(Gravity.CENTER); count.setIncludeFontPadding(false); count.setSingleLine(true);
-                count.setMinWidth(kit.dp(17)); count.setMinHeight(kit.dp(17)); count.setPadding(kit.dp(5), 0, kit.dp(5), 0);
-                count.setBackground(kit.shape(kit.BAD, 0, 9));
+                count.setMinWidth(kit.dp(17)); count.setMinHeight(kit.dp(17)); count.setPadding(kit.dp(4), 0, kit.dp(4), 0);
+                GradientDrawable badgeBg = kit.shape(kit.BAD, 0, 9);
+                badgeBg.setStroke(kit.dp(1.5f), on ? kit.accentSoft() : kit.PANEL);
+                count.setBackground(badgeBg);
                 FrameLayout.LayoutParams above = new FrameLayout.LayoutParams(-2, kit.dp(17), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-                above.topMargin = kit.dp(4); above.leftMargin = kit.dp(6 + 17 / 2f);
+                above.topMargin = kit.dp(3); above.leftMargin = kit.dp(14);
                 tab.addView(count, above);
                 count(waiting);
             }
@@ -93,11 +98,12 @@ final class Tabs {
             tab.setSelected(on);
             tab.setContentDescription(LABELS[i] + (on ? "，已选中" : ""));
             tab.setOnClickListener(pressedTab -> { kit.haptic(pressedTab, HapticFeedbackConstants.CLOCK_TICK); picked.accept(key); });
-            inner.addView(tab, new LinearLayout.LayoutParams(0, -2, 1));
+            LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(0, -2, 1);
+            if (i > 0) tabLp.leftMargin = kit.dp(4);
+            inner.addView(tab, tabLp);
         }
-        // (on a wide screen the four stay together in the middle, as on the pages)
-        int width = Math.min(activity.getResources().getDisplayMetrics().widthPixels, kit.dp(560));
-        LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(width, -2);
+        int maxDock = Math.min(activity.getResources().getDisplayMetrics().widthPixels - kit.dp(28), kit.dp(540));
+        LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(maxDock, -2);
         middle.gravity = Gravity.CENTER_HORIZONTAL;
         bar.addView(inner, middle);
         yieldToKeyboard(bar);

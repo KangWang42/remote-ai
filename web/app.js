@@ -950,9 +950,14 @@
     box.hidden = !offered.length && !places.length;
     if (box.dataset.signature === signature) return;
     box.dataset.signature = signature;
-    const chip = (text, on, act) => el('button', { type: 'button', className: on ? 'on' : '', ariaPressed: String(on), textContent: text, onclick: act });
+    const MONO = { claude: 'CC', codex: 'CX', agy: 'AG', opencode: 'OC', qoder: 'QD', cline: 'CL', pi: 'PI' };
+    const chip = (text, on, act, toolKey) => {
+      const btn = el('button', { type: 'button', className: on ? 'on' : '', ariaPressed: String(on), textContent: text, onclick: act });
+      if (toolKey && MONO[toolKey]) { btn.dataset.tool = toolKey; btn.dataset.mono = MONO[toolKey]; }
+      return btn;
+    };
     const row = [chip('全部', !filter.tool && !filter.source, () => choose({ tool: '', source: '' }))];
-    offered.forEach(tool => row.push(chip(TOOLS[tool], filter.tool === tool, () => choose({ tool: filter.tool === tool ? '' : tool }))));
+    offered.forEach(tool => row.push(chip(TOOLS[tool], filter.tool === tool, () => choose({ tool: filter.tool === tool ? '' : tool }), tool)));
     if (offered.length && places.length) row.push(el('i'));
     places.forEach(source => row.push(chip(SOURCE[source], filter.source === source, () => choose({ source: filter.source === source ? '' : source }))));
     box.replaceChildren(...row);
@@ -1246,8 +1251,9 @@
         if (work) { const c = el('span', { className: 'count', textContent: work + ' 个正在运行' }); c.prepend(el('i')); c.style.setProperty('--c', 'var(--busy)'); c.style.color = 'var(--busy)'; meta.append(c); }
         if (opened) meta.append(el('span', { textContent: opened + ' 个已打开' }));
         meta.append(el('span', { textContent: (source ? source + ' · ' : '') + (count ? count + ' 段对话' : '还没有对话') }));
+        const folderTone = need ? ' confirm' : work ? ' busy' : opened ? ' active' : '';
         const made = held(el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => enter(name) },
-          el('span', { className: 'tool folder', html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev }))),
+          el('span', { className: 'tool folder' + folderTone, html: ICON.folder }), el('span', { className: 'text' }, el('b', { textContent: name }), meta), el('span', { className: 'chev', html: ICON.chev }))),
           () => manageProject(name, folder));
         return { name, card: made, sign: [name, need, opened, work, own.length, count, folder.path, source] };
       });

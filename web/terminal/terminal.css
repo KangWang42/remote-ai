@@ -1,5 +1,5 @@
 /* Colours come from the chosen skin (terminal.js sets them on :root); these are the default skin's, for the first frame. */
-:root { color-scheme: light; --bg: #f2f3f7; --term-bg: #fbfbfc; --panel: #ffffff; --raised: #e9ecf2; --ink: #232733; --muted: #686e7d; --line: #dde1e9; --accent: #2f6fe4; --on-accent: #ffffff; --good: #358432; --busy: #9e6600; --bad: #c93c37; --warn-ink: #9e6600; --warn-bg: #e9ecf2; --elevate: 0 1px 2px rgb(15 23 42 / .04), 0 6px 20px -10px rgb(15 23 42 / .10); --rim: rgb(15 23 42 / .07); }
+:root { color-scheme: light; --bg: #f2f3f7; --term-bg: #fbfbfc; --panel: #ffffff; --raised: #f1f3f6; --ink: #0e1116; --muted: #5b6270; --line: #e6e8ec; --accent: #2f54eb; --on-accent: #ffffff; --good: #15803d; --busy: #9a5b00; --bad: #c0261a; --warn-ink: #9a5b00; --warn-bg: #f1f3f6; --elevate: 0 1px 2px rgba(14, 17, 22, .04), 0 8px 24px rgba(14, 17, 22, .05); --rim: rgba(14, 17, 22, .07); }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; width: 100%; height: 100%; background: var(--term-bg, var(--bg)); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; overflow: hidden; }
 main { height: 100%; height: 100dvh; display: flex; flex-direction: column; min-width: 0; }

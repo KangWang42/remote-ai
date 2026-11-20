@@ -2,7 +2,7 @@
 <resources>
     <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#2F6FE4</item>
+        <item name="android:colorAccent">#2F54EB</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:colorBackground">#F2F3F7</item>
         <item name="android:statusBarColor">#F2F3F7</item>

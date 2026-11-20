@@ -1,6 +1,6 @@
 package io.github.kangwang42.remotecli;
 
-import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.CookieManager;
@@ -14,12 +14,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Two of the app's four lists, both over every computer: 协作 (what each computer keeps of conversations working
- * together; what is set there is set on that computer's own page of it) and 我的 (the work in numbers, connected
- * computers, and the app's settings). Each computer answers independently with its own cookie.
+ * Two of the app's four lists, both over every computer: 协作 (dark multi-AI pipeline hero card, 2x2 calm
+ * quick actions grid, and scheduled collaboration cards) and 我的 (quotas, today's KPI summary, connected
+ * computers, and app settings). Each computer answers independently with its own cookie.
  */
 final class AppPages {
-    private static final int TINT_CLAUDE = 0xffd97757, TINT_WARN = 0xffc77c1a, TINT_RELAY = 0xff7b6fd6, TINT_LOOK = 0xffd6587e, TINT_AGY = 0xff6366f1;
+    private static final int TINT_WARN = 0xff9a5b00, TINT_RELAY = 0xff5536c9, TINT_LOOK = 0xffc02669, TINT_AGY = 0xff5536c9;
 
     private final MainActivity activity;
     private final Kit kit;
@@ -35,9 +35,9 @@ final class AppPages {
     View build(String tab) {
         generation++; holders.clear(); deviceSummaries.clear(); stats.clear(); answered = 0;
         boolean mine = "me".equals(tab);
-        LinearLayout page = kit.page(22);
-        View refreshAction = kit.iconButton(R.drawable.ic_refresh, "刷新", kit.MUTED, () -> activity.appPage(tab));
-        page.addView(kit.head(mine ? "我的" : "协作", kit.text(mine ? "设备连接与个人偏好" : "交接上下文，让对话接着做", 13, kit.MUTED), refreshAction));
+        LinearLayout page = kit.page(16);
+        View refreshAction = kit.circleAction(R.drawable.ic_refresh, "刷新", false, () -> activity.appPage(tab));
+        page.addView(kit.head(mine ? "我的" : "协作", kit.text(mine ? "设备连接与个人偏好" : "交接上下文，让对话接着做", 14, kit.MUTED), refreshAction));
         JSONArray computers = activity.computers();
         expected = computers.length();
 
@@ -61,7 +61,7 @@ final class AppPages {
         quotaCard.setVisibility(shown.isEmpty() ? View.GONE : View.VISIBLE);
         long now = System.currentTimeMillis() / 1000;
         LinearLayout head = kit.row();
-        head.addView(kit.semibold("额度", 13.5f, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+        head.addView(kit.semibold("额度", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         quotaCard.addView(head);
         for (QuotaLines.Reading one : shown) {
             if (one.windows.isEmpty()) { quotaLine(quotaCard, QuotaLines.tool(one.tool), one.why, kit.MUTED, -1); continue; }
@@ -74,10 +74,10 @@ final class AppPages {
                 boolean warn = !open && QuotaLines.anyHigh(extra);
                 int pools = QuotaLines.extraPoolCount(extra);
                 LinearLayout toggle = kit.row();
-                toggle.setPadding(kit.dp(10), kit.dp(8), kit.dp(10), kit.dp(8));
-                toggle.setBackground(kit.shape(kit.RAISED, 0, 10));
+                toggle.setPadding(kit.dp(12), kit.dp(9), kit.dp(12), kit.dp(9));
+                toggle.setBackground(kit.shape(kit.subSurface(), 0, 12));
                 toggle.addView(kit.text("其他 " + pools + " 个池子", 12.5f, kit.MUTED), new LinearLayout.LayoutParams(0, -2, 1));
-                toggle.addView(kit.semibold((warn ? "接近上限 · " : "") + (open ? "收起 ▴" : "展开 ▾"), 12.5f, warn ? kit.BAD : kit.ACCENT));
+                toggle.addView(kit.semibold((warn ? "接近上限 · " : "") + (open ? "收起 ▴" : "展开 ▾"), 12.5f, warn ? kit.BAD : kit.accentInk()));
                 final String toolKey = one.tool;
                 kit.press(toggle, () -> {
                     if (expandedQuotas.contains(toolKey)) expandedQuotas.remove(toolKey);
@@ -103,11 +103,10 @@ final class AppPages {
     private void quotaLine(LinearLayout host, String label, String detail, int tone, double used) {
         LinearLayout line = kit.row();
         line.setPadding(0, kit.dp(12), 0, 0);
-        line.addView(kit.semibold(label, 14, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+        line.addView(kit.medium(label, 14, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         line.addView(kit.text(detail, 12, tone));
         host.addView(line);
         if (used < 0) return;
-        // the share used, as a bar
         LinearLayout track = new LinearLayout(activity);
         track.setBackground(kit.shape(kit.RAISED, 0, 3));
         track.setClipToOutline(true);
@@ -122,20 +121,16 @@ final class AppPages {
     }
 
     private void buildMe(LinearLayout page, JSONArray computers) {
-        quotaCard = kit.column();
-        quotaCard.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(16));
-        quotaCard.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
-        kit.elevate(quotaCard, 1.5f);
-        page.addView(quotaCard, kit.below(16));
+        quotaCard = kit.cardBox(22);
+        quotaCard.setPadding(kit.dp(16), kit.dp(16), kit.dp(16), kit.dp(16));
+        page.addView(quotaCard, kit.below(18));
         drawQuotas();
 
         // Compact 3-metric KPI summary card for today's work
-        LinearLayout summary = kit.column();
+        LinearLayout summary = kit.cardBox(20);
         summary.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(14));
-        summary.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
-        kit.elevate(summary, 1.5f);
         LinearLayout topRow = kit.row();
-        topRow.addView(kit.semibold("今日工作", 13.5f, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+        topRow.addView(kit.semibold("今日工作", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         coverage = kit.text(expected == 0 ? "添加电脑后显示统计" : "正在读取…", 12, kit.MUTED);
         topRow.addView(coverage);
         summary.addView(topRow);
@@ -154,54 +149,48 @@ final class AppPages {
                 kit.press(summary, () -> activity.computerPage(url, "me"));
             }
         }
-        page.addView(summary, kit.below(16));
+        page.addView(summary, kit.below(14));
 
-        // Unified "我的电脑" grouped list (merges device management + per-computer stats without duplicate cards or giant buttons)
+        // Unified "我的电脑" grouped list
         LinearLayout connections = kit.settingGroup(page, "我的电脑");
         for (int i = 0; i < computers.length(); i++) {
             JSONObject computer = computers.optJSONObject(i);
             if (computer == null) continue;
             final String url = computer.optString("url");
             final String name = computer.optString("name", MainActivity.host(url));
-            if (connections.getChildCount() > 0) {
-                View line = new View(activity);
-                line.setBackgroundColor(kit.rim());
-                LinearLayout.LayoutParams divider = new LinearLayout.LayoutParams(-1, kit.hairline());
-                divider.setMargins(kit.dp(58), 0, 0, 0);
-                connections.addView(line, divider);
-            }
+            if (connections.getChildCount() > 0) connections.addView(kit.insetDivider(64));
             LinearLayout row = kit.row();
-            row.setPadding(kit.dp(14), kit.dp(11), kit.dp(12), kit.dp(11));
-            row.setMinimumHeight(kit.dp(58));
-            View badge = kit.tile(R.drawable.ic_computer, kit.ACCENT, 32);
+            row.setPadding(kit.dp(14), kit.dp(12), kit.dp(12), kit.dp(12));
+            row.setMinimumHeight(kit.dp(60));
+            View badge = kit.tintedTile(R.drawable.ic_computer, kit.heroBg(), kit.heroFg(), 36, 11);
             ((LinearLayout.LayoutParams) badge.getLayoutParams()).rightMargin = kit.dp(12);
             row.addView(badge);
             LinearLayout copy = kit.column();
-            copy.addView(kit.line(name, 15.5f, kit.INK, true));
+            copy.addView(kit.line(name, 15, kit.INK, true));
             TextView sub = kit.line(MainActivity.host(url) + " · 正在读取统计…", 12.5f, kit.MUTED, false);
             copy.addView(sub, kit.below(2));
             deviceSummaries.put(url, sub);
             row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
 
-            TextView statChip = kit.bold("统计", 12.5f, kit.ACCENT);
+            TextView statChip = kit.semibold("统计", 12.5f, kit.accentInk());
             statChip.setGravity(Gravity.CENTER);
             statChip.setMinHeight(kit.dp(48));
             statChip.setPadding(kit.dp(10), 0, kit.dp(10), 0);
             kit.press(statChip, () -> activity.computerPage(url, "me"));
             row.addView(statChip);
 
-            row.addView(kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 15));
+            row.addView(kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 16));
             kit.press(row, () -> activity.manage(url));
             connections.addView(row);
         }
-        kit.setting(connections, R.drawable.ic_plus, kit.ACCENT, "添加电脑", "扫描电脑端的连接二维码", "", kit.ACCENT, activity::scan);
+        kit.setting(connections, R.drawable.ic_plus, kit.accentInk(), "添加电脑", "扫描电脑端的连接二维码", "", kit.accentInk(), activity::scan);
 
-        // Grouped settings with clean tinted icons and modern pill switches
+        // Grouped settings
         LinearLayout preferences = kit.settingGroup(page, "提醒与偏好");
         kit.settingSwitch(preferences, R.drawable.ic_bell, TINT_WARN, "任务提醒", "需要确认或一轮完成时通知", activity.watching(), activity::toggleWatch);
         String remStatus = activity.reminderStatus();
-        int remColor = "已开启".equals(remStatus) ? kit.GOOD : "需授权".equals(remStatus) ? kit.BAD : kit.MUTED;
-        kit.setting(preferences, R.drawable.ic_shield, kit.GOOD, "提醒与权限", "通知、电池与后台联网", remStatus, remColor, activity::reminderSettings);
+        int remColor = "已开启".equals(remStatus) ? kit.goodInk() : "需授权".equals(remStatus) ? kit.BAD : kit.MUTED;
+        kit.setting(preferences, R.drawable.ic_shield, kit.goodInk(), "提醒与权限", "通知、电池与后台联网", remStatus, remColor, activity::reminderSettings);
         kit.setting(preferences, R.drawable.ic_palette, TINT_LOOK, "外观与文字", "主题、字号与终端阅读方式", activity.appearanceName(), kit.MUTED, activity::look);
 
         LinearLayout updates = kit.settingGroup(page, "版本与更新");
@@ -212,63 +201,118 @@ final class AppPages {
     private TextView metricCell(LinearLayout parent, String label, boolean withDivider) {
         if (withDivider) {
             View divider = new View(activity);
-            divider.setBackgroundColor(kit.rim());
+            divider.setBackgroundColor(kit.dividerColor());
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(kit.hairline(), kit.dp(34));
             params.setMargins(kit.dp(6), 0, kit.dp(6), 0);
             parent.addView(divider, params);
         }
         LinearLayout cell = kit.column();
         cell.setPadding(kit.dp(4), 0, kit.dp(4), 0);
-        TextView value = kit.figure("—", 22, kit.MUTED);
+        TextView value = kit.figure("—", 23, kit.MUTED);
         cell.addView(value);
-        cell.addView(kit.text(label, 12, kit.MUTED), kit.below(2));
+        cell.addView(kit.text(label, 12.5f, kit.MUTED), kit.below(2));
         parent.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
         return value;
     }
 
     private void buildTogether(LinearLayout page, JSONArray computers) {
         if (expected > 0) {
-            page.addView(wideAction("协作任务", "写审循环或领队分工，多 AI 配合完成", "team", TINT_AGY), kit.below(14));
+            page.addView(heroCollabCard(), kit.below(18));
+
+            TextView quickLabel = kit.semibold("快速协作", 15, kit.INK);
+            quickLabel.setPadding(kit.dp(4), 0, kit.dp(4), 0);
+            page.addView(quickLabel, kit.below(20));
+
             actions(page,
-                "交给另一个 AI", "交接上下文接着做", "handoff", TINT_CLAUDE,
-                "同时提问", "一个问题发给多段对话", "many", kit.ACCENT);
+                "交给另一个 AI", "带上上下文接着做", "handoff",
+                "同时提问", "一个问题发给多段对话", "many");
             actions(page,
-                "定时提问", "到时间由电脑替你问", "schedule", TINT_WARN,
-                "自动接力", "完成一轮后自动转交", "chain", TINT_RELAY);
+                "定时提问", "到点由电脑替你问", "schedule",
+                "自动接力", "一轮结束后自动转交", "chain");
         } else {
-            page.addView(kit.text("添加电脑后，可发起多 AI 协作任务，交接对话，或安排接力和定时提问。", 13.5f, kit.MUTED), kit.below(18));
-            page.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(18));
+            LinearLayout empty = kit.cardBox(22);
+            empty.setPadding(kit.dp(20), kit.dp(24), kit.dp(20), kit.dp(24));
+            empty.addView(kit.text("添加电脑后，可发起多 AI 协作任务，交接对话，或安排接力和定时提问。", 14, kit.MUTED));
+            empty.addView(kit.button("扫码添加电脑", 0, activity::scan), kit.below(16));
+            page.addView(empty, kit.below(18));
             return;
         }
-        TextView sectionLabel = kit.bold("已安排的协作", 12.5f, kit.MUTED);
-        sectionLabel.setPadding(kit.dp(4), 0, kit.dp(4), 0);
-        page.addView(sectionLabel, kit.below(22));
+
         for (int i = 0; i < computers.length(); i++) {
             JSONObject computer = computers.optJSONObject(i);
             if (computer == null) continue;
             final String url = computer.optString("url");
-            LinearLayout card = kit.column();
-            card.setBackground(kit.shape(kit.PANEL, kit.rim(), 16));
-            card.setClipToOutline(true);
-            kit.elevate(card, 1.5f);
-            LinearLayout head = kit.row();
-            head.setMinimumHeight(kit.dp(50));
-            head.setPadding(kit.dp(14), kit.dp(8), kit.dp(12), kit.dp(8));
-            View badge = kit.tile(R.drawable.ic_computer, kit.ACCENT, 28);
-            ((LinearLayout.LayoutParams) badge.getLayoutParams()).rightMargin = kit.dp(10);
-            head.addView(badge);
-            head.addView(kit.line(computer.optString("name", MainActivity.host(url)), 15.5f, kit.INK, true), new LinearLayout.LayoutParams(0, -2, 1));
-            head.addView(kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 15));
-            kit.press(head, () -> activity.computerPage(url, "together"));
-            card.addView(head);
+            final String name = computer.optString("name", MainActivity.host(url));
+
+            LinearLayout sectionHead = kit.row();
+            sectionHead.setPadding(kit.dp(4), 0, kit.dp(4), 0);
+            sectionHead.addView(kit.semibold("已安排", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+            TextView who = kit.text(name, 13, kit.MUTED);
+            sectionHead.addView(who);
+            kit.press(sectionHead, () -> activity.computerPage(url, "together"));
+            page.addView(sectionHead, kit.below(i == 0 ? 22 : 16));
+
             LinearLayout body = kit.column();
+            LinearLayout loadingCard = kit.cardBox(22);
             TextView loading = kit.text("正在读取…", 13, kit.MUTED);
-            loading.setPadding(kit.dp(14), kit.dp(4), kit.dp(14), kit.dp(14));
-            body.addView(loading);
+            loading.setPadding(kit.dp(16), kit.dp(16), kit.dp(16), kit.dp(16));
+            loadingCard.addView(loading);
+            body.addView(loadingCard);
             holders.put(url, body);
-            card.addView(body);
-            page.addView(card, kit.below(i == 0 ? 8 : 12));
+            page.addView(body, kit.below(10));
         }
+    }
+
+    /** Dark hero collaboration card with CC -> CX -> AG pipeline strip and inverted white CTA. */
+    private View heroCollabCard() {
+        LinearLayout card = kit.column();
+        card.setPadding(kit.dp(18), kit.dp(18), kit.dp(18), kit.dp(18));
+        card.setBackground(kit.shape(kit.heroBg(), Kit.light(kit.BG) ? 0 : kit.LINE, 24));
+
+        // Pipeline strip: [CC] --- [CX] --- [AG]
+        LinearLayout pipe = kit.row();
+        pipe.addView(heroBadge("CC", 0xff3a2318, 0xfff7b593));
+        pipe.addView(flowLine(), flowLp());
+        pipe.addView(heroBadge("CX", 0xff17284a, 0xff9dbbf7));
+        pipe.addView(flowLine(), flowLp());
+        pipe.addView(heroBadge("AG", 0xff261d4a, 0xffbca9f8));
+        card.addView(pipe);
+
+        card.addView(kit.semibold("协作任务", 19, kit.heroFg()), kit.below(16));
+        card.addView(kit.text("写审循环或领队分工，让多个 AI 配合完成一件事", 13.5f, kit.heroMuted()), kit.below(4));
+
+        TextView cta = kit.semibold("＋ 新建协作任务", 14, Kit.light(kit.BG) ? 0xff0e1116 : kit.ON_ACCENT);
+        cta.setGravity(Gravity.CENTER);
+        cta.setMinHeight(kit.dp(48));
+        cta.setBackground(kit.shape(Kit.light(kit.BG) ? 0xffffffff : kit.ACCENT, 0, 14));
+        kit.press(cta, () -> pickTogether("协作任务", "team"));
+        card.addView(cta, kit.below(16));
+        return card;
+    }
+
+    private View heroBadge(String mono, int bg, int fg) {
+        TextView badge = kit.bold(mono, 12, fg);
+        badge.setGravity(Gravity.CENTER);
+        badge.setIncludeFontPadding(false);
+        badge.setBackground(kit.shape(bg, 0, 12));
+        badge.setLayoutParams(new LinearLayout.LayoutParams(kit.dp(40), kit.dp(40)));
+        return badge;
+    }
+
+    private View flowLine() {
+        View line = new View(activity);
+        GradientDrawable dash = new GradientDrawable();
+        dash.setShape(GradientDrawable.LINE);
+        dash.setStroke(kit.dp(2), 0x59ffffff, kit.dp(5), kit.dp(4));
+        line.setBackground(dash);
+        line.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        return line;
+    }
+
+    private LinearLayout.LayoutParams flowLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, kit.dp(4), 1);
+        lp.leftMargin = kit.dp(8); lp.rightMargin = kit.dp(8);
+        return lp;
     }
 
     private JSONObject ask(String url, String cookie, String action) throws Exception {
@@ -287,7 +331,6 @@ final class AppPages {
                     if ("me".equals(tab)) result = ask(url, cookie, "stats");
                     else {
                         result = new JSONObject();
-                        // An older computer can still provide schedules when it does not support teams or chains.
                         try { result.put("teams", ask(url, cookie, "teams").optJSONArray("teams")); }
                         catch (Exception ignored) { }
                         try { result.put("chains", ask(url, cookie, "chains").optJSONArray("chains")); }
@@ -316,14 +359,26 @@ final class AppPages {
                     if (body == null) return;
                     body.removeAllViews();
                     if (data == null || !problem.isEmpty()) {
-                        addRowMessage(body, "暂时无法读取：" + (problem.isEmpty() ? "请确认电脑在线" : problem), kit.BAD);
+                        LinearLayout errCard = kit.cardBox(22);
+                        addRowMessage(errCard, "暂时无法读取：" + (problem.isEmpty() ? "请确认电脑在线" : problem), kit.BAD);
+                        body.addView(errCard);
                     } else {
                         JSONArray teams = data.optJSONArray("teams");
-                        if (teams != null && teams.length() > 0) teamRows(body, url, teams);
-                        for (boolean chain : new boolean[]{false, true}) {
-                            String failure = data.optString(chain ? "chain_error" : "schedule_error");
-                            if (!failure.isEmpty()) addRowMessage(body, (chain ? "接力" : "定时提问") + "暂不可用：" + failure, kit.BAD);
-                            else rows(body, url, data.optJSONArray(chain ? "chains" : "schedules"), chain);
+                        JSONArray chains = data.optJSONArray("chains");
+                        JSONArray schedules = data.optJSONArray("schedules");
+                        String chainErr = data.optString("chain_error");
+                        String schedErr = data.optString("schedule_error");
+                        int count = (teams == null ? 0 : teams.length()) + (chains == null ? 0 : chains.length()) + (schedules == null ? 0 : schedules.length());
+                        if (count == 0 && chainErr.isEmpty() && schedErr.isEmpty()) {
+                            body.addView(emptyScheduledCard(url));
+                        } else {
+                            LinearLayout card = kit.cardBox(22);
+                            if (teams != null && teams.length() > 0) teamRows(card, url, teams);
+                            if (!schedErr.isEmpty()) addRowMessage(card, "定时提问暂不可用：" + schedErr, kit.BAD);
+                            else if (schedules != null && schedules.length() > 0) rows(card, url, schedules, false);
+                            if (!chainErr.isEmpty()) addRowMessage(card, "接力暂不可用：" + chainErr, kit.BAD);
+                            else if (chains != null && chains.length() > 0) rows(card, url, chains, true);
+                            body.addView(card);
                         }
                     }
                 });
@@ -331,9 +386,44 @@ final class AppPages {
         }
     }
 
+    /** Crisp dashed empty state card with quick-add pill buttons matching the design. */
+    private View emptyScheduledCard(String url) {
+        LinearLayout card = kit.column();
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding(kit.dp(18), kit.dp(22), kit.dp(18), kit.dp(22));
+        GradientDrawable dashed = kit.shape(kit.PANEL, 0, 22);
+        dashed.setStroke(kit.dp(1), Kit.light(kit.BG) ? 0xffd5d9e0 : kit.LINE, kit.dp(6), kit.dp(4));
+        card.setBackground(dashed);
+
+        card.addView(kit.semibold("还没有安排的协作", 14.5f, kit.INK));
+        card.addView(kit.text("定时提问和自动接力会出现在这里", 12.5f, kit.MUTED), kit.below(4));
+
+        LinearLayout pills = kit.row();
+        pills.setGravity(Gravity.CENTER_HORIZONTAL);
+        pills.addView(emptyQuickPill("＋ 定时提问", () -> activity.together(url, "schedule")));
+        View second = emptyQuickPill("＋ 自动接力", () -> activity.together(url, "chain"));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = kit.dp(8);
+        pills.addView(second, lp);
+        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(-2, -2);
+        pLp.topMargin = kit.dp(14);
+        card.addView(pills, pLp);
+        return card;
+    }
+
+    private View emptyQuickPill(String label, Runnable action) {
+        TextView btn = kit.medium(label, 13, kit.INK);
+        btn.setGravity(Gravity.CENTER);
+        btn.setMinHeight(kit.dp(48));
+        btn.setPadding(kit.dp(14), 0, kit.dp(14), 0);
+        btn.setBackground(kit.shape(kit.PANEL, kit.cardBorder(), 99));
+        kit.press(btn, action);
+        return btn;
+    }
+
     private void addRowMessage(LinearLayout body, String text, int color) {
-        TextView note = kit.text(text, 12.5f, color);
-        note.setPadding(kit.dp(14), kit.dp(4), kit.dp(14), kit.dp(12));
+        TextView note = kit.text(text, 13, color);
+        note.setPadding(kit.dp(16), kit.dp(12), kit.dp(16), kit.dp(12));
         body.addView(note);
     }
 
@@ -377,23 +467,6 @@ final class AppPages {
         }
     }
 
-    private View wideAction(String title, String hint, String what, int tint) {
-        LinearLayout row = kit.row();
-        row.setPadding(kit.dp(14), kit.dp(13), kit.dp(14), kit.dp(13));
-        row.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
-        kit.elevate(row, 1.5f);
-        View badge = kit.tile(R.drawable.ic_tab_together, tint, 38);
-        ((LinearLayout.LayoutParams) badge.getLayoutParams()).rightMargin = kit.dp(12);
-        row.addView(badge);
-        LinearLayout copy = kit.column();
-        copy.addView(kit.semibold(title, 15.5f, kit.INK));
-        copy.addView(kit.text(hint, 12.5f, kit.MUTED), kit.below(2));
-        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
-        row.addView(kit.icon(R.drawable.ic_chevron, Kit.tint(kit.MUTED, 150), 15));
-        kit.press(row, () -> pickTogether(title, what));
-        return row;
-    }
-
     private void pickTogether(String title, String what) {
         java.util.List<String> urls = new java.util.ArrayList<>();
         JSONArray saved = activity.computers();
@@ -402,9 +475,6 @@ final class AppPages {
     }
 
     private void teamRows(LinearLayout body, String url, JSONArray items) {
-        View divider = new View(activity);
-        divider.setBackgroundColor(kit.rim());
-        body.addView(divider, new LinearLayout.LayoutParams(-1, kit.hairline()));
         for (int i = 0; i < items.length(); i++) {
             JSONObject item = items.optJSONObject(i); if (item == null) continue;
             String mode = "lead".equals(item.optString("mode")) ? "领队" : "写审";
@@ -414,46 +484,37 @@ final class AppPages {
             String note = item.optString("note");
             if (!note.isEmpty()) desc += " · " + note;
             kit.setting(body, R.drawable.ic_tab_together, TINT_AGY, item.optString("goal", "协作任务"), desc, "",
-                "running".equals(rawState) ? kit.GOOD : "paused".equals(rawState) ? TINT_WARN : kit.MUTED,
+                "running".equals(rawState) ? kit.goodInk() : "paused".equals(rawState) ? TINT_WARN : kit.MUTED,
                 () -> activity.together(url, "team", item.optString("id")));
         }
     }
 
-    private void actions(LinearLayout page, String first, String firstHint, String firstAction, int firstTint,
-                         String second, String secondHint, String secondAction, int secondTint) {
+    private void actions(LinearLayout page, String first, String firstHint, String firstAction,
+                         String second, String secondHint, String secondAction) {
         LinearLayout row = kit.row();
-        row.addView(action(first, firstHint, firstAction, firstTint), new LinearLayout.LayoutParams(0, -1, 1));
+        row.addView(action(first, firstHint, firstAction), new LinearLayout.LayoutParams(0, -1, 1));
         LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(0, -1, 1); beside.leftMargin = kit.dp(10);
-        row.addView(action(second, secondHint, secondAction, secondTint), beside);
+        row.addView(action(second, secondHint, secondAction), beside);
         page.addView(row, kit.below(10));
     }
 
-    private View action(String title, String hint, String what, int tint) {
-        LinearLayout tile = kit.column();
-        tile.setPadding(kit.dp(14), kit.dp(14), kit.dp(14), kit.dp(13));
-        tile.setMinimumHeight(kit.dp(104));
+    private View action(String title, String hint, String what) {
+        LinearLayout tile = kit.cardBox(20);
+        tile.setPadding(kit.dp(14), kit.dp(14), kit.dp(14), kit.dp(14));
+        tile.setMinimumHeight(kit.dp(120));
         int icon = what.equals("chain") ? R.drawable.ic_tab_together : what.equals("schedule") ? R.drawable.ic_clock
             : what.equals("handoff") ? R.drawable.ic_handoff : R.drawable.ic_say;
-        tile.setBackground(kit.shape(kit.PANEL, kit.rim(), 18));
-        kit.elevate(tile, 1.5f);
-        tile.addView(kit.tile(icon, tint, 36));
-        tile.addView(kit.semibold(title, 15.5f, kit.INK), kit.below(12));
-        tile.addView(kit.text(hint, 12.5f, kit.MUTED), kit.below(2));
+        tile.addView(kit.tintedTile(icon, kit.RAISED, kit.INK, 38, 11));
+        View spacer = new View(activity);
+        tile.addView(spacer, new LinearLayout.LayoutParams(-1, 0, 1));
+        tile.addView(kit.semibold(title, 15, kit.INK), kit.below(12));
+        tile.addView(kit.text(hint, 12.5f, kit.MUTED), kit.below(3));
         kit.press(tile, () -> pickTogether(title, what));
         return tile;
     }
 
     private void rows(LinearLayout body, String url, JSONArray items, boolean chain) {
         int size = items == null ? 0 : items.length();
-        View divider = new View(activity);
-        divider.setBackgroundColor(kit.rim());
-        body.addView(divider, new LinearLayout.LayoutParams(-1, kit.hairline()));
-        if (size == 0) {
-            TextView empty = kit.text(chain ? "暂无自动接力" : "暂无定时提问", 12.5f, kit.MUTED);
-            empty.setPadding(kit.dp(14), kit.dp(10), kit.dp(14), kit.dp(10));
-            body.addView(empty);
-            return;
-        }
         for (int i = 0; i < size; i++) {
             JSONObject item = items.optJSONObject(i); if (item == null) continue;
             String title = chain ? item.optString("from_title", "来源对话") + " → " + item.optString("to_title", "接手对话") : item.optString("text");

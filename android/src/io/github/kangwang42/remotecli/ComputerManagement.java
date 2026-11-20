@@ -1,8 +1,11 @@
 package io.github.kangwang42.remotecli;
 
+import android.graphics.drawable.GradientDrawable;
 import android.os.SystemClock;
+import android.view.Gravity;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.io.ByteArrayOutputStream;
@@ -20,14 +23,14 @@ import org.json.JSONObject;
 
 /** Native computer management, reachable without opening its web workbench. */
 final class ComputerManagement {
-    private static final int TINT_AGY = 0xff6366f1, TINT_WARN = 0xffc77c1a;
+    private static final int TINT_AGY = 0xff5536c9, TINT_WARN = 0xff9a5b00;
 
     private final MainActivity activity;
     private final Kit kit;
     private final Workbench bench;
     private final Map<String, ComputerUpdate> states = new HashMap<>();
     private final Set<String> loading = new HashSet<>();
-    private String current = "";
+    private String current = "", currentName = "";
     private LinearLayout details;
     private final Runnable tick = this::refresh;
 
@@ -36,20 +39,18 @@ final class ComputerManagement {
     }
 
     View build(String url, String name) {
-        stop(); current = url;
+        stop(); current = url; currentName = name;
         if (!states.containsKey(url)) states.put(url, new ComputerUpdate());
         LinearLayout page = kit.page(12);
-        View refreshIcon = kit.iconButton(R.drawable.ic_refresh, "刷新电脑版本", kit.MUTED, this::refresh);
+        View refreshIcon = kit.circleAction(R.drawable.ic_refresh, "刷新电脑版本", false, this::refresh);
         page.addView(kit.navBar(name, () -> activity.home(""), refreshIcon));
-        TextView subtitle = kit.text(MainActivity.host(url), 13, kit.MUTED);
-        subtitle.setPadding(kit.dp(4), 0, kit.dp(4), 0);
-        page.addView(subtitle, kit.below(2));
 
-        details = kit.settingGroup(page, "版本与状态");
+        details = kit.column();
+        page.addView(details, kit.below(14));
         draw();
 
         LinearLayout access = kit.settingGroup(page, "使用这台电脑");
-        kit.setting(access, R.drawable.ic_computer, kit.ACCENT, "打开工作台", "查看这台电脑上的对话、终端和项目", "", kit.MUTED, () -> activity.open(url, ""));
+        kit.setting(access, R.drawable.ic_computer, kit.accentInk(), "打开工作台", "查看这台电脑上的对话、终端和项目", "", kit.MUTED, () -> activity.open(url, ""));
         kit.setting(access, R.drawable.ic_chart, TINT_AGY, "工作统计", "查看今日与近 30 天使用趋势", "", kit.MUTED, () -> activity.computerPage(url, "me"));
         kit.setting(access, R.drawable.ic_desktop, TINT_WARN, "远程桌面", "通过 UU 远程打开桌面或小窗", "", kit.MUTED, () -> activity.desktop(url));
         kit.setting(access, R.drawable.ic_settings, kit.MUTED, "电脑设置", "连接线路、远程访问与工具", "", kit.MUTED, () -> activity.computerSettings(url));
@@ -63,33 +64,61 @@ final class ComputerManagement {
     private void draw() {
         ComputerUpdate state = states.get(current);
         details.removeAllViews();
-        LinearLayout body = kit.column();
-        body.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(14));
+        boolean ready = state.online && state.enabled;
+        LinearLayout hero = kit.column();
+        hero.setPadding(kit.dp(16), kit.dp(16), kit.dp(16), kit.dp(16));
+        hero.setBackground(kit.shape(kit.heroBg(), Kit.light(kit.BG) ? 0 : kit.LINE, 22));
+
         LinearLayout top = kit.row();
-        TextView standing = kit.standing(state.connection);
-        kit.stands(standing, state.connection, kit.MUTED, state.online && state.enabled ? kit.GOOD : kit.BUSY);
-        top.addView(standing, new LinearLayout.LayoutParams(0, -2, 1));
+        FrameLayout iconWrap = new FrameLayout(activity);
+        iconWrap.setBackground(kit.shape(kit.heroChipBg(), 0, 14));
+        iconWrap.addView(kit.icon(R.drawable.ic_computer, kit.heroFg(), 22), new FrameLayout.LayoutParams(kit.dp(22), kit.dp(22), Gravity.CENTER));
+        View dot = new View(activity);
+        GradientDrawable dotShape = kit.shape(ready ? 0xff22c55e : state.online ? 0xfff59e0b : 0xffef4444, 0, 6);
+        dotShape.setStroke(kit.dp(2.5f), kit.heroBg());
+        dot.setBackground(dotShape);
+        FrameLayout.LayoutParams dotLp = new FrameLayout.LayoutParams(kit.dp(12), kit.dp(12), Gravity.BOTTOM | Gravity.END);
+        dotLp.setMargins(0, 0, -kit.dp(1), -kit.dp(1));
+        iconWrap.addView(dot, dotLp);
+        LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(kit.dp(44), kit.dp(44));
+        wrapLp.rightMargin = kit.dp(12);
+        top.addView(iconWrap, wrapLp);
+
+        LinearLayout meta = kit.column();
+        LinearLayout titleRow = kit.row();
+        titleRow.addView(kit.line(currentName, 16, kit.heroFg(), true));
+        TextView onlineTag = kit.medium(state.connection, 12, ready ? 0xff86efac : state.online ? 0xfffcd34d : 0xfffca5a5);
+        LinearLayout.LayoutParams tagLp = new LinearLayout.LayoutParams(-2, -2);
+        tagLp.leftMargin = kit.dp(8);
+        titleRow.addView(onlineTag, tagLp);
+        meta.addView(titleRow);
+        meta.addView(kit.line(MainActivity.host(current), 12.5f, kit.heroMuted(), false), kit.below(2));
+        top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
+
         String versionLabel = state.version.isEmpty() ? "版本未知" : "v" + state.version;
-        top.addView(kit.pill(versionLabel, state.online && state.enabled ? kit.ACCENT : kit.MUTED));
-        body.addView(top);
+        top.addView(kit.statusPill(versionLabel, kit.heroFg(), kit.heroChipBg(), 0));
+        hero.addView(top);
 
         String hint = !state.online ? "保持电脑开机并运行 Remote AI 后，可查看版本并发起远程更新。"
             : !state.enabled ? "在电脑端恢复手机访问后可发起更新。"
             : !state.supported ? "此电脑端暂不支持手机更新，请先在电脑上安装新版。"
             : state.version.isEmpty() ? "暂未读取到版本号，点右上角刷新重试。"
             : state.newer.isEmpty() ? "电脑端版本正常，可随时检查更新。" : "发现新版本 v" + state.newer + "，可远程安装。";
-        body.addView(kit.text(hint, 13, state.newer.isEmpty() ? kit.MUTED : kit.ACCENT), kit.below(10));
-        if (!state.note.isEmpty()) body.addView(kit.text(state.note, 12.5f, kit.MUTED), kit.below(6));
-        details.addView(body);
+        hero.addView(kit.text(hint, 13, state.newer.isEmpty() ? kit.heroMuted() : 0xff9dbbf7), kit.below(12));
+        if (!state.note.isEmpty()) hero.addView(kit.text(state.note, 12.5f, kit.heroMuted()), kit.below(6));
 
         final String url = current;
         if (state.canUpdate() || state.busy()) {
             String actionLabel = state.busy() ? "正在等待电脑更新…"
                 : state.newer.isEmpty() ? "检查电脑端更新" : "更新电脑至 v" + state.newer;
-            kit.setting(details, R.drawable.ic_update, state.newer.isEmpty() ? kit.ACCENT : kit.GOOD,
-                actionLabel, loading.contains(url) ? "正在读取版本…" : "由电脑下载并安装新版", "",
-                state.newer.isEmpty() ? kit.MUTED : kit.ACCENT, () -> { if (state.canUpdate()) confirm(url); });
+            TextView cta = kit.semibold(loading.contains(url) ? "正在读取版本…" : actionLabel, 14, Kit.light(kit.BG) ? 0xff0e1116 : kit.ON_ACCENT);
+            cta.setGravity(Gravity.CENTER);
+            cta.setMinHeight(kit.dp(48));
+            cta.setBackground(kit.shape(Kit.light(kit.BG) ? 0xffffffff : kit.ACCENT, 0, 14));
+            kit.press(cta, () -> { if (state.canUpdate()) confirm(url); });
+            hero.addView(cta, kit.below(14));
         }
+        details.addView(hero);
     }
 
     private void confirm(String url) {

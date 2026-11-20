@@ -20,11 +20,11 @@
     pond: { name: '锦鲤池塘', panel: '#1b292b', raised: '#27383a', line: '#3b5052', muted: '#a4b7b6', accent: '#edbb83', onAccent: '#10191b',
       t: { background: '#10191b', foreground: '#e2ece9', cursor: '#edbb83', selectionBackground: '#415957', black: '#172426', red: '#f39188', green: '#a8c99a', yellow: '#e7c58b', blue: '#9cbfd9', magenta: '#ceafd1', cyan: '#97ceca', white: '#c2d3cf',
         brightBlack: '#94aaa7', brightRed: '#ffada4', brightGreen: '#bfdfb2', brightYellow: '#f4dba8', brightBlue: '#b7d7ed', brightMagenta: '#e0c7e3', brightCyan: '#b3e4df', brightWhite: '#eff7f4' } },
-    // Light skins: soft mist canvas with crisp elevated white cards (Apple-style surface hierarchy),
+    // Light skins: cool mist canvas with crisp elevated white cards and deep charcoal primary ink,
     // while keeping the terminal screen itself a calm, glare-free paper tone.
-    paper: { name: '纸白', light: true, bg: '#f2f3f7', panel: '#ffffff', raised: '#e9ecf2', line: '#dde1e9', muted: '#686e7d', accent: '#2f6fe4', onAccent: '#ffffff',
-      t: { background: '#fbfbfc', foreground: '#232733', cursor: '#2f6fe4', cursorAccent: '#fbfbfc', selectionBackground: '#cfdcf7', black: '#232733', red: '#c93c37', green: '#358432', yellow: '#9e6600', blue: '#2f6fe4', magenta: '#9a2fa0', cyan: '#0b7a96', white: '#8b909c',
-        brightBlack: '#5c6170', brightRed: '#d9534e', brightGreen: '#469643', brightYellow: '#b87a05', brightBlue: '#4a84ee', brightMagenta: '#ab45b0', brightCyan: '#168aa6', brightWhite: '#232733' } },
+    paper: { name: '纸白', light: true, bg: '#f2f3f7', panel: '#ffffff', raised: '#f1f3f6', line: '#e6e8ec', muted: '#5b6270', accent: '#2f54eb', onAccent: '#ffffff',
+      t: { background: '#fbfbfc', foreground: '#0e1116', cursor: '#2f54eb', cursorAccent: '#fbfbfc', selectionBackground: '#d9e1ff', black: '#0e1116', red: '#c0261a', green: '#15803d', yellow: '#9a5b00', blue: '#2445c8', magenta: '#7c3aed', cyan: '#0b7a96', white: '#8b909c',
+        brightBlack: '#5b6270', brightRed: '#dc2626', brightGreen: '#16a34a', brightYellow: '#d97706', brightBlue: '#2f54eb', brightMagenta: '#9333ea', brightCyan: '#0891b2', brightWhite: '#0e1116' } },
     dawn: { name: '晨光', light: true, bg: '#f2ece3', panel: '#fdfaf6', raised: '#e9dfd2', line: '#ded4c6', muted: '#7a7089', accent: '#286983', onAccent: '#ffffff',
       t: { background: '#faf4ed', foreground: '#4a4566', cursor: '#286983', cursorAccent: '#faf4ed', selectionBackground: '#dfd6e6', black: '#4a4566', red: '#b4506a', green: '#3b7d5c', yellow: '#b9781a', blue: '#286983', magenta: '#80689c', cyan: '#3f8590', white: '#9893a5',
         brightBlack: '#6e6a86', brightRed: '#c2607a', brightGreen: '#4a8d6b', brightYellow: '#c98820', brightBlue: '#357793', brightMagenta: '#907aa9', brightCyan: '#56949f', brightWhite: '#4a4566' } }
@@ -60,8 +60,19 @@
     const bg = s.bg || s.t.background;
     const vars = { bg, 'term-bg': s.t.background, panel: s.panel, raised: s.raised, line: s.line, ink: s.t.foreground, muted: s.muted, accent: s.accent, 'on-accent': s.onAccent,
       good: s.t.green, busy: s.t.yellow, bad: s.t.red, 'warn-ink': s.t.yellow, 'warn-bg': s.raised,
-      elevate: s.light ? '0 1px 2px rgb(15 23 42 / .04), 0 6px 20px -10px rgb(15 23 42 / .10)' : '0 1px 2px rgb(0 0 0 / .24)',
-      rim: s.light ? 'rgb(15 23 42 / .06)' : 'rgb(255 255 255 / .07)' };
+      'ink-solid': s.light ? '#0e1116' : s.accent, 'on-ink-solid': s.light ? '#ffffff' : s.onAccent,
+      'hero-bg': s.light ? '#0e1116' : s.panel, 'hero-fg': s.light ? '#ffffff' : s.t.foreground, 'hero-muted': s.light ? '#b9bec8' : s.muted,
+      'surface-sub': s.light ? '#f6f7f9' : bg, 'reader-bg': s.light ? s.panel : bg,
+      'card-border': s.light ? '#e9ebef' : s.line, divider: s.light ? '#eef0f3' : s.line,
+      'accent-soft': s.light ? '#eef1ff' : 'color-mix(in srgb, var(--accent) 16%, transparent)',
+      'accent-ink': s.light ? '#2445c8' : s.accent,
+      'busy-soft': s.light ? '#fff7ea' : 'color-mix(in srgb, var(--busy) 14%, transparent)',
+      'busy-ink': s.light ? '#8a4b00' : s.t.yellow, 'busy-dot': s.light ? '#f59e0b' : s.t.yellow,
+      'good-soft': s.light ? '#dcfce7' : 'color-mix(in srgb, var(--good) 16%, transparent)',
+      'good-ink': s.light ? '#15803d' : s.t.green, 'good-dot': s.light ? '#16a34a' : s.t.green,
+      'bad-soft': s.light ? '#fdedec' : 'color-mix(in srgb, var(--bad) 14%, transparent)',
+      elevate: s.light ? '0 1px 2px rgba(14, 17, 22, .04), 0 8px 24px rgba(14, 17, 22, .05)' : '0 1px 2px rgb(0 0 0 / .24)',
+      rim: s.light ? 'rgba(14, 17, 22, .07)' : 'rgba(255, 255, 255, .08)' };
     Object.keys(vars).forEach(key => style.setProperty('--' + key, vars[key]));
     style.colorScheme = s.light ? 'light' : 'dark';
     document.documentElement.dataset.skin = resolved;

@@ -1,6 +1,6 @@
 /* Shared conversation surface language used by both web/chat/ (phone-hosted structured chats)
-   and dialog.window in web/app.js (computer-hosted & saved conversations), so every conversation
-   window shares identical typography, bubbles, tool step cards, approvals, status bar, and composer. */
+   and dialog.window in web/app.js (computer-hosted & saved conversations), matching the clean white
+   editorial reader, rounded tool-operation cards, cobalt connection banner, and pill composer. */
 
 /* ---- Shared Markdown typography ---- */
 :is(#said, #sheet-form .said) .md { overflow-wrap: anywhere; min-width: 0; }
@@ -11,79 +11,79 @@
 :is(#said, #sheet-form .said) .md ol,
 :is(#said, #sheet-form .said) .md pre,
 :is(#said, #sheet-form .said) .md blockquote,
-:is(#said, #sheet-form .said) .md .wide { margin: 0 0 .6em; }
+:is(#said, #sheet-form .said) .md .wide { margin: 0 0 .65em; }
 :is(#said, #sheet-form .said) .md h1,
 :is(#said, #sheet-form .said) .md h2,
 :is(#said, #sheet-form .said) .md h3,
-:is(#said, #sheet-form .said) .md h4 { margin: .9em 0 .35em; font-size: 1em; font-weight: 700; line-height: 1.4; }
+:is(#said, #sheet-form .said) .md h4 { margin: .95em 0 .35em; font-size: 1em; font-weight: 700; line-height: 1.4; }
 :is(#said, #sheet-form .said) .md h1,
 :is(#said, #sheet-form .said) .md h2 { font-size: 1.06em; }
 :is(#said, #sheet-form .said) .md ul,
 :is(#said, #sheet-form .said) .md ol { padding-left: 1.35em; }
-:is(#said, #sheet-form .said) .md li { margin: .15em 0; }
+:is(#said, #sheet-form .said) .md li { margin: .18em 0; }
 :is(#said, #sheet-form .said) .md li > p { margin: 0; }
-:is(#said, #sheet-form .said) .md code { font-family: var(--mono, ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK SC", monospace); font-size: .86em; padding: .1em .38em; border-radius: 6px; background: color-mix(in srgb, var(--ink) 8%, transparent); }
-:is(#said, #sheet-form .said) .md pre { padding: 10px 12px; border-radius: 12px; border: 0.5px solid var(--rim, var(--line)); background: color-mix(in srgb, var(--ink) 4.5%, var(--panel)); overflow-x: auto; line-height: 1.5; }
+:is(#said, #sheet-form .said) .md code { font-family: var(--mono, ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK SC", monospace); font-size: .85em; padding: .12em .4em; border-radius: 6px; background: var(--raised); }
+:is(#said, #sheet-form .said) .md pre { padding: 12px 14px; border-radius: 14px; border: 1px solid var(--card-border, var(--line)); background: var(--surface-sub, var(--bg)); overflow-x: auto; line-height: 1.55; }
 :is(#said, #sheet-form .said) .md pre code { padding: 0; background: none; font-size: .82em; white-space: pre; }
-:is(#said, #sheet-form .said) .md blockquote { padding-left: 11px; border-left: 2.5px solid color-mix(in srgb, var(--accent) 35%, var(--line)); color: var(--muted); }
-:is(#said, #sheet-form .said) .md hr { border: 0; border-top: 0.5px solid var(--rim, var(--line)); margin: .85em 0; }
+:is(#said, #sheet-form .said) .md blockquote { padding-left: 12px; border-left: 2.5px solid color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--muted); }
+:is(#said, #sheet-form .said) .md hr { border: 0; border-top: 1px solid var(--divider, var(--line)); margin: .9em 0; }
 :is(#said, #sheet-form .said) .md .wide { overflow-x: auto; }
 :is(#said, #sheet-form .said) .md table { border-collapse: collapse; font-size: .88em; white-space: nowrap; }
 :is(#said, #sheet-form .said) .md th,
-:is(#said, #sheet-form .said) .md td { padding: 5px 10px; border: 0.5px solid var(--rim, var(--line)); text-align: left; }
-:is(#said, #sheet-form .said) .md th { background: color-mix(in srgb, var(--ink) 5%, transparent); font-weight: 600; }
+:is(#said, #sheet-form .said) .md td { padding: 6px 10px; border: 1px solid var(--divider, var(--line)); text-align: left; }
+:is(#said, #sheet-form .said) .md th { background: var(--surface-sub, var(--raised)); font-weight: 600; }
 :is(#said, #sheet-form .said) .md strong { font-weight: 700; }
 
-/* ---- Unified floating "back to latest" pill (matches terminal.css #latest) ---- */
+/* ---- Unified floating "back to latest" pill ---- */
 #latest,
-dialog.window .reads .latest { position: absolute; right: 12px; bottom: 12px; left: auto; transform: none; z-index: 4; display: inline-flex; align-items: center; gap: 4px; height: 34px; min-height: 34px; padding: 0 13px; border-radius: 17px; border: 0.5px solid var(--rim, var(--line)); background: color-mix(in srgb, var(--panel) 92%, transparent); color: var(--ink); font-size: 12.5px; font-weight: 600; white-space: nowrap; box-shadow: 0 4px 16px rgb(0 0 0 / .16); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); transition: transform .12s; }
+dialog.window .reads .latest { position: absolute; right: 14px; bottom: 14px; left: auto; transform: none; z-index: 4; display: inline-flex; align-items: center; gap: 4px; height: 36px; min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--card-border, var(--line)); background: color-mix(in srgb, var(--panel) 94%, transparent); color: var(--ink); font-size: 12.5px; font-weight: 600; white-space: nowrap; box-shadow: 0 6px 20px rgba(14, 17, 22, .12); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transition: transform .12s; }
 #latest:active,
 dialog.window .reads .latest:active { transform: scale(.95); }
 
-/* ---- Unified message stream, user bubbles, and thinking quotes ---- */
+/* ---- Unified message stream, user bubbles, and thinking prose ---- */
 #said,
-dialog.window #sheet-form .said { height: 100%; max-height: none; min-height: 0; overflow-y: auto; overflow-anchor: none; overscroll-behavior: contain; border: 0; border-radius: 0; background: transparent; padding: 14px 14px 20px; display: flex; flex-direction: column; gap: 12px; font-family: var(--read-font, inherit); font-size: var(--read-size, .95rem); line-height: var(--read-line, 1.62); }
+dialog.window #sheet-form .said { height: 100%; max-height: none; min-height: 0; overflow-y: auto; overflow-anchor: none; overscroll-behavior: contain; border: 0; border-radius: 0; background: transparent; padding: 16px 16px 22px; display: flex; flex-direction: column; gap: 16px; font-family: var(--read-font, inherit); font-size: var(--read-size, .94rem); line-height: var(--read-line, 1.65); }
 #said > *,
 dialog.window #sheet-form .said > * { min-width: 0; flex-shrink: 0; }
 
 #said .user,
-#sheet-form .said .turn.user { align-self: flex-end; max-width: 86%; padding: 9px 14px; border-radius: 18px 18px 5px 18px; background: color-mix(in srgb, var(--accent) 14%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+#sheet-form .said .turn.user { align-self: flex-end; max-width: 86%; padding: 10px 15px; border-radius: 18px 18px 6px 18px; background: var(--accent-soft, color-mix(in srgb, var(--accent) 14%, transparent)); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 #sheet-form .said .turn.user { display: grid; gap: 4px; white-space: normal; }
 #said .user.going,
-#sheet-form .said .turn.going { opacity: .58; }
+#sheet-form .said .turn.going { opacity: .6; }
 
 #said .thought,
-#sheet-form .said .turn.thought .plain { color: var(--muted); font-size: .89em; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; padding-left: 11px; border-left: 2px solid color-mix(in srgb, var(--accent) 30%, var(--line)); }
+#sheet-form .said .turn.thought .plain { color: var(--muted); font-size: .9em; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; padding-left: 12px; border-left: 2px solid var(--divider, var(--line)); }
 
-/* ---- Unified elevated tool-step cards (chat .step + dialog.window details.did) ---- */
+/* ---- Unified rounded operation / tool-step cards (chat .step + dialog.window details.did) ---- */
 #said .step,
-#sheet-form .said details.did { min-width: 0; border-radius: 13px; border: 0.5px solid var(--rim, var(--line)); background: var(--panel); box-shadow: var(--elevate); font-size: .84rem; line-height: 1.5; }
-#sheet-form .said details.did { padding: 9px 12px; color: var(--ink); overflow-wrap: anywhere; }
-#sheet-form .said details.did summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; color: var(--ink); list-style: none; min-height: 26px; }
+#sheet-form .said details.did { min-width: 0; border-radius: 18px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); box-shadow: none; font-size: .85rem; line-height: 1.5; overflow: hidden; }
+#sheet-form .said details.did { padding: 0; color: var(--ink); overflow-wrap: anywhere; }
+#sheet-form .said details.did summary { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; font-weight: 600; color: var(--ink); list-style: none; min-height: 48px; }
 #sheet-form .said details.did summary::-webkit-details-marker { display: none; }
-#sheet-form .said details.did summary::before { content: "✓"; flex: none; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
-#sheet-form .said details.did summary::after { content: "›"; margin-left: auto; color: var(--muted); font-size: 1.05em; font-weight: 500; transition: transform .15s ease; }
-#sheet-form .said details.did[open] summary::after { transform: rotate(90deg); }
-#sheet-form .said details.did ul { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 0.5px solid var(--rim, var(--line)); display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+#sheet-form .said details.did summary::before { content: "✓"; flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-size: 13px; font-weight: 700; line-height: 1; background: var(--good-soft, color-mix(in srgb, var(--good) 18%, transparent)); color: var(--good-ink, var(--good)); }
+#sheet-form .said details.did summary::after { content: "⌄"; margin-left: auto; color: var(--muted); font-size: 1.1em; font-weight: 500; transition: transform .2s ease; }
+#sheet-form .said details.did[open] summary::after { transform: rotate(180deg); }
+#sheet-form .said details.did ul { list-style: none; margin: 0; padding: 8px 14px 12px; border-top: 1px solid var(--divider, var(--line)); display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 #sheet-form .said details.did li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-family: var(--mono, ui-monospace, "Cascadia Mono", Consolas, monospace); }
-#sheet-form .said details.did li + li { padding-top: 8px; border-top: 0.5px solid var(--rim, var(--line)); }
-#sheet-form .said details.did li .what { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; font-weight: 600; color: var(--ink); white-space: normal; overflow-wrap: anywhere; }
-#sheet-form .said details.did li .ran { font: inherit; font-size: .9em; color: var(--muted); padding: 0; background: none; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
-#sheet-form .said details.did li .got { margin: 0; padding: 6px 9px; border-radius: 8px; background: var(--bg); font: inherit; font-size: .88em; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12em; overflow-y: auto; line-height: 1.48; }
+#sheet-form .said details.did li + li { padding-top: 8px; border-top: 1px solid var(--divider, var(--line)); }
+#sheet-form .said details.did li .what { font-family: inherit; font-weight: 500; font-size: .84rem; color: var(--ink); white-space: normal; overflow-wrap: anywhere; }
+#sheet-form .said details.did li .ran { font: inherit; font-size: .84em; color: var(--muted); padding: 0; background: none; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
+#sheet-form .said details.did li .got { margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--surface-sub, var(--bg)); font: inherit; font-size: .84em; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12em; overflow-y: auto; line-height: 1.5; }
 
-/* ---- Unified dialog.window header, status bar, approvals, and composer ---- */
-dialog.window { max-width: none; width: 100%; height: 100%; height: 100dvh; max-height: none; margin: 0; border-radius: 0; background: var(--bg); animation: none; }
-dialog.window #sheet-form { height: 100%; max-height: none; max-width: 760px; margin-inline: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-auto-rows: auto; gap: 0; padding: 0 0 env(safe-area-inset-bottom); overflow: hidden; }
+/* ---- Unified dialog.window header, cobalt banner, status bar, approvals, and floating pill composer ---- */
+dialog.window { max-width: none; width: 100%; height: 100%; height: 100dvh; max-height: none; margin: 0; border-radius: 0; background: var(--reader-bg, var(--bg)); animation: none; }
+dialog.window #sheet-form { height: 100%; max-height: none; max-width: 760px; margin-inline: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-auto-rows: auto; gap: 0; padding: 0 0 env(safe-area-inset-bottom); overflow: hidden; background: var(--reader-bg, var(--bg)); }
 dialog.window #sheet-form::before { display: none; }
 
-dialog.window .above { background: color-mix(in srgb, var(--bg) 90%, transparent); box-shadow: inset 0 -0.5px 0 var(--rim, var(--line)); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); z-index: 4; }
-dialog.window .bar { display: flex; align-items: center; gap: 2px; min-width: 0; padding: calc(6px + env(safe-area-inset-top)) 6px 6px 4px; }
-dialog.window .bar .icon { width: 42px; height: 42px; border-radius: 12px; transition: background .12s, color .12s, transform .1s; }
-dialog.window .bar .icon:active { transform: scale(.93); }
+dialog.window .above { background: color-mix(in srgb, var(--reader-bg, var(--bg)) 90%, transparent); border-bottom: 1px solid var(--divider, var(--line)); backdrop-filter: saturate(1.4) blur(20px); -webkit-backdrop-filter: saturate(1.4) blur(20px); z-index: 4; }
+dialog.window .bar { display: flex; align-items: center; gap: 4px; min-width: 0; padding: calc(5px + env(safe-area-inset-top)) 8px 5px 6px; }
+dialog.window .bar .icon { width: 42px; height: 42px; border-radius: 50%; background: transparent; border: 0; color: var(--ink); transition: background .12s, color .12s, transform .1s; }
+dialog.window .bar .icon:active { background: var(--raised); transform: scale(.93); }
 dialog.window .bar .type,
 dialog.window .bar .files,
 dialog.window .bar .take,
-dialog.window .bar .hand { flex: none; min-width: 40px; min-height: 40px; border-radius: 12px; color: var(--muted); font-weight: 600; font-size: .92rem; }
+dialog.window .bar .hand { flex: none; min-width: 40px; min-height: 40px; border-radius: 50%; color: var(--muted); font-weight: 600; font-size: .9rem; }
 dialog.window .bar .files[hidden],
 dialog.window .bar .take[hidden],
 dialog.window .bar .hand[hidden] { display: none; }
@@ -91,44 +91,47 @@ dialog.window .bar .files svg,
 dialog.window .bar .take svg,
 dialog.window .bar .hand svg { width: 20px; height: 20px; }
 dialog.window .bar .who { flex: 1; min-width: 0; padding: 0 4px; }
-dialog.window .bar h3 { font-size: 1.02rem; font-weight: 650; line-height: 1.3; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-dialog.window .bar .stands { display: flex; align-items: center; gap: 6px; margin-top: 1px; color: var(--muted); font-size: .78rem; line-height: 1.35; min-width: 0; }
+dialog.window .bar h3 { font-size: 1rem; font-weight: 600; line-height: 1.3; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.window .bar .stands { display: flex; align-items: center; gap: 6px; margin-top: 1px; color: var(--muted); font-size: .76rem; line-height: 1.35; min-width: 0; }
 dialog.window .bar .stands-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 dialog.window .bar .head-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-dialog.window .bar .head-dot.on { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 20%, transparent); }
-dialog.window .bar .head-dot.busy { background: var(--busy); box-shadow: 0 0 0 3px color-mix(in srgb, var(--busy) 20%, transparent); animation: working 1.2s ease-in-out infinite; }
-dialog.window .bar .head-dot.confirm { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent); }
+dialog.window .bar .head-dot.on { background: var(--good-dot, var(--good)); box-shadow: 0 0 0 3px var(--good-soft); }
+dialog.window .bar .head-dot.busy { background: var(--busy-dot, var(--busy)); box-shadow: 0 0 0 3px var(--busy-soft); animation: working 1.2s ease-in-out infinite; }
+dialog.window .bar .head-dot.confirm { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
 dialog.window .bar .head-dot.off { background: var(--muted); opacity: .65; }
 
-dialog.window #sheet-form .control-mode { margin: 0 10px 7px; padding: 5px 11px; border: 0.5px solid var(--rim, var(--line)); border-radius: 10px; color: var(--muted); background: color-mix(in srgb, var(--panel) 82%, transparent); font-size: .75rem; line-height: 1.4; }
-dialog.window #sheet-form .control-mode.shared { border-color: color-mix(in srgb, var(--accent) 28%, var(--rim, var(--line))); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
-dialog.window #sheet-form .control-mode.saved { border-style: dashed; }
-dialog.window .reading { margin: 0 10px 8px; padding: 12px 14px; border: 0.5px solid var(--rim, var(--line)); border-radius: 14px; background: var(--panel); box-shadow: var(--elevate); font-size: .85rem; color: var(--muted); }
+dialog.window #sheet-form .control-mode { margin: 4px 12px 8px; padding: 8px 12px; border: 0; border-radius: 14px; color: var(--muted); background: var(--surface-sub, var(--raised)); font-size: .78rem; line-height: 1.4; }
+dialog.window #sheet-form .control-mode.shared { background: var(--accent-soft); color: var(--accent-ink, var(--ink)); }
+dialog.window #sheet-form .control-mode.saved { border: 1px dashed var(--line); background: transparent; }
+dialog.window .reading { margin: 0 12px 10px; padding: 12px 14px; border: 1px solid var(--card-border, var(--line)); border-radius: 16px; background: var(--panel); box-shadow: var(--elevate); font-size: .85rem; color: var(--muted); }
 
 dialog.window .reads { position: relative; min-height: 0; }
-dialog.window #sheet-form .asks-host { padding: 10px 12px 6px; border-top: 0.5px solid color-mix(in srgb, var(--bad) 26%, var(--rim, var(--line))); background: color-mix(in srgb, var(--bad) 5%, var(--bg)); }
+dialog.window #sheet-form .asks-host { padding: 10px 14px 8px; border-top: 1px solid color-mix(in srgb, var(--bad) 24%, var(--divider, var(--line))); background: var(--bad-soft); }
 dialog.window #sheet-form .asks-host:empty,
 dialog.window #sheet-form .asks-host[hidden] { display: none; }
 dialog.window #sheet-form .asks-host .card.asking { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 dialog.window #sheet-form .asks-host .card .ask { padding: 0; }
-dialog.window #sheet-form .asks-host .card .ask pre { background: var(--panel); border: 0.5px solid var(--rim, var(--line)); }
+dialog.window #sheet-form .asks-host .card .ask pre { background: var(--panel); border: 1px solid var(--card-border, var(--line)); }
 
-dialog.window .state { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 2px 12px 0 16px; font-size: .84rem; color: var(--muted); }
-dialog.window .state .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .55; }
-dialog.window .state.busy .dot { background: var(--busy, #9e6600); opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--busy) 20%, transparent); animation: working 1.2s ease-in-out infinite; }
-dialog.window .state.confirm .dot { background: var(--bad); opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent); }
-dialog.window .state.waiting .dot { background: var(--good); opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 20%, transparent); }
-dialog.window .state .end { margin-left: auto; flex: none; min-height: 32px; padding: 0 13px; border-radius: 16px; border: 0.5px solid color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); font-size: .82rem; font-weight: 600; background: transparent; transition: transform .1s, background .12s; }
-dialog.window .state .end:active { background: color-mix(in srgb, var(--bad) 10%, transparent); transform: scale(.96); }
-dialog.window #sheet-form .sync-note { padding: 4px 14px 0; }
-dialog.window #sheet-form .stop-note { margin: 4px 12px 2px; padding: 8px 12px; border: 0.5px solid var(--rim, var(--line)); border-radius: 12px; background: var(--panel); color: var(--ink); font-size: .82rem; line-height: 1.5; overflow-wrap: anywhere; }
-dialog.window #sheet-form .below { padding: 4px 12px 10px; }
-dialog.window #sheet-form .confirm { margin: 4px 12px 6px; border: 0.5px solid var(--rim, var(--line)); box-shadow: var(--elevate); }
+dialog.window .state { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 14px 2px 16px; font-size: .84rem; color: var(--muted); }
+dialog.window .state .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: .55; }
+dialog.window .state.busy { color: var(--busy-ink, var(--busy)); }
+dialog.window .state.busy .standing { color: var(--busy-ink, var(--busy)); }
+dialog.window .state.busy .dot { background: var(--busy-dot, var(--busy)); opacity: 1; box-shadow: 0 0 0 3px var(--busy-soft); animation: working 1.2s ease-in-out infinite; }
+dialog.window .state.confirm .dot { background: var(--bad); opacity: 1; box-shadow: 0 0 0 3px var(--bad-soft); }
+dialog.window .state.waiting .dot { background: var(--good-dot, var(--good)); opacity: 1; box-shadow: 0 0 0 3px var(--good-soft); }
+dialog.window .state .end { margin-left: auto; flex: none; min-height: 32px; padding: 0 13px; border-radius: 999px; border: 0; background: var(--bad-soft); color: var(--bad); font-size: .8rem; font-weight: 600; transition: transform .1s, opacity .12s; }
+dialog.window .state .end.halt { background: var(--ink-solid, var(--ink)); color: var(--on-ink-solid, var(--bg)); }
+dialog.window .state .end:active { transform: scale(.96); opacity: .88; }
+dialog.window #sheet-form .sync-note { padding: 4px 16px 0; }
+dialog.window #sheet-form .stop-note { margin: 4px 14px 2px; padding: 9px 12px; border: 1px solid var(--card-border, var(--line)); border-radius: 14px; background: var(--surface-sub, var(--panel)); color: var(--ink); font-size: .82rem; line-height: 1.5; overflow-wrap: anywhere; }
+dialog.window #sheet-form .below { padding: 4px 14px 10px; }
+dialog.window #sheet-form .confirm { margin: 4px 14px 6px; border: 1px solid var(--card-border, var(--line)); box-shadow: var(--elevate); }
 
-dialog.window #sheet-form .write { margin: 4px 10px 10px; padding: 5px 5px 5px 8px; border: 0.5px solid var(--rim, var(--line)); border-radius: 24px; background: var(--panel); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
-dialog.window #sheet-form .write:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
-dialog.window #sheet-form .write textarea { border: 0; border-radius: 16px; background: transparent; box-shadow: none; outline: none; padding: 8px 8px; min-height: 38px; max-height: 144px; caret-color: var(--accent); overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; }
-dialog.window #sheet-form .write .go { flex: none; min-height: 38px; padding: 0 13px; border-radius: 19px; border: 0.5px solid var(--rim, var(--line)); background: var(--raised); color: var(--ink); font-weight: 600; transition: transform .1s; }
+dialog.window #sheet-form .write { margin: 6px 12px 12px; padding: 6px 6px 6px 10px; border: 1px solid var(--card-border, var(--line)); border-radius: 26px; background: var(--bg); box-shadow: none; transition: border-color .15s, box-shadow .15s; }
+dialog.window #sheet-form .write:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+dialog.window #sheet-form .write textarea { border: 0; border-radius: 18px; background: transparent; box-shadow: none; outline: none; padding: 8px 6px; min-height: 40px; max-height: 144px; caret-color: var(--accent); overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; font-size: .96rem; }
+dialog.window #sheet-form .write .go { flex: none; min-height: 40px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); color: var(--ink); font-weight: 600; transition: transform .1s; }
 dialog.window #sheet-form .write .go:active { transform: scale(.96); }
-dialog.window #sheet-form .write button.solid { border-radius: 19px; min-height: 38px; padding: 0 16px; transition: transform .1s; }
+dialog.window #sheet-form .write button.solid { border-radius: 20px; min-height: 40px; padding: 0 18px; background: var(--accent); color: var(--on-accent); transition: transform .1s; }
 dialog.window #sheet-form .write button.solid:active { transform: scale(.95); }

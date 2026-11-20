@@ -231,7 +231,13 @@
     parts.working = el('section', { id: 'teams' }, el('div', { className: 'section-head' }, el('h2', { textContent: '协作任务' }), parts.teamCount), parts.teamStatus, parts.teams);
     parts.lists = el('div', null, parts.working,
       el('section', { id: 'schedules' }, el('div', { className: 'section-head' }, el('h2', { textContent: '定时提问' }), parts.scheduleCount), parts.scheduleStatus, parts.schedules), parts.passing);
-    parts.addTeam = act('add-team', '协作任务', '写审循环或领队分工，多 AI 配合完成', window.RemoteTeams.TEAM, 'team', () => window.RemoteTeams.begin());
+    parts.addTeam = el('button', { type: 'button', id: 'add-team', className: 'act team', onclick: () => window.RemoteTeams.begin() },
+      el('span', { className: 'team-flow', ariaHidden: 'true' },
+        el('span', { className: 'tool n-cc', textContent: 'CC' }), el('span', { className: 'flow' }),
+        el('span', { className: 'node n-cx', textContent: 'CX' }), el('span', { className: 'flow' }),
+        el('span', { className: 'node n-ag', textContent: 'AG' })),
+      el('span', { className: 'collab-action' }, el('b', { textContent: '协作任务' }), el('small', { textContent: '写审循环或领队分工，多 AI 配合完成' })),
+      el('span', { className: 'team-cta', textContent: '＋ 新建协作任务' }));
     box.append(el('div', { className: 'acts collaboration-actions' },
       parts.addTeam,
       act('handoff', '交给另一个 AI', '新对话或开着的对话接着做', HAND, 'hand', () => handoff()),
