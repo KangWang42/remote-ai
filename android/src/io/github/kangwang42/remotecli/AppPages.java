@@ -191,14 +191,14 @@ final class AppPages {
 
         // Grouped settings
         LinearLayout preferences = kit.settingGroup(page, "提醒与偏好");
-        kit.settingSwitch(preferences, R.drawable.ic_bell, TINT_WARN, "任务提醒", "需要确认或一轮完成时通知", activity.watching(), activity::toggleWatch);
+        kit.settingSwitch(preferences, R.drawable.ic_bell, kit.busyInk(), "任务提醒", "需要确认或一轮完成时通知", activity.watching(), activity::toggleWatch);
         String remStatus = activity.reminderStatus();
         int remColor = "已开启".equals(remStatus) ? kit.goodInk() : "需授权".equals(remStatus) ? kit.BAD : kit.MUTED;
         kit.setting(preferences, R.drawable.ic_shield, kit.goodInk(), "提醒与权限", "通知、电池与后台联网", remStatus, remColor, activity::reminderSettings);
-        kit.setting(preferences, R.drawable.ic_palette, TINT_LOOK, "外观与文字", "主题、字号与终端阅读方式", activity.appearanceName(), kit.MUTED, activity::look);
+        kit.setting(preferences, R.drawable.ic_palette, kit.accentInk(), "外观与文字", "主题、字号与终端阅读方式", activity.appearanceName(), kit.MUTED, activity::look);
 
         LinearLayout updates = kit.settingGroup(page, "版本与更新");
-        kit.setting(updates, R.drawable.ic_update, TINT_AGY, "手机 App 更新", "检查手机安装包更新", "v" + activity.versionName(), kit.MUTED, activity::checkUpdate);
+        kit.setting(updates, R.drawable.ic_update, kit.toolBadgeFg("agy"), "手机 App 更新", "检查手机安装包更新", "v" + activity.versionName(), kit.MUTED, activity::checkUpdate);
         kit.settingSwitch(updates, R.drawable.ic_refresh, kit.MUTED, "自动检查手机更新", "发现新版时提示，安装前由你确认", activity.autoUpdate(), activity::toggleAutoUpdate);
         kit.settingSwitch(updates, R.drawable.ic_update, kit.MUTED, "接收预发布版本", "关闭时只接收正式版", activity.previewUpdates(), activity::togglePreviewUpdates);
     }

@@ -1,15 +1,30 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
 
 namespace RemoteCli {
 
+/// The saved conversations the organizer can read, and what of one is sent to a model.
 internal static class OrganizeHistory {
-    internal static Organizer.Source[] List(IDictionary<string, string> projects, IEnumerable<TerminalAgent.SessionInfo> visible, long since) {
+    /// What is sent of a conversation: its first request and its last few messages, within a fixed size.
+    internal const int FirstChars = 1500, RecentMessages = 6, MessageChars = 1200, MostChars = 6000;
+    /// A conversation with less said than this in all is not worth a request of its own.
+    internal const int ShortChars = 80;
+    /// Conversations a team's members and lead are given begin with this (Teams.cs).
+    internal const string TeamMark = "【协作任务";
+
+    internal sealed class Reading {
+        public string Context = "", Hash = "";
+        public bool Short, Team;
+    }
+
+    /// Conversations of the projects and of the visible folders outside them, written to since `since` (0: all).
+    /// `own` is the organizer's working folder: what a tool keeps of its requests there is never listed.
+    internal static Organizer.Source[] List(IDictionary<string, string> projects, IEnumerable<TerminalAgent.SessionInfo> visible, long since, string own = "") {
         var found = new List<Organizer.Source>();
         var outside = visible.Where(s => s.Dir.Length == 0 && s.Folder.Length > 0).ToArray();
         var folders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -17,13 +32,14 @@ internal static class OrganizeHistory {
         foreach (var s in outside) {
             if (!folders.ContainsKey(PathKey(s.Folder))) folders.Add(PathKey(s.Folder), "");
         }
+        if (!String.IsNullOrEmpty(own)) folders.Remove(PathKey(own));
         var named = CodexNames();
         string cp = Path.Combine(ClaudeSessions.Home, "projects");
         foreach (var folder in folders) {
             foreach (var file in Files(Path.Combine(cp, TerminalAgent.ProjectFolder(folder.Key)), "*.jsonl", SearchOption.TopDirectoryOnly)) {
                 string id = Path.GetFileNameWithoutExtension(file.Name);
                 if (!SessionLocks.IsUuid(id) || !Eligible(file, since) || (folder.Value.Length == 0 && !Visible(outside, "claude", id, folder.Key))) continue;
-                Add(found, file, "claude", id, folder.Value, folder.Key, "", since);
+                Add(found, file, "claude", id, folder.Value, folder.Key, "");
             }
         }
         foreach (var file in Files(Path.Combine(CodexSessions.Home, "sessions"), "rollout-*.jsonl", SearchOption.AllDirectories)) {
@@ -36,14 +52,14 @@ internal static class OrganizeHistory {
                 string folder = PathKey(Transcripts.JsonText(first, @"""cwd"":", false)), dir, title;
                 if (!folders.TryGetValue(folder, out dir) || (dir.Length == 0 && !Visible(outside, "codex", id, folder))) continue;
                 named.TryGetValue(id, out title);
-                Add(found, file, "codex", id, dir, folder, title ?? "", since, first);
+                Add(found, file, "codex", id, dir, folder, title ?? "");
             } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
         foreach (var item in Antigravity.Summaries(null, visible.Where(s => s.Tool == "agy" && s.Live).Select(s => s.Id), all: true)) {
             string folder = PathKey(item.Folder), dir;
             if (!folders.TryGetValue(folder, out dir) || (dir.Length == 0 && !Visible(outside, "agy", item.Id, folder))) continue;
             string path = Antigravity.TranscriptPath(item.Id);
-            if (path != null) Add(found, new FileInfo(path), "agy", item.Id, dir, folder, item.Title, since, named: item.Named);
+            if (path != null && Eligible(new FileInfo(path), since)) Add(found, new FileInfo(path), "agy", item.Id, dir, folder, item.Title, item.Named);
         }
         return found.GroupBy(s => s.Key).Select(g => g.OrderByDescending(s => s.Updated).First())
             .OrderByDescending(s => s.Updated).ThenBy(s => s.Key, StringComparer.Ordinal).ToArray();
@@ -91,50 +107,53 @@ internal static class OrganizeHistory {
         return names;
     }
 
-    static void Add(List<Organizer.Source> found, FileInfo file, string tool, string id, string dir, string folder, string title,
-            long since, string first = null, bool named = false) {
+    static void Add(List<Organizer.Source> found, FileInfo file, string tool, string id, string dir, string folder, string title, bool named = false) {
         try {
-            if (!Eligible(file, since)) return;
-            long created = Organizer.Now(file.CreationTimeUtc);
-            if (since > 0) {
-                if (created < since) return;
-                if (first == null) first = Transcripts.ReadPart(file.FullName, false, 64 * 1024).Split('\n')[0];
-                DateTime parsed;
-                if (DateTime.TryParse(Transcripts.JsonText(first, @"""timestamp"":", false), CultureInfo.InvariantCulture,
-                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out parsed))
-                    created = Math.Min(created, Organizer.Now(parsed));
-                if (created < since) return;
-            }
             if (tool == "codex") named = title.Length > 0;
             if (tool == "claude") title = Transcripts.ClaudeTitleOf(file.FullName, out named);
             if (title.Length == 0) title = Tool.Named(tool).Label + " 对话 " + file.CreationTime.ToString("MM-dd HH:mm");
             found.Add(new Organizer.Source { Tool = tool, Id = id, Dir = dir, Folder = folder, File = file.FullName,
-                Title = title, Named = named, Updated = Organizer.Now(file.LastWriteTimeUtc), Created = created });
+                Title = title, Named = named, Updated = Organizer.Now(file.LastWriteTimeUtc) });
         } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    internal static bool HasExchange(Organizer.Source source) {
-        try {
-            var messages = Messages(source);
-            return messages.Any(m => Organizer.Text(m, "role") == "user") && messages.Any(m => Organizer.Text(m, "role") == "assistant");
-        } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
-    }
-
-    internal static string Context(Organizer.Source source) {
+    /// What is sent of a conversation, and what decides whether it is sent at all. InvalidOperationException where
+    /// it has nothing its user said.
+    internal static Reading Read(Organizer.Source source) {
         var messages = Messages(source);
         if (!messages.Any(m => Organizer.Text(m, "role") == "user")) throw new InvalidOperationException("对话还没有可整理的用户消息");
-        int remaining = 18000;
-        var kept = new List<object>();
-        for (int i = messages.Length - 1; i >= 0 && remaining > 0; i--) {
+        var first = messages.First(m => Organizer.Text(m, "role") == "user");
+        int start = Math.Max(Array.IndexOf(messages, first) + 1, messages.Length - RecentMessages);
+        var kept = new List<object> { Part(first, FirstChars) };
+        if (start > Array.IndexOf(messages, first) + 1)
+            kept.Add(new { role = "note", text = "中间省略 " + (start - Array.IndexOf(messages, first) - 1) + " 条消息" });
+        int remaining = MostChars - FirstChars;
+        var recent = new List<object>();
+        for (int i = messages.Length - 1; i >= start && remaining > 0; i--) {
             string text = Organizer.Text(messages[i], "text");
-            int count = Math.Min(Math.Min(text.Length, 4000), remaining);
-            if (count > 0 && Char.IsHighSurrogate(text[count - 1])) count--;
+            int count = Math.Min(Math.Min(text.Length, MessageChars), remaining);
             if (count == 0) continue;
-            kept.Add(new { role = Organizer.Text(messages[i], "role"), text = text.Substring(0, count) });
+            recent.Add(Part(messages[i], count));
             remaining -= count;
         }
-        kept.Reverse();
-        return new JavaScriptSerializer().Serialize(kept);
+        recent.Reverse();
+        kept.AddRange(recent);
+        string context = new JavaScriptSerializer().Serialize(kept);
+        return new Reading {
+            Context = context, Hash = Hash(context),
+            Short = !messages.Any(m => Organizer.Text(m, "role") == "assistant") || messages.Sum(m => Organizer.Text(m, "text").Length) < ShortChars,
+            Team = Organizer.Text(first, "text").TrimStart().StartsWith(TeamMark, StringComparison.Ordinal)
+        };
+    }
+
+    static object Part(Dictionary<string, object> message, int most) {
+        string text = Organizer.Text(message, "text");
+        return new { role = Organizer.Text(message, "role"), text = OrganizeReply.Limit(text, Math.Min(text.Length, most)) };
+    }
+
+    static string Hash(string text) {
+        using (var sha = SHA256.Create())
+            return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text)), 0, 16).Replace("-", "").ToLowerInvariant();
     }
 
     static Dictionary<string, object>[] Messages(Organizer.Source source) {

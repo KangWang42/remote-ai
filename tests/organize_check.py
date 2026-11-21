@@ -44,7 +44,7 @@ def check_agent(agent, root):
     port = 0
     target = {"session": sid, "tool": "claude"}
 
-    def call(path, body=None):
+    def call(path, body=None, status=200):
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
         try:
             headers = dict(cookie, **{"Content-Type": "application/json"})
@@ -54,13 +54,13 @@ def check_agent(agent, root):
             if reply.getheader("Set-Cookie"):
                 cookie["Cookie"] = reply.getheader("Set-Cookie").split(";", 1)[0]
             text = reply.read()
-            assert reply.status == 200, (path, reply.status, text.decode("utf-8", "replace"))
+            assert reply.status == status, (path, reply.status, text.decode("utf-8", "replace"))
             return json.loads(text)
         finally:
             connection.close()
 
-    def operation(verb, **fields):
-        return call("/api/organize", {"id": secrets.token_hex(16), "verb": verb, **fields})
+    def operation(verb, status=200, **fields):
+        return call("/api/organize", {"id": secrets.token_hex(16), "verb": verb, **fields}, status)
 
     def connect(new_port):
         nonlocal port
@@ -133,6 +133,13 @@ def check_agent(agent, root):
         connect(second_line)
         assert overview(True)["title"] == original and selected()["follow_up"] is True
 
+        off = operation("status")
+        assert off["source"] == "off" and off["source_tool"] == "" and off["calls_today"] == 0, off
+        assert "已关闭" in operation("start", status=400, **target)["error"]
+        assert not gate.with_suffix(".started").exists()
+        chosen = operation("settings", source="tool", source_tool="codex")
+        assert chosen["source"] == "tool" and chosen["source_tool"] == "codex" and chosen["model"] == "gpt-6-luna", chosen
+        assert operation("count", scope="all")["needed"] == 0
         assert operation("start", **target)["queued"] == 1
         until(gate.with_suffix(".started").exists, bool, "model did not start")
         assert selected()["state"] == "running"
@@ -146,6 +153,9 @@ def check_agent(agent, root):
         completed = until(selected, lambda item: item["state"] != "running", "model did not finish")
         assert completed["state"] == "done" and completed["summary"] == "Agree on a seed collection date."
         assert completed["title"] == "Seed library plan" and completed["follow_up"] is False
+        assert operation("start", **target)["queued"] == 0
+        used = operation("status")
+        assert used["calls_today"] == 1 and used["tokens_today"] == 1234, used
         legacy = operation("edit", **target, title="Seed library next steps")["item"]
         assert legacy["title"] == "Seed library next steps" and legacy["follow_up"] is False
 
@@ -155,7 +165,7 @@ def check_agent(agent, root):
         stop(process)
         process = start_agent()
         assert overview(False)["title"] == original and selected()["follow_up"] is False
-        print("Windows EXE and two local relays passed: add, remove during a model turn, combined edit, legacy title-only edit, restart and relay switch")
+        print("Windows EXE and two local relays passed: off by default, source chosen through the relay, add, remove during a model turn, combined edit, unchanged not sent again, usage counted, legacy title-only edit, restart and relay switch")
     finally:
         for process in reversed(processes):
             stop(process)
@@ -173,7 +183,7 @@ def main():
     with TemporaryDirectory(prefix="remote-ai-organize-") as temp:
         exe = Path(temp) / "OrganizeCheck.exe"
         compile_check("OrganizeCheck", exe, [ROOT / "tests/OrganizeCheck.cs"])
-        subprocess.run([str(exe), temp, *(["live"] if args.live else [])], check=True, timeout=125)
+        subprocess.run([str(exe), temp, *(["live"] if args.live else [])], check=True, timeout=420 if args.live else 125)
 
 
 if __name__ == "__main__":

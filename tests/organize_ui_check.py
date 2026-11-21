@@ -16,6 +16,7 @@ class OrganizerComputer(pictures.Played):
         self.info["workspaces"].append("网络工具")
         self.model = "gpt-6-luna"
         self.auto = False
+        self.source, self.source_tool, self.api_url, self.api_key_set, self.calls = "off", "", "", False, 0
         self.turn = 0
         self.items = []
         for index in range(37):
@@ -51,8 +52,15 @@ class OrganizerComputer(pictures.Played):
         verb = op["verb"]
         items = [row for row in self.items if not op.get("session") or row["id"] == op["session"]]
         if verb == "settings":
+            self.source = op.get("source", self.source)
+            self.source_tool = op.get("source_tool", self.source_tool or "codex") if self.source == "tool" else ""
             self.model = op.get("model", self.model)
             self.auto = op.get("auto", self.auto)
+            self.api_url = op.get("api_url", self.api_url)
+            if "api_key" in op:
+                self.api_key_set = bool(op["api_key"])
+        if verb in ("start", "retry") and self.source == "off":
+            raise pictures.RemoteError("对话整理已关闭，请先在整理设置里选择来源")
         if verb in ("settings", "status"):
             counts = {state: sum(row["state"] == state for row in items) for state in ("queued", "running", "done", "failed")}
             if verb == "status" and any(row["state"] in ("queued", "running") for row in items):
@@ -62,8 +70,14 @@ class OrganizerComputer(pictures.Played):
                         continue
                     row["state"] = "running" if self.turn < 2 else self.outcome
                     row["error"] = "样例模型暂时不可用" if row["state"] == "failed" else ""
-            return dict(counts, auto=self.auto, model=self.model, default_model="gpt-6-luna", model_available=True,
-                        models=[{"id": "gpt-6-luna", "label": "GPT-6 Luna"}, {"id": "alternate", "label": "备用模型"}])
+            usage = {"calls_today": self.calls, **({"tokens_today": self.calls * 1862} if self.calls else {})}
+            on = self.source != "off"
+            listed = ([{"id": "gpt-6-luna", "label": "GPT-6 Luna"}, {"id": "alternate", "label": "备用模型"}] if self.source == "tool"
+                      else [{"id": self.model, "label": self.model}] if on else [])
+            return dict(counts, **usage, source=self.source, source_tool=self.source_tool, api_url=self.api_url,
+                        api_key_set=self.api_key_set, auto=self.auto,
+                        tools=[{"id": "codex", "label": "Codex"}, {"id": "claude", "label": "Claude Code"}],
+                        model=self.model if on else "", default_model="gpt-6-luna" if on else "", model_available=on, models=listed)
         if verb == "list":
             first, limit = op["offset"], op["limit"]
             return {"items": items[first:first + limit], "more": first + limit < len(items), "total": len(items)}
@@ -74,7 +88,11 @@ class OrganizerComputer(pictures.Played):
             if "follow_up" in op:
                 items[0]["follow_up"] = bool(op["follow_up"])
             return {"item": items[0]}
+        if verb == "count":
+            needed = sum(row["state"] == "pending" for row in items)
+            return {"needed": needed, "skipped": len(items) - needed, "total": len(items)}
         eligible = [row for row in items if row["state"] == ("pending" if verb == "start" else "failed")]
+        self.calls += len(eligible)
         for row in eligible:
             row["state"], row["error"] = "queued", ""
         self.turn, self.outcome = 0, "failed" if verb == "start" else "done"
@@ -182,9 +200,24 @@ def run(browser, computer, evidence):
     follow_ops = [op for op in computer.asked if op.get("action") == "session_organize" and op.get("verb") == "edit" and "follow_up" in op]
     assert follow_ops[-1]["follow_up"] is True and "title" not in follow_ops[-1], follow_ops[-1]
 
-    # Single-session organize, fail -> retry, rename
+    # Off by default: the single-session page says so and offers nothing that would call a model
     click("#results-list .organize-more")
     button("整理这段对话")
+    shown("整理已关闭")
+    assert not value("[...document.querySelectorAll('dialog[open] button')].some(b => ['整理这段', '整理全部'].includes(b.textContent.trim()))")
+    if evidence:
+        browser.picture(evidence / "organize-off-390.png")
+    button("选择整理来源")
+    until("!!document.querySelector('dialog[open] #organize-source-tool')", "来源选择")
+    assert value("document.querySelector('dialog[open] #organize-source-off').getAttribute('aria-checked')") == "true"
+    assert value("document.querySelector('dialog[open] #organize-auto').disabled")
+    click("dialog[open] #organize-source-tool")
+    until("document.querySelector('dialog[open] #organize-tool-codex')?.getAttribute('aria-checked') === 'true'", "选中 Codex")
+    until("document.querySelector('dialog[open] #organize-model')?.value === 'gpt-6-luna'", "默认最小模型")
+    click("dialog[open] .rs-back")
+    until("!document.querySelector('dialog[open] #organize-source-tool')", "回到这段对话")
+
+    # Single-session organize, fail -> retry, rename
     shown("未整理")
     button("整理这段")
     shown("样例模型暂时不可用")
@@ -210,36 +243,53 @@ def run(browser, computer, evidence):
     if evidence:
         browser.picture(evidence / "organize-390.png")
 
-    # Open settings subpage: default GPT-6 Luna, auto off -> switch model & turn auto on
+    # Settings: an API with address, model and key; the key is sent once and only "set" comes back
     click("dialog[open] #organize-settings")
     until("document.querySelector('dialog[open] #organize-model')?.value === 'gpt-6-luna'", "默认 Luna")
     assert value("document.querySelector('dialog[open] #organize-auto').getAttribute('aria-checked')") == "false"
     until("Math.abs((document.querySelector('dialog[open] .rs-page')?.getBoundingClientRect().left || 99) - 16) <= 4", "设置页滑入完成")
     if evidence:
         browser.picture(evidence / "organize-settings-390.png")
+    click("dialog[open] #organize-source-api")
+    until("!!document.querySelector('dialog[open] #organize-api-url')", "API 表单")
+    type_in("dialog[open] #organize-api-url", "https://api.example.test/v1")
+    type_in("dialog[open] #organize-api-model", "small-chat")
+    type_in("dialog[open] #organize-api-key", "sk-ui-check-1")
+    button("保存")
+    shown("已保存 API 设置")
+    until("document.querySelector('dialog[open] #organize-api-key')?.placeholder === '已设置' && !document.querySelector('dialog[open] #organize-api-key').value", "密钥只显示已设置")
+    sent = [op for op in computer.asked if op.get("verb") == "settings" and "api_key" in op][-1]
+    assert sent["source"] == "api" and sent["api_url"] == "https://api.example.test/v1" and sent["model"] == "small-chat", sent
+    if evidence:
+        browser.picture(evidence / "organize-settings-api-390.png")
     for width in (320, 390, 430):
         check_width(width, check_pane=True)
     browser.ask("Emulation.setDeviceMetricsOverride", **screen(390))
+    click("dialog[open] #organize-source-tool")
+    until("document.querySelector('dialog[open] #organize-tool-codex')?.getAttribute('aria-checked') === 'true'", "回到 Codex")
     type_in("dialog[open] #organize-model", "alternate", "change")
     shown("已保存设置")
     click("dialog[open] #organize-auto")
     until("document.querySelector('dialog[open] #organize-auto')?.getAttribute('aria-checked') === 'true'", "开启自动")
+    shown("今天")
+    if evidence:
+        browser.picture(evidence / "organize-settings-tool-390.png")
     click("dialog[open] .rs-back")
     until("!!document.querySelector('dialog[open] #organize-settings')", "返回整理主视图")
-    shown("备用模型 · 自动整理已开")
+    shown("Codex · 备用模型 · 自动整理")
 
     # Batch organize, retry failure, and batch skip when all are already done
-    button("整理全部可读对话")
-    shown("37 段可读对话")
-    button("开始整理")
+    button("整理全部")
+    shown("需要整理 1 段，调用 1 次")
+    shown("跳过 36 段")
+    button("整理 1 段")
     shown("已排队 1 段 · 跳过 36 段")
     button("重试失败记录")
     button("重试失败记录")
     shown("已整理 37 段")
     shown("全部可读对话已处理")
-    button("整理全部可读对话")
-    button("开始整理")
-    shown("已排队 0 段 · 跳过 37 段")
+    button("整理全部")
+    shown("没有需要整理的对话")
     for width in (320, 390, 430):
         check_width(width, check_pane=True)
         if evidence:
@@ -283,11 +333,13 @@ def run(browser, computer, evidence):
     until("window.__nativeReturned", "关闭后回原生工作台")
     assert value("window.__errors") == []
     asked = [op for op in computer.asked if op["action"] == "session_organize"]
-    assert {op["verb"] for op in asked} == {"status", "settings", "list", "start", "retry", "edit"}
+    assert {op["verb"] for op in asked} == {"status", "settings", "list", "count", "start", "retry", "edit"}
+    chosen = next(index for index, op in enumerate(asked) if op.get("source") == "tool")
+    assert not any(op["verb"] in ("start", "retry", "count") for op in asked[:chosen]), "a model could be called before a source was chosen"
     assert any(op.get("scope") == "all" for op in asked)
     assert any(op["verb"] == "edit" and op.get("follow_up") is False for op in asked)
     assert any(op["verb"] == "edit" and op.get("follow_up") is True for op in asked)
-    print("Organizer UI passed: first-screen follow-up, settings subpage, state progress, manual follow_up edit, reading return, batch skip, 16/17 project history, 320/390/430px.")
+    print("Organizer UI passed: off by default with nothing to send, source choice (tool, API with key shown as set), count before organizing all, first-screen follow-up, state progress, manual follow_up edit, reading return, 16/17 project history, 320/390/430px.")
 
 
 if __name__ == "__main__":

@@ -394,7 +394,7 @@
     return { title: '终端外观', build(p) {
       const skins = window.RemoteCliSkins, canFollow = !!(native && native.pref && native.setPref), follows = canFollow && !native.pref('termskin');
       const currentKey = store.get('skin', 'paper');
-      const list = Object.keys(skins).map(key => ({ key, name: skins[key].name, bg: skins[key].t.background, ink: skins[key].t.foreground, muted: skins[key].muted, accent: skins[key].accent, current: !follows && key === currentKey }));
+      const list = Object.keys(skins).map(key => { const k = skins[key]; return { key, name: k.name, bg: k.t.background, bubble: (k.chat && k.chat.userBg) || k.accentSoft, termBg: k.t.background, ink: k.t.foreground, muted: k.muted, accent: k.accent, current: !follows && key === currentKey }; });
       list.unshift({ key: 'auto', name: '跟随系统', follow: true, current: !follows && currentKey === 'auto' });
       if (canFollow) list.unshift({ key: 'app', name: '跟随 App', follow: true, current: follows });
       p.body.append(kit.swatches(list, key => {

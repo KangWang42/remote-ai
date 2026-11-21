@@ -981,13 +981,13 @@ final class Workbench {
         if (entry.team) {
             String teamPeek = !entry.said.isEmpty() ? entry.said : ("team-verify".equals(task.kind) ? "领队正在验收成员改动与结果" : "");
             if (!teamPeek.isEmpty()) {
-                TextView peek = kit.text(teamPeek, 12, confirm ? kit.BAD : Kit.light(kit.BG) ? 0xff6e4a12 : kit.BUSY);
+                TextView peek = kit.text(teamPeek, 12, confirm ? kit.BAD : kit.busyInk());
                 peek.setSingleLine(true);
                 peek.setEllipsize(android.text.TextUtils.TruncateAt.END);
                 strip.addView(peek, kit.below(6));
             }
         } else if (entry.terminal || entry.reached) {
-            TextView peek = kit.mono(entry.said, 12, confirm ? kit.BAD : Kit.light(kit.BG) ? 0xff6e4a12 : kit.BUSY);
+            TextView peek = kit.mono(entry.said, 12, confirm ? kit.BAD : kit.busyInk());
             peek.setSingleLine(true);
             peek.setEllipsize(android.text.TextUtils.TruncateAt.END);
             peek.setVisibility(entry.said.isEmpty() ? View.GONE : View.VISIBLE);
@@ -1081,7 +1081,9 @@ final class Workbench {
         row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
 
         boolean closing = ending.contains(task.url + '\n' + entry.id), organizer = canOrganize(task);
-        LinearLayout status = organizer ? texts : row;
+        // The state stays a compact tag at the right of the row: inside the text column a pill took the whole width
+        // and read as a bar under every conversation.
+        LinearLayout status = row;
         if (AggregateSessions.isPast(task.kind)) {
             String when = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
             String pastText = entry.team
@@ -1121,8 +1123,16 @@ final class Workbench {
             && java.util.Arrays.asList("codex", "claude", "agy").contains(task.entry.tool);
     }
 
+    /** A quiet "more" mark at the end of a row: an icon without a disc, so it does not compete with the state. */
     private View organizeMenu(AggregateSessions.Thing task) {
-        return kit.circleAction(R.drawable.ic_more, "对话操作：" + task.entry.shownTitle(), false, () -> manage(task));
+        android.widget.FrameLayout box = new android.widget.FrameLayout(activity);
+        box.addView(kit.icon(R.drawable.ic_more, kit.MUTED, 18), new android.widget.FrameLayout.LayoutParams(kit.dp(18), kit.dp(18), Gravity.CENTER));
+        box.setContentDescription("对话操作：" + task.entry.shownTitle());
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(kit.dp(32), kit.dp(44));
+        size.setMarginStart(kit.dp(2));
+        box.setLayoutParams(size);
+        kit.press(box, () -> manage(task));
+        return box;
     }
 
     private void openTask(AggregateSessions.Thing task) {

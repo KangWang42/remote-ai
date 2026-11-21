@@ -75,8 +75,8 @@
     autoButton.dataset.key = 'auto'; $('skins').append(autoButton);
     Object.keys(skins).forEach(key => {
       const s = skins[key], preview = el('i');
-      preview.style.background = s.t.background;
-      [[s.t.foreground, 22], [s.accent, 30], [s.t.green, 16], [s.t.yellow, 24], [s.t.red, 12]].forEach(([colour, height]) => { const bar = el('span'); bar.style.background = colour; bar.style.height = height + 'px'; preview.append(bar); });
+      preview.style.background = 'linear-gradient(135deg, ' + ((s.chat && s.chat.bg) || s.bg) + ' 52%, ' + s.t.background + ' 52%)';
+      [[(s.chat && s.chat.userBg) || s.accentSoft, 22], [s.accent, 30], [s.t.green, 16], [s.t.yellow, 24], [s.t.red, 14]].forEach(([colour, height]) => { const bar = el('span'); bar.style.background = colour; bar.style.height = height + 'px'; preview.append(bar); });
       const button = el('button', { type: 'button', onclick: () => { keep('skin', key); paint(); mark(); } }, preview, s.name + (s.light ? ' · 明亮' : ''));
       button.dataset.key = key; $('skins').append(button);
     });

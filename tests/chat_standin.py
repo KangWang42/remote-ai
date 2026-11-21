@@ -364,6 +364,8 @@ def organize():
             assert gate.exists(), "integration test did not release the model"
             text = json.dumps({"title": "Seed library", "summary": "Agree on a seed collection date.",
                                "tags": ["seeds"], "follow_up": True})
+            put({"method": "thread/tokenUsage/updated", "params": {"threadId": thread, "turnId": "turn-organize",
+                "tokenUsage": {"total": {"totalTokens": 1234, "inputTokens": 1200, "outputTokens": 34}}}})
             put({"method": "item/completed", "params": {"threadId": thread, "turnId": "turn-organize",
                 "item": {"type": "agentMessage", "text": text}}})
             put({"method": "turn/completed", "params": {"threadId": thread,

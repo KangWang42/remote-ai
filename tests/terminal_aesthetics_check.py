@@ -49,7 +49,9 @@ index_html = (ROOT / "web/index.html").read_text(encoding="utf-8")
 chat_html = (ROOT / "web/chat/index.html").read_text(encoding="utf-8")
 assert 'href="conversation.css"' in index_html and "interactive-widget=resizes-content" in index_html
 assert 'href="../conversation.css"' in chat_html
-assert ":is(#said, #sheet-form .said) .md" in conv_css
+assert ":is(#said, #sheet-form .said" in conv_css and ") .md" in conv_css
+assert "--chat-user-bg" in conv_css and "--chat-code-bg" in conv_css
+assert "--term-dock" in term_css and "--term-key-bg" in term_css
 assert "#said .step," in conv_css and "#sheet-form .said details.did" in conv_css
 assert "dialog.window .bar .head-dot" in conv_css
 
@@ -78,10 +80,22 @@ assert.equal(light.theme, 'light');
 assert.equal(light.vars['--bg'], '#f2f3f7');
 assert.equal(light.vars['--panel'], '#ffffff');
 assert.equal(light.vars['--term-bg'], '#fbfbfc');
+assert.equal(light.vars['--chat-bg'], '#ffffff');
+const dawn = (() => {
+  const vars = {};
+  const ctx = { URL, document: { currentScript: { src: 'https://local.invalid/terminal/skins.js' }, documentElement: { style: { setProperty(k, v) { vars[k] = v; } }, dataset: {} } }, matchMedia: () => ({ matches: false, addEventListener() {} }) };
+  ctx.window = ctx;
+  vm.runInNewContext(src, ctx);
+  ctx.window.RemoteCliPaint('dawn');
+  return vars;
+})();
+assert.notEqual(dawn['--accent-soft'], light.vars['--accent-soft']);
+assert.notEqual(dawn['--accent-ink'], light.vars['--accent-ink']);
 const dark = run(true);
 assert.equal(dark.resolved, 'night');
 assert.equal(dark.theme, 'dark');
 assert.equal(dark.vars['--bg'], '#1a1b26');
+assert.notEqual(dark.vars['--chat-code-bg'], dark.vars['--chat-bg']);
 """
     subprocess.run(["node", "-e", node_check], cwd=str(ROOT), check=True)
 

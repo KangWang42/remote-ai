@@ -321,8 +321,12 @@
     swatches(list, changed) {
       const box = el('div', { className: 'rs-swatches', role: 'group', ariaLabel: '外观' });
       list.forEach(s => {
-        const look = s.follow ? el('span', { className: 'look', textContent: 'App' })
-          : el('span', { className: 'look', style: 'background:' + s.bg }, el('i', { style: 'background:' + s.ink }), el('i', { style: 'background:' + s.muted }), el('i', { style: 'background:' + s.muted + ';opacity:.6' }), el('b', { style: 'background:' + s.accent }));
+        const look = s.follow ? el('span', { className: 'look', textContent: s.key === 'auto' ? '系统' : 'App' })
+          : el('span', { className: 'look', style: 'background:' + s.bg },
+              el('i', { style: 'background:' + (s.bubble || s.accent) }),
+              el('i', { style: 'background:' + s.ink + ';opacity:.78' }),
+              el('i', { style: 'background:' + s.muted + ';opacity:.58' }),
+              el('b', { style: 'background:' + s.accent }));
         box.append(el('button', { type: 'button', className: 'rs-swatch' + (s.follow ? ' follow' : ''), ariaPressed: String(!!s.current), dataValue: s.key, onclick: event => {
           box.querySelectorAll('.rs-swatch').forEach(one => one.setAttribute('aria-pressed', String(one === event.currentTarget)));
           changed(s.key);

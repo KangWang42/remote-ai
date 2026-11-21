@@ -73,9 +73,6 @@
   }
   paintFiles();
   if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(paintFiles);
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = skin.t.background;
-  if (native && native.chrome) native.chrome(skin.t.background);
   $('back').innerHTML = ICON.back; $('more').innerHTML = ICON.more;
 
   // ---- asking the computer
@@ -152,8 +149,21 @@
   const from = asked.get('from') === 'terminal' ? 'terminal' : '';
   const address = p => '?dir=' + encodeURIComponent(dir) + (from ? '&from=' + from : '') + (p.path ? '&path=' + encodeURIComponent(p.path) : '') + (p.file ? '&file=' + encodeURIComponent(p.file) : '');
   const join = (folder, name) => folder ? folder + '/' + name : name;
-  function go(next) { next.depth = ((history.state && history.state.depth) || 0) + 1; place = next; history.pushState(next, '', address(next)); scrollTo(0, 0); show(); }
-  window.addEventListener('popstate', event => { place = event.state || { path: asked.get('path') || '', file: asked.get('file') || '' }; show(); });
+  function go(next) {
+    const folderChanged = next.path !== place.path;
+    next.depth = ((history.state && history.state.depth) || 0) + 1;
+    place = next;
+    if (folderChanged) $('search').value = '';
+    history.pushState(next, '', address(next));
+    scrollTo(0, 0);
+    show();
+  }
+  window.addEventListener('popstate', event => {
+    const prevPath = place.path;
+    place = event.state || { path: asked.get('path') || '', file: asked.get('file') || '' };
+    if (place.path !== prevPath) $('search').value = '';
+    show();
+  });
   $('back').addEventListener('click', () => {
     if (history.state) return history.back();                                     // a step taken on this page
     if (place.file) return go({ path: place.path, file: '' });                   // a file opened by a link: its folder
@@ -166,6 +176,8 @@
     run++;
     $('download').hidden = !place.file;
     $('upload').hidden = !!place.file;
+    if ($('refresh')) $('refresh').hidden = !!place.file;
+    if (!saving && !uploading) $('transfer').hidden = true;
     $('problem').hidden = true; $('progress').hidden = true;
     for (const url of handed.splice(0)) URL.revokeObjectURL(url);
     if (place.file) showFile(run); else showFolder(run);
@@ -430,6 +442,7 @@
     if (native && !native.canUploadFiles) return toast('请先更新手机 App，再上传文件');
     pickedFolder = place.path; $('upload-input').value = ''; $('upload-input').click();
   };
+  if ($('refresh')) $('refresh').onclick = () => { folders.delete(place.path); show(); toast('正在刷新…'); };
   $('upload-input').onchange = async () => {
     const files = Array.from($('upload-input').files || []), folder = pickedFolder;
     if (!files.length || saving || uploading) return;

@@ -31,7 +31,7 @@
     const skin = window.RemoteCliPaint(saved('skin', 'paper'));
     Object.keys(READ).forEach(key => { const [choices, usual, name] = READ[key]; document.documentElement.style.setProperty(name, choices[saved(key, usual)] || choices[usual]); });
     document.documentElement.style.fontSize = TEXT[saved('text', 'normal')] || TEXT.normal;
-    const shade = skin.bg || skin.t.background;
+    const shade = (skin.chat && skin.chat.bg) || skin.bg || skin.t.background;
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.content = shade;
     if (native && native.chrome) native.chrome(shade);
@@ -380,7 +380,7 @@
   const work = RemoteWork.forPage('../', toast);
   const skinList = () => {
     const cur = saved('skin', 'paper');
-    const items = Object.keys(window.RemoteCliSkins).map(key => { const k = window.RemoteCliSkins[key]; return { key, name: k.name, bg: k.bg || k.t.background, ink: k.t.foreground, muted: k.muted, accent: k.accent, current: key === cur }; });
+    const items = Object.keys(window.RemoteCliSkins).map(key => { const k = window.RemoteCliSkins[key]; return { key, name: k.name, bg: (k.chat && k.chat.bg) || k.bg || k.t.background, bubble: (k.chat && k.chat.userBg) || k.accentSoft, termBg: k.t.background, ink: k.t.foreground, muted: k.muted, accent: k.accent, current: key === cur }; });
     items.unshift({ key: 'auto', name: '跟随系统', follow: true, current: cur === 'auto' });
     return items;
   };

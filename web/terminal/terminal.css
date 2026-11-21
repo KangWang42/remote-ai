@@ -81,19 +81,19 @@ header { contain: layout; }
 #palette p { margin: 0; padding: 10px 14px; font-size: 12.5px; color: var(--muted); }
 
 /* Unified bottom dock: key strip + composer grouped under one subtle surface. */
-.dock { background: var(--bg); box-shadow: inset 0 0.5px 0 var(--rim, var(--line)); }
+.dock { background: var(--term-dock, var(--bg)); box-shadow: inset 0 0.5px 0 var(--rim, var(--line)); }
 .keys { display: flex; align-items: center; gap: 5px; padding: 7px 10px 5px; overflow-x: auto; scrollbar-width: none; }
 .keys::-webkit-scrollbar { display: none; }
-.keys button { flex: 0 0 auto; min-width: 38px; height: 32px; padding: 0 10px; border-radius: 9px; background: var(--panel); color: var(--ink); font-family: "Terminal Mono", system-ui, monospace; font-size: 12px; font-weight: 500; white-space: nowrap; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; box-shadow: 0 1px 0 rgb(15 23 42 / .09), 0 0 0 0.5px var(--rim, var(--line)); transition: transform .08s ease, background .1s ease; }
-html[data-theme="dark"] .keys button { background: var(--raised); box-shadow: inset 0 0.5px 0 rgb(255 255 255 / .09), 0 1px 2px rgb(0 0 0 / .28); }
+.keys button { flex: 0 0 auto; min-width: 38px; height: 32px; padding: 0 10px; border-radius: 9px; background: var(--term-key-bg, var(--panel)); color: var(--ink); font-family: "Terminal Mono", system-ui, monospace; font-size: 12px; font-weight: 500; white-space: nowrap; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; box-shadow: 0 1px 0 rgb(15 23 42 / .09), 0 0 0 0.5px var(--term-key-border, var(--rim, var(--line))); transition: transform .08s ease, background .1s ease; }
+html[data-theme="dark"] .keys button { background: var(--term-key-bg, var(--raised)); box-shadow: inset 0 0.5px 0 rgb(255 255 255 / .09), 0 0 0 0.5px var(--term-key-border, var(--rim, var(--line))), 0 1px 2px rgb(0 0 0 / .28); }
 .keys button:active { background: var(--raised); transform: scale(.93); }
-html[data-theme="dark"] .keys button:active { background: color-mix(in srgb, var(--raised) 75%, var(--ink)); }
+html[data-theme="dark"] .keys button:active { background: color-mix(in srgb, var(--term-key-bg, var(--raised)) 75%, var(--ink)); }
 .keys button.danger-key { color: color-mix(in srgb, var(--bad, #f7768e) 88%, var(--ink)); }
 .key-sep { flex: none; width: 1px; height: 16px; margin: 0 2px; background: var(--rim, var(--line)); }
 
 /* Unified pill composer (matches chat & conversation composer language). */
 #composer { padding: 3px 10px max(10px, env(safe-area-inset-bottom)); }
-.composer-shell { display: flex; align-items: flex-end; gap: 4px; padding: 4px 5px 4px 6px; border-radius: 24px; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
+.composer-shell { display: flex; align-items: flex-end; gap: 4px; padding: 4px 5px 4px 6px; border-radius: 24px; background: var(--term-composer-bg, var(--panel)); border: 0.5px solid var(--term-key-border, var(--rim, var(--line))); box-shadow: var(--elevate); transition: border-color .15s, box-shadow .15s; }
 .composer-shell:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 #input { font: inherit; font-size: 15px; line-height: 22px; flex: 1; min-width: 0; min-height: 38px; height: 38px; max-height: 144px; resize: none; border: 0; border-radius: 16px; padding: 8px 8px; color: var(--ink); caret-color: var(--accent); background: transparent; overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; }
 #input:focus { outline: none; }
@@ -136,8 +136,8 @@ html[data-theme="dark"] .keys button:active { background: color-mix(in srgb, var
 .keys button.custom { border: 1px dashed color-mix(in srgb, var(--accent) 42%, var(--line)); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
 .keys button.custom-delete { min-width: 28px; padding: 0 6px; color: var(--bad, #f7768e); }
 /* 钉在滚动条右缘：条内静态键已超出一屏，滚动条又不可见，「＋」不钉住就无从发现。 */
-#key-add { position: sticky; right: 0; min-width: 34px; color: var(--muted); font-size: 15px; background: var(--panel); box-shadow: -14px 0 12px -2px var(--bg), 12px 0 0 0 var(--bg), 0 0 0 0.5px var(--rim, var(--line)); }
-html[data-theme="dark"] #key-add { background: var(--raised); box-shadow: -14px 0 12px -2px var(--bg), 12px 0 0 0 var(--bg), inset 0 0.5px 0 rgb(255 255 255 / .09); }
+#key-add { position: sticky; right: 0; min-width: 34px; color: var(--muted); font-size: 15px; background: var(--term-key-bg, var(--panel)); box-shadow: -14px 0 12px -2px var(--term-dock, var(--bg)), 12px 0 0 0 var(--term-dock, var(--bg)), 0 0 0 0.5px var(--term-key-border, var(--rim, var(--line))); }
+html[data-theme="dark"] #key-add { background: var(--term-key-bg, var(--raised)); box-shadow: -14px 0 12px -2px var(--term-dock, var(--bg)), 12px 0 0 0 var(--term-dock, var(--bg)), inset 0 0.5px 0 rgb(255 255 255 / .09); }
 #key-editor { display: grid; gap: 8px; margin: 4px 10px 6px; padding: 12px; background: var(--panel); border: 0.5px solid var(--rim, var(--line)); border-radius: 16px; box-shadow: var(--elevate); }
 #key-editor[hidden] { display: none; }
 .key-row { display: flex; gap: 6px; align-items: center; }

@@ -432,7 +432,8 @@ CHAT_ACTIONS = ("say", "stop", "answer", "close", "rename")
 CHAT_DECISIONS = re.compile(r"^(allow|always|deny|choice:[0-9]{1,2})$")
 # Conversation organization is a computer-side queue. The relay validates the
 # request and keeps the result only while the held request is waiting.
-ORGANIZE_VERBS = ("status", "settings", "list", "start", "retry", "edit")
+ORGANIZE_VERBS = ("status", "settings", "list", "count", "start", "retry", "edit")
+ORGANIZE_SOURCES = ("off", "tool", "api")
 ORGANIZE_TOOLS = ("claude", "codex", "agy")
 # By which way the computer does each thing to a conversation that a program there has open (docs/PROTOCOL.md):
 # its application's own channel, its tool's hooks, its tool's own way to one that sits idle; ending closes its program.
@@ -1218,6 +1219,24 @@ class Relay:
                 if type(payload.get("auto")) is not bool:
                     raise RemoteError("自动整理设置无效")
                 question["auto"] = payload["auto"]
+            if "source" in payload:
+                if payload["source"] not in ORGANIZE_SOURCES:
+                    raise RemoteError("整理来源无效")
+                question["source"] = payload["source"]
+            if "source_tool" in payload:
+                if payload["source_tool"] not in ORGANIZE_TOOLS:
+                    raise RemoteError("整理工具无效")
+                question["source_tool"] = payload["source_tool"]
+            if "api_url" in payload:
+                url = payload["api_url"]
+                if not isinstance(url, str) or len(url) > 300 or (url and not re.fullmatch(r"https?://[^\s?#]+", url.strip())):
+                    raise RemoteError("API 地址无效")
+                question["api_url"] = url.strip()
+            if "api_key" in payload:
+                key = payload["api_key"]
+                if not isinstance(key, str) or len(key) > 400 or any(c.isspace() or ord(c) < 32 for c in key.strip()):
+                    raise RemoteError("API 密钥格式无效")
+                question["api_key"] = key.strip()
         elif verb == "list":
             offset, limit = payload.get("offset", 0), payload.get("limit", 50)
             if type(offset) is not int or offset < 0:
@@ -1225,6 +1244,10 @@ class Relay:
             if type(limit) is not int or not 1 <= limit <= 120:
                 raise RemoteError("分页大小无效")
             question.update(offset=offset, limit=limit)
+        elif verb == "count":
+            if has_tool or payload.get("scope") != "all":
+                raise RemoteError("整理范围无效")
+            question["scope"] = "all"
         elif verb in ("start", "retry"):
             scope = payload.get("scope", "")
             if scope not in ("", "all") or (not has_tool and scope != "all"):

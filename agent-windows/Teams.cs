@@ -306,7 +306,7 @@ public sealed class Teams {
         { "agy", "若使用 Gemini，Neon 和 Carbon 适合复杂代码、界面和多份材料，Argon 兼顾推理与速度，Hydrogen 适合日常实现和检查" } };
     /// Whether any main quota window has reached 100%.
     public static bool IsExhausted(Quotas.Window[] windows) { return windows != null && windows.Any(w => Math.Round(w.Used) >= 100); }
-    static readonly Regex QuotaErrorPattern = new Regex(@"(hit your limit|rate[\s_-]*limit|usage[\s_-]*limit|quota|out of credits|credit balance|too many requests|\b429\b|overloaded|额度|限额|已达上限|额度用尽|额度已用完|额度用完)", RegexOptions.IgnoreCase);
+    static readonly Regex QuotaErrorPattern = new Regex(@"(hit your [\w\s-]{0,24}limit|rate[\s_-]*limit|usage[\s_-]*limit|quota|out of credits|credit balance|too many requests|\b429\b|overloaded|额度|限额|已达上限|额度用尽|额度已用完|额度用完)", RegexOptions.IgnoreCase);
     /// Whether a member's failure message indicates quota or rate-limit exhaustion.
     public static bool IsQuotaError(string text) { return !String.IsNullOrWhiteSpace(text) && QuotaErrorPattern.IsMatch(text); }
     /// A tool's limits in words for the leader; 80%+ is tight and 100% is exhausted.
@@ -709,6 +709,7 @@ public sealed class Teams {
         if (team.Spent) { Extend(team, ""); return; }
         lock (gate) {
             team.State = "running"; team.Note = "";
+            foreach (string role in team.Awaited) { team.Failed.Remove(role); team.Failed.Remove(ToolOf(team, role)); }
             again = team.Awaited.Select(role => new KeyValuePair<string, string>(role, team.Members.ContainsKey(role) ? team.Members[role] : null)).ToList();
             Save();
         }
@@ -752,7 +753,10 @@ public sealed class Teams {
                     else targets.AddRange(team.Awaited.Count > 0 ? team.Awaited : new List<string> { mode == "review" ? "writer" : mode == "lead" ? "leader" : team.Tools[0] });
                     foreach (string r in targets) if (!team.Awaited.Contains(r)) team.Awaited.Add(r);
                 }
-                if (state == "paused") { team.State = "running"; team.Note = ""; }
+                if (state == "paused") {
+                    team.State = "running"; team.Note = "";
+                    foreach (string r in targets) { team.Failed.Remove(r); team.Failed.Remove(ToolOf(team, r)); }
+                }
                 if (state == "running" && mode == "lead" && targets.Remove("leader")) {
                     team.LeaderInput = Cut(team.LeaderInput.Length == 0 ? text : team.LeaderInput + "\n" + text, 12000);
                     if (MembersWorking(team)) team.Awaited.Remove("leader");
@@ -776,7 +780,7 @@ public sealed class Teams {
                 team.Round++;
                 if (!team.Free && team.Round > team.Rounds) team.Rounds = Math.Min(MaxTotalRounds, team.Round + 2);
                 team.State = "running"; team.Note = ""; team.Phase = ""; team.Reminded = false; team.Last = false;
-                team.Awaited.Clear(); team.Answers.Clear();
+                team.Awaited.Clear(); team.Answers.Clear(); team.Failed.Clear();
                 Save();
             }
         }
@@ -887,6 +891,7 @@ public sealed class Teams {
             if (rosterMember != null) {
                 if (phase == "discuss" && resolved != "leader") {
                     resolved = "discuss:" + rosterMember.Role;
+                    team.Failed.Remove(resolved);
                     team.Members.TryGetValue(resolved, out oldTerminal);
                     team.Pending.TryGetValue(resolved, out pending);
                     wasActive = team.Awaited.Contains(resolved) || prevState != "running";
@@ -1096,6 +1101,8 @@ public sealed class Teams {
                 team.Members[role] = terminal;
                 if (!team.Opened.Contains(terminal)) team.Opened.Add(terminal);
                 team.Sessions.Remove(role);
+                team.Failed.Remove(role);
+                team.Failed.Remove(tool);
                 if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
                 opening--; Save(); Monitor.PulseAll(gate);
             }
@@ -1162,7 +1169,8 @@ public sealed class Teams {
         if (team.Mode == "compare") { Compared(team, role, how, said); return; }
         if (how == "done") {
             lock (gate) {
-                if (team.Failed.Remove(team.Roster.Length > 0 ? role : ToolOf(team, role))) Save();
+                bool cleared = team.Failed.Remove(role) | team.Failed.Remove(ToolOf(team, role));
+                if (cleared) Save();
             }
         } else if (how == "stopped") {
             lock (gate) { team.State = "paused"; team.Note = Label(ToolOf(team, role)) + " 这一轮被停止：点“继续”接着做，或点“换 AI 接手”"; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
@@ -1250,6 +1258,8 @@ public sealed class Teams {
             if (backup != null) {
                 lock (gate) {
                     PromoteLeader(team, backup);
+                    team.Failed.Remove("leader");
+                    team.Failed.Remove(backup);
                     team.Members.Remove("leader");
                     team.Awaited.Clear();
                     team.Awaited.Add("leader");
@@ -1276,6 +1286,8 @@ public sealed class Teams {
         if (replacement != null) {
             lock (gate) {
                 team.Tools[slot] = replacement;
+                team.Failed.Remove(role);
+                team.Failed.Remove(replacement);
                 team.Members.Remove(role);
                 team.Awaited.Clear();
                 team.Awaited.Add(role);
@@ -1340,7 +1352,7 @@ public sealed class Teams {
             if (writerFailed) {
                 string backup = FallbackTool(team, writerTool, team.Tools[1]);
                 if (backup != null) {
-                    lock (gate) { team.Tools[0] = backup; Save(); }
+                    lock (gate) { team.Tools[0] = backup; team.Failed.Remove("writer"); team.Failed.Remove(backup); Save(); }
                     Log(team, "切换", Label(writerTool) + " 讨论阶段不可用，写手已自动切换为 " + Label(backup));
                     writerTool = backup;
                 }
@@ -1352,7 +1364,7 @@ public sealed class Teams {
             if (leaderFailed) {
                 string backup = FallbackTool(team, leaderTool);
                 if (backup != null) {
-                    lock (gate) { PromoteLeader(team, backup); Save(); }
+                    lock (gate) { PromoteLeader(team, backup); team.Failed.Remove("leader"); team.Failed.Remove(backup); Save(); }
                     Log(team, "切换", Label(leaderTool) + " 不可用，领队已自动切换为 " + Label(backup));
                     leaderTool = backup;
                 }

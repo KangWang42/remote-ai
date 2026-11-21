@@ -820,18 +820,19 @@
       const waitingResume = isPaused && awaited;
       const asking = !!liveTerm && (page.phaseOf(liveTerm) === 'confirm' || !!liveTerm.ask);
       const askText = liveTerm ? (liveTerm.ask || (liveTerm.asks || []).join('\n') || (asking ? '需要你确认后才能继续' : '')) : '';
-      const failed = !!(team.failed && (team.failed[role] || team.failed[tool]));
+      const rawFailed = !!(team.failed && (team.failed[role] || team.failed[tool]));
+      const failed = rawFailed && !active;
       const canOpen = !!liveTerm || !!sessionRef || !!t;
       const route = liveTerm ? 'live' : sessionRef ? 'history' : t ? 'terminal' : 'none';
       let statusText = '待开始', statusTone = 'idle';
       if (asking) { statusText = '等你确认'; statusTone = 'ask'; }
-      else if (failed) { statusText = '已中断'; statusTone = 'fail'; }
       else if (active) {
         statusText = team.phase === 'discuss' ? '讨论中' : '进行中';
         if (role === 'leader' && team.phase === 'verify') statusText = '验收中';
         if (role === 'leader' && team.phase === 'decision') statusText = phaseLabel(team.phase);
         statusTone = 'busy';
       }
+      else if (failed) { statusText = '已中断'; statusTone = 'fail'; }
       else if (waitingResume) { statusText = '待继续'; statusTone = 'pause'; }
       else if (liveTerm) { statusText = '当前对话'; statusTone = 'live'; }
       else if (sessionRef) { statusText = '查看历史'; statusTone = 'hist'; }
@@ -932,8 +933,16 @@
     }
 
     function buildStageSteps(team) {
-      const stepNode = (text, cls) => el('span', { className: 'team-step' + (cls ? ' ' + cls : ''), textContent: text });
-      const sep = () => el('span', { className: 'team-step-sep', ariaHidden: 'true', textContent: '→' });
+      const renderTrack = (roundTag, stages, ariaLabel) => {
+        const list = el('ol', { className: 'team-pipeline' }, ...stages.map(([label, state], idx) =>
+          el('li', { className: 'team-stage' + (state ? ' ' + state : '') },
+            el('span', { className: 'stage-node', ariaHidden: 'true', textContent: state === 'done' ? '✓' : state === 'fail' ? '!' : String(idx + 1) }),
+            el('span', { className: 'stage-label team-step' + (state ? ' ' + state : ''), textContent: label }))
+        ));
+        return el('div', { className: 'team-round-steps', id: 'team-round-steps', ariaLabel },
+          el('div', { className: 'team-round-meta' }, el('span', { className: 'team-round-tag', textContent: roundTag })),
+          list);
+      };
       const round = team.round || 1, flex = isFlexRounds(team), rounds = roundsOf(team);
       const finalRound = !!team.last || (!flex && round >= rounds);
       const awaited = team.awaited || [];
@@ -963,12 +972,12 @@
           discussState = assignState = 'done';
         }
         const roundTag = (flex ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + rounds + ' 轮') + (finalRound ? ' · 末轮' : '');
-        const nodes = [el('span', { className: 'team-round-tag', textContent: roundTag })];
-        if (hasDiscuss) nodes.push(stepNode(phaseLabel('discuss'), discussState), sep());
-        nodes.push(stepNode('派工', assignState), sep(), stepNode('执行成员', workState), sep());
-        if (decisionState) nodes.push(stepNode(phaseLabel('decision'), decisionState), sep());
-        nodes.push(stepNode(verifyState === 'fail' ? '验收未通过' : phaseLabel('verify'), verifyState));
-        return el('div', { className: 'team-round-steps', id: 'team-round-steps', ariaLabel: '本轮进度' }, ...nodes);
+        const stages = [];
+        if (hasDiscuss) stages.push([phaseLabel('discuss'), discussState]);
+        stages.push(['领队派工', assignState], ['成员执行', workState]);
+        if (decisionState) stages.push([phaseLabel('decision'), decisionState]);
+        stages.push([verifyState === 'fail' ? '验收未通过' : phaseLabel('verify'), verifyState]);
+        return renderTrack(roundTag, stages, '本轮进度');
       }
       if (team.mode === 'review') {
         const hasDiscuss = !!team.discuss || team.phase === 'discuss';
@@ -985,20 +994,20 @@
         } else if (team.state === 'paused') {
           discussState = 'done'; writeState = 'pause';
         }
-        const nodes = [el('span', { className: 'team-round-tag', textContent: '第 ' + round + ' / ' + rounds + ' 轮' })];
-        if (hasDiscuss) nodes.push(stepNode(phaseLabel('discuss'), discussState), sep());
-        nodes.push(stepNode('写手实现', writeState), sep(), stepNode('只读审查', reviewState), sep(), stepNode('审查通过', passState));
-        return el('div', { className: 'team-round-steps', id: 'team-round-steps', ariaLabel: '本轮进度' }, ...nodes);
+        const stages = [];
+        if (hasDiscuss) stages.push([phaseLabel('discuss'), discussState]);
+        stages.push(['写手实现', writeState], ['只读审查', reviewState], ['审查通过', passState]);
+        return renderTrack('第 ' + round + ' / ' + rounds + ' 轮', stages, '本轮进度');
       }
       if (team.mode === 'compare') {
         const runState = team.state === 'running' ? 'active' : team.state === 'failed' ? 'fail' : 'done';
         const pickState = team.state === 'choose' ? 'active' : team.state === 'done' ? 'done' : '';
         const endState = team.state === 'done' ? 'done' : '';
-        return el('div', { className: 'team-round-steps', id: 'team-round-steps', ariaLabel: '比稿进度' },
-          el('span', { className: 'team-round-tag', textContent: '并行比稿' }),
-          stepNode('独立实现', runState), sep(),
-          stepNode('对比选稿', pickState), sep(),
-          stepNode(team.picked ? '已采纳' : '已结束', endState));
+        return renderTrack('并行比稿', [
+          ['独立实现', runState],
+          ['对比选稿', pickState],
+          [team.picked ? '已采纳' : '已结束', endState]
+        ], '比稿进度');
       }
       return null;
     }
@@ -1009,7 +1018,7 @@
       if (distBottom < 48) unreadLogs = 0;
       const showNew = unreadLogs > 0 && distBottom >= 48;
       jumpBtn.hidden = !showNew;
-      if (showNew) jumpBtn.textContent = unreadLogs > 1 ? unreadLogs + ' 条新记录 ↓' : '有新记录 ↓';
+      if (showNew) jumpBtn.textContent = unreadLogs > 1 ? unreadLogs + ' 条新记录' : '有新记录';
     }
 
     function scrollToLatest(smooth) {
@@ -1144,8 +1153,7 @@
               el('span', { className: 'name', textContent: roleName(team, info.role) }),
               tags.length ? el('span', { className: 'member-tags' }, ...tags) : ''),
             el('span', { className: 'member-tail' },
-              el('small', { className: 'status-tag ' + info.statusTone, textContent: info.statusText }),
-              info.canOpen ? el('span', { className: 'member-chev', ariaHidden: 'true', html: page.ICON.chev }) : ''));
+              el('small', { className: 'status-tag ' + info.statusTone, textContent: info.statusText })));
         });
         overviewParts.push(el('section', { className: 'team-members-wrap', ariaLabel: '成员状态' },
           el('div', { className: 'team-subhead' },
@@ -1224,7 +1232,7 @@
         compareBox.replaceChildren();
       }
 
-      // Unified chronological activity stream (oldest -> newest) with incremental DOM reuse
+      // Structured collaboration workflow timeline (oldest -> newest) with incremental DOM reuse
       const log = team.log || [];
       const tailSig = log.length ? (log[log.length - 1].at + ':' + log[log.length - 1].who + ':' + (log[log.length - 1].text || '').length) : '';
       let addedLogs = 0;
@@ -1235,12 +1243,72 @@
       lastLogCount = log.length;
       lastLogTail = tailSig;
 
+      const memberByRole = new Map(memberInfos.map(info => [info.role, info]));
+      const parseAssignments = text => {
+        const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+        const prose = [], assigns = [];
+        const headRe = /^[\s>*\-_`]*ASSIGN[*_`]*[ \t]+[*_`]*(claude|codex|agy|member-[123])(?:[ \t]+(claude|codex|agy))?[*_`]*[ \t]*[:：][ \t]*(.+)$/i;
+        let current = null;
+        for (const line of lines) {
+          const m = headRe.exec(line);
+          if (m) {
+            current = { role: m[1].toLowerCase(), tool: (m[2] || '').toLowerCase(), lines: [m[3].trim()] };
+            assigns.push(current);
+          } else if (current && /^[\s>*\-_`]*(DONE|VERIFIED)[*_`]*\s*[:：]/i.test(line)) {
+            current = null;
+            prose.push(line);
+          } else if (current) {
+            current.lines.push(line);
+          } else {
+            prose.push(line);
+          }
+        }
+        return {
+          prose: prose.join('\n').trim(),
+          assigns: assigns.map(a => ({ role: a.role, tool: a.tool, body: a.lines.join('\n').trim() }))
+        };
+      };
+      const isSystemPulse = step => {
+        const t = String(step.text || '').trim();
+        return (t.startsWith('开始：') || t.startsWith('收到：')) && step.who !== 'user' && step.who !== '目标' && step.who !== '结果' && step.who !== '切换' && step.who !== '验收';
+      };
+      const classifyStep = (step, parsed) => {
+        if (step.who === '目标') return { kind: 'goal', tag: '协作目标', stage: '任务起点' };
+        if (step.who === '切换') return { kind: 'switch', tag: '流程切换', stage: '' };
+        if (step.who === '验收') return { kind: 'verify', tag: '验收依据', stage: '领队验收' };
+        if (step.who === '结果') return { kind: 'outcome', tag: '最终结论', stage: '协作完成' };
+        if (step.who === 'user') return { kind: 'mine', tag: '你的补充', stage: '' };
+        if (isSystemPulse(step)) {
+          const isRecv = String(step.text || '').trim().startsWith('收到：');
+          return { kind: 'event', tag: isRecv ? '收到指令' : '已派发任务', stage: '' };
+        }
+        if (step.who.startsWith('discuss:')) return { kind: 'discuss', tag: '方案讨论', stage: '方案讨论' };
+        if (step.who === 'leader') {
+          if (/^[\s>*\-_`]*(VERIFIED|DONE)[*_`]*\s*[:：]/im.test(step.text || '')) return { kind: 'verify', tag: '验收结论', stage: '领队验收' };
+          if (parsed.assigns.length) return { kind: 'dispatch', tag: '领队派工', stage: '分工派发' };
+          return { kind: 'lead', tag: '领队回复', stage: '' };
+        }
+        if (step.who === 'writer') return { kind: 'work', tag: '写手交付', stage: '写手实现' };
+        if (step.who === 'reviewer') return { kind: 'review', tag: '审阅意见', stage: '只读审查' };
+        if (team.mode === 'compare') return { kind: 'work', tag: '候选方案', stage: '独立实现' };
+        return { kind: 'work', tag: '成员交付', stage: '成员执行' };
+      };
+
+      const flowKeyCount = log.filter(s => !isSystemPulse(s)).length;
+      if (!currentTeam._flowMode) currentTeam._flowMode = 'all';
+      const flowMode = currentTeam._flowMode;
+
       activityBox.hidden = !log.length;
       if (log.length) {
+        const showFilter = log.length > flowKeyCount && flowKeyCount > 0;
+        const filterGroup = showFilter ? el('div', { className: 'team-flow-tabs', role: 'group', ariaLabel: '记录视图' },
+          el('button', { type: 'button', className: 'team-flow-tab' + (flowMode === 'key' ? ' on' : ''), ariaPressed: String(flowMode === 'key'), textContent: '流程视图', onclick: () => { currentTeam._flowMode = 'key'; renderStream('preserve'); } }),
+          el('button', { type: 'button', className: 'team-flow-tab' + (flowMode === 'all' ? ' on' : ''), ariaPressed: String(flowMode === 'all'), textContent: '全部 ' + log.length, onclick: () => { currentTeam._flowMode = 'all'; renderStream('preserve'); } })) : '';
         activityHead.replaceChildren(
-          el('h3', { textContent: '活动记录' }),
-          el('span', { className: 'team-activity-count', textContent: log.length + ' 条' }),
-          log.length >= 3 ? el('button', { type: 'button', className: 'team-to-latest', textContent: '最新 ↓', onclick: () => scrollToLatest(true) }) : ''
+          el('h3', { textContent: '协作流程' }),
+          !showFilter ? el('span', { className: 'team-activity-count', textContent: log.length + ' 步' }) : '',
+          filterGroup,
+          log.length >= 3 ? el('button', { type: 'button', className: 'team-to-latest', textContent: '跳到最新', onclick: () => scrollToLatest(true) }) : ''
         );
 
         const existing = new Map();
@@ -1248,44 +1316,112 @@
           if (node.dataset && node.dataset.msgKey) existing.set(node.dataset.msgKey, node);
         });
         const occ = new Map();
-        const nextNodes = log.map(step => {
+        let roundSeen = 0, lastStage = '';
+        const nextNodes = [];
+        for (const step of log) {
           const isUser = step.who === 'user', isMeta = step.who === '目标' || step.who === '结果' || step.who === '切换' || step.who === '验收';
           const tool = isUser ? 'user' : isMeta ? '' : toolOf(team, step.who);
           const baseKey = step.at + ':' + step.who;
           const seq = occ.get(baseKey) || 0;
           occ.set(baseKey, seq + 1);
           const key = baseKey + ':' + seq;
-          const long = (step.text || '').length > 420 || (step.text || '').split('\n').length > 10;
-          const open = !long || expanded.has(key);
+          const parsed = step.who === 'leader' ? parseAssignments(step.text) : { prose: step.text || '', assigns: [] };
+          const meta = classifyStep(step, parsed);
+          if (flowMode === 'key' && meta.kind === 'event') continue;
+
+          // Infer round heading when a new dispatch/write cycle begins
+          let stageBanner = '';
+          if (meta.kind === 'dispatch' || (meta.kind === 'work' && step.who === 'writer')) {
+            roundSeen++;
+            stageBanner = '第 ' + roundSeen + ' 轮 · ' + meta.stage;
+          } else if (meta.stage && meta.stage !== lastStage && meta.kind !== 'goal') {
+            stageBanner = meta.stage;
+          }
+          if (meta.stage) lastStage = meta.stage;
+
+          const bodyText = meta.kind === 'dispatch' ? parsed.prose : (step.text || '');
+          const compactEvent = meta.kind === 'event';
+          const long = !compactEvent && (bodyText.length > 420 || bodyText.split('\n').length > 10);
+          const open = compactEvent ? expanded.has(key) : (!long || expanded.has(key));
           const stepModel = (!isUser && !isMeta && showModels) ? modelOf(team, step.who) : '';
           const stepEffort = (!isUser && !isMeta && showEfforts) ? effortOf(team, step.who) : '';
           const agoText = page.ago(step.at);
           const labelText = roleName(team, step.who);
-          const useMarkdown = !isUser && step.who !== '目标' && step.who !== '切换';
+          const memberLink = !isUser && !isMeta ? memberByRole.get(step.who) : null;
+          const canJumpMember = !!(memberLink && memberLink.canOpen);
+          const useMarkdown = !isUser && !compactEvent && step.who !== '目标' && step.who !== '切换';
           const richNow = useMarkdown && isRichReady();
-          const sig = JSON.stringify([labelText, tool, stepModel ? modelLabel(tool, stepModel) : '', stepEffort ? effortLabel(stepEffort) : '', agoText, step.text || '', open, long, richNow]);
+          const sig = JSON.stringify([meta.kind, meta.tag, stageBanner, labelText, tool, stepModel ? modelLabel(tool, stepModel) : '', stepEffort ? effortLabel(stepEffort) : '', agoText, step.text || '', open, long, richNow, canJumpMember]);
           const reused = existing.get(key);
-          if (reused && reused.dataset.msgSig === sig) return reused;
-          const bodyNode = useMarkdown
-            ? renderRichBody(step.text, 'body' + (open ? '' : ' clamp'))
-            : el('p', { className: 'body' + (open ? '' : ' clamp'), textContent: step.text });
-          const toggleBtn = long ? el('button', {
-            type: 'button', className: 'more-btn', textContent: open ? '收起' : '展开全文',
-            onclick: () => { if (expanded.has(key)) expanded.delete(key); else expanded.add(key); renderStream('preserve'); }
-          }) : '';
-          const li = el('li', { className: 'team-msg' + (isUser ? ' mine' : isMeta ? ' meta' : '') },
-            el('div', { className: 'head' },
-              !isMeta ? el('span', { className: 'badge ' + (isUser ? 'n-me' : tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }) : '',
-              el('b', { textContent: labelText }),
-              stepModel ? el('span', { className: 'model', textContent: modelLabel(tool, stepModel) }) : '',
-              stepEffort ? el('span', { className: 'effort', textContent: '思考 · ' + effortLabel(stepEffort) }) : '',
-              el('span', { className: 'at', textContent: agoText })),
-            bodyNode,
-            toggleBtn);
+          if (reused && reused.dataset.msgSig === sig) { nextNodes.push(reused); continue; }
+
+          if (meta.kind === 'switch') {
+            const li = el('li', { className: 'team-msg switch' },
+              el('span', { className: 'switch-dot', ariaHidden: 'true' }),
+              el('span', { className: 'switch-text', textContent: step.text || '' }),
+              el('span', { className: 'at', textContent: agoText }));
+            li.dataset.msgKey = key; li.dataset.msgSig = sig;
+            nextNodes.push(li);
+            continue;
+          }
+
+          if (compactEvent) {
+            const summaryLine = String(step.text || '').replace(/^(开始|收到)：\s*/, '').replace(/\s+/g, ' ').trim();
+            const li = el('li', { className: 'team-msg compact' + (open ? ' expanded' : '') },
+              el('button', {
+                type: 'button', className: 'compact-row',
+                onclick: () => { if (expanded.has(key)) expanded.delete(key); else expanded.add(key); renderStream('preserve'); }
+              },
+                el('span', { className: 'badge ' + (tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }),
+                el('span', { className: 'compact-who', textContent: labelText }),
+                el('span', { className: 'action-tag subtle', textContent: meta.tag }),
+                el('span', { className: 'compact-preview', textContent: summaryLine }),
+                el('span', { className: 'at', textContent: agoText })),
+              open ? el('p', { className: 'body compact-full', textContent: step.text }) : '');
+            li.dataset.msgKey = key; li.dataset.msgSig = sig;
+            nextNodes.push(li);
+            continue;
+          }
+
+          const contentNodes = [];
+          if (stageBanner) contentNodes.push(el('div', { className: 'team-stage-pill', textContent: stageBanner }));
+          contentNodes.push(el('div', { className: 'head' },
+            !isMeta ? el('span', { className: 'badge ' + (isUser ? 'n-me' : tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }) : '',
+            el('b', { textContent: labelText }),
+            el('span', { className: 'action-tag kind-' + meta.kind, textContent: meta.tag }),
+            stepModel ? el('span', { className: 'model', textContent: modelLabel(tool, stepModel) }) : '',
+            stepEffort ? el('span', { className: 'effort', textContent: '思考 · ' + effortLabel(stepEffort) }) : '',
+            canJumpMember ? el('button', { type: 'button', className: 'team-msg-open', textContent: '查看对话', onclick: () => openMember(memberLink) }) : '',
+            el('span', { className: 'at', textContent: agoText })));
+
+          if (bodyText) {
+            contentNodes.push(useMarkdown
+              ? renderRichBody(bodyText, 'body' + (open ? '' : ' clamp'))
+              : el('p', { className: 'body' + (open ? '' : ' clamp'), textContent: bodyText }));
+          }
+          if (parsed.assigns.length) {
+            contentNodes.push(el('div', { className: 'team-assign-list' }, ...parsed.assigns.map(item => {
+              const targetTool = item.tool || toolOf(team, item.role);
+              const targetTitle = roleTitle(item.role) ? roleTitle(item.role) + (targetTool ? ' · ' + (TOOLS[targetTool] || targetTool) : '') : (TOOLS[targetTool] || item.role);
+              return el('div', { className: 'team-assign-card' },
+                el('div', { className: 'team-assign-head' },
+                  el('span', { className: 'badge ' + (targetTool === 'claude' ? 'n-cc' : targetTool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[targetTool] || 'AI' }),
+                  el('b', { textContent: targetTitle }),
+                  el('span', { className: 'action-tag kind-dispatch', textContent: '分派任务' })),
+                useMarkdown ? renderRichBody(item.body, 'team-assign-body') : el('p', { className: 'team-assign-body', textContent: item.body }));
+            })));
+          }
+          if (long) {
+            contentNodes.push(el('button', {
+              type: 'button', className: 'more-btn', textContent: open ? '收起' : '展开全文',
+              onclick: () => { if (expanded.has(key)) expanded.delete(key); else expanded.add(key); renderStream('preserve'); }
+            }));
+          }
+          const li = el('li', { className: 'team-msg kind-' + meta.kind + (isUser ? ' mine' : isMeta ? ' meta' : '') }, ...contentNodes);
           li.dataset.msgKey = key;
           li.dataset.msgSig = sig;
-          return li;
-        });
+          nextNodes.push(li);
+        }
 
         let cursor = streamList.firstChild;
         for (const node of nextNodes) {
@@ -1612,7 +1748,7 @@
       streamList = el('ol', { className: 'team-stream', id: 'team-stream' });
       activityBox = el('section', { className: 'team-activity', ariaLabel: '活动记录', hidden: true }, activityHead, streamList);
       jumpBtn = el('button', { type: 'button', id: 'team-jump-latest', className: 'team-jump-latest', hidden: true, onclick: () => scrollToLatest(true) });
-      streamBox = el('div', { className: 'team-view' }, overviewBox, compareBox, activityBox, jumpBtn);
+      streamBox = el('div', { className: 'team-view' }, overviewBox, el('div', { className: 'team-main' }, compareBox, activityBox, jumpBtn));
       p.body.append(streamBox);
       footBox = p.foot;
       const initialMode = builtOnce ? 'preserve' : 'top';

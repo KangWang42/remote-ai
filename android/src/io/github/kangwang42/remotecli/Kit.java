@@ -47,6 +47,7 @@ final class Kit {
     static final int PAPER = 0xfff2f3f7;
     private final Activity activity;
     int BG, PANEL, RAISED, LINE, INK, MUTED, ACCENT, ON_ACCENT, GOOD, BUSY, BAD;
+    private int SUB, CARD_BORDER, DIVIDER, ACCENT_SOFT, ACCENT_INK, BUSY_SOFT, BUSY_INK, BUSY_DOT, GOOD_SOFT, GOOD_INK, GOOD_DOT, BAD_SOFT;
 
     Kit(Activity activity) { this.activity = activity; }
 
@@ -58,29 +59,34 @@ final class Kit {
         BG = 0xff000000 | skin[0]; PANEL = 0xff000000 | skin[1]; RAISED = 0xff000000 | skin[2]; LINE = 0xff000000 | skin[3];
         INK = 0xff000000 | skin[4]; MUTED = 0xff000000 | skin[5]; ACCENT = 0xff000000 | skin[6]; ON_ACCENT = 0xff000000 | skin[7];
         GOOD = 0xff000000 | skin[8]; BUSY = 0xff000000 | skin[9]; BAD = 0xff000000 | skin[10];
+        SUB = 0xff000000 | skin[11]; CARD_BORDER = 0xff000000 | skin[12]; DIVIDER = 0xff000000 | skin[13];
+        ACCENT_SOFT = 0xff000000 | skin[14]; ACCENT_INK = 0xff000000 | skin[15];
+        BUSY_SOFT = 0xff000000 | skin[16]; BUSY_INK = 0xff000000 | skin[17]; BUSY_DOT = 0xff000000 | skin[18];
+        GOOD_SOFT = 0xff000000 | skin[19]; GOOD_INK = 0xff000000 | skin[20]; GOOD_DOT = 0xff000000 | skin[21];
+        BAD_SOFT = 0xff000000 | skin[22];
     }
 
-    // ---- Semantic design tokens derived from the active skin
+    // ---- Semantic design tokens derived directly from the active skin (no hardcoded light theme bleed)
     int solidInk() { return ACCENT; }
     int onSolidInk() { return ON_ACCENT; }
     int heroBg() { return PANEL; }
-    int heroTintBg() { return light(BG) ? mix(ACCENT, PANEL, .06f) : PANEL; }
-    int heroBorder() { return light(BG) ? mix(ACCENT, cardBorder(), .20f) : LINE; }
+    int heroTintBg() { return mix(ACCENT, PANEL, light(BG) ? .06f : .07f); }
+    int heroBorder() { return mix(ACCENT, CARD_BORDER, light(BG) ? .20f : .24f); }
     int heroFg() { return INK; }
     int heroMuted() { return MUTED; }
     int heroChipBg() { return RAISED; }
-    int cardBorder() { return light(BG) ? 0xffe9ebef : LINE; }
-    int dividerColor() { return light(BG) ? 0xffeef0f3 : rim(); }
-    int subSurface() { return light(BG) ? 0xfff6f7f9 : BG; }
-    int accentSoft() { return light(BG) ? 0xffeef1ff : tint(ACCENT, 40); }
-    int accentInk() { return light(BG) ? 0xff2445c8 : ACCENT; }
-    int busySoft() { return light(BG) ? 0xfffff7ea : tint(BUSY, 34); }
-    int busyInk() { return light(BG) ? 0xff8a4b00 : BUSY; }
-    int busyDot() { return light(BG) ? 0xfff59e0b : BUSY; }
-    int goodSoft() { return light(BG) ? 0xffdcfce7 : tint(GOOD, 36); }
-    int goodInk() { return light(BG) ? 0xff15803d : GOOD; }
-    int goodDot() { return light(BG) ? 0xff16a34a : GOOD; }
-    int badSoft() { return light(BG) ? 0xfffdedec : tint(BAD, 34); }
+    int cardBorder() { return CARD_BORDER; }
+    int dividerColor() { return DIVIDER; }
+    int subSurface() { return SUB; }
+    int accentSoft() { return ACCENT_SOFT; }
+    int accentInk() { return ACCENT_INK; }
+    int busySoft() { return BUSY_SOFT; }
+    int busyInk() { return BUSY_INK; }
+    int busyDot() { return BUSY_DOT; }
+    int goodSoft() { return GOOD_SOFT; }
+    int goodInk() { return GOOD_INK; }
+    int goodDot() { return GOOD_DOT; }
+    int badSoft() { return BAD_SOFT; }
 
     static String toolMono(String tool) {
         if ("agy".equals(tool)) return "AG";
@@ -118,15 +124,15 @@ final class Kit {
     int dp(float value) { return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, activity.getResources().getDisplayMetrics())); }
     /** Crisp 0.5dp hairline divider/stroke on high-DPI displays. */
     int hairline() { return Math.max(1, Math.round(activity.getResources().getDisplayMetrics().density * 0.5f)); }
-    /** Subtle surface rim: whisper-soft dark edge on light canvas, faint highlight on dark canvas. */
-    int rim() { return light(BG) ? tint(0xff0e1116, 18) : tint(0xffffffff, 20); }
+    /** Subtle surface rim derived from the active skin's ink, avoiding cold shadows on warm skins. */
+    int rim() { return light(BG) ? tint(INK, 18) : tint(0xffffffff, 20); }
     /** Soft elevation for cards on light themes; flat layered contrast on dark themes. */
     void elevate(View view, float depthDp) {
         if (!light(BG)) { view.setElevation(0); return; }
         view.setElevation(dp(depthDp));
         if (Build.VERSION.SDK_INT >= 28) {
-            view.setOutlineAmbientShadowColor(0x100e1116);
-            view.setOutlineSpotShadowColor(0x1c0e1116);
+            view.setOutlineAmbientShadowColor(tint(INK, 16));
+            view.setOutlineSpotShadowColor(tint(INK, 26));
         }
     }
     void haptic(View view, int kind) { if (view != null) view.performHapticFeedback(kind); }

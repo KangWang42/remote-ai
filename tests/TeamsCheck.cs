@@ -879,6 +879,19 @@ public static class TeamsCheck {
             var swapped = failTeams.Swap(sw, "writer", "agy", "顺便把暗色模式也调一下");
             Require(stopped.Contains(swOld) && swapped.State == "running" && swapped.Tools[0] == "agy" && Last(swapped.Members["writer"]).Contains("暗色模式也调一下") && swapped.Log.Any(s => s.Who == "切换"), "manual swap stops old terminal and launches chosen AI with note");
 
+            // 5b) Claude 5-hour quota failure + failover to agy clears leader/agy failed state so UI does not stay "已中断"
+            Require(Teams.IsQuotaError("You've hit your 5-hour limit · resets 8pm (Asia/Shanghai)"), "5-hour limit counts as quota error");
+            string qf = "1919191919191919";
+            var qfPreset = Lead(qf, new object[] { "claude", "codex" }, 2);
+            qfPreset["roster"] = new[] { Member("leader", "claude"), Member("member-1", "agy") };
+            failTeams.Start(qfPreset);
+            string qfLeader = Team(failTeams, qf).Members["leader"];
+            failTeams.Turned(qfLeader, "failed", "You've hit your 5-hour limit · resets 8pm (Asia/Shanghai)");
+            var qft = Team(failTeams, qf);
+            Require(qft.State == "running" && qft.Roster[0].Tool == "agy" && qft.Awaited.SequenceEqual(new[] { "leader" })
+                && !qft.Failed.ContainsKey("leader") && !qft.Failed.ContainsKey("agy") && qft.Failed.ContainsKey("claude"),
+                "auto-promoted agy leader clears leader/agy failure while marking claude exhausted");
+
             // 5) Paused team + Say targeting leader clears stale failed member from Awaited so next round does not hang
             string ps = "1818181818181818";
             var noBackup = new Teams(null, new Teams.Hands { Begin = Hands().Begin, Say = Hands().Say, Stop = Hands().Stop, Changes = d => "" });

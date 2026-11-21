@@ -6,6 +6,10 @@
   const request = (verb, fields) => page.api('api/organize', { id: page.newId(), verb, ...fields });
   const targetOf = item => ({ session: item.id, tool: item.tool });
   const keyOf = item => item.tool + ':' + (item.session || item.id);
+  const toolNames = { codex: 'Codex', claude: 'Claude Code', agy: 'Antigravity CLI' };
+  // an older computer reports no source: it organizes with Codex whenever asked
+  const sourceOf = status => status?.source || 'tool';
+  const isOff = status => sourceOf(status) === 'off';
   const gearIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.8"/><circle cx="12" cy="12" r="6.3"/><circle cx="12" cy="12" r="8.4" stroke-width="2.4" stroke-linecap="butt" stroke-dasharray="2.64 3.957"/></svg>';
 
   function open(options = {}) {
@@ -56,7 +60,7 @@
       } finally {
         if (!poll) { busy = false; paintAll(); }
       }
-      if (!sheet.gone && status && (status.queued || status.running || status.auto)) {
+      if (!sheet.gone && status && !isOff(status) && (status.queued || status.running || status.auto)) {
         timer = setTimeout(() => load(true), status.queued || status.running ? 2000 : 5000);
       }
     }
@@ -66,7 +70,7 @@
       busy = true; error = ''; message = ''; paintAll();
       try {
         const answer = await request(verb, fields);
-        if (verb === 'start' || verb === 'retry') message = `已排队 ${answer.queued || 0} 段 · 跳过 ${answer.skipped || 0} 段`;
+        if (verb === 'start' || verb === 'retry') message = answer.queued ? `已排队 ${answer.queued} 段` + (answer.skipped ? ` · 跳过 ${answer.skipped} 段` : '') : '内容没有变化，无需整理';
         if (verb === 'settings') message = '已保存设置';
         if (verb === 'edit') {
           if ('follow_up' in fields && !('title' in fields)) message = fields.follow_up ? '已加入待跟进' : '已移出待跟进';
@@ -92,8 +96,15 @@
       return found ? (found.label || found.id) : (status.model || '');
     }
 
+    function sourceLabel() {
+      if (!status || isOff(status)) return '';
+      const where = sourceOf(status) === 'api' ? 'API' : toolNames[status.source_tool] || (status.source ? '' : 'Codex');
+      return [where, modelLabel()].filter(Boolean).join(' · ');
+    }
+
     function statusSummary() {
       if (!status) return { tone: 'idle', headline: '正在读取整理状态…', detail: computer, percent: null };
+      if (isOff(status)) return { tone: 'off', headline: '整理已关闭', detail: computer, percent: null };
       if (selected) {
         const one = items[0];
         if (!one) return { tone: 'idle', headline: '暂无可整理记录', detail: computer, percent: null };
@@ -151,31 +162,81 @@
         return;
       }
       const focus = document.activeElement?.id;
-      const model = el('select', { id: 'organize-model', className: 'organize-select', ariaLabel: '整理模型', disabled: busy });
-      if (!status.model_available) model.append(el('option', { value: status.model, textContent: status.model + ' · 当前不可用' }));
-      for (const choice of status.models || []) model.append(el('option', { value: choice.id, textContent: choice.label || choice.id }));
-      model.value = status.model;
-      model.onchange = () => change('settings', { model: model.value });
-
-      const toggle = ui.toggle(status.auto, auto => change('settings', { auto }), '自动整理');
-      toggle.id = 'organize-auto';
-      toggle.disabled = busy || (!status.auto && !status.model_available);
-
-      const defaultChoice = (status.models || []).find(c => c.id === status.default_model);
-      const defaultName = defaultChoice ? (defaultChoice.label || defaultChoice.id) : (status.default_model || 'GPT-6 Luna');
-
-      box.replaceChildren(
+      const tools = status.tools || [];
+      // the API form is shown on choosing it; the source changes when the form is saved
+      const shown = settingsView.source || sourceOf(status);
+      const pick = source => {
+        settingsView.source = source;
+        message = ''; error = '';
+        if (source === 'off') change('settings', { source: 'off' });
+        else if (source === 'tool') change('settings', { source: 'tool', source_tool: status.source_tool || tools[0].id });
+        else paintSettings();
+      };
+      const sourceRow = (value, label, disabled) => ui.row({ label, checked: shown === value, disabled: busy || disabled, id: 'organize-source-' + value, act: () => pick(value) });
+      const parts = [
         ui.note(computer),
-        ui.section('模型', ui.group(
-          ui.row({ label: '整理模型', detail: '用于生成标题、摘要与待跟进标记', wrap: true, end: model })
-        ), `默认使用 ${defaultName}；更改后用于新的整理任务。`),
-        !status.model_available ? ui.summary('这台电脑暂时无法使用所选模型，请切换为可用模型。', 'bad', 'stop') : '',
-        ui.section('自动化', ui.group(
-          ui.row({ label: '自动整理', detail: '开启后自动整理新增对话，已整理的不重复处理', wrap: true, end: toggle })
-        )),
-        message ? el('p', { className: 'organize-banner', role: 'status', textContent: message }) : '',
-        error ? el('div', { className: 'organize-banner bad', role: 'alert' }, el('span', { textContent: error })) : ''
-      );
+        ui.section('来源', ui.group(
+          sourceRow('off', '关闭'),
+          sourceRow('tool', '电脑上的 AI 工具', !tools.length),
+          sourceRow('api', '兼容 OpenAI 的 API')
+        ), !tools.length ? '这台电脑没有可用的 Codex、Claude Code 或 Antigravity CLI。' : '')
+      ];
+
+      if (shown === 'tool' && sourceOf(status) === 'tool') {
+        const model = el('select', { id: 'organize-model', className: 'organize-select', ariaLabel: '整理模型', disabled: busy });
+        if (!status.model_available && status.model) model.append(el('option', { value: status.model, textContent: status.model + ' · 当前不可用' }));
+        for (const choice of status.models || []) model.append(el('option', { value: choice.id, textContent: (choice.label || choice.id) + (choice.id === status.default_model ? ' · 默认' : '') }));
+        model.value = status.model;
+        model.onchange = () => change('settings', { model: model.value });
+        parts.push(ui.section('工具', ui.group(
+          ...tools.map(tool => ui.row({ label: tool.label || toolNames[tool.id] || tool.id, checked: status.source_tool === tool.id, disabled: busy,
+            id: 'organize-tool-' + tool.id, act: () => change('settings', { source: 'tool', source_tool: tool.id }) })),
+          ui.row({ label: '模型', wrap: true, end: model })
+        )));
+      }
+
+      if (shown === 'api') {
+        const url = ui.input({ id: 'organize-api-url', label: 'API 地址', value: status.api_url || '', placeholder: 'https://api.example.com/v1', max: 300 });
+        url.type = 'url';
+        url.inputMode = 'url';
+        const name = ui.input({ id: 'organize-api-model', label: '模型', value: sourceOf(status) === 'api' ? status.model || '' : '', placeholder: '模型名称', max: 80 });
+        const key = ui.input({ id: 'organize-api-key', label: 'API 密钥', placeholder: status.api_key_set ? '已设置' : 'API 密钥', max: 400 });
+        key.type = 'password';
+        const save = ui.go('保存', async () => {
+          const fields = { source: 'api', api_url: url.value.trim(), model: name.value.trim() };
+          if (!fields.api_url) throw new Error('请填写 API 地址');
+          if (!fields.model) throw new Error('请填写模型名称');
+          if (key.value.trim()) fields.api_key = key.value.trim();
+          if (!await change('settings', fields)) throw new Error(error);
+          message = '已保存 API 设置';
+          paintSettings();
+        }, { busy: '正在保存…', id: 'organize-api-save' });
+        parts.push(ui.section('API', el('div', { className: 'organize-api' },
+          el('label', { className: 'organize-field' }, el('span', { textContent: '地址' }), url),
+          el('label', { className: 'organize-field' }, el('span', { textContent: '模型' }), name),
+          el('label', { className: 'organize-field' }, el('span', { textContent: '密钥' }), key),
+          ...save.nodes
+        ), '密钥只保存在这台电脑上。'));
+        if (status.api_key_set) parts.push(ui.group(ui.row({ label: '清除密钥', danger: true, disabled: busy, act: () => change('settings', { api_key: '' }) })));
+      }
+
+      const off = isOff(status);
+      const toggle = ui.toggle(status.auto && !off, auto => change('settings', { auto }), '自动整理');
+      toggle.id = 'organize-auto';
+      toggle.disabled = busy || off || (!status.auto && !status.model_available);
+      parts.push(ui.section('自动整理', ui.group(
+        ui.row({ label: '自动整理', detail: '对话停下 10 分钟后，整理内容有变化的', wrap: true, end: toggle })
+      )));
+      if (!off && status.calls_today !== undefined) {
+        parts.push(ui.section('今天', ui.group(
+          ui.row({ label: '调用', value: `${status.calls_today || 0} 次` }),
+          status.tokens_today ? ui.row({ label: 'Token', value: status.tokens_today.toLocaleString('zh-CN') }) : ''
+        )));
+      }
+      if (!off && !status.model_available && sourceOf(status) === 'tool') parts.push(ui.summary('这台电脑暂时无法使用所选模型，请换一个。', 'bad', 'stop'));
+      if (message) parts.push(el('p', { className: 'organize-banner', role: 'status', textContent: message }));
+      if (error) parts.push(el('div', { className: 'organize-banner bad', role: 'alert' }, el('span', { textContent: error })));
+      box.replaceChildren(...parts.filter(Boolean));
       if (focus) [...box.querySelectorAll('[id]')].find(node => node.id === focus)?.focus({ preventScroll: true });
     }
 
@@ -196,16 +257,33 @@
       } });
     }
 
-    function confirmScope(verb, fields, count) {
-      const description = count === undefined
-        ? '重试这台电脑上整理失败的对话。'
-        : `检查这台电脑的 ${count} 段可读对话，已整理过的会自动跳过。`;
-      view.sheet.push({ title: verb === 'retry' ? '重试失败记录' : '整理这台电脑的对话', build(p) {
-        p.body.append(ui.note(computer), ui.summary(description, '', 'spark'));
-        p.foot.append(...ui.go(verb === 'retry' ? '重试失败记录' : '开始整理', async () => {
-          if (await change(verb, fields)) p.sheet.goBack();
+    function confirmRetry() {
+      view.sheet.push({ title: '重试失败记录', build(p) {
+        p.body.append(ui.note(computer), ui.summary(`重试 ${status.failed} 段整理失败的对话。`, '', 'spark'));
+        p.foot.append(...ui.go('重试失败记录', async () => {
+          if (await change('retry', { scope: 'all' })) p.sheet.goBack();
           else throw new Error(error);
         }, { busy: '正在提交…' }).nodes);
+      } });
+    }
+
+    // "all" says first how many it would send, and sends them only once that is confirmed
+    async function confirmAll() {
+      clearTimeout(timer);
+      busy = true; error = ''; message = ''; paintAll();
+      let count;
+      try { count = await request('count', { scope: 'all' }); }
+      catch (problem) { error = problem.message; }
+      busy = false; paintAll();
+      if (!count) return;
+      if (!count.needed) { message = '没有需要整理的对话'; paintAll(); return; }
+      view.sheet.push({ title: '整理这台电脑的对话', build(p) {
+        p.body.append(ui.note(computer), ui.summary(`需要整理 ${count.needed} 段，调用 ${count.needed} 次。`, '', 'spark'),
+          count.skipped ? ui.note(`跳过 ${count.skipped} 段：内容没有变化、太短或属于协作任务。`) : '');
+        p.foot.append(...ui.go(`整理 ${count.needed} 段`, async () => {
+          if (await change('start', { scope: 'all' })) p.sheet.goBack();
+          else throw new Error(error);
+        }, { busy: '正在提交…', id: 'organize-confirm' }).nodes);
       } });
     }
 
@@ -226,14 +304,16 @@
       const session = !selected ? findSession(item) : null;
       const badges = el('span', { className: 'organize-row-badges' });
       if (item.follow_up) badges.append(el('span', { className: 'organize-badge follow', textContent: '待跟进' }));
-      if (item.state && item.state !== 'done') {
+      if (item.state && item.state !== 'done' && !(item.state === 'pending' && isOff(status))) {
         badges.append(el('span', { className: 'organize-badge state-' + item.state, textContent: labels[item.state] || item.state }));
       }
 
       const actions = el('div', { className: 'organize-row-actions' });
       if (session) actions.append(actionBtn('查看对话', () => openItem(item), { primary: !!item.follow_up }));
-      if (item.state === 'pending') actions.append(actionBtn('整理这段', () => change('start', targetOf(item)), { primary: !session, disabled: !status.model_available }));
-      if (item.state === 'failed') actions.append(actionBtn('重试这段', () => change('retry', targetOf(item)), { danger: true, disabled: !status.model_available }));
+      if (!isOff(status)) {
+        if (item.state === 'pending') actions.append(actionBtn('整理这段', () => change('start', targetOf(item)), { primary: !session, disabled: !status.model_available }));
+        if (item.state === 'failed') actions.append(actionBtn('重试这段', () => change('retry', targetOf(item)), { danger: true, disabled: !status.model_available }));
+      }
       actions.append(actionBtn(item.follow_up ? '移出待跟进' : '加入待跟进', () => change('edit', { ...targetOf(item), follow_up: !item.follow_up })));
       actions.append(actionBtn('编辑名称', () => edit(item)));
 
@@ -279,13 +359,16 @@
         ariaLabel: '整理设置', disabled: busy, onclick: openSettings
       }, el('span', { html: gearIcon }), el('span', { textContent: '设置' }));
 
-      const metaText = [computer, modelLabel(), status.auto ? '自动整理已开' : '手动整理'].filter(Boolean).join(' · ');
+      const off = isOff(status);
+      const metaText = off ? '' : [computer, sourceLabel(), status.auto ? '自动整理' : ''].filter(Boolean).join(' · ');
       const headChildren = [
         el('div', { className: 'organize-head-top' }, statusBlock, settingsBtn),
         info.percent !== null ? el('div', { className: 'organize-bar', ariaHidden: 'true' }, el('i', { style: 'width:' + Math.max(4, info.percent) + '%' })) : '',
-        el('p', { className: 'organize-meta', textContent: metaText })
+        metaText ? el('p', { className: 'organize-meta', textContent: metaText }) : ''
       ];
-      if (!status.model_available) {
+      if (off) {
+        headChildren.push(actionBtn('选择整理来源', openSettings, { primary: true }));
+      } else if (!status.model_available) {
         headChildren.push(el('div', { className: 'organize-warn' },
           el('span', { textContent: '所选模型当前不可用' }),
           actionBtn('更换模型', openSettings)
@@ -294,7 +377,7 @@
       const headCard = el('div', { className: 'organize-head' }, ...headChildren);
 
       const batchBar = el('div', { className: 'organize-actions' });
-      if (!selected) {
+      if (!selected && !off) {
         if (filtered.length) {
           batchBar.append(actionBtn(`整理当前筛选的 ${filtered.length} 段`, async () => {
             busy = true; error = ''; message = ''; paintAll();
@@ -311,12 +394,12 @@
           }, { primary: true, disabled: !status.model_available }));
         }
         const pendingCount = Math.max(0, total - (status.queued || 0) - (status.running || 0) - (status.done || 0) - (status.failed || 0));
-        batchBar.append(actionBtn('整理全部可读对话', () => confirmScope('start', { scope: 'all' }, total), {
+        batchBar.append(actionBtn('整理全部', confirmAll, {
           primary: !filtered.length && pendingCount > 0,
           disabled: !total || !status.model_available
         }));
         if (status.failed > 0) {
-          batchBar.append(actionBtn('重试失败记录', () => confirmScope('retry', { scope: 'all' }), {
+          batchBar.append(actionBtn('重试失败记录', confirmRetry, {
             danger: true,
             disabled: !status.model_available
           }));
@@ -331,10 +414,10 @@
       if (scopeFilter === 'failed' && !failedItems.length) scopeFilter = 'all';
 
       let filterBar = '';
-      if (!selected && items.length && (followItems.length || pendingItems.length || failedItems.length)) {
+      if (!selected && items.length && (followItems.length || (pendingItems.length && !off) || failedItems.length)) {
         const tabs = [['all', `全部 ${total || items.length}`]];
         if (followItems.length) tabs.push(['follow', `待跟进 ${followItems.length}`]);
-        if (pendingItems.length) tabs.push(['pending', `待整理 ${pendingItems.length}`]);
+        if (pendingItems.length && !off) tabs.push(['pending', `待整理 ${pendingItems.length}`]);
         if (failedItems.length) tabs.push(['failed', `失败 ${failedItems.length}`]);
         filterBar = el('div', { className: 'organize-tabs', role: 'group', ariaLabel: '筛选对话' },
           ...tabs.map(([key, text]) => el('button', {

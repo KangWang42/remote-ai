@@ -8,9 +8,10 @@
 #where { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .note { color: var(--muted); font-size: .86rem; text-align: center; margin: 18px 8px; }
 .tick { margin-left: auto; font-style: normal; font-weight: 700; color: var(--accent); }
-#file-actions { display: flex; gap: 10px; margin: 4px 0 12px; }
-#file-actions button, #transfer-cancel { min-height: 44px; padding: 0 16px; border: 1px solid var(--line); color: var(--accent); }
-#transfer { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+#file-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
+#file-actions button, #transfer-cancel { min-height: 40px; padding: 0 14px; border: 1px solid var(--card-border, var(--line)); border-radius: 12px; background: var(--panel); color: var(--accent-ink, var(--accent)); font-size: .86rem; font-weight: 600; }
+#file-actions #refresh { color: var(--muted); }
+#transfer { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--card-border, var(--line)); border-radius: 14px; background: var(--panel); box-shadow: var(--elevate, none); }
 #transfer-text { overflow-wrap: anywhere; margin: 0 0 8px; font-size: .9rem; }
 #transfer-bar { display: block; width: 100%; height: 8px; accent-color: var(--accent); margin-bottom: 8px; }
 

@@ -174,6 +174,37 @@ class OrganizeRelayTests(unittest.TestCase):
         with self.assertRaises(relay.RemoteError):
             self.relay.organize({"id": "f" * 32, "verb": "start", "scope": "all", "tool": "codex", "session": "bad"}, now=1001)
 
+    def test_source_settings_and_count_are_passed_on(self):
+        request = {"id": "1" * 32, "verb": "settings", "source": "api", "api_url": " https://api.example.test/v1 ",
+                   "api_key": "sk-test-123", "model": "small-model", "auto": False}
+        operation, result = self.answer(request, {"source": "api", "api_key_set": True})
+        self.assertEqual({key: operation[key] for key in ("source", "api_url", "api_key", "model", "auto")},
+                         {"source": "api", "api_url": "https://api.example.test/v1", "api_key": "sk-test-123",
+                          "model": "small-model", "auto": False})
+        self.assertEqual(result, {"source": "api", "api_key_set": True})
+        operation, _ = self.answer({"id": "2" * 32, "verb": "settings", "source": "tool", "source_tool": "claude"}, {})
+        self.assertEqual((operation["source"], operation["source_tool"]), ("tool", "claude"))
+        operation, result = self.answer({"id": "3" * 32, "verb": "count", "scope": "all"}, {"needed": 2, "skipped": 5, "total": 7})
+        self.assertEqual((operation["verb"], operation["scope"]), ("count", "all"))
+        self.assertEqual(result["needed"], 2)
+
+    def test_invalid_source_settings_are_refused(self):
+        base = {"id": "a" * 32, "verb": "settings"}
+        for change in (
+            {"source": "cloud"},
+            {"source_tool": "vim"},
+            {"api_url": "ftp://example.test"},
+            {"api_url": "https://example.test/v1?key=1"},
+            {"api_url": 7},
+            {"api_key": "two words"},
+            {"api_key": "x" * 401},
+        ):
+            with self.subTest(change=change), self.assertRaises(relay.RemoteError):
+                self.relay.organize(dict(base, **change), now=1001)
+        for change in ({}, {"scope": "one"}, {"scope": "all", "tool": "codex", "session": session_id(3)}):
+            with self.subTest(change=change), self.assertRaises(relay.RemoteError):
+                self.relay.organize(dict({"id": "b" * 32, "verb": "count"}, **change), now=1001)
+
 
 if __name__ == "__main__":
     unittest.main()

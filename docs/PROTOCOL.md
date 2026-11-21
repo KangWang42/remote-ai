@@ -452,12 +452,18 @@ the tool shows its own question and takes what is typed.
 The computer advertises the optional `organize` capability in `info.features`. A signed-in viewer calls
 `POST /api/organize`; the relay validates the request, holds it on the same asynchronous operation path as
 `/api/conversation`, and sends `session_organize` to the computer. The computer owns the conversation catalog, queue,
-Codex model selection and generated metadata. A request keeps its `id` when retried, and the relay returns the
-computer's result or its error.
+source and model selection, daily usage counts and generated metadata. A request keeps its `id` when retried, and the
+relay returns the computer's result or its error.
+
+Organization starts disabled (`source: "off"`) and makes no model calls until the owner chooses either a local tool
+(`source: "tool"`, with `source_tool` in `codex`, `claude` or `agy`) or an OpenAI-compatible HTTP endpoint
+(`source: "api"`, with `api_url`, `model` and optional `api_key`). API keys are stored protected on the computer and
+are never returned; `status` and `settings` report only `api_key_set`.
 
 The identity of one conversation is always the pair `tool` and `session`. Windows organization currently accepts
-`claude`, `codex` and `agy` UUID sessions. `start` and `retry` can target that pair or use `scope: "all"`. A
-`list` request is independently paged with `offset` and `limit`, up to 120 rows per response. This paging is not the
+`claude`, `codex` and `agy` UUID sessions. `start` and `retry` can target that pair or use `scope: "all"`; `count`
+uses `scope: "all"` to preview how many conversations would be queued or skipped before starting a batch. A `list`
+request is independently paged with `offset` and `limit`, up to 120 rows per response. This paging is not the
 overview's historical-session limit, so a computer with more than 120 saved conversations is read page by page.
 
 The request verbs and representative responses are:
@@ -466,17 +472,29 @@ The request verbs and representative responses are:
 POST /api/organize
 {"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90","verb":"status"}
 
-{"auto":false,"model":"gpt-6-luna","default_model":"gpt-6-luna",
+{"source":"tool","source_tool":"codex","api_url":"","api_key_set":false,"auto":false,
+ "tools":[{"id":"codex","label":"Codex"},{"id":"claude","label":"Claude Code"}],
+ "model":"gpt-6-luna","default_model":"gpt-6-luna",
  "models":[{"id":"gpt-6-luna","label":"GPT-6 Luna","is_default":true}],
- "model_available":true,"queued":0,"running":0,"done":12,"failed":1}
+ "model_available":true,"calls_today":2,"tokens_today":3724,
+ "queued":0,"running":0,"done":12,"failed":1}
 ```
 
 ```json
-{"id":"...","verb":"settings","model":"gpt-6-luna","auto":true}
+{"id":"...","verb":"settings","source":"tool","source_tool":"codex","model":"gpt-6-luna","auto":true}
+{"id":"...","verb":"settings","source":"api","api_url":"https://api.example.com/v1","model":"small-chat","api_key":"sk-..."}
+{"id":"...","verb":"settings","source":"off"}
 
-{"auto":true,"model":"gpt-6-luna","default_model":"gpt-6-luna",
+{"source":"tool","source_tool":"codex","api_url":"","api_key_set":false,"auto":true,
+ "tools":[{"id":"codex","label":"Codex"}],
+ "model":"gpt-6-luna","default_model":"gpt-6-luna",
  "models":[{"id":"gpt-6-luna","label":"GPT-6 Luna","is_default":true}],
- "model_available":true,"queued":0,"running":1,"done":12,"failed":1}
+ "model_available":true,"calls_today":2,"queued":0,"running":1,"done":12,"failed":1}
+```
+
+```json
+{"id":"...","verb":"count","scope":"all"}
+{"needed":5,"skipped":168,"total":173}
 ```
 
 ```json

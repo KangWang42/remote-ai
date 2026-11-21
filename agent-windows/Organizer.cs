@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,14 +11,19 @@ using System.Web.Script.Serialization;
 namespace RemoteCli {
 
 /// Local conversation metadata and work queue. A running item remains queued on disk until its result is committed.
+/// Nothing is sent anywhere until the owner chooses a source (`off` by default): a tool on this computer or an
+/// OpenAI-compatible API. A conversation is sent again only when what would be sent of it has changed.
 internal sealed class Organizer {
-    internal const string DefaultModel = "gpt-6-luna";
+    internal const string Off = "off", ToolSource = "tool", ApiSource = "api";
     internal const string Queued = "queued", Failed = "failed", Done = "done";
+    /// How long a conversation must have been quiet before it is organized by itself.
+    internal const long Rest = 10 * 60 * 1000;
+    const long Interval = 15000;
 
     public sealed class Source {
         public string Tool = "", Id = "", Dir = "", Folder = "", File = "", Title = "";
         public bool Named;
-        public long Created, Updated;
+        public long Updated;
         internal string Key { get { return Organizer.Key(Tool, Id); } }
     }
 
@@ -25,6 +31,8 @@ internal sealed class Organizer {
         public string Title = "", Summary = "";
         public string[] Tags = new string[0];
         public bool FollowUp;
+        /// The tokens the request used, where its source told them; not kept.
+        [ScriptIgnore] public long Tokens;
     }
 
     public sealed class Entry {
@@ -33,23 +41,38 @@ internal sealed class Organizer {
         public bool? ManualFollowUp;
         public Metadata Data;
         public bool Automatic;
+        /// What was last sent of the conversation (OrganizeHistory.Reading.Hash), and its file's time then.
+        public string Hash = "";
+        public long Seen;
         internal Entry Copy() { return (Entry)MemberwiseClone(); }
     }
 
     public sealed class Store {
         public long AutoSince;
-        public string Model = DefaultModel;
+        public string Source = Off, Tool = "", ApiUrl = "", ApiKey = "";     // ApiKey: protected for this Windows user
+        public Dictionary<string, string> Chosen = new Dictionary<string, string>();   // source kind -> model
+        public string Model = "";                                          // the Codex model chosen before there were sources
+        public string Day = "";
+        public int Calls;
+        public long Tokens;
         public Dictionary<string, Entry> Entries = new Dictionary<string, Entry>();
+    }
+
+    /// What a request is sent to: "codex", "claude", "agy" or "api", and for an API its address and key.
+    public sealed class Choice {
+        public string Kind = "", Url = "", Key = "";
     }
 
     readonly object gate = new object();
     readonly string file;
     readonly Func<long, Source[]> catalog;
     readonly Func<Source, bool> readable, busy;
-    readonly Func<Dictionary<string, object>[]> models;
-    readonly Func<Source, string, Metadata> classify;
+    readonly Func<string[]> tools;
+    readonly Func<Choice, IOrganizeSource> open;
     readonly Func<long> clock;
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
+    // conversations found not worth sending (short, a team's) at a file time: not read again until written to
+    readonly Dictionary<string, long> passed = new Dictionary<string, long>();
     Store state;
     long nextAuto;
     string running = "";
@@ -58,13 +81,13 @@ internal sealed class Organizer {
     internal event Action Changed;
 
     internal Organizer(string file, Func<long, Source[]> catalog, Func<Source, bool> readable, Func<Source, bool> busy,
-            Func<Dictionary<string, object>[]> models, Func<Source, string, Metadata> classify, Func<long> clock = null) {
+            Func<string[]> tools, Func<Choice, IOrganizeSource> open, Func<long> clock = null) {
         this.file = file;
         this.catalog = catalog;
         this.readable = readable;
         this.busy = busy;
-        this.models = models;
-        this.classify = classify;
+        this.tools = tools;
+        this.open = open;
         this.clock = clock ?? (() => Now(DateTime.UtcNow));
     }
 
@@ -82,6 +105,10 @@ internal sealed class Organizer {
                 state = null;
                 throw new InvalidOperationException("对话整理记录无法读取");
             }
+            if (state.Chosen == null) state.Chosen = new Dictionary<string, string>();
+            if (!state.Chosen.ContainsKey("codex") && !String.IsNullOrEmpty(state.Model)) state.Chosen["codex"] = state.Model;
+            // what earlier versions left waiting is not sent while organizing is off
+            if (state.Source == Off) Unqueue(state);
         }
         return state;
     }
@@ -97,9 +124,24 @@ internal sealed class Organizer {
     }
 
     Store Copy() {
-        var current = Loaded();
-        return new Store { AutoSince = current.AutoSince, Model = current.Model, Entries = new Dictionary<string, Entry>(current.Entries) };
+        var c = Loaded();
+        return new Store { AutoSince = c.AutoSince, Source = c.Source, Tool = c.Tool, ApiUrl = c.ApiUrl, ApiKey = c.ApiKey,
+            Chosen = new Dictionary<string, string>(c.Chosen), Day = c.Day, Calls = c.Calls, Tokens = c.Tokens,
+            Entries = new Dictionary<string, Entry>(c.Entries) };
     }
+
+    static string Kind(Store s) { return s.Source == ToolSource ? s.Tool : s.Source == ApiSource ? "api" : ""; }
+    static string Today() { return DateTime.Now.ToString("yyyy-MM-dd"); }
+    static string Protect(string key) {
+        return key.Length == 0 ? "" : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(key), null, DataProtectionScope.CurrentUser));
+    }
+    // "" where it cannot be read (kept by another Windows user): the API then refuses, and the owner enters it again
+    static string Unprotect(string kept) {
+        try { return kept.Length == 0 ? "" : Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(kept), null, DataProtectionScope.CurrentUser)); }
+        catch (CryptographicException) { return ""; }
+        catch (FormatException) { return ""; }
+    }
+    static Choice ChoiceOf(Store s) { return new Choice { Kind = Kind(s), Url = s.ApiUrl, Key = Unprotect(s.ApiKey) }; }
 
     internal string Title(string tool, string id, string original, bool named) {
         var metadata = ForList(tool, id, original, named);
@@ -128,9 +170,10 @@ internal sealed class Organizer {
 
     internal Dictionary<string, object> Operate(Dictionary<string, object> op) {
         switch (Text(op, "verb")) {
-            case "status": return Status(models());
+            case "status": return Status();
             case "settings": return Settings(op);
             case "list": return List(op);
+            case "count": return Count(op);
             case "start": return Start(op, false);
             case "retry": return Start(op, true);
             case "edit": return Edit(op);
@@ -138,35 +181,100 @@ internal sealed class Organizer {
         }
     }
 
-    Dictionary<string, object> Status(Dictionary<string, object>[] offered) {
+    // The chosen source and its models, read outside the lock (a tool's list may take a while).
+    sealed class Offer { public Store Store; public IOrganizeSource Source; public Dictionary<string, object>[] Models = new Dictionary<string, object>[0]; public string Model = "", Default = ""; }
+    Offer Offered() {
+        Store current;
+        lock (gate) current = Loaded();
+        var offer = new Offer { Store = current };
+        string kind = Kind(current);
+        if (kind.Length == 0) return offer;
+        offer.Source = open(ChoiceOf(current));
+        offer.Models = offer.Source.Models();
+        offer.Default = offer.Source.DefaultModel(offer.Models);
+        string chosen;
+        offer.Model = current.Chosen.TryGetValue(kind, out chosen) && chosen.Length > 0 ? chosen : offer.Default;
+        if (kind == "api" && offer.Model.Length > 0) offer.Models = new[] { new Dictionary<string, object> { { "id", offer.Model }, { "label", offer.Model } } };
+        return offer;
+    }
+    static bool Available(Offer offer) {
+        if (offer.Source == null || offer.Model.Length == 0) return false;
+        return Kind(offer.Store) == "api" ? offer.Store.ApiUrl.Length > 0 : offer.Models.Any(m => Text(m, "id") == offer.Model);
+    }
+
+    Dictionary<string, object> Status() {
+        var offer = Offered();
+        var installed = tools();
         lock (gate) {
             var current = Loaded();
-            return new Dictionary<string, object> {
-                { "auto", current.AutoSince > 0 }, { "model", current.Model }, { "default_model", DefaultModel },
-                { "models", offered }, { "model_available", offered.Any(model => Text(model, "id") == current.Model) },
+            var result = new Dictionary<string, object> {
+                { "source", current.Source }, { "source_tool", current.Source == ToolSource ? current.Tool : "" },
+                { "tools", OrganizeSources.Tools.Where(installed.Contains).Select(t => new Dictionary<string, object> { { "id", t }, { "label", Tool.Named(t).Label } }).ToArray() },
+                { "api_url", current.ApiUrl }, { "api_key_set", current.ApiKey.Length > 0 },
+                { "auto", current.AutoSince > 0 }, { "model", offer.Model }, { "default_model", offer.Default },
+                { "models", offer.Models }, { "model_available", Available(offer) },
                 { "queued", current.Entries.Count(e => e.Value.State == Queued && e.Key != running) },
                 { "running", running.Length > 0 ? 1 : 0 },
                 { "done", current.Entries.Count(e => e.Value.State == Done) },
-                { "failed", current.Entries.Count(e => e.Value.State == Failed) }
+                { "failed", current.Entries.Count(e => e.Value.State == Failed) },
+                { "calls_today", current.Day == Today() ? current.Calls : 0 }
             };
+            if (current.Day == Today() && current.Tokens > 0) result["tokens_today"] = current.Tokens;
+            return result;
         }
     }
 
     Dictionary<string, object> Settings(Dictionary<string, object> op) {
-        var offered = models();
-        string model = Text(op, "model");
-        if (op.ContainsKey("model") && (!Models.Valid(model) || !offered.Any(choice => Text(choice, "id") == model)))
-            throw new ArgumentException("这台电脑没有列出所选的 Codex 模型");
+        string source = op.ContainsKey("source") ? Text(op, "source") : null, tool = op.ContainsKey("source_tool") ? Text(op, "source_tool") : null;
+        string model = op.ContainsKey("model") ? Text(op, "model") : null, url = op.ContainsKey("api_url") ? Text(op, "api_url").Trim() : null;
+        string key = op.ContainsKey("api_key") ? Text(op, "api_key").Trim() : null;
         object automatic;
         if (op.TryGetValue("auto", out automatic) && !(automatic is bool)) throw new ArgumentException("自动整理设置无效");
+        if (source != null && source != Off && source != ToolSource && source != ApiSource) throw new ArgumentException("整理来源无效");
+        if (tool != null && !tools().Contains(tool)) throw new ArgumentException("这台电脑上没有所选的 AI 工具");
+        if (url != null && url.Length > 0 && !ApiOrganizer.ValidAddress(url)) throw new ArgumentException("API 地址需以 http:// 或 https:// 开头");
+        if (key != null && (key.Length > 400 || key.Any(c => Char.IsControl(c) || Char.IsWhiteSpace(c)))) throw new ArgumentException("API 密钥格式无效");
+        if (model != null && !Models.Valid(model)) throw new ArgumentException("模型名称无效");
+        Store next;
         lock (gate) {
-            var next = Copy();
-            if (model.Length > 0) next.Model = model;
-            if (automatic is bool) next.AutoSince = (bool)automatic ? (next.AutoSince > 0 ? next.AutoSince : clock()) : 0;
-            Save(next);
+            next = Copy();
+            if (source != null) next.Source = source;
+            if (tool != null) next.Tool = tool;
+            if (url != null) next.ApiUrl = url;
+            if (key != null) next.ApiKey = Protect(key);
+            if (next.Source == ToolSource && !tools().Contains(next.Tool)) throw new ArgumentException("请选择这台电脑上的 AI 工具");
+            if (next.Source == ApiSource && next.ApiUrl.Length == 0) throw new ArgumentException("请填写 API 地址");
+        }
+        if (model != null) {
+            // a tool's model must be one it lists; an API's is taken as the owner names it
+            string kind = Kind(next);
+            if (kind.Length == 0) throw new ArgumentException("请先选择整理来源");
+            if (kind != "api") {
+                var offered = open(ChoiceOf(next)).Models();
+                if (!offered.Any(m => Text(m, "id") == model)) throw new ArgumentException("这台电脑没有列出所选的模型");
+            }
+        }
+        lock (gate) {
+            var latest = Copy();
+            latest.Source = next.Source; latest.Tool = next.Tool; latest.ApiUrl = next.ApiUrl; latest.ApiKey = next.ApiKey;
+            if (model != null) latest.Chosen[Kind(latest)] = model;
+            if (automatic is bool) latest.AutoSince = (bool)automatic ? (latest.AutoSince > 0 ? latest.AutoSince : clock()) : 0;
+            if (latest.Source == Off) Unqueue(latest);
+            Save(latest);
             nextAuto = 0;
         }
-        return Status(offered);
+        Notify();
+        return Status();
+    }
+
+    // Turned off: what waited is not sent, and stands as it did before it was queued.
+    void Unqueue(Store next) {
+        foreach (var pair in next.Entries.Where(e => e.Value.State == Queued && e.Key != running).ToArray()) {
+            var entry = pair.Value.Copy();
+            entry.State = entry.Data != null ? Done : "";
+            entry.Automatic = false;
+            next.Entries[pair.Key] = entry;
+        }
     }
 
     Dictionary<string, object> List(Dictionary<string, object> op) {
@@ -196,13 +304,54 @@ internal sealed class Organizer {
         return Key(tool, session);
     }
 
+    /// How many of the readable conversations "organize all" would send, before anything is sent.
+    Dictionary<string, object> Count(Dictionary<string, object> op) {
+        if (Text(op, "scope") != "all") throw new ArgumentException("整理范围无效");
+        var sources = catalog(0);
+        int needed = sources.Count(s => Needed(s, false));
+        return new Dictionary<string, object> { { "needed", needed }, { "skipped", sources.Length - needed }, { "total", sources.Length } };
+    }
+
     Dictionary<string, object> Start(Dictionary<string, object> op, bool retry) {
         string wanted = Target(op), scope = Text(op, "scope");
         if (wanted.Length == 0 && scope != "all") throw new ArgumentException("请选择一个对话或所有可读对话");
+        lock (gate) {
+            if (Loaded().Source == Off) throw new InvalidOperationException("对话整理已关闭，请先在整理设置里选择来源");
+        }
         var sources = catalog(0).Where(s => wanted.Length == 0 || s.Key == wanted).ToArray();
         if (wanted.Length > 0 && sources.Length == 0) throw new ArgumentException("没有找到可读取的对话");
-        int added = Enqueue(sources, false, retry, 0);
+        // one conversation asked for by name is sent whatever its size; "all" leaves out what is not worth a request
+        var chosen = retry ? sources : sources.Where(s => Needed(s, wanted.Length > 0)).ToArray();
+        int added = Enqueue(chosen, false, retry, 0);
         return new Dictionary<string, object> { { "queued", added }, { "skipped", sources.Length - added } };
+    }
+
+    /// Whether a conversation would be sent: not waiting or running already, and what would be sent of it differs
+    /// from what was sent last. Unless `named`, a short conversation or a team's is not sent either.
+    bool Needed(Source source, bool named) {
+        Entry entry;
+        lock (gate) {
+            if (source.Key == running) return false;
+            Loaded().Entries.TryGetValue(source.Key, out entry);
+            if (entry != null && (entry.State == Queued || (entry.Hash.Length > 0 && entry.Seen == source.Updated))) return false;
+            // organized before contents were compared: unchanged while its file has not been written to since
+            if (entry != null && entry.State == Done && entry.Hash.Length == 0 && entry.Source != null && entry.Source.Updated >= source.Updated) return false;
+            // a failure is sent again by `retry`, not by itself
+            if (!named && entry != null && entry.State == Failed && (entry.Hash.Length == 0 || entry.Seen == source.Updated)) return false;
+            long at;
+            if (!named && passed.TryGetValue(source.Key, out at) && at == source.Updated) return false;
+        }
+        OrganizeHistory.Reading reading;
+        try { reading = OrganizeHistory.Read(source); }
+        catch (InvalidOperationException) { return false; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        bool unchanged = entry != null && entry.Hash == reading.Hash;
+        if (!named && (reading.Short || reading.Team || unchanged)) {
+            lock (gate) passed[source.Key] = source.Updated;
+            return false;
+        }
+        return !unchanged;
     }
 
     int Enqueue(Source[] sources, bool automatic, bool retry, long since) {
@@ -210,7 +359,7 @@ internal sealed class Organizer {
         bool changed = false;
         lock (gate) {
             var next = Copy();
-            if (automatic && next.AutoSince != since) return 0;
+            if (next.Source == Off || (automatic && next.AutoSince != since)) return 0;
             foreach (var source in sources) {
                 Entry entry;
                 if (next.Entries.TryGetValue(source.Key, out entry)) {
@@ -220,12 +369,11 @@ internal sealed class Organizer {
                         next.Entries[source.Key] = entry;
                         changed = true;
                     }
-                    if (entry.State.Length > 0 && !(retry && entry.State == Failed)) continue;
+                    if (entry.State == Queued || source.Key == running || (retry && entry.State != Failed)) continue;
                 } else {
                     if (retry) continue;
                     entry = new Entry();
                 }
-                if (retry && entry.State != Failed) continue;
                 entry = entry.Copy();
                 entry.Source = source;
                 entry.State = Queued;
@@ -296,8 +444,8 @@ internal sealed class Organizer {
         lock (gate) {
             try {
                 var current = Loaded();
-                if (!(current.AutoSince > 0 && clock() >= nextAuto) &&
-                    !current.Entries.Values.Any(e => e.State == Queued && (!e.Automatic || current.AutoSince > 0))) {
+                if (current.Source == Off || (!(current.AutoSince > 0 && clock() >= nextAuto) &&
+                    !current.Entries.Values.Any(e => e.State == Queued && (!e.Automatic || current.AutoSince > 0)))) {
                     working = 0;
                     return;
                 }
@@ -318,18 +466,17 @@ internal sealed class Organizer {
     internal void Advance() {
         if (awaitingSave != null) Commit();
         long since = 0;
-        HashSet<string> known = null;
         lock (gate) {
             var current = Loaded();
+            if (current.Source == Off) return;
             if (current.AutoSince > 0 && clock() >= nextAuto) {
                 since = current.AutoSince;
-                nextAuto = clock() + 15000;
-                known = new HashSet<string>(current.Entries.Where(entry => entry.Value.State.Length > 0).Select(entry => entry.Key));
+                nextAuto = clock() + Interval;
             }
         }
         if (since > 0) {
-            var eligible = catalog(since).Where(s => s.Created >= since && !known.Contains(s.Key) && !busy(s))
-                .Where(s => OrganizeHistory.HasExchange(s)).ToArray();
+            long now = clock();
+            var eligible = catalog(since).Where(s => now - s.Updated >= Rest && !busy(s) && Needed(s, false)).ToArray();
             Enqueue(eligible, true, false, since);
         }
         Entry[] queued;
@@ -339,44 +486,57 @@ internal sealed class Organizer {
         }
         foreach (var candidate in queued) {
             if (busy(candidate.Source)) continue;
-            string model;
+            Choice choice;
             lock (gate) {
                 if (running.Length > 0) return;
                 var current = Loaded();
                 var entry = current.Entries[candidate.Source.Key];
-                if (entry.State != Queued || (entry.Automatic && current.AutoSince == 0)) continue;
+                if (current.Source == Off || entry.State != Queued || (entry.Automatic && current.AutoSince == 0)) continue;
                 running = candidate.Source.Key;
-                model = current.Model;
+                choice = ChoiceOf(current);
             }
-            Run(candidate.Source, model);
+            Run(candidate.Source, choice);
             return;
         }
     }
 
-    void Run(Source source, string model) {
+    void Run(Source source, Choice choice) {
         Metadata data = null;
-        string error = "";
+        string error = "", model = "", hash = "", label = "整理来源";
+        long seen = 0;
+        bool called = false;
         try {
             if (!readable(source)) throw new InvalidOperationException("这段对话已不在可读取的项目中");
-            if (!models().Any(choice => Text(choice, "id") == model))
-                throw new InvalidOperationException("所选 Codex 模型当前不可用，请重新选择模型后重试");
-            data = classify(source, model);
+            var offer = Offered();
+            if (Kind(offer.Store) != choice.Kind) throw new InvalidOperationException("整理来源已更改，请重试");
+            label = offer.Source.Label;
+            model = offer.Model;
+            if (!Available(offer)) throw new InvalidOperationException("所选模型当前不可用，请在整理设置里重新选择");
+            seen = Now(File.GetLastWriteTimeUtc(source.File));
+            var reading = OrganizeHistory.Read(source);
+            hash = reading.Hash;
+            called = true;
+            data = offer.Source.Analyze(reading.Context, model);
             if (data == null) throw new InvalidOperationException("模型没有返回有效的整理结果");
         } catch (InvalidOperationException failure) { error = failure.Message; }
-          catch (IOException) { error = "读不到对话记录，或与 Codex 的连接已中断"; }
-          catch (UnauthorizedAccessException) { error = "没有权限读取对话记录或启动 Codex"; }
-          catch (System.ComponentModel.Win32Exception) { error = "电脑无法启动 Codex"; }
-          catch (TimeoutException) { error = "Codex 整理超时，请重试"; }
+          catch (IOException) { error = "读不到对话记录，或与 " + label + " 的连接已中断"; }
+          catch (UnauthorizedAccessException) { error = "没有权限读取对话记录或启动 " + label; }
+          catch (System.ComponentModel.Win32Exception) { error = "电脑无法启动 " + label; }
+          catch (TimeoutException) { error = label + " 整理超时，请重试"; }
           catch (ArgumentException) { error = "模型返回的整理结果无效，请重试"; }
         finally {
             lock (gate) {
                 if (data != null || error.Length > 0) {
-                    awaitingSave = new Entry { Source = source, State = error.Length == 0 ? Done : Failed, Error = error, Model = model, Data = data };
+                    awaitingSave = new Entry { Source = source, State = error.Length == 0 ? Done : Failed, Error = error, Model = model,
+                        Data = data, Hash = hash, Seen = seen };
+                    if (called) calls.Add(data != null ? data.Tokens : 0);
                 } else running = "";
             }
             Commit();
         }
     }
+    // requests made since the last commit: their tokens (0 where the source did not tell them)
+    readonly List<long> calls = new List<long>();
 
     void Commit() {
         lock (gate) {
@@ -388,8 +548,14 @@ internal sealed class Organizer {
             entry.ManualTitle = latest.ManualTitle;
             entry.ManualFollowUp = latest.ManualFollowUp;
             entry.Source = latest.Source;
+            // a failed request keeps the last good result, so the list does not lose it
+            if (entry.Data == null) entry.Data = latest.Data;
             next.Entries[key] = entry;
+            if (next.Day != Today()) { next.Day = Today(); next.Calls = 0; next.Tokens = 0; }
+            next.Calls += calls.Count;
+            next.Tokens += calls.Sum();
             Save(next);
+            calls.Clear();
             awaitingSave = null;
             running = "";
         }

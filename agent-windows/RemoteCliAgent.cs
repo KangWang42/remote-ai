@@ -143,10 +143,10 @@ public sealed class TerminalAgent {
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
+        string organizing = Path.Combine(dataDir, "organize");
         Organizer = new Organizer(Path.Combine(dataDir, "conversation-organize.json"),
-            since => OrganizeHistory.List(AllDirs(Preferences()), sessions, since), OrganizeReadable, OrganizeBusy,
-            OrganizeModels, (source, model) => CodexOrganizer.Analyze(FindTool("codex"), Path.Combine(dataDir, "organize"),
-                model, OrganizeHistory.Context(source)));
+            since => OrganizeHistory.List(AllDirs(Preferences()), sessions, since, organizing), OrganizeReadable, OrganizeBusy,
+            AvailableChatTools, choice => OrganizeSources.Open(choice, FindTool, OrganizeModels, organizing));
         Organizer.Changed += () => { sessionsDirty = true; Wake(); };
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
@@ -314,10 +314,10 @@ public sealed class TerminalAgent {
     public readonly Marks Marks;
     readonly Organizer Organizer;
 
-    Dictionary<string, object>[] OrganizeModels() {
-        var byTool = (Dictionary<string, object>)Models.Listed(only: "codex")["models"];
-        object codex;
-        return byTool.TryGetValue("codex", out codex) ? (Dictionary<string, object>[])codex : new Dictionary<string, object>[0];
+    Dictionary<string, object>[] OrganizeModels(string tool) {
+        var byTool = (Dictionary<string, object>)Models.Listed(only: tool)["models"];
+        object listed;
+        return byTool.TryGetValue(tool, out listed) ? (Dictionary<string, object>[])listed : new Dictionary<string, object>[0];
     }
 
     bool OrganizeReadable(Organizer.Source source) {
