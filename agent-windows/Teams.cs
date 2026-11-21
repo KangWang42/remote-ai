@@ -1173,7 +1173,7 @@ public sealed class Teams {
                 if (cleared) Save();
             }
         } else if (how == "stopped") {
-            lock (gate) { team.State = "paused"; team.Note = Label(ToolOf(team, role)) + " 这一轮被停止：点“继续”接着做，或点“换 AI 接手”"; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
+            lock (gate) { team.State = "paused"; team.Note = Label(ToolOf(team, role)) + " 这一轮被停止：点“继续”接着做，或从右上角“⋯”换 AI 接手"; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
             Tell();
             return;
         } else {
@@ -1234,7 +1234,7 @@ public sealed class Teams {
                         } else {
                             pauseNoMember = true;
                             team.State = "paused";
-                            team.Note = Label(failedTool) + " 失败（" + reason + "），且没有其他可用成员：可点“换 AI 接手”或稍后继续";
+                            team.Note = Label(failedTool) + " 失败（" + reason + "），且没有其他可用成员：可从右上角“⋯”换 AI 接手，或稍后继续";
                             team.Awaited.Clear();
                             team.Awaited.Add("leader");
                         }
@@ -1271,7 +1271,7 @@ public sealed class Teams {
             }
             lock (gate) {
                 team.State = "paused";
-                team.Note = Label(failedTool) + "（领队）失败（" + reason + "），没有可用备用 AI：可点“换 AI 接手”或稍后继续";
+                team.Note = Label(failedTool) + "（领队）失败（" + reason + "），没有可用备用 AI：可从右上角“⋯”换 AI 接手，或稍后继续";
                 if (!team.Awaited.Contains("leader")) team.Awaited.Add("leader");
                 Save();
             }
@@ -1299,7 +1299,7 @@ public sealed class Teams {
         }
         lock (gate) {
             team.State = "paused";
-            team.Note = Label(failedTool) + " 失败（" + reason + "），没有其他可用备用 AI：可点“换 AI 接手”指定接替，或稍后继续";
+            team.Note = Label(failedTool) + " 失败（" + reason + "），没有其他可用备用 AI：可从右上角“⋯”换 AI 接手，或稍后继续";
             if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
             Save();
         }

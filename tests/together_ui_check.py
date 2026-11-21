@@ -969,7 +969,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
             "id": fs_paused_id, "dir": "web-shop", "mode": "lead",
             "goal": "核对暂停原因与继续按钮在协作详情中可见",
             "rules": "", "state": "paused",
-            "note": "执行成员 1 这一轮提前结束且未给出最终结果：点“继续”接着做，或点“换 AI 接手”",
+            "note": "执行成员 1 这一轮提前结束且未给出最终结果：点“继续”接着做，或从右上角“⋯”换 AI 接手",
             "phase": "", "discuss": False, "picked": "", "tools": ["codex", "claude", "agy"],
             "roster": [
                 {"role": "leader", "tool": "codex", "model": "gpt-6.2-astra", "effort": "high"},
