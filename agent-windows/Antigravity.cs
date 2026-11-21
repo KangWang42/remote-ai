@@ -19,6 +19,7 @@ public static class Antigravity {
 
     public sealed class Summary {
         public string Id = "", Title = "", Folder = "", Status = "";
+        public bool Named;
         public long Updated;
         public DateTime Created = DateTime.UtcNow;
     }
@@ -219,7 +220,7 @@ public static class Antigravity {
     }
 
     /// Reads recent Antigravity CLI conversations from conversation_summaries.db and supplements with live lock files.
-    public static List<Summary> Summaries(string homeOverride = null, IEnumerable<string> liveIds = null) {
+    public static List<Summary> Summaries(string homeOverride = null, IEnumerable<string> liveIds = null, bool all = false) {
         string home = String.IsNullOrWhiteSpace(homeOverride) ? Home : homeOverride;
         var map = new Dictionary<string, Summary>(StringComparer.OrdinalIgnoreCase);
         string dbPath = Path.Combine(home, "conversation_summaries.db");
@@ -230,7 +231,7 @@ public static class Antigravity {
                     sqlite3_busy_timeout(db, 400);
                     string sql = "SELECT conversation_id, title, preview, last_modified_time, workspace_uris, status, not_fully_idle "
                         + "FROM conversation_summaries WHERE parent_conversation_id = '' AND killed = 0 "
-                        + "ORDER BY last_modified_time DESC LIMIT 200";
+                        + "ORDER BY last_modified_time DESC" + (all ? "" : " LIMIT 200");
                     if (sqlite3_prepare_v2(db, Utf8Z(sql), -1, out stmt, IntPtr.Zero) == 0 && stmt != IntPtr.Zero) {
                         while (sqlite3_step(stmt) == SQLITE_ROW) {
                             string id = ColumnText(stmt, 0).Trim();
@@ -241,11 +242,13 @@ public static class Antigravity {
                             string folder = WorkspacePath(ColumnText(stmt, 4));
                             string status = MapStatus(ColumnText(stmt, 5), sqlite3_column_int(stmt, 6) != 0);
                             if (title.Length == 0) title = AnnotationTitle(home, id);
+                            bool named = title.Length > 0;
                             if (title.Length == 0) title = preview;
                             if (title.Length == 0) title = TranscriptTitle(home, id);
                             map[id] = new Summary {
                                 Id = id,
                                 Title = title,
+                                Named = named,
                                 Folder = folder,
                                 Status = status,
                                 Updated = Milliseconds(modified),
@@ -269,6 +272,7 @@ public static class Antigravity {
                 string folder = "";
                 if (history != null) history.TryGetValue(id, out folder);
                 string title = AnnotationTitle(home, id);
+                bool named = title.Length > 0;
                 if (title.Length == 0) title = TranscriptTitle(home, id);
                 DateTime when = DateTime.UtcNow;
                 string lockPath = Path.Combine(home, "presence", id + ".lock");
@@ -276,6 +280,7 @@ public static class Antigravity {
                 map[id] = new Summary {
                     Id = id,
                     Title = title.Length > 0 ? title : "Antigravity 对话 " + when.ToLocalTime().ToString("MM-dd HH:mm"),
+                    Named = named,
                     Folder = folder ?? "",
                     Status = "idle",
                     Updated = Milliseconds(when),

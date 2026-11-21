@@ -143,6 +143,11 @@ public sealed class TerminalAgent {
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
+        Organizer = new Organizer(Path.Combine(dataDir, "conversation-organize.json"),
+            since => OrganizeHistory.List(AllDirs(Preferences()), sessions, since), OrganizeReadable, OrganizeBusy,
+            OrganizeModels, (source, model) => CodexOrganizer.Analyze(FindTool("codex"), Path.Combine(dataDir, "organize"),
+                model, OrganizeHistory.Context(source)));
+        Organizer.Changed += () => { sessionsDirty = true; Wake(); };
         // A program built without a target framework starts with TLS 1.0 only, which a relay of one's own behind
         // https refuses. TLS 1.3 is asked for where this Windows has it.
         try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | (SecurityProtocolType)12288; }
@@ -286,7 +291,7 @@ public sealed class TerminalAgent {
     // can be made a project from there.
     // Live: a program on this computer holds it. Now: it is in use (InUse); only then is it something that is going on.
     // Wakes: a message for it can be handed to it where it is even while it sits idle (ClaudeRelay, CodexQueue).
-    public sealed class SessionInfo { public bool Now, Wakes, MultipleOwners; public string Kind = ""; public string Id, Tool, Dir, Folder = "", ControlFolder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
+    public sealed class SessionInfo { public bool Now, Wakes, MultipleOwners, Named; public string Kind = ""; public string Id, Tool, Dir, Folder = "", ControlFolder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
     public static string ObservedStatus(SessionInfo s, Reach.Open known) {
         // Hooks are keyed by conversation, not process: an idle copy cannot stop the busy copy.
         if (s.MultipleOwners && s.Status == "busy" && (known == null || known.Status == "idle")) return s.Status;
@@ -300,6 +305,33 @@ public sealed class TerminalAgent {
     public string DataFolder { get { return dataDir; } }
     /// What the owner said of single conversations from the phone: pinned, hidden (Marks.cs).
     public readonly Marks Marks;
+    readonly Organizer Organizer;
+
+    Dictionary<string, object>[] OrganizeModels() {
+        var byTool = (Dictionary<string, object>)Models.Listed(only: "codex")["models"];
+        object codex;
+        return byTool.TryGetValue("codex", out codex) ? (Dictionary<string, object>[])codex : new Dictionary<string, object>[0];
+    }
+
+    bool OrganizeReadable(Organizer.Source source) {
+        var prefs = Preferences();
+        if (Get(prefs, "RemoteEnabled") != "True") return false;
+        if (AllDirs(prefs).Values.Any(folder => SamePath(folder, source.Folder))) return true;
+        return source.Dir.Length == 0 && sessions.Any(s => s.Tool == source.Tool && s.Id == source.Id && s.Dir.Length == 0 && SamePath(s.Folder, source.Folder));
+    }
+
+    bool OrganizeBusy(Organizer.Source source) {
+        var known = Reach.Of(source.Tool, source.Id);
+        if (known != null && (known.Status == "busy" || known.Status == "confirm")) return true;
+        lock (work) {
+            if (terminals.Values.Any(t => t.Tool == source.Tool && (t.Session == source.Id || (t.Chat != null && t.Chat.Session == source.Id))
+                    && !t.Pty.Closed && (t.Status == "busy" || t.Status == "confirm" || (t.Chat != null && t.Chat.Status == "busy")))) return true;
+        }
+        var saved = sessions.FirstOrDefault(s => s.Tool == source.Tool && s.Id == source.Id);
+        if (saved == null || !saved.Live) return false;
+        var native = NativeState(saved);
+        return native != null ? native.Busy : saved.Status == "busy" || saved.Status == "confirm";
+    }
     // A conversation as the phone is told of it: what the scan found, and where a hook or its application has told
     // more, how it stands now, what it asks, what it last said, and what the phone can do to it and by which way
     // (Ways.cs: `reach` by name, `ways` for each thing, `why` for what cannot be done now).
@@ -309,7 +341,8 @@ public sealed class TerminalAgent {
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
         var ways = Ways.Of(s, known, native);
         bool asks = known != null && known.Status == "confirm";
-        return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, kind = s.Kind, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = ways.Now, title = s.Title, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = ways.Status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
+        var organize = Organizer.ForList(s.Tool, s.Id, s.Title, s.Named);
+        return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, kind = s.Kind, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = ways.Now, title = s.Title, organize = organize, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = ways.Status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
             reach = ways.Reach, ways = s.Live ? ways.Named : null,
             // (only what is of use now: why it cannot be told or ended, why it cannot be stopped while it works, why it cannot be answered while it asks)
             why = s.Live ? ways.Why.Where(one => one.Key == "say" || one.Key == "end" || (one.Key == "stop" && ways.Status == "busy") || (one.Key == "answer" && asks)).ToDictionary(one => one.Key, one => one.Value) : null,
@@ -653,7 +686,7 @@ public sealed class TerminalAgent {
                 throw new InvalidOperationException("电脑上的原对话或工作目录已变化，请刷新后重试");
         }
     }
-    sealed class TitleCache { public long Stamp, Length; public string Title, Same, Kind; }
+    sealed class TitleCache { public long Stamp, Length; public string Title, Same, Kind; public bool Named; }
     readonly Dictionary<string, string> codexFiles = new Dictionary<string, string>();       // a Codex conversation -> its file
     readonly Dictionary<string, TitleCache> titles = new Dictionary<string, TitleCache>();
     readonly CodexSessions codexSessions = new CodexSessions();
@@ -721,9 +754,14 @@ public sealed class TerminalAgent {
         TitleCache cached; same = "";
         if (titles.TryGetValue(file.FullName, out cached) && cached.Stamp == file.LastWriteTimeUtc.Ticks && cached.Length == file.Length) { same = cached.Same; return cached.Title; }
         string title;
-        try { title = ClaudeTitleOf(file.FullName, out same); } catch (IOException) { if (cached != null) same = cached.Same; return cached != null ? cached.Title : ""; } catch (UnauthorizedAccessException) { return ""; }
-        titles[file.FullName] = new TitleCache { Stamp = file.LastWriteTimeUtc.Ticks, Length = file.Length, Title = title, Same = same };
+        bool named;
+        try { title = Transcripts.ClaudeTitleOf(file.FullName, out same, out named); } catch (IOException) { if (cached != null) same = cached.Same; return cached != null ? cached.Title : ""; } catch (UnauthorizedAccessException) { return ""; }
+        titles[file.FullName] = new TitleCache { Stamp = file.LastWriteTimeUtc.Ticks, Length = file.Length, Title = title, Same = same, Named = named };
         return title;
+    }
+    bool ClaudeNamed(FileInfo file) {
+        TitleCache cached;
+        return titles.TryGetValue(file.FullName, out cached) && cached.Named;
     }
     /// By what a Claude Code conversation was started: every row of its file says so. Read once for a file.
     string ClaudeKind(FileInfo file) {
@@ -831,7 +869,7 @@ public sealed class TerminalAgent {
                     ClaudeSessions.Owner source; bool live = open.TryGetValue(id, out source);
                     string kind = live ? Folders.Held(source.Origin, ClaudeKind(file)) : ClaudeKind(file);
                     note(dir.Value, "claude", file.LastWriteTimeUtc, live, kind);
-                    found.Add(new SessionInfo { Id = id, Tool = "claude", Dir = dir.Key, Kind = kind, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? source.Host : "", Origin = live ? source.Origin : "", Wakes = live && source.Socket.Length > 0, CanTakeover = live && source.CanTakeover, OwnershipKnown = !live || source.CanTakeover || source.Host == "remote", Status = live ? source.Status : "", TakeoverReason = live ? source.Reason : "", Same = same });
+                    found.Add(new SessionInfo { Id = id, Tool = "claude", Dir = dir.Key, Kind = kind, Title = title, Named = ClaudeNamed(file), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Host = live ? source.Host : "", Origin = live ? source.Origin : "", Wakes = live && source.Socket.Length > 0, CanTakeover = live && source.CanTakeover, OwnershipKnown = !live || source.CanTakeover || source.Host == "remote", Status = live ? source.Status : "", TakeoverReason = live ? source.Reason : "", Same = same });
                 }
             } catch { }
         }
@@ -845,7 +883,7 @@ public sealed class TerminalAgent {
                 string title = file.Exists ? ClaudeTitle(file, out same) : "";
                 if (title.Length == 0) continue;        // nothing has been said in it yet
                 var source = held.Value;
-                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Kind = Folders.Held(source.Origin, ClaudeKind(file)), Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Wakes = source.Socket.Length > 0, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
+                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Kind = Folders.Held(source.Origin, ClaudeKind(file)), Title = title, Named = ClaudeNamed(file), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Wakes = source.Socket.Length > 0, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
             } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
         // and the ones a terminal of the phone's has taken on from there: listed so that the terminal keeps the conversation's name and marks
@@ -854,7 +892,7 @@ public sealed class TerminalAgent {
                 string same;
                 var file = new FileInfo(Path.Combine(ClaudeHome, "projects", ProjectFolder(own.Folder), own.Session + ".jsonl"));
                 string title = file.Exists ? ClaudeTitle(file, out same) : "";
-                if (title.Length > 0) found.Add(new SessionInfo { Id = own.Session, Tool = "claude", Dir = "", Folder = own.Folder, Title = title, Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = false, OwnershipKnown = true, Same = "" });
+                if (title.Length > 0) found.Add(new SessionInfo { Id = own.Session, Tool = "claude", Dir = "", Folder = own.Folder, Title = title, Named = ClaudeNamed(file), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = false, OwnershipKnown = true, Same = "" });
             } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
         try {
@@ -925,13 +963,13 @@ public sealed class TerminalAgent {
                     // (one that a terminal of the phone's has taken on from there is listed too, as that terminal's)
                     bool taken = running.Any(t => t.Tool == "codex" && t.Session == id && t.Folder.Length > 0 && !t.Pty.Closed);
                     bool used = live && !phone;
-                    if ((used || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Wakes = live && !phone && queues, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
+                    if ((used || taken) && Elsewhere(where)) found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = "", Folder = where, Kind = codexKind, Named = title.Length > 0, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live && !phone, Wakes = live && !phone && queues, Host = live && !phone ? owner.Host : "", Origin = live && !phone ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = owner.Reason, Same = "" });
                     continue;
                 }
                 int count; counts.TryGetValue(dir, out count);
                 if (!live && count >= 15) continue;
                 if (!live) counts[dir] = count + 1;
-                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Kind = codexKind, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
+                found.Add(new SessionInfo { Id = id, Tool = "codex", Dir = dir, Kind = codexKind, Named = title.Length > 0, Title = title.Length > 0 ? title : "Codex 对话 " + file.CreationTime.ToString("MM-dd HH:mm"), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = live, Wakes = live && !phone && queues, Host = live ? owner.Host : "", Origin = live ? origin : "", OwnershipKnown = owner.Known, CanTakeover = live && owner.CanTakeover && !phone, TakeoverReason = live ? owner.Reason : "", Same = title });
             }
         } catch { }
     }
@@ -957,13 +995,13 @@ public sealed class TerminalAgent {
                 if (dir == null) {
                     bool taken = running.Any(t => t.Tool == "agy" && t.Session == item.Id && t.Folder.Length > 0 && !t.Pty.Closed);
                     if ((external || taken) && Elsewhere(item.Folder))
-                        found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = "", Folder = item.Folder, Kind = agyKind, Title = item.Title, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = "" });
+                        found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = "", Folder = item.Folder, Kind = agyKind, Title = item.Title, Named = item.Named, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = "" });
                     continue;
                 }
                 int count; agyCounts.TryGetValue(dir, out count);
                 if (!live && count >= 15) continue;
                 if (!live) agyCounts[dir] = count + 1;
-                found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir, Kind = agyKind, Title = item.Title, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = item.Title });
+                found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir, Kind = agyKind, Title = item.Title, Named = item.Named, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = item.Title });
             }
         } catch { }
     }
@@ -1188,7 +1226,7 @@ public sealed class TerminalAgent {
             string stamp = info.Length + "." + info.LastWriteTimeUtc.Ticks, since = Get(op, "since");
             var known = Reach.Of(tool, session);
             var result = since.Length > 0 && since == stamp ? new Dictionary<string, object> { { "same", true } } : Said(file, tool);
-            result["stamp"] = stamp; result["title"] = saved.Title; result["status"] = known != null ? known.Status : saved.Status;
+            result["stamp"] = stamp; result["title"] = Organizer.Title(saved.Tool, saved.Id, saved.Title, saved.Named); result["status"] = known != null ? known.Status : saved.Status;
             var native = NativeState(saved);
             if (native != null) result["status"] = native.Busy ? "busy" : native.Ready ? "waiting" : "confirm";
             return result;
@@ -1449,12 +1487,12 @@ public sealed class TerminalAgent {
         string error = ""; Dictionary<string, object> result = null;
         try {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read" || FileTransfers.Handles(action), update = action == "update";
-            bool desktop = action == "app_open";
+            bool desktop = action == "app_open", organize = action == "session_organize";
             bool peek = action == "session_read" || action == "session_say" || action == "session_withdraw" || action == "session_release" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0, ownWork = Array.IndexOf(WorkActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
             if (!ownWork && action.StartsWith("work_", StringComparison.Ordinal)) throw new ArgumentException("这台电脑的电脑端版本不支持这项操作，请更新电脑端");
-            if (!project && !file && !update && !peek && !computer && !ownWork && !desktop && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z")) throw new ArgumentException("操作编号无效");
+            if (!project && !file && !update && !peek && !computer && !ownWork && !desktop && !organize && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z")) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
             if (Get(prefs, "RemoteEnabled") != "True") throw new InvalidOperationException("电脑远控已关闭");
             if (project) ChangeProjects(op, prefs, action);
@@ -1469,6 +1507,11 @@ public sealed class TerminalAgent {
             else if (action == "work_team_models") {
                 // each tool is started for a moment to say what it offers, beside the terminals' work
                 RunAsync(id, () => Models.Listed(), _ => "没有读出可选的模型，请稍后再试");
+                return;
+            }
+            else if (organize) {
+                RunAsync(id, () => Organizer.Operate(op), problem => problem is ArgumentException || problem is InvalidOperationException
+                    ? problem.Message : "电脑无法读取或保存对话整理记录");
                 return;
             }
             else if (ownWork) result = Work(action, op, prefs);
@@ -1705,6 +1748,7 @@ public sealed class TerminalAgent {
     async Task Tick() {
         uploads.Expire();
         Dictionary<string, object> prefs = Preferences();
+        if (Get(prefs, "RemoteEnabled") == "True") Organizer.Tick();
         if (client == null && !await Login(prefs)) return;
         string body, listedText; bool listing; Dictionary<string, object>[] acknowledgments;
         lock (work) {
@@ -1751,7 +1795,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0],

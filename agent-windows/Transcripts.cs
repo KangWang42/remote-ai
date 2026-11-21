@@ -44,12 +44,15 @@ public static class Transcripts {
 
     // The name the tool itself shows for a conversation; without one, what the owner last asked.
     public static string ClaudeTitleOf(string path) { string same; return ClaudeTitleOf(path, out same); }
+    internal static string ClaudeTitleOf(string path, out bool named) { string same; return ClaudeTitleOf(path, out same, out named); }
     // same tells copies of one conversation apart from others: Claude Code writes a branch or a second run of the
     // same request as a file of its own. It is the name where the conversation has one, else what it began with;
     // the last request alone ("continue") is shared by conversations that have nothing to do with each other.
-    public static string ClaudeTitleOf(string path, out string same) {
+    public static string ClaudeTitleOf(string path, out string same) { bool named; return ClaudeTitleOf(path, out same, out named); }
+    internal static string ClaudeTitleOf(string path, out string same, out bool named) {
         string tail = ReadPart(path, true, 256 * 1024);
         string title = JsonText(tail, @"""customTitle"":", true);
+        named = title.Length > 0;
         if (title.Length == 0) title = JsonText(tail, @"""aiTitle"":", true);
         same = Tidy(title);
         if (title.Length > 0) return same;

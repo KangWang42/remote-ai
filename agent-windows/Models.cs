@@ -53,9 +53,9 @@ public sealed class Models {
 
     /// Each installed chat tool's models (`team_models`): those known, read again where they are old, waiting for
     /// a reading at most `wait` milliseconds. A tool that is not installed is not listed.
-    public Dictionary<string, object> Listed(int wait = Patience) {
+    public Dictionary<string, object> Listed(int wait = Patience, string only = null) {
         var tasks = new List<Task>();
-        var tools = Tools.Select(tool => new { tool, launcher = find(tool) }).Where(x => x.launcher != null).ToArray();
+        var tools = Tools.Where(tool => only == null || tool == only).Select(tool => new { tool, launcher = find(tool) }).Where(x => x.launcher != null).ToArray();
         lock (gate) {
             foreach (var one in tools) {
                 Task running;
