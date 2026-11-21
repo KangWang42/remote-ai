@@ -79,7 +79,7 @@ final class Workbench {
         for (Map.Entry<String, Snapshot> one : snapshots.entrySet()) if ("on".equals(one.getValue().state)) waiting += AggregateSessions.counts(one.getValue().projects, seen(one.getKey()))[0];
         return waiting;
     }
-    private static final int SHOWN = 4, TASKS = 12, TALKS = 8, RECENT = 2, RECENT_ALL = 20, FOUND = 30;
+    private static final int SHOWN = 4, TASKS = 12, TALKS = 16, RECENT = 2, RECENT_ALL = 20, FOUND = 30;
 
     private final MainActivity activity;
     private final Kit kit;
@@ -742,7 +742,8 @@ final class Workbench {
         if (attention == null) return;
         if (organizeButton != null) organizeButton.setVisibility(organizes ? View.VISIBLE : View.GONE);
         AggregateSessions.Board board = AggregateSessions.board(things, query, tool, source, followOnly);
-        drawFilters(board, organizes);
+        int followCount = organizes ? AggregateSessions.board(things, "", tool, source, true).found.size() : 0;
+        drawFilters(board, organizes, followCount);
         boolean several = list.length() > 1;
         long now = System.currentTimeMillis();
         StringBuilder mark = new StringBuilder();
@@ -870,7 +871,7 @@ final class Workbench {
         return out;
     }
 
-    private void drawFilters(AggregateSessions.Board board, boolean organizes) {
+    private void drawFilters(AggregateSessions.Board board, boolean organizes, int followCount) {
         if (filters == null) return;
         List<String> tools = new ArrayList<>(board.tools), sources = new ArrayList<>(board.sources);
         for (Snapshot snapshot : snapshots.values()) for (AggregateSessions.Project project : snapshot.projects) {
@@ -881,13 +882,13 @@ final class Workbench {
         if (!source.isEmpty() && !sources.contains(source)) sources.add(source);
         if (tools.size() < 2 && tool.isEmpty()) tools.clear();
         if (sources.size() < 2 && source.isEmpty()) sources.clear();
-        String mark = tools + "|" + sources + "|" + tool + "|" + source + "|" + organizes + "|" + followOnly;
+        String mark = tools + "|" + sources + "|" + tool + "|" + source + "|" + organizes + "|" + followOnly + "|" + followCount;
         if (mark.equals(filtersMark)) return;
         filtersMark = mark;
         filters.removeAllViews();
         if (tools.isEmpty() && sources.isEmpty() && !organizes && !followOnly) return;
         filters.addView(filterChip("全部", "", tool.isEmpty() && source.isEmpty() && !followOnly, () -> { tool = ""; source = ""; followOnly = false; foundShown = FOUND; draw(); }));
-        if (organizes || followOnly) filters.addView(filterChip("待跟进", "", followOnly, () -> { followOnly = !followOnly; foundShown = FOUND; draw(); }));
+        if (organizes || followOnly) filters.addView(filterChip(followCount > 0 ? "待跟进 · " + followCount : "待跟进", "", followOnly, () -> { followOnly = !followOnly; foundShown = FOUND; draw(); }));
         for (final String one : tools) filters.addView(filterChip(AggregateSessions.toolName(one), one, one.equals(tool), () -> { tool = one.equals(tool) ? "" : one; draw(); }));
         if (!tools.isEmpty() && !sources.isEmpty()) {
             View between = new View(activity);
@@ -1144,7 +1145,12 @@ final class Workbench {
         Snapshot snapshot = snapshots.get(task.url);
         boolean marks = snapshot != null && snapshot.marks && !entry.conversation().isEmpty();
         final List<String> labels = new ArrayList<>(), does = new ArrayList<>();
-        if (canOrganize(task)) { labels.add("整理这段对话"); does.add("organize"); }
+        if (canOrganize(task)) {
+            labels.add(entry.followUp ? "移出待跟进" : "加入待跟进");
+            does.add("follow_up");
+            labels.add("整理这段对话");
+            does.add("organize");
+        }
         boolean canQuickSay = !"confirm".equals(task.kind) && ((entry.terminal && "running".equals(entry.state)) || (entry.reached && entry.canSay));
         if (canQuickSay) { labels.add("发消息"); does.add("say"); }
         if (marks) { labels.add(entry.pinned ? "取消置顶" : "置顶"); does.add("pin"); }
@@ -1156,7 +1162,8 @@ final class Workbench {
         if (labels.isEmpty()) return;
         kit.sheet(entry.shownTitle(), AggregateSessions.where(entry), labels.toArray(new String[0]), null, danger, which -> {
             String what = does.get(which);
-            if ("organize".equals(what)) activity.organize(task.url, entry.tool, entry.conversation());
+            if ("follow_up".equals(what)) followUpRemote(task, !entry.followUp);
+            else if ("organize".equals(what)) activity.organize(task.url, entry.tool, entry.conversation());
             else if ("say".equals(what)) sayTask(task);
             else if ("pin".equals(what)) markRemote(task, true, !entry.pinned);
             else if ("hide".equals(what)) markRemote(task, false, !entry.hidden);
@@ -1208,6 +1215,37 @@ final class Workbench {
                 if (!message.isEmpty()) android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show();
                 else if (pin) task.entry.pinned = on;
                 else { task.entry.hidden = on; if (on) task.entry.pinned = false; }
+                redraw(); refresh();
+            });
+        });
+    }
+    private void followUpRemote(AggregateSessions.Thing task, boolean on) {
+        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        activity.net.execute(() -> {
+            String problem = "";
+            boolean effective = on;
+            try {
+                JSONObject op = new JSONObject()
+                    .put("id", UUID.randomUUID().toString().replace("-", ""))
+                    .put("verb", "edit")
+                    .put("tool", task.entry.tool)
+                    .put("session", task.entry.conversation())
+                    .put("follow_up", on);
+                JSONObject result = post(task.url + "/api/organize", cookie, op);
+                JSONObject item = result.optJSONObject("item");
+                if (item != null && item.has("follow_up")) effective = item.optBoolean("follow_up", on);
+            } catch (Exception error) {
+                String said = error.getMessage();
+                problem = said == null ? "没有改成，请稍后重试" : said;
+            }
+            final String message = problem;
+            final boolean nextFollow = effective;
+            activity.runOnUiThread(() -> {
+                if (!message.isEmpty()) android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show();
+                else {
+                    task.entry.followUp = nextFollow;
+                    android.widget.Toast.makeText(activity, nextFollow ? "已加入待跟进" : "已移出待跟进", android.widget.Toast.LENGTH_SHORT).show();
+                }
                 redraw(); refresh();
             });
         });

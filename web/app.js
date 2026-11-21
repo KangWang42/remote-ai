@@ -22,7 +22,7 @@
     if (native && native.setPref && LOOK.includes(key)) native.setPref(key, value);
     try { localStorage.setItem('rcli-' + key, value); } catch (error) { /* private window */ }
   };
-  let data = null, project = '', timer = 0, shown = 2, endedShown = 8, toastTimer = 0;
+  let data = null, project = '', timer = 0, shown = 16, endedShown = 8, toastTimer = 0;
   let relayVersion = '';
   // The tabs at the foot. The one last used is kept while the app is open (a terminal's page leads back to it);
   // ?tab=<name> opens one by a link. A project in detail belongs to 项目: `project` is set only there.
@@ -105,6 +105,7 @@
   paint();
   if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(paint);
   $('back').innerHTML = ICON.back; $('settings').innerHTML = ICON.gear; $('new-task').innerHTML = svg('<path d="M12 5v14M5 12h14"/>', 24);
+  $('organize').innerHTML = svg('<path d="M12 3.5l1.9 5.6 5.6 1.9-5.6 1.9L12 18.5l-1.9-5.6-5.6-1.9 5.6-1.9z"/>', 16) + '<span>整理</span>';
   document.querySelectorAll('#tabs button').forEach(button => {
     button.querySelector('.glyph').innerHTML = button.dataset.tab === 'projects' ? svg(ICON.folder.replace(/^<svg[^>]*>|<\/svg>$/g, ''), 24) : ICON[button.dataset.tab];
     button.addEventListener('click', () => go(button.dataset.tab));
@@ -185,7 +186,7 @@
   // It rises as the sheet of ui/sheet.js: a single answer that ends or saves something is its one button at the foot;
   // several are rows with a mark for what each does, those that end or delete something apart at the end.
   const MARK = { pin: 'pin', hide: 'hide', finish: 'stop', end: 'stop', handoff: 'hand', add: 'folder', enter: 'enter', delete: 'trash', remove: 'trash', rename: 'pen',
-    resume: 'term', chat: 'chat', 'chat-close': 'chat', close: 'term', copy: 'copy' };
+    resume: 'term', chat: 'chat', 'chat-close': 'chat', close: 'term', copy: 'copy', organize: 'spark', follow_up: 'clock' };
   function ask(title, text, choices, fields) {
     const kit = window.RemoteSheet.ui;
     return window.RemoteSheet.open({ title, build(p) {
@@ -1170,8 +1171,10 @@
     const tools = Object.keys(TOOLS).filter(tool => tool === filter.tool || all.some(x => hasTool(x, tool)) || folders.some(f => (f.tools || []).includes(tool)));
     const sources = Object.keys(SOURCE).filter(source => source === filter.source || all.some(x => x.source === source) || folders.some(f => (f.kinds || []).some(kind => sourceOfKind(kind) === source)));
     const offered = (tools.length > 1 ? tools : filter.tool ? [filter.tool] : []), places = (sources.length > 1 ? sources : filter.source ? [filter.source] : []);
-    const box = $('filters'), signature = JSON.stringify([offered, places, filter, TOOLS.shell]);
-    box.hidden = !offered.length && !places.length;
+    const showFollow = tab === 'tasks' && (pageHost.has('organize') || filter.follow);
+    const followCount = showFollow ? all.filter(x => !x.twice && !x.hidden && pass(x) && !!x.organize?.follow_up).length : 0;
+    const box = $('filters'), signature = JSON.stringify([offered, places, filter, TOOLS.shell, showFollow, followCount]);
+    box.hidden = !offered.length && !places.length && !showFollow;
     if (box.dataset.signature === signature) return;
     box.dataset.signature = signature;
     const MONO = { claude: 'CC', codex: 'CX', agy: 'AG', opencode: 'OC', qoder: 'QD', cline: 'CL', pi: 'PI' };
@@ -1180,7 +1183,14 @@
       if (toolKey && MONO[toolKey]) { btn.dataset.tool = toolKey; btn.dataset.mono = MONO[toolKey]; }
       return btn;
     };
-    const row = [chip('全部', !filter.tool && !filter.source, () => choose({ tool: '', source: '' }))];
+    const row = [chip('全部', !filter.tool && !filter.source && (!showFollow || !filter.follow), () => choose({ tool: '', source: '', follow: false }))];
+    if (showFollow) {
+      const followBtn = el('button', {
+        type: 'button', id: 'follow-filter', className: filter.follow ? 'on' : '',
+        ariaPressed: String(!!filter.follow), onclick: () => choose({ follow: !filter.follow })
+      }, el('span', { textContent: '待跟进' }), followCount > 0 ? el('span', { className: 'chip-count', textContent: String(followCount) }) : '');
+      row.push(followBtn);
+    }
     offered.forEach(tool => row.push(chip(TOOLS[tool], filter.tool === tool, () => choose({ tool: filter.tool === tool ? '' : tool }), tool)));
     if (offered.length && places.length) row.push(el('i'));
     places.forEach(source => row.push(chip(SOURCE[source], filter.source === source, () => choose({ source: filter.source === source ? '' : source }))));
@@ -1193,12 +1203,25 @@
     catch (error) { toast(error.message); }
     refresh();
   }
+  async function setFollowUp(s, followUp) {
+    if (!usable()) return toast('电脑离线，暂时无法修改');
+    try {
+      const answer = await api('api/organize', { id: newId(), verb: 'edit', tool: s.tool, session: s.id, follow_up: !!followUp });
+      s.organize = Object.assign({}, s.organize, answer && answer.item ? answer.item : { follow_up: !!followUp });
+      draw();
+      toast(followUp ? '已加入待跟进' : '已移出待跟进');
+    } catch (error) { toast(error.message); }
+    refresh();
+  }
   async function addFolder(path) {
     if (await run({ action: 'project_add', path, name: '', create: false }, '正在添加…')) { toast('已加为项目'); refresh(); }
   }
   async function manage(x) {
     const s = x.s, choices = [];
-    if (supportsOrganize(s) && pageHost.has('organize')) choices.push({ label: '整理这段对话', value: 'organize' });
+    if (supportsOrganize(s) && pageHost.has('organize')) {
+      choices.push({ label: s.organize?.follow_up ? '移出待跟进' : '加入待跟进', value: 'follow_up' });
+      choices.push({ label: '整理这段对话', value: 'organize' });
+    }
     if (s && marks()) choices.push({ label: s.pinned ? '取消置顶' : '置顶', value: 'pin' });
     if (s && !x.t && marks() && (!s.live || s.hidden || s.now === false)) choices.push({ label: s.hidden ? '取消隐藏' : '从列表隐藏', value: 'hide' });
     if (s && !x.t && canEnd(s) && usable()) choices.push({ label: '结束电脑上的这段对话', value: 'finish', kind: 'danger' });
@@ -1213,7 +1236,8 @@
     if (s && !x.t && !s.live && s.dir && usable() && (data.device.features || []).includes('delete')) choices.push({ label: '删除对话', value: 'delete', kind: 'danger' });
     if (!choices.length) return;
     const choice = await ask(x.title, '', choices);
-    if (choice === 'organize') window.RemoteOrganize.open({ session: s.id, tool: s.tool });
+    if (choice === 'follow_up') setFollowUp(s, !s.organize?.follow_up);
+    else if (choice === 'organize') window.RemoteOrganize.open({ session: s.id, tool: s.tool });
     else if (choice === 'pin') mark(s, { pinned: !s.pinned });
     else if (choice === 'hide') mark(s, s.hidden ? { hidden: false } : { hidden: true, pinned: false });
     else if (choice === 'add') addFolder(folder);
@@ -1433,8 +1457,6 @@
     $('new-task').hidden = tab !== 'tasks'; $('settings').hidden = tab !== 'me';
     $('organize').hidden = tab !== 'tasks' || !pageHost.has('organize');
     $('organize').disabled = !ready;
-    $('follow-filter').hidden = tab !== 'tasks' || !pageHost.has('organize');
-    $('follow-filter').setAttribute('aria-pressed', String(!!filter.follow));
     document.querySelectorAll('#tabs button').forEach(button => { if (button.dataset.tab === tab) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
     // conversations open on the computer are counted with the terminals, by how they stand
     const stands = (list, ...phases) => list.filter(x => x.live && phases.includes(x.phase)).length;
@@ -1483,7 +1505,8 @@
         const pinned = rest.filter(x => x.pinned && !x.live).sort(byTime), free = rest.filter(x => !x.pinned || x.live);
         const active = free.filter(working).sort(byOpen);
         const opened = free.filter(x => x.live && !working(x)).sort(byOpened);
-        const recent = free.filter(x => !x.live && ((x.state === 'history' && !x.hidden) || x.state === 'ended')).sort(byTime);
+        const recent = free.filter(x => !x.live && ((x.state === 'history' && !x.hidden) || x.state === 'ended'))
+          .sort((a, b) => (Number(!!b.organize?.follow_up) - Number(!!a.organize?.follow_up)) || byTime(a, b));
         $('needs').hidden = !needs.length;
         show($('needs-list'), needs, tick);
         $('needs-summary').textContent = needs.length + ' 个等你确认';
@@ -1599,7 +1622,7 @@
   }
   // A project is entered from the list of projects, or from a card on 任务: the way back leads to where one came from.
   let cameFrom = 'projects';
-  function enter(name) { cameFrom = tab; tab = 'projects'; project = name; shown = 2; endedShown = 8; hiddenShown = false; Object.keys(projectFolds).forEach(key => { projectFolds[key] = false; }); $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
+  function enter(name) { cameFrom = tab; tab = 'projects'; project = name; shown = 16; endedShown = 8; hiddenShown = false; Object.keys(projectFolds).forEach(key => { projectFolds[key] = false; }); $('search').value = ''; history.pushState({ project: name }, ''); scrollTo(0, 0); draw(); }
   window.addEventListener('popstate', event => {
     const left = project;
     project = event.state && event.state.project || '';
@@ -1617,11 +1640,10 @@
   $('organize').addEventListener('click', () => window.RemoteOrganize.open({
     targets: organizeCandidates(), filtered: !!($('query').value.trim() || filter.tool || filter.source || filter.follow)
   }));
-  $('follow-filter').addEventListener('click', () => choose({ follow: !filter.follow }));
   // While something is typed the tabs make room: the keyboard takes the foot of the screen.
   document.addEventListener('focusin', event => { if (event.target.matches && event.target.matches('#home input, #home textarea')) document.body.classList.add('typing'); });
   document.addEventListener('focusout', () => document.body.classList.remove('typing'));
-  $('search').addEventListener('input', () => { shown = 2; draw(); });
+  $('search').addEventListener('input', () => { shown = 16; draw(); });
   $('more-history').addEventListener('click', () => { shown += 30; draw(); });
   $('more-ended').addEventListener('click', () => { endedShown += 30; draw(); });
   $('hidden-history').addEventListener('click', () => { hiddenShown = !hiddenShown; if (hiddenShown) { shown = Math.max(shown, 30); projectFolds.history = true; } draw(); });
@@ -1691,6 +1713,7 @@
   // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
   const pageHost = window.RemoteCliPage = {
     $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, closeReader, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep, loadMarkdown, markdownNode,
+    openSession: s => { if (!usable()) return toast('电脑离线，暂时无法打开'); return s.live ? takeOver(s) : readHistory(s); },
     get data() { return data; },
     get relayVersion() { return relayVersion; }, startAgyShell,
     get tab() { return tab; },

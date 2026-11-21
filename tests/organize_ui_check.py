@@ -68,8 +68,11 @@ class OrganizerComputer(pictures.Played):
             first, limit = op["offset"], op["limit"]
             return {"items": items[first:first + limit], "more": first + limit < len(items), "total": len(items)}
         if verb == "edit":
-            items[0]["title"] = op["title"]
-            items[0]["manual_title"] = op["title"]
+            if "title" in op:
+                items[0]["title"] = op["title"]
+                items[0]["manual_title"] = op["title"]
+            if "follow_up" in op:
+                items[0]["follow_up"] = bool(op["follow_up"])
             return {"item": items[0]}
         eligible = [row for row in items if row["state"] == ("pending" if verb == "start" else "failed")]
         for row in eligible:
@@ -121,11 +124,32 @@ def run(browser, computer, evidence):
     def shown(text, selector="dialog[open]"):
         until(f"document.querySelector({json.dumps(selector)})?.innerText.includes({json.dumps(text)})", text)
 
-    browser.open(computer.origin + "/?tab=tasks", "!document.querySelector('#organize').hidden", "整理按钮", **screen(390))
+    def check_width(width, check_pane=True):
+        browser.ask("Emulation.setDeviceMetricsOverride", **screen(width))
+        geometry = value(f"""(() => {{
+            const root = document.documentElement, pane = document.querySelector('dialog[open] .rs-body');
+            return [innerWidth, root.clientWidth, root.scrollWidth, document.body.scrollWidth,
+                    pane ? pane.clientWidth : 0, pane ? pane.scrollWidth : 0];
+        }})()""")
+        assert geometry[0] == geometry[1] == width and geometry[2] <= width and geometry[3] <= width, (width, geometry)
+        if check_pane:
+            assert geometry[4] > 0 and geometry[5] <= geometry[4] + 1, (width, geometry)
+        return geometry
+
+    browser.open(computer.origin + "/?tab=tasks", "!document.querySelector('#organize').hidden && !!document.querySelector('#filters #follow-filter')", "整理按钮与待跟进筛选", **screen(390))
+    assert value("document.querySelector('#follow-filter .chip-count')?.textContent") == "2"
+    if evidence:
+        browser.picture(evidence / "tasks-390.png")
+    for width in (320, 390, 430):
+        check_width(width, check_pane=False)
+    browser.ask("Emulation.setDeviceMetricsOverride", **screen(390))
+
     click("#follow-filter")
     shown("2 个", "#results")
     shown("thesis", "#results")
     shown("网络工具", "#results")
+    if evidence:
+        browser.picture(evidence / "follow-390.png")
     click("#follow-filter")
     type_in("#query", "断线重连")
     shown("37 个", "#results")
@@ -142,15 +166,30 @@ def run(browser, computer, evidence):
     assert value("document.querySelectorAll('#results-list .card').length") == 37
     assert abs(value("document.querySelectorAll('#results-list .card')[18].getBoundingClientRect().top") - top) <= 2
 
+    # Manual follow-up toggle from conversation menu via edit { follow_up: bool }
     type_in("#query", "请接着核对记录 00")
     shown("1 个", "#results")
+    click("#results-list .organize-more")
+    button("移出待跟进")
+    until("!document.querySelector('dialog[open]')", "移出待跟进后关闭菜单")
+    until("document.querySelector('#follow-filter .chip-count')?.textContent === '1'", "待跟进计数更新为 1")
+    follow_ops = [op for op in computer.asked if op.get("action") == "session_organize" and op.get("verb") == "edit" and "follow_up" in op]
+    assert follow_ops[-1]["follow_up"] is False and "title" not in follow_ops[-1], follow_ops[-1]
+    click("#results-list .organize-more")
+    button("加入待跟进")
+    until("!document.querySelector('dialog[open]')", "加入待跟进后关闭菜单")
+    until("document.querySelector('#follow-filter .chip-count')?.textContent === '2'", "待跟进计数恢复为 2")
+    follow_ops = [op for op in computer.asked if op.get("action") == "session_organize" and op.get("verb") == "edit" and "follow_up" in op]
+    assert follow_ops[-1]["follow_up"] is True and "title" not in follow_ops[-1], follow_ops[-1]
+
+    # Single-session organize, fail -> retry, rename
     click("#results-list .organize-more")
     button("整理这段对话")
     shown("未整理")
     button("整理这段")
     shown("样例模型暂时不可用")
     button("重试这段")
-    shown("已整理 36")
+    shown("已整理")
     button("编辑名称")
     type_in("dialog[open] input", "手动命名的对话")
     button("保存名称")
@@ -158,35 +197,87 @@ def run(browser, computer, evidence):
     click("dialog[open] .rs-close")
     shown("手动命名的对话", "#results")
 
+    # Full organizer: conversations to continue appear first; model/auto are tucked in settings
     click("#organize")
+    until("!!document.querySelector('dialog[open] #organize-settings')", "设置入口可见")
+    assert not value("!!document.querySelector('dialog[open] #organize-model')"), "模型选择器已收入设置子页"
+    assert not value("!!document.querySelector('dialog[open] #organize-auto')"), "自动开关已收入设置子页"
+    shown("待跟进 · 2")
+    shown("1 段待整理")
+    until("(document.querySelector('dialog[open] .organize-row')?.getBoundingClientRect().top || 9999) < 420", "要继续的对话在首屏上半部分可见")
+    first_row_top = value("document.querySelector('dialog[open] .organize-row')?.getBoundingClientRect().top || 9999")
+    assert first_row_top < 420, f"要继续的对话应在首屏上半部分可见: top={first_row_top}"
+    if evidence:
+        browser.picture(evidence / "organize-390.png")
+
+    # Open settings subpage: default GPT-6 Luna, auto off -> switch model & turn auto on
+    click("dialog[open] #organize-settings")
     until("document.querySelector('dialog[open] #organize-model')?.value === 'gpt-6-luna'", "默认 Luna")
     assert value("document.querySelector('dialog[open] #organize-auto').getAttribute('aria-checked')") == "false"
+    until("Math.abs((document.querySelector('dialog[open] .rs-page')?.getBoundingClientRect().left || 99) - 16) <= 4", "设置页滑入完成")
+    if evidence:
+        browser.picture(evidence / "organize-settings-390.png")
+    for width in (320, 390, 430):
+        check_width(width, check_pane=True)
+    browser.ask("Emulation.setDeviceMetricsOverride", **screen(390))
     type_in("dialog[open] #organize-model", "alternate", "change")
     shown("已保存设置")
     click("dialog[open] #organize-auto")
     until("document.querySelector('dialog[open] #organize-auto')?.getAttribute('aria-checked') === 'true'", "开启自动")
+    click("dialog[open] .rs-back")
+    until("!!document.querySelector('dialog[open] #organize-settings')", "返回整理主视图")
+    shown("备用模型 · 自动整理已开")
+
+    # Batch organize, retry failure, and batch skip when all are already done
     button("整理全部可读对话")
     shown("37 段可读对话")
     button("开始整理")
     shown("已排队 1 段 · 跳过 36 段")
     button("重试失败记录")
     button("重试失败记录")
-    shown("已整理 37")
+    shown("已整理 37 段")
+    shown("全部可读对话已处理")
     button("整理全部可读对话")
     button("开始整理")
     shown("已排队 0 段 · 跳过 37 段")
     for width in (320, 390, 430):
-        browser.ask("Emulation.setDeviceMetricsOverride", **screen(width))
-        geometry = value("""(() => {
-            const root = document.documentElement, pane = document.querySelector('dialog[open] .rs-body');
-            return [innerWidth, root.clientWidth, root.scrollWidth, document.body.scrollWidth, pane.clientWidth, pane.scrollWidth];
-        })()""")
-        assert geometry[0] == geometry[1] == width and geometry[2] <= width and geometry[3] <= width, geometry
-        assert geometry[5] <= geometry[4] + 1, geometry
+        check_width(width, check_pane=True)
         if evidence:
-            browser.picture(evidence / f"organize-{width}.png")
+            browser.picture(evidence / f"organize-done-{width}.png")
     assert value("window.__errors") == []
-    browser.open(computer.origin + "/?tab=tasks&organize=1&from=bench", "document.querySelector('#organize-model')", "原生面板入口", **screen(390))
+
+    # Project history default of 16: first open, load more to reveal 17th, re-enter project resets to 16
+    project_name = "历史验证"
+    computer.info["workspaces"].append(project_name)
+    for idx in range(17):
+        sid = f"00000000-0000-4000-8000-{idx + 200:012d}"
+        computer.sessions.append({
+            "id": sid, "tool": "codex", "dir": project_name, "title": f"项目历史 {idx + 1:02d}",
+            "updated": computer.now - idx * 60000, "live": False,
+        })
+    computer.relay.agent({"info": computer.info, "sessions": computer.sessions})
+    browser.open(computer.origin + "/?project=" + project_name, "!document.querySelector('#project').hidden && !document.querySelector('#p-history').hidden", "首次打开项目详情", **screen(390))
+    click("#p-history .section-head")
+    until("document.querySelectorAll('#p-history .card').length === 16", "首次打开默认展开前 16 条历史")
+    assert not value("document.querySelector('#more-history').hidden"), "第 17 条历史应可展开"
+    assert not value("document.querySelector('#p-history').innerText.includes('项目历史 17')")
+    click("#more-history")
+    until("document.querySelectorAll('#p-history .card').length === 17", "加载更多后显示全部 17 条历史")
+    assert value("document.querySelector('#p-history').innerText.includes('项目历史 17')")
+    assert value("document.querySelector('#more-history').hidden")
+    # Re-enter the project from projects list: history count resets to 16 and 17th can be expanded again
+    click("#back")
+    until("!document.querySelector('#overview').hidden", "返回项目列表")
+    value(f"Array.from(document.querySelectorAll('#project-list .card b')).find(b => b.textContent === {json.dumps(project_name)}).closest('button').click()")
+    until("!document.querySelector('#project').hidden && document.querySelector('#heading').textContent === " + json.dumps(project_name), "重新进入项目详情")
+    click("#p-history .section-head")
+    until("document.querySelectorAll('#p-history .card').length === 16", "重新进入项目后默认显示前 16 条历史")
+    assert not value("document.querySelector('#more-history').hidden")
+    click("#more-history")
+    until("document.querySelectorAll('#p-history .card').length === 17", "重新进入后可展开第 17 条历史")
+
+    # Scoped native workbench entry
+    browser.open(computer.origin + "/?tab=tasks&organize=1&from=bench", "!!document.querySelector('#organize-settings')", "原生面板入口", **screen(390))
     shown("隔离样例电脑")
     click("dialog[open] .rs-close")
     until("window.__nativeReturned", "关闭后回原生工作台")
@@ -194,7 +285,9 @@ def run(browser, computer, evidence):
     asked = [op for op in computer.asked if op["action"] == "session_organize"]
     assert {op["verb"] for op in asked} == {"status", "settings", "list", "start", "retry", "edit"}
     assert any(op.get("scope") == "all" for op in asked)
-    print("Organizer UI passed: six operations, scoped native entry, cross-project search, reading return, 320/390/430px.")
+    assert any(op["verb"] == "edit" and op.get("follow_up") is False for op in asked)
+    assert any(op["verb"] == "edit" and op.get("follow_up") is True for op in asked)
+    print("Organizer UI passed: first-screen follow-up, settings subpage, state progress, manual follow_up edit, reading return, batch skip, 16/17 project history, 320/390/430px.")
 
 
 if __name__ == "__main__":
