@@ -94,8 +94,9 @@
     const minutes = Math.round(left / 60000);
     return (minutes < 60 ? minutes + ' 分钟' : minutes < 2880 ? Math.round(minutes / 60) + ' 小时' : Math.round(minutes / 1440) + ' 天') + '后重置';
   }
+  const quotaLevel = used => used >= 80 ? 'high' : used > 50 ? 'elevated' : '';
   function quotaRow(title, w) {
-    return el('li', { className: w.used >= 90 ? 'high' : '' },
+    return el('li', { className: quotaLevel(w.used) },
       el('div', { className: 'line' }, el('b', { textContent: title }),
         el('span', { textContent: Math.round(w.used) + '%' + (w.resets ? ' · ' + renews(w.resets) : '') })),
       el('div', { className: 'track', role: 'img', ariaLabel: '已用 ' + Math.round(w.used) + '%' }, el('i', { style: 'width:' + Math.max(2, Math.min(100, w.used)).toFixed(1) + '%' })));
@@ -113,7 +114,7 @@
       const main = q.windows.filter(w => !w.group), extra = main.length ? q.windows.filter(w => w.group) : [];
       (main.length ? main : q.windows).forEach(w => lines.push(quotaRow((w.group || TOOLS[q.tool] || q.tool) + ' · ' + windowName(w.name), w)));
       if (extra.length) {
-        const open = !!expandedPools[q.tool], pools = new Set(extra.map(w => w.group)).size, warn = !open && extra.some(w => w.used >= 90);
+        const open = !!expandedPools[q.tool], pools = new Set(extra.map(w => w.group)).size, warn = !open && extra.some(w => quotaLevel(w.used) === 'high');
         const toggle = el('button', { type: 'button', className: 'quota-more' + (warn ? ' warn' : ''), ariaExpanded: String(open),
           onclick: () => { expandedPools[q.tool] = !open; draw(); } },
           el('span', { textContent: '其他 ' + pools + ' 个池子' }),

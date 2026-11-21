@@ -113,7 +113,9 @@ final class AppPages {
         track.setBackground(kit.shape(kit.RAISED, 0, 3));
         track.setClipToOutline(true);
         View part = new View(activity);
-        part.setBackground(kit.shape(used >= 90 ? kit.BAD : kit.ACCENT, 0, 3));
+        QuotaLines.Level level = QuotaLines.level(used);
+        int fill = level == QuotaLines.Level.HIGH ? kit.BAD : level == QuotaLines.Level.ELEVATED ? kit.BUSY : kit.ACCENT;
+        part.setBackground(kit.shape(fill, 0, 3));
         float share = (float) Math.max(2, Math.min(100, used));
         track.addView(part, new LinearLayout.LayoutParams(0, -1, share));
         if (share < 100) track.addView(new View(activity), new LinearLayout.LayoutParams(0, -1, 100 - share));

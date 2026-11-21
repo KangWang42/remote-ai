@@ -86,7 +86,12 @@ final class QuotaLines {
         if (minutes <= 0) return used + " · 已重置";
         return used + " · " + (minutes < 60 ? minutes + " 分钟" : minutes < 2880 ? Math.round(minutes / 60.0) + " 小时" : Math.round(minutes / 1440.0) + " 天") + "后重置";
     }
-    static boolean high(Window w) { return w.used >= 90; }
+    enum Level { NORMAL, ELEVATED, HIGH }
+    static Level level(double used) {
+        if (used >= 80) return Level.HIGH;
+        return used > 50 ? Level.ELEVATED : Level.NORMAL;
+    }
+    static boolean high(Window w) { return level(w.used) == Level.HIGH; }
 
     private QuotaLines() { }
 }

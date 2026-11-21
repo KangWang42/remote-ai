@@ -9,6 +9,9 @@ public final class QuotaLinesCheck {
     static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
     public static void main(String[] args) {
         long now = 1_800_000_000L;
+        require(QuotaLines.level(50) == QuotaLines.Level.NORMAL, "50% stays normal");
+        require(QuotaLines.level(50.1) == QuotaLines.Level.ELEVATED && QuotaLines.level(79.9) == QuotaLines.Level.ELEVATED, "above half and below 80% is amber");
+        require(QuotaLines.level(80) == QuotaLines.Level.HIGH && QuotaLines.level(100) == QuotaLines.Level.HIGH, "red starts at 80%");
         QuotaLines.Reading older = new QuotaLines.Reading("claude", 1000, "", Arrays.asList(new QuotaLines.Window("five_hour", 10, now + 3600)));
         QuotaLines.Reading newer = new QuotaLines.Reading("claude", 2000, "", Arrays.asList(new QuotaLines.Window("five_hour", 38, now + 2 * 3600), new QuotaLines.Window("seven_day", 93.4, now - 5)));
         QuotaLines.Reading codex = new QuotaLines.Reading("codex", 1500, "Codex 用 ChatGPT 账号登录后才能读取额度", Collections.<QuotaLines.Window>emptyList());
