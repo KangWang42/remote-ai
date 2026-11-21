@@ -7,3 +7,7 @@ agent-windows/bin/
 relay/data/
 *.p12
 signing-password.txt
+xiaohongshu/bin/
+xiaohongshu/past/
+xiaohongshu/shots/
+xiaohongshu/posts/*/out/

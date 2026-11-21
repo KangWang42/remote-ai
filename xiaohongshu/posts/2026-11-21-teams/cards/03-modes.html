@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>三种方式</title>
+<link rel="stylesheet" href="../../../card.css">
+<style>
+  .rows { width: 248px; gap: 9px; }
+  .row { grid-template-columns: 1fr; padding: 13px 15px; }
+  .row b { font-size: 17px; }
+  .row span { font-size: 13px; }
+  .row em { font-style: normal; color: var(--blue); }
+  .phone { width: 215px; right: 26px; top: 150px; }
+  .screen { height: 500px; }
+</style>
+</head>
+<body>
+  <span class="chip">怎么配合</span>
+  <h1>三种<span class="mark">协作方式</span></h1>
+  <div class="rows">
+    <div class="row"><div><b><em>写审</em> · 一个写，一个审</b><span>每轮把 git diff 交给审查员；有意见就退回，直到审查通过</span></div></div>
+    <div class="row"><div><b><em>分工协作</em> · 领队带 1–3 人</b><span>领队拆任务、派工、验收；成员手动选，或让领队按额度组队</span></div></div>
+    <div class="row"><div><b><em>比稿</em> · 各做一版</b><span>每个 AI 在独立的 worktree 里实现，看完差异再选一个合并</span></div></div>
+  </div>
+  <div class="phone"><div class="screen"><img src="../../../shots/begin.png" alt="" style="margin-top: -134px"></div></div>
+  <div class="foot"><b>Remote AI</b><span>GitHub 搜 remote-ai</span><span class="page">3 / 6</span></div>
+</body>
+</html>

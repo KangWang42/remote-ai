@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>怎么用上</title>
+<link rel="stylesheet" href="../../../card.css">
+<style>
+  .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 22px; }
+  .three > div { padding: 14px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .three .n { width: 32px; height: 32px; border-radius: 9px; font-size: 16px; line-height: 32px; }
+  .three > div > b { display: block; margin-top: 10px; font-size: 16.5px; font-weight: 800; }
+  .three > div > span { display: block; margin-top: 3px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+  .safe { margin-top: 16px; padding: 18px 20px; border-radius: 18px; background: var(--dark); color: #fff; }
+  .safe b { display: block; font-size: 18px; font-weight: 800; }
+  .safe li { margin-top: 8px; font-size: 14px; line-height: 1.5; list-style: none; padding-left: 16px; position: relative; }
+  .safe li::before { content: ""; position: absolute; left: 0; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--mark); }
+  .safe ul { margin: 4px 0 0; padding: 0; }
+  .find { margin-top: 14px; padding: 15px 18px; border: 1.5px dashed var(--blue); border-radius: 16px; }
+  .find b { font-size: 16.5px; }
+  .find em { font-style: normal; }
+  .find span { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+  <span class="chip">怎么用上</span>
+  <h1><span class="mark">更新到 v1.12</span></h1>
+  <div class="three">
+    <div><div class="n">1</div><b>电脑端更新</b><span>Windows 安装包，协作任务在电脑上跑</span></div>
+    <div><div class="n">2</div><b>App 更新</b><span>“我的”里检查更新</span></div>
+    <div><div class="n">3</div><b>协作 → 新建</b><span>选方式、项目和成员，点开始</span></div>
+  </div>
+  <div class="safe">
+    <b>还是原来那几点</b>
+    <ul>
+      <li>用的是电脑上已登录的 Claude Code、Codex</li>
+      <li>代码和对话都留在自己电脑上</li>
+      <li>不用注册账号，不托管模型账号</li>
+      <li>MIT 开源，免费</li>
+    </ul>
+  </div>
+  <div class="find"><b>GitHub 搜 <em class="blue">remote-ai</em>（KangWang42/remote-ai）</b><span>目前是 Windows 电脑 + Android 手机，暂无 iOS</span></div>
+  <div class="foot"><b>Remote AI</b><span>开源免费</span><span class="page">6 / 6</span></div>
+</body>
+</html>

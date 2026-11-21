@@ -1,0 +1,33 @@
+/* The look the Xiaohongshu cards share: a 3:4 page laid out at 540 x 720 and drawn at twice that size by
+   `xhs.py render`. Kept to the look of the earlier notes: a warm paper ground, heavy black titles, the product's
+   blue for names, a yellow marker under the words that matter, white cards and one black bar. */
+:root { --ground: #f3f0e9; --ink: #16181d; --muted: #5b6270; --line: #e3ded3; --card: #ffffff; --blue: #2f6fe4; --mark: #ffd84d; --dark: #16181d; }
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 540px; height: 720px; overflow: hidden; background: var(--ground); }
+body { position: relative; padding: 42px 39px 0; font-family: "Noto Sans SC", "Microsoft YaHei UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+.chip { display: inline-block; padding: 6px 13px; border-radius: 999px; background: var(--dark); color: #fff; font-size: 13.5px; font-weight: 700; letter-spacing: .02em; }
+h1 { margin: 16px 0 0; font-size: 40px; line-height: 1.22; font-weight: 900; letter-spacing: -.01em; }
+h1.big { font-size: 46px; line-height: 1.16; }
+.blue { color: var(--blue); }
+.mark { background: linear-gradient(transparent 58%, var(--mark) 58%, var(--mark) 92%, transparent 92%); padding: 0 2px; }
+.lead { margin: 14px 0 0; color: var(--muted); font-size: 17px; line-height: 1.6; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.pills span { padding: 6px 13px; border-radius: 999px; background: var(--card); border: 1.5px solid var(--line); font-size: 14.5px; font-weight: 700; }
+
+/* numbered rows on white cards */
+.rows { display: grid; gap: 10px; margin-top: 22px; }
+.row { display: grid; grid-template-columns: 40px 1fr; gap: 14px; align-items: center; padding: 15px 18px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+.n { width: 40px; height: 40px; border-radius: 10px; background: var(--blue); color: #fff; font: 800 19px/40px "Segoe UI", sans-serif; text-align: center; }
+.row b { display: block; font-size: 18px; line-height: 1.35; font-weight: 800; }
+.row span { display: block; margin-top: 3px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.bar { margin-top: 14px; padding: 16px; border-radius: 16px; background: var(--dark); color: #fff; text-align: center; font-size: 19px; font-weight: 800; }
+
+/* a phone with a real page of the app in it */
+.phone { position: absolute; padding: 7px; border-radius: 34px; background: #14171c; box-shadow: 0 18px 40px rgba(20, 24, 32, .22); }
+.phone img { display: block; width: 100%; border-radius: 28px; }
+.screen { overflow: hidden; border-radius: 28px; }
+
+.foot { position: absolute; left: 39px; right: 39px; bottom: 26px; display: flex; align-items: center; gap: 12px; font-size: 13.5px; color: var(--muted); }
+.foot b { color: var(--ink); font-size: 14px; }
+.foot .page { margin-left: auto; padding: 3px 10px; border: 1.5px solid var(--line); border-radius: 999px; font-weight: 700; color: var(--ink); }
