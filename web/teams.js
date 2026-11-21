@@ -14,6 +14,10 @@
   const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', user: '你' };
   const defaults = window.RemoteTeamDefaults;
   const EFFORT_LABELS = (defaults && defaults.EFFORT_LABELS) || { none: '无（none）', minimal: '极低（minimal）', low: '低（low）', medium: '中（medium）', high: '高（high）', xhigh: '极高（xhigh）', max: '最高（max）', ultra: '极致（ultra）' };
+  const effortTag = level => defaults ? defaults.effortTag(level) : '思考 · ' + ((EFFORT_LABELS[String(level || '').trim().toLowerCase()] || '').replace(/（.*）/, '') || '默认');
+  const MENU_ICON = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>';
+  // the colour of the state dot beside the task, the same as the header's badge (badgeInfo)
+  const TONE_DOT = { busy: 'var(--busy-dot, var(--busy))', confirm: 'var(--bad)', good: 'var(--good-dot, var(--good))', starting: 'var(--accent)', ended: 'var(--muted)' };
   let teams = null, failure = '', loading = null, activeSync = null, loadEpoch = 0;
   let modelCatalog = null, modelError = '', modelLoading = false, modelPromise = null;
   const mdCache = new Map();
@@ -420,7 +424,7 @@
     function slotBadgeSummary(tool, modelId, effortId) {
       if (!hasModels()) return '';
       const chips = [el('span', { textContent: modelLabel(tool, modelId) })];
-      if (hasEffort() && effortId) chips.push(el('span', { className: 'effort', textContent: '思考 · ' + effortLabel(effortId) }));
+      if (hasEffort() && effortId) chips.push(el('span', { className: 'effort', textContent: effortTag(effortId) }));
       return el('div', { className: 'team-slot-summary' }, ...chips);
     }
     function refreshAllSections() {
@@ -786,7 +790,7 @@
 
   // ---- one: full-screen collaboration detail (stage & member status first, scrollable activity log, preserved reading position)
   function show(known) {
-    let confirmRemove = false, confirmDiscard = false, sending = false, busyAct = false;
+    let confirmDiscard = false, sending = false, busyAct = false, menuButton = null;
     let currentTeam = (teams || []).find(t => t.id === known.id) || known;
     let draftText = '', targetRole = '', activeCandidate = (currentTeam.tools && currentTeam.tools[0]) || '';
     const expanded = new Set();
@@ -1060,37 +1064,19 @@
       const memberKeys = memberRolesOf(team);
       const memberInfos = memberKeys.map(role => inspectMember(team, role, terminals));
       const pendingAsks = memberInfos.filter(info => info.asking);
+      // Each fact is said once: the state in the header's badge, the round and phase on the stage track, who works
+      // on it beside the goal (with a dot in the badge's colour), each member with its model on its card.
       const badge = badgeInfo(team, pendingAsks);
-      const phaseText = team.state === 'running' ? phaseLabel(team.phase) : '';
-      const phaseDetail = phaseText && phaseText !== badge[0] ? ' · ' + phaseText : '';
-      const badgeRound = team.mode === 'compare' ? '' : roundBadgeText(team);
-      const roundText = badgeRound ? ' · ' + badgeRound : '';
-      const subLine = badge[0] + phaseDetail + ' · ' + who(team) + roundText;
-
       if (activePage && activePage.setHeader) {
-        activePage.setHeader({
-          title: (MODES[team.mode] || '协作') + (team.dir ? ' · ' + team.dir : ''),
-          subtitle: who(team) + roundText + phaseDetail,
-          badge: badge[0],
-          tone: badge[1]
-        });
+        activePage.setHeader({ title: (MODES[team.mode] || '协作') + (team.dir ? ' · ' + team.dir : ''), subtitle: '', badge: badge[0], tone: badge[1] });
       }
 
       const overviewParts = [];
-      const heroParts = [
-        kit.who({
-          icon: 'spark', tint: 'agy', title: team.goal || '协作任务', line: subLine,
-          state: pendingAsks.length || team.confirm ? 'var(--bad)' : team.state === 'running' ? 'var(--good)' : (team.state === 'paused' || team.state === 'choose' || isUnverifiedStop(team)) ? 'var(--busy)' : ''
-        })
-      ];
+      const heroParts = [kit.who({ icon: 'spark', tint: 'agy', title: team.goal || '协作任务', line: who(team), state: TONE_DOT[badge[1]] || '' })];
       const stageBar = buildStageSteps(team);
       if (stageBar) heroParts.push(stageBar);
       if (team.state === 'running' && team.phase === 'verify') {
-        const round = team.round || 1, flex = isFlexRounds(team), rounds = roundsOf(team);
-        const finalTag = (team.last || (!flex && round >= rounds)) ? '（末轮验收）' : '';
-        const prefix = (flex ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + rounds + ' 轮') + ' · ' + phaseText + finalTag;
-        const verifyText = team.note ? (team.note.includes(phaseText) ? team.note : prefix + '：' + team.note) : prefix + '：正在核对执行成员改动与结果';
-        const banner = kit.summary(verifyText, '', 'spark');
+        const banner = kit.summary(team.note || '正在核对执行成员改动与结果', '', 'spark');
         banner.classList.add('team-verify');
         heroParts.push(banner);
       } else if (team.state !== 'paused' && team.note) {
@@ -1139,7 +1125,7 @@
           const showRoleEffort = !!effortId || (info.role === 'leader' && team.mode === 'lead' && showEfforts);
           const tags = [];
           if (showModels) tags.push(el('span', { className: 'model', textContent: modelLabel(info.tool, modelId) }));
-          if (showRoleEffort) tags.push(el('span', { className: 'effort', textContent: '思考 · ' + (effortId ? effortLabel(effortId) : '默认') }));
+          if (showRoleEffort) tags.push(el('span', { className: 'effort', textContent: effortTag(effortId) }));
           return el('button', {
             type: 'button',
             id: 'member-' + info.role.replace(/[^a-z0-9_-]/gi, '_'),
@@ -1153,7 +1139,8 @@
               el('span', { className: 'name', textContent: roleName(team, info.role) }),
               tags.length ? el('span', { className: 'member-tags' }, ...tags) : ''),
             el('span', { className: 'member-tail' },
-              el('small', { className: 'status-tag ' + info.statusTone, textContent: info.statusText })));
+              el('small', { className: 'status-tag ' + info.statusTone, textContent: info.statusText }),
+              info.canOpen ? el('span', { className: 'member-chev', ariaHidden: 'true', html: page.ICON.chev }) : ''));
         });
         overviewParts.push(el('section', { className: 'team-members-wrap', ariaLabel: '成员状态' },
           el('div', { className: 'team-subhead' },
@@ -1343,15 +1330,13 @@
           const compactEvent = meta.kind === 'event';
           const long = !compactEvent && (bodyText.length > 420 || bodyText.split('\n').length > 10);
           const open = compactEvent ? expanded.has(key) : (!long || expanded.has(key));
-          const stepModel = (!isUser && !isMeta && showModels) ? modelOf(team, step.who) : '';
-          const stepEffort = (!isUser && !isMeta && showEfforts) ? effortOf(team, step.who) : '';
           const agoText = page.ago(step.at);
           const labelText = roleName(team, step.who);
           const memberLink = !isUser && !isMeta ? memberByRole.get(step.who) : null;
           const canJumpMember = !!(memberLink && memberLink.canOpen);
           const useMarkdown = !isUser && !compactEvent && step.who !== '目标' && step.who !== '切换';
           const richNow = useMarkdown && isRichReady();
-          const sig = JSON.stringify([meta.kind, meta.tag, stageBanner, labelText, tool, stepModel ? modelLabel(tool, stepModel) : '', stepEffort ? effortLabel(stepEffort) : '', agoText, step.text || '', open, long, richNow, canJumpMember]);
+          const sig = JSON.stringify([meta.kind, meta.tag, stageBanner, labelText, tool, agoText, step.text || '', open, long, richNow, canJumpMember]);
           const reused = existing.get(key);
           if (reused && reused.dataset.msgSig === sig) { nextNodes.push(reused); continue; }
 
@@ -1389,8 +1374,6 @@
             !isMeta ? el('span', { className: 'badge ' + (isUser ? 'n-me' : tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }) : '',
             el('b', { textContent: labelText }),
             el('span', { className: 'action-tag kind-' + meta.kind, textContent: meta.tag }),
-            stepModel ? el('span', { className: 'model', textContent: modelLabel(tool, stepModel) }) : '',
-            stepEffort ? el('span', { className: 'effort', textContent: '思考 · ' + effortLabel(stepEffort) }) : '',
             canJumpMember ? el('button', { type: 'button', className: 'team-msg-open', textContent: '查看对话', onclick: () => openMember(memberLink) }) : '',
             el('span', { className: 'at', textContent: agoText })));
 
@@ -1470,11 +1453,13 @@
       }
     }
 
-    function openSwapSheet() {
-      if (!activeSheet) return;
+    const isRosterLeadOf = team => team.mode === 'lead' && (rosterOf(team).length > 0 || hasRoster());
+    const canSwap = team => hasV2() && team.mode !== 'compare' && (team.state === 'running' || team.state === 'paused') && able().length >= (isRosterLeadOf(team) ? 1 : 2);
+
+    // 换 AI 接手: a page of the detail's sheet, reached from its menu (it takes the menu's place, so it goes back to the detail)
+    function swapPage() {
       const team = currentTeam, tools = able(), roster = rosterOf(team);
-      const isRosterLead = team.mode === 'lead' && (roster.length > 0 || hasRoster());
-      if (isRosterLead ? tools.length < 1 : tools.length < 2) return toast(isRosterLead ? '需要电脑上至少安装一个可用 AI' : '需要电脑上至少安装两个可用 AI');
+      const isRosterLead = isRosterLeadOf(team);
       const roleChoices = team.mode === 'lead' && roster.length
         ? roster.map(r => [r.role, roleName(team, r.role)])
         : team.mode === 'review'
@@ -1539,7 +1524,8 @@
       if (hasModels() && (!modelCatalog || modelError)) {
         loadModels().then(() => { if (activeSheet && !activeSheet.gone) { state.effort = reconcileEffort(state.tool, state.model, state.effort); renderSwapModel(); } });
       }
-      activeSheet.push({ title: '换 AI 接手', build(p) {
+      return { title: '换 AI 接手', build(p) {
+        if (menuButton) menuButton.hidden = true;
         p.body.append(kit.section('要替换或转交的角色', kit.chips(roleChoices, { chosen: state.role, label: '替换角色' }, val => {
           state.role = val;
           if (!isRosterLead && state.tool === currentOf(val)) {
@@ -1581,93 +1567,73 @@
           page.refresh();
         }, { busy: '正在切换…', id: 'team-swap-go' });
         p.foot.append(...go.nodes);
-      } });
+      } };
     }
 
+    // whom a message goes to, named short for the composer's one line (the member cards name each in full)
     function targetOptions(team) {
       const first = ['', team.mode === 'compare' ? '全部候选' : '自动分配'];
       const roster = rosterOf(team);
       if (team.mode === 'lead' && roster.length) {
-        return [first].concat(roster.map(r => [r.role, roleName(team, r.role)]));
+        return [first].concat(roster.map(r => [r.role, roleTitle(r.role).replace('执行成员', '成员') || TOOLS[r.tool] || r.tool]));
       }
       return [first].concat(
-        (team.mode === 'review' ? [['writer', '写手 · ' + (TOOLS[team.tools[0]] || team.tools[0])], ['reviewer', '审查 · ' + (TOOLS[team.tools[1]] || team.tools[1])]]
-          : team.mode === 'lead' ? [['leader', '领队 · ' + (TOOLS[team.tools[0]] || team.tools[0])]].concat((team.tools || []).slice(1).map(t => [t, TOOLS[t] || t]))
+        (team.mode === 'review' ? [['writer', '写手'], ['reviewer', '审查']]
+          : team.mode === 'lead' ? [['leader', '领队']].concat((team.tools || []).slice(1).map(t => [t, TOOLS[t] || t]))
           : (team.tools || []).map(t => [t, TOOLS[t] || t]))
       );
     }
 
-    function renderFoot() {
-      if (!footBox) return;
-      const team = currentTeam, v2 = hasV2();
-      const canSay = v2 && team.state !== 'failed' && !(team.mode === 'compare' && team.state === 'done');
-      const existingBox = footBox.querySelector('#team-say-input');
-      const hadFocus = existingBox && document.activeElement === existingBox;
-      const isRosterLead = team.mode === 'lead' && (rosterOf(team).length > 0 || hasRoster());
+    // What is done to the task as a whole, refreshed from the computer afterwards.
+    async function act(action, after, said) {
+      if (busyAct) return;
+      busyAct = true;
+      try {
+        const res = await work(action, { team: currentTeam.id });
+        if (res && res.team) updateTeamLocal(res.team);
+        await load();
+        currentTeam = (teams || []).find(t => t.id === known.id) || Object.assign({}, currentTeam, after);
+        lastKey = keyOf(currentTeam);
+        renderStream('preserve'); renderFoot(); page.refresh(); toast(said);
+      }
+      catch (err) { toast(err.message); } finally { busyAct = false; }
+    }
+    const resume = () => act('team_resume', { state: 'running', note: '' }, '已继续');
 
-      const actions = [];
-      if (v2 && team.mode !== 'compare' && (team.state === 'running' || team.state === 'paused') && (isRosterLead ? able().length >= 1 : able().length >= 2)) {
-        actions.push(el('button', { type: 'button', id: 'team-swap', className: 'team-act', onclick: openSwapSheet }, '换 AI 接手'));
-      }
-      if (team.state === 'running') {
-        actions.push(el('button', {
-          type: 'button', id: 'team-stop', className: 'team-act danger',
-          onclick: async () => {
-            if (busyAct) return; busyAct = true;
-            try {
-              const res = await work('team_stop', { team: team.id });
-              if (res && res.team) updateTeamLocal(res.team);
-              await load();
-              currentTeam = (teams || []).find(t => t.id === known.id) || Object.assign({}, team, { state: 'stopped' });
-              lastKey = keyOf(currentTeam);
-              renderStream('preserve'); renderFoot(); page.refresh(); toast('已停止');
-            }
-            catch (err) { toast(err.message); } finally { busyAct = false; }
-          }
-        }, '停止'));
-      }
-      if (team.state === 'paused') {
-        actions.push(el('button', {
-          type: 'button', id: 'team-resume', className: 'team-act primary',
-          onclick: async () => {
-            if (busyAct) return; busyAct = true;
-            try {
-              const res = await work('team_resume', { team: team.id });
-              if (res && res.team) updateTeamLocal(res.team);
-              await load();
-              currentTeam = (teams || []).find(t => t.id === known.id) || Object.assign({}, team, { state: 'running', note: '' });
-              lastKey = keyOf(currentTeam);
-              renderStream('preserve'); renderFoot(); page.refresh(); toast('已继续');
-            }
-            catch (err) { toast(err.message); } finally { busyAct = false; }
-          }
-        }, '继续'));
-      }
-      if (team.state !== 'running') {
-        const delBtn = el('button', {
-          type: 'button', id: 'team-remove', className: 'team-act danger', textContent: confirmRemove ? '再按一次删除' : '删除',
-          onclick: async () => {
-            if (busyAct) return;
-            if (!confirmRemove) { confirmRemove = true; delBtn.textContent = '再按一次删除'; setTimeout(() => { confirmRemove = false; if (delBtn.isConnected) delBtn.textContent = '删除'; }, 4000); return; }
-            busyAct = true;
-            try {
-              await work('team_remove', { team: team.id });
+    // The menu at the top right: what is done seldom, or cannot be taken back (removing asks first).
+    function menuPage() {
+      return { title: '协作任务', build(p) {
+        if (menuButton) menuButton.hidden = true;
+        const team = currentTeam, terminals = (page.data && page.data.terminals) || [];
+        const asks = memberRolesOf(team).map(role => inspectMember(team, role, terminals)).filter(info => info.asking);
+        const badge = badgeInfo(team, asks);
+        p.body.append(kit.who({ icon: 'spark', tint: 'agy', title: team.goal || '协作任务', line: (MODES[team.mode] || '协作') + (team.dir ? ' · ' + team.dir : '') + ' · ' + badge[0], state: TONE_DOT[badge[1]] || '' }));
+        const rows = [];
+        if (canSwap(team)) rows.push(kit.row({ id: 'team-swap', icon: 'hand', tint: 'muted', label: '换 AI 接手', go: () => p.sheet.replace(swapPage()) }));
+        if (team.state === 'running') rows.push(kit.row({ id: 'team-stop', icon: 'stop', tint: 'muted', label: '停止', act: () => { p.sheet.goBack(); act('team_stop', { state: 'stopped' }, '已停止'); } }));
+        if (rows.length) p.body.append(kit.group(...rows));
+        if (team.state !== 'running') {
+          p.body.append(kit.group(kit.row({ id: 'team-remove', label: '删除', danger: true, act: () => p.sheet.push(kit.confirm({
+            title: '删除协作任务', text: '会关闭它打开的领队和成员对话，聊天记录仍在历史中。', label: '删除', kind: 'danger', busy: '正在删除…',
+            act: async () => {
+              await work('team_remove', { team: currentTeam.id });
               closeRemoved(false);
               await load();
               page.refresh();
               toast('已删除');
             }
-            catch (err) { toast(err.message); } finally { busyAct = false; }
-          }
-        });
-        actions.push(delBtn);
-      }
+          })) })));
+        }
+      } };
+    }
 
-      // Keep composer DOM stable when already present & canSay unchanged so typing never loses focus on poll
-      let bar = footBox.querySelector('.team-act-bar');
-      if (!bar) { bar = el('div', { className: 'team-act-bar' }); footBox.prepend(bar); }
-      bar.replaceChildren(...actions);
-      bar.hidden = !actions.length;
+    // The foot is one line to write in, as on the conversation page: whom it goes to, the words, and send. While the
+    // task is paused and nothing is written, the button there is 继续.
+    function renderFoot() {
+      if (!footBox) return;
+      const team = currentTeam, v2 = hasV2();
+      const canSay = v2 && team.state !== 'failed' && !(team.mode === 'compare' && team.state === 'done');
+      const paused = team.state === 'paused';
 
       let hint = footBox.querySelector('.team-upgrade-hint');
       if (!v2 && team.state !== 'failed') {
@@ -1675,25 +1641,34 @@
       } else if (hint) { hint.remove(); }
 
       let form = footBox.querySelector('#team-say-form');
-      if (!canSay) { if (form) form.remove(); return; }
+      const lone = footBox.querySelector('.team-resume-only');
+      if (!canSay) {
+        if (form) form.remove();
+        if (paused && !lone) footBox.append(el('button', { type: 'button', id: 'team-resume', className: 'team-resume team-resume-only', textContent: '继续', onclick: resume }));
+        if (!paused && lone) lone.remove();
+        return;
+      }
+      if (lone) lone.remove();
 
-      const placeholder = team.state === 'running' ? '随时插话补充方向或纠正…'
-        : team.state === 'paused' ? '补充说明并继续…'
-        : team.state === 'choose' ? '对候选方案提修改意见（默认发给全部 AI）…'
-        : '发一条新要求，接着做下一轮…';
-
+      const placeholder = team.state === 'running' ? '插话补充或纠正'
+        : paused ? '补充说明并继续'
+        : team.state === 'choose' ? '对候选方案提意见'
+        : '新要求，接着做';
       const targets = targetOptions(team);
+
       if (form) {
         const input = form.querySelector('#team-say-input');
-        if (input && input.placeholder !== placeholder) input.placeholder = placeholder;
+        const hadFocus = document.activeElement === input;
+        if (input.placeholder !== placeholder) input.placeholder = placeholder;
         const sel = form.querySelector('#team-say-target');
         const sig = JSON.stringify(targets);
-        if (sel && sel.dataset.sig !== sig) {
+        if (sel.dataset.sig !== sig) {
           sel.dataset.sig = sig;
           if (!targets.some(([v]) => v === targetRole)) targetRole = '';
           sel.replaceChildren(...targets.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === targetRole })));
         }
-        if (hadFocus && input) input.focus();
+        form.showAction();
+        if (hadFocus) input.focus();
         return;
       }
 
@@ -1701,19 +1676,20 @@
         id: 'team-say-input', rows: 1, maxLength: 4000, value: draftText, placeholder, ariaLabel: '向协作任务发消息'
       });
       const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(120, Math.max(38, input.scrollHeight)) + 'px'; };
-      input.addEventListener('input', () => { draftText = input.value; grow(); });
-      input.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); } });
-
-      // Optional target selector for interjecting to a specific member
       const targetSel = el('select', { id: 'team-say-target', className: 'team-target', ariaLabel: '发送对象' },
         ...targets.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === targetRole })));
       targetSel.dataset.sig = JSON.stringify(targets);
       targetSel.addEventListener('change', () => { targetRole = targetSel.value; });
-
+      const resumeBtn = el('button', { type: 'button', id: 'team-resume', className: 'team-resume', textContent: '继续', onclick: resume });
       const sendBtn = el('button', { type: 'submit', id: 'team-say-send', className: 'team-send', textContent: '发送' });
-      form = el('form', { id: 'team-say-form', className: 'team-composer' },
-        el('div', { className: 'team-composer-top' }, targetSel),
-        el('div', { className: 'team-composer-row' }, input, sendBtn));
+      form = el('form', { id: 'team-say-form', className: 'team-composer' }, targetSel, input, resumeBtn, sendBtn);
+      form.showAction = () => {
+        const resuming = currentTeam.state === 'paused' && !input.value.trim();
+        resumeBtn.hidden = !resuming;
+        sendBtn.hidden = resuming;
+      };
+      input.addEventListener('input', () => { draftText = input.value; grow(); form.showAction(); });
+      input.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); } });
       form.addEventListener('submit', async event => {
         event.preventDefault();
         const text = input.value.trim();
@@ -1729,8 +1705,9 @@
           renderStream('bottom'); renderFoot(); page.refresh();
           toast(currentTeam.state === 'running' ? '已发给协作任务' : '已发送');
         } catch (err) { toast(err.message); }
-        finally { sending = false; sendBtn.disabled = false; sendBtn.textContent = '发送'; }
+        finally { sending = false; sendBtn.disabled = false; sendBtn.textContent = '发送'; form.showAction(); }
       });
+      form.showAction();
       footBox.append(form);
       grow();
     }
@@ -1742,6 +1719,11 @@
       currentTeam = (teams || []).find(t => t.id === known.id) || currentTeam;
       lastKey = keyOf(currentTeam);
       bodyScroll = p.sheet.body;
+      if (!menuButton) {
+        menuButton = el('button', { type: 'button', id: 'team-menu', className: 'rs-icon team-menu', ariaLabel: '协作任务选项', html: MENU_ICON, onclick: () => { if (activeSheet.stack.length === 1) activeSheet.push(menuPage()); } });
+        p.sheet.top.querySelector('.rs-bar').append(menuButton);
+      }
+      menuButton.hidden = false;
       overviewBox = el('div', { className: 'team-overview' });
       compareBox = el('div', { className: 'team-compare-slot', hidden: true });
       activityHead = el('div', { className: 'team-activity-head' });

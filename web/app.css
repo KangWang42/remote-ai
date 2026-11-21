@@ -507,8 +507,8 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-round-steps { display: grid; gap: 10px; padding: 11px 12px; border-radius: 16px; background: var(--surface-sub, var(--raised)); border: 1px solid var(--divider, var(--line)); min-width: 0; }
 .team-round-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .team-round-tag { font-size: .78rem; font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; }
-.team-pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: start; gap: 4px; }
-.team-stage { position: relative; display: grid; justify-items: center; gap: 5px; min-width: 0; text-align: center; }
+.team-pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: start; gap: 0; }
+.team-stage { position: relative; display: grid; justify-items: center; gap: 5px; min-width: 0; padding: 0 2px; text-align: center; }
 .team-stage::before, .team-stage::after { content: ""; position: absolute; top: 10px; height: 2px; background: var(--divider, var(--line)); z-index: 0; }
 .team-stage::before { left: 0; right: 50%; }
 .team-stage::after { left: 50%; right: 0; }
@@ -516,10 +516,10 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-stage.done::before, .team-stage.done::after { background: var(--good-dot, var(--good)); }
 .team-stage.active::before, .team-stage.pause::before, .team-stage.fail::before { background: var(--good-dot, var(--good)); }
 .team-stage .stage-node { position: relative; z-index: 1; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; background: var(--panel); border: 1.5px solid var(--line); color: var(--muted); font-variant-numeric: tabular-nums; }
-.team-stage.done .stage-node { background: var(--good-dot, var(--good)); border-color: var(--good-dot, var(--good)); color: #fff; }
-.team-stage.active .stage-node { background: var(--busy-dot, var(--busy)); border-color: var(--busy-dot, var(--busy)); color: #fff; box-shadow: 0 0 0 4px var(--busy-soft); }
+.team-stage.done .stage-node { background: var(--good-soft); border-color: var(--good-dot, var(--good)); color: var(--good-ink, var(--good)); }
+.team-stage.active .stage-node { background: var(--busy-soft); border-color: var(--busy-dot, var(--busy)); color: var(--busy-ink, var(--busy)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--busy-dot, var(--busy)) 24%, transparent); }
 .team-stage.pause .stage-node { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 4px var(--accent-soft); }
-.team-stage.fail .stage-node { background: var(--bad); border-color: var(--bad); color: #fff; box-shadow: 0 0 0 4px var(--bad-soft); }
+.team-stage.fail .stage-node { background: var(--bad-soft); border-color: var(--bad); color: color-mix(in srgb, var(--bad) 75%, var(--ink)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent); }
 .team-stage .stage-label { font-size: .72rem; line-height: 1.25; color: var(--muted); font-weight: 550; overflow-wrap: anywhere; }
 .team-stage.done .stage-label { color: var(--good-ink, var(--good)); }
 .team-stage.active .stage-label { color: var(--busy-ink, var(--ink)); font-weight: 650; }
@@ -538,8 +538,6 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-chip .member-tail { flex: none; display: inline-flex; align-items: center; gap: 4px; }
 .team-chip .member-chev { display: grid; color: var(--muted); opacity: .6; }
 .team-chip .member-chev svg { width: 16px; height: 16px; }
-.team-msg .head .model { padding: 1px 7px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: .7rem; font-weight: 550; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.team-msg .head .effort { padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--raised)); color: var(--accent-ink, var(--accent)); font-size: .7rem; font-weight: 600; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-chip .name { font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
 .team-chip .model { padding: 1px 7px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: .72rem; font-weight: 550; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-chip .effort { padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--raised)); color: var(--accent-ink, var(--accent)); font-size: .72rem; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -547,7 +545,7 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-chip small.status-tag.busy { background: var(--busy-soft); color: var(--busy-ink, var(--busy)); }
 .team-chip small.status-tag.live { background: var(--good-soft); color: var(--good-ink, var(--good)); }
 .team-chip small.status-tag.hist { background: var(--accent-soft); color: var(--accent-ink, var(--accent)); }
-.team-chip small.status-tag.pause { background: var(--accent-soft); color: var(--accent-ink, var(--accent)); }
+.team-chip small.status-tag.pause { background: var(--raised); color: var(--ink); }
 .team-chip small.status-tag.ask,
 .team-chip small.status-tag.fail { background: var(--bad-soft); color: var(--bad); }
 .team-chip.busy { border-color: color-mix(in srgb, var(--busy-dot, var(--busy)) 45%, var(--card-border, var(--line))); }
@@ -572,7 +570,7 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-ask-banner .copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .team-ask-banner b { font-size: .86rem; color: var(--bad); }
 .team-ask-banner small { color: var(--ink); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-.team-ask-banner .go { flex: none; min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: var(--bad); color: #fff; font-size: .82rem; font-weight: 600; }
+.team-ask-banner .go { flex: none; min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: .82rem; font-weight: 600; }
 .team-pause-banner { display: grid; gap: 4px; padding: 12px 14px; border-radius: 16px; background: var(--busy-soft); border: 1px solid color-mix(in srgb, var(--busy-dot, var(--busy)) 42%, var(--card-border, var(--line))); }
 .team-pause-banner b { font-size: .86rem; font-weight: 650; color: var(--busy-ink, var(--busy)); }
 .team-pause-banner p { margin: 0; color: var(--ink); font-size: .84rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -633,17 +631,18 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-msg.meta .body.md.clamp::after { background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--raised) 70%, var(--bg))); }
 .team-compare-summary.md { white-space: normal; }
 .team-msg .more-btn { justify-self: start; padding: 3px 0; border: 0; background: none; color: var(--accent-ink, var(--accent)); font-size: .8rem; font-weight: 600; }
-.team-act-bar { display: flex; gap: 8px; flex-wrap: wrap; }
-.team-act { flex: 1; min-height: 36px; padding: 0 12px; border: 1px solid var(--card-border, var(--line)); border-radius: 11px; background: var(--panel); color: var(--ink); font-size: .84rem; font-weight: 600; }
-.team-act.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.team-act.danger { background: color-mix(in srgb, var(--bad) 10%, var(--bg)); border-color: transparent; color: var(--bad); }
-.team-composer { display: grid; gap: 6px; }
-.team-composer-top { display: flex; align-items: center; gap: 8px; }
-.team-target { height: 28px; padding: 0 10px; border: 1px solid var(--card-border, var(--line)); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: .78rem; }
-.team-composer-row { display: flex; align-items: flex-end; gap: 8px; }
-.team-composer textarea { flex: 1; min-width: 0; min-height: 38px; max-height: 120px; padding: 8px 12px; border: 1px solid var(--card-border, var(--line)); border-radius: 14px; background: var(--panel); color: var(--ink); font: inherit; font-size: .9rem; line-height: 1.4; resize: none; }
-.team-send { flex: none; min-height: 38px; padding: 0 16px; border: 0; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: .88rem; }
+dialog.rs.rs-full .rs-bar .team-menu { color: var(--ink); }
+dialog.rs.rs-full .rs-bar .team-menu[hidden] { display: none; }
+.team-composer { display: flex; align-items: flex-end; gap: 6px; padding: 5px; border: 1px solid var(--chat-composer-border, var(--card-border, var(--line))); border-radius: 24px; background: var(--chat-composer-bg, var(--panel)); transition: border-color .15s, box-shadow .15s; }
+.team-composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.team-target { flex: none; align-self: flex-end; max-width: 7.5em; height: 38px; padding: 0 8px 0 12px; border: 0; border-radius: 19px; background: var(--raised); color: var(--ink); font-size: .8rem; font-weight: 600; text-overflow: ellipsis; }
+.team-composer textarea { flex: 1; min-width: 0; min-height: 38px; max-height: 120px; padding: 8px 4px; border: 0; background: transparent; color: var(--ink); caret-color: var(--accent); font: inherit; font-size: .92rem; line-height: 1.4; resize: none; }
+.team-composer textarea:focus, .team-composer textarea:focus-visible { outline: none; }
+.team-send, .team-resume { flex: none; min-height: 38px; padding: 0 16px; border: 0; border-radius: 19px; background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: .88rem; }
+.team-send[hidden], .team-resume[hidden] { display: none; }
 .team-send:disabled { opacity: .55; }
+.team-send:active, .team-resume:active { transform: scale(.96); }
+.team-resume-only { width: 100%; min-height: 44px; border-radius: 14px; }
 .team-upgrade-hint { margin: 4px 2px 0; color: var(--muted); font-size: .78rem; line-height: 1.4; }
 html[data-theme="dark"] .team-chip .dot.n-cc, html[data-theme="dark"] .team-slot-head .dot.n-cc, html[data-theme="dark"] .team-msg .badge.n-cc { background: #3a2318; color: #f7b593; }
 html[data-theme="dark"] .team-chip .dot.n-cx, html[data-theme="dark"] .team-slot-head .dot.n-cx, html[data-theme="dark"] .team-msg .badge.n-cx { background: #17284a; color: #9dbbf7; }

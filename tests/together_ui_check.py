@@ -186,6 +186,9 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         sheet = "document.querySelector('dialog.rs[open] .rs-body')"
         closed = "!document.querySelector('dialog.rs:not(.closing)')"
         # a button of the sheet, by the words it starts with
+        def menu(row):
+            value("document.querySelector('dialog.rs:not(.closing) #team-menu').click()")
+            until("!!document.getElementById(%s)" % json.dumps(row), 'the detail menu with ' + row)
         press = lambda text: until("(b => b && !b.disabled && (b.click(), true))([...document.querySelectorAll('dialog.rs:not(.closing) button')].find(b => b.innerText.trim().startsWith(%s)))" % json.dumps(text), 'press ' + text)
         typed = lambda name, text: value("(n=>{n.value=%s;n.dispatchEvent(new Event('input',{bubbles:true}));})(document.getElementById(%s))" % (json.dumps(text), json.dumps(name)))
         # a conversation chosen on a page of the sheet, by its title
@@ -318,7 +321,10 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until("!!document.getElementById('member-writer')", "the team's sheet, with its writer")
         made = played.teams[-1]
         assert (made["mode"], made["dir"], made["tools"], made["rounds"], made["goal"]) == ("review", "web-shop", ["claude", "agy"], 3, "给结算页加上优惠券，并补上测试"), made
-        assert "进行中" in value("document.querySelector('dialog.rs[open] .rs-who').innerText") and "写手 · Claude Code" in value("document.getElementById('member-writer').innerText")
+        assert value("document.querySelector('dialog.rs[open] .rs-badge').textContent") == "进行中" and "写手 · Claude Code" in value("document.getElementById('member-writer').innerText")
+        # the state is said once, in the header's badge: the line beside the goal names who works on it, without the state or round
+        hero_line = value("document.querySelector('dialog.rs[open] .team-hero .rs-who small').innerText")
+        assert hero_line == "Claude Code 写 · Antigravity CLI 审" and value("document.querySelector('dialog.rs[open] .rs-sub').hidden") is True, hero_line
         assert "给结算页加上优惠券" in value("document.querySelector('dialog.rs[open] .team-stream').innerText")
         # interject mid-run via bottom composer
         typed('team-say-input', '优惠券折扣保留两位小数')
@@ -327,7 +333,9 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         # verify chronological order (目标 first, user interject last)
         items_txt = value("[...document.querySelectorAll('dialog.rs[open] .team-stream .team-msg')].map(n => n.innerText)")
         assert "目标" in items_txt[0] and "优惠券折扣保留两位小数" in items_txt[-1], items_txt
-        # swap active role mid-run via 换 AI 接手
+        # swap active role mid-run via 换 AI 接手, in the menu at the top right
+        menu('team-swap')
+        assert value("!!document.getElementById('team-stop') && !document.getElementById('team-remove')"), 'a running task offers 停止, not 删除'
         value("document.getElementById('team-swap').click()")
         until("!!document.getElementById('team-swap-note')", 'swap sub-sheet opened')
         value("[...document.querySelector('dialog.rs[open] [aria-label=\"接手 AI\"]').querySelectorAll('.rs-chip')].find(c => c.textContent.startsWith('Codex')).click()")
@@ -336,14 +344,16 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until("(n => !!n && n.innerText.includes('接着补测试即可'))(document.querySelector('dialog.rs[open] .team-stream'))", 'swap logged and returned to stream')
         assert played.teams[-1]["tools"][0] == "codex", played.teams[-1]
         browser.picture(out / 'team-sheet-390.png')
+        menu('team-stop')
         press('停止')
         until(closed + " || document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'it says it stopped')
         assert played.teams[-1]["state"] == "stopped"
         # continue after stopped/done via bottom composer
         typed('team-say-input', '再补上过期优惠券校验')
         value("document.getElementById('team-say-send').click()")
-        until("document.querySelector('dialog.rs[open] .rs-who').innerText.includes('进行中') && document.querySelector('dialog.rs[open] .team-stream').innerText.includes('再补上过期优惠券校验')", 'continued into next round after stop')
+        until("document.querySelector('dialog.rs[open] .rs-badge').textContent === '进行中' && document.querySelector('dialog.rs[open] .team-stream').innerText.includes('再补上过期优惠券校验')", 'continued into next round after stop')
         assert played.teams[-1]["state"] == "running" and played.teams[-1]["round"] == 2
+        menu('team-stop')
         press('停止')
         until("document.querySelector('dialog.rs[open]').innerText.includes('已停止')", 'stopped again')
         # 分工协作 + 先讨论再动手 (discuss: true)
@@ -380,7 +390,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         value("document.getElementById('compare-tab-codex').click()")
         until("document.querySelector('#team-compare .team-diff').innerText.includes('codex')", 'switched candidate diff tab')
         value("document.getElementById('team-pick-winner').click()")
-        until("document.querySelector('dialog.rs[open] .rs-who').innerText.includes('已完成')", 'picked winner merged')
+        until("document.querySelector('dialog.rs[open] .rs-badge').textContent === '已完成'", 'picked winner merged')
         assert played.teams[-1]["state"] == "done" and played.teams[-1]["picked"] == "codex"
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed')
@@ -491,6 +501,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         browser.picture(out / 'team-verify-detail-390.png')
 
         # Swap member with model choice
+        menu('team-swap')
         value("document.getElementById('team-swap').click()")
         until("!!document.getElementById('team-swap-model')", 'swap model selector rendered')
         value("(s => { s.value = 'claude-sonnet-4-6'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-swap-model'))")
@@ -639,7 +650,9 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         played.extra_terminals.append({"id": m1_tid, "tool": "claude", "dir": "web-shop", "title": "执行成员 1 终端", "form": "chat", "state": "running", "phase": "idle", "status": "idle", "phase_at": played.now, "created": played.now, "team": roster_team["id"]})
         open_page('&do=team&item=' + roster_team['id'], "!!document.getElementById('member-member-2') && !!document.getElementById('team-round-steps') && document.getElementById('member-member-1').innerText.includes('Claude Opus 4.6')")
         roster_detail_txt = value("document.querySelector('dialog.rs[open]').innerText")
-        assert "领队 · Codex" in roster_detail_txt and "GPT-6.2 Sol" in roster_detail_txt and "高（high）" in roster_detail_txt, roster_detail_txt
+        assert "领队 · Codex" in roster_detail_txt and "GPT-6.2 Sol" in roster_detail_txt and "思考 · 高" in roster_detail_txt and "（high）" not in roster_detail_txt, roster_detail_txt
+        # a message's head does not repeat the model and effort its member's card shows
+        assert value("document.querySelectorAll('#team-stream .team-msg .head .model, #team-stream .team-msg .head .effort').length") == 0
         assert "执行成员 1 · Claude Code" in roster_detail_txt and "Claude Opus 4.6" in roster_detail_txt, roster_detail_txt
         assert "执行成员 2 · Claude Code" in roster_detail_txt and "Claude Sonnet 4.6" in roster_detail_txt, roster_detail_txt
         assert "末轮" in value("document.getElementById('team-round-steps').innerText") and "领队验收" in roster_detail_txt, roster_detail_txt
@@ -650,6 +663,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until("document.querySelector('dialog.rs[open] .team-stream').innerText.includes('请补充边界测试')", 'targeted roster say sent')
         assert [op for op in played.asked if op['action'] == 'work_team_say_roster'][-1]['payload'].get('target') == 'member-2'
         # Swap by role (member-2 -> codex with gpt-5.3-codex)
+        menu('team-swap')
         value("document.getElementById('team-swap').click()")
         until("!!document.getElementById('team-swap-model')", 'roster swap opened')
         value("[...document.querySelector('dialog.rs[open] [aria-label=\"替换角色\"]').querySelectorAll('.rs-chip')].find(c => c.textContent.startsWith('执行成员 2')).click()")
@@ -685,7 +699,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until("!!document.getElementById('team-auto-roster-status')", 'auto roster team detail opened')
         auto_start_codex = [op for op in played.asked if op['action'] == 'work_team_start_roster'][-1]['item']
         assert auto_start_codex.get('auto_roster') is True and auto_start_codex.get('roster') == [{'role': 'leader', 'tool': 'codex', 'model': 'gpt-6.2-astra', 'effort': 'high'}], auto_start_codex
-        assert "GPT-6.2 Astra" in value("document.getElementById('member-leader').innerText") and "高（high）" in value("document.getElementById('member-leader').innerText")
+        assert "GPT-6.2 Astra" in value("document.getElementById('member-leader').innerText") and "思考 · 高" in value("document.getElementById('member-leader').innerText")
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed codex auto roster team')
 
@@ -827,6 +841,59 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert fs_box["scrollHeight"] > fs_box["clientHeight"] + 150, fs_box
         time.sleep(.22)
         browser.picture(out / 'team-detail-decision-light-390.png')
+        # the stage track is one line: each stage's half-lines reach its neighbour's, with no gap between the stages
+        track = value("""(() => {
+          const stages = [...document.querySelectorAll('#team-round-steps .team-stage')];
+          const gaps = stages.slice(1).map((li, i) => Math.abs(li.getBoundingClientRect().left - stages[i].getBoundingClientRect().right));
+          const ends = stages.map((li, i) => [getComputedStyle(li, '::before'), getComputedStyle(li, '::after')]
+            .map((pseudo, side) => (side === 0 && i === 0) || (side === 1 && i === stages.length - 1) ? 'end' : pseudo.display !== 'none' && (side === 0 ? pseudo.left : pseudo.right) === '0px' ? 'edge' : 'short'));
+          return {count: stages.length, gaps, ends};
+        })()""")
+        assert track["count"] >= 3 and max(track["gaps"]) < 0.5 and all(e in ('end', 'edge') for pair in track["ends"] for e in pair), track
+        # the foot is one line to write in: whom to, the words and send; what is done seldom is in the menu
+        foot = value("""(() => {
+          const foot = document.querySelector('dialog.rs.rs-full[open] .rs-foot');
+          const shown = n => !n.hidden && getComputedStyle(n).display !== 'none';
+          const form = document.getElementById('team-say-form');
+          const controls = [...form.children].filter(shown);
+          return {children: [...foot.children].filter(shown).map(n => n.id || n.className), controls: controls.map(n => n.id),
+            bottoms: [...new Set(controls.map(n => Math.round(n.getBoundingClientRect().bottom)))], height: Math.round(foot.getBoundingClientRect().height),
+            actions: !!foot.querySelector('#team-swap, #team-stop, #team-remove, .team-act-bar')};
+        })()""")
+        assert foot["children"] == ["team-say-form"] and foot["controls"] == ["team-say-target", "team-say-input", "team-say-send"], foot
+        assert len(foot["bottoms"]) == 1 and foot["height"] <= 72 and not foot["actions"], foot
+        # cards that open a conversation end with a chevron; one that cannot be opened has none
+        chev = value("[...document.querySelectorAll('.team-chip')].map(c => [c.id, !c.disabled, !!c.querySelector('.member-chev')])")
+        assert chev and all(openable == has for _, openable, has in chev), chev
+        # the stage figures and the 去处理 button stay readable (4.5:1) on every skin, dark ones included
+        node_contrast = value("""(() => {
+          const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', {willReadFrequently: true});
+          const lum = color => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3).map(x => x / 255).map(x => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4).reduce((a, x, i) => a + x * [.2126, .7152, .0722][i], 0); };
+          const ratio = (fg, bg) => { const a = lum(fg), b = lum(bg); return Math.round((Math.max(a, b) + .05) / (Math.min(a, b) + .05) * 100) / 100; };
+          const track = document.querySelector('#team-round-steps .team-pipeline'), host = document.querySelector('.team-overview'), out = {};
+          const before = document.documentElement.dataset.skin;
+          for (const skin of Object.keys(window.RemoteCliSkins)) {
+            window.RemoteCliPaint(skin);
+            const one = {theme: document.documentElement.dataset.theme};
+            for (const state of ['done', 'active', 'pause', 'fail']) {
+              const li = document.createElement('li'), node = document.createElement('span');
+              li.className = 'team-stage ' + state; node.className = 'stage-node'; node.textContent = '1';
+              li.append(node); track.append(li);
+              const cs = getComputedStyle(node); one[state] = ratio(cs.color, cs.backgroundColor);
+              li.remove();
+            }
+            const banner = document.createElement('div'), go = document.createElement('button');
+            banner.className = 'team-ask-banner'; go.className = 'go'; go.textContent = '去处理'; banner.append(go); host.append(banner);
+            const gs = getComputedStyle(go); one.go = ratio(gs.color, gs.backgroundColor);
+            banner.remove();
+            out[skin] = one;
+          }
+          window.RemoteCliPaint(before);
+          return out;
+        })()""")
+        assert any(v["theme"] == "dark" for v in node_contrast.values()), node_contrast
+        assert all(v[k] >= 4.5 for v in node_contrast.values() for k in ('done', 'active', 'pause', 'fail', 'go')), node_contrast
+        (out / 'stage-contrast.json').write_text(json.dumps(node_contrast, indent=2), encoding='utf-8')
         # Scroll to the Markdown activity item so visual evidence also confirms rendered Markdown
         value("document.querySelectorAll('#team-stream .team-msg')[1].scrollIntoView({ block: 'start' })")
         browser.picture(out / 'team-detail-markdown-light-390.png')
@@ -938,6 +1005,32 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert paused_box["reasonVisible"] and paused_box["resumeVisible"], paused_box
         time.sleep(.2)
         browser.picture(out / 'team-detail-paused-light-390.png')
+        # paused: 继续 stands where send is, in the same one line, until something is written
+        paused_foot = value("""(() => { const shown = n => !n.hidden && getComputedStyle(n).display !== 'none';
+          return [...document.getElementById('team-say-form').children].filter(shown).map(n => n.id); })()""")
+        assert paused_foot == ["team-say-target", "team-say-input", "team-resume"], paused_foot
+        typed('team-say-input', '先补测试')
+        until("document.getElementById('team-resume').hidden && !document.getElementById('team-say-send').hidden", 'writing turns 继续 into 发送')
+        typed('team-say-input', '')
+        until("!document.getElementById('team-resume').hidden && document.getElementById('team-say-send').hidden", 'an empty line offers 继续 again')
+        # 待继续 cannot be pressed: no chevron, and not in the accent that marks what opens
+        pause_tag = value("getComputedStyle(document.querySelector('#member-member-1 .status-tag')).color")
+        accent_ink = value("(n => { n.style.color = 'var(--accent-ink)'; document.body.append(n); const v = getComputedStyle(n).color; n.remove(); return v; })(document.createElement('i'))")
+        assert value("document.getElementById('member-member-1').disabled") is True and not value("!!document.querySelector('#member-member-1 .member-chev')"), 'a member that cannot be opened has no chevron'
+        assert pause_tag != accent_ink, (pause_tag, accent_ink)
+        # the menu at the top right holds 换 AI 接手 and 删除; removing asks first and removes nothing until confirmed
+        menu('team-remove')
+        menu_txt = value("document.querySelector('dialog.rs[open] .rs-body').innerText")
+        assert value("!!document.getElementById('team-swap')") and "换 AI 接手" in menu_txt and "删除" in menu_txt and not value("!!document.getElementById('team-stop')"), menu_txt
+        assert value("document.getElementById('team-menu').hidden") is True, 'the menu button is gone while the menu is open'
+        browser.picture(out / 'team-detail-menu-light-390.png')
+        value("document.getElementById('team-remove').click()")
+        until("!!document.getElementById('rs-confirm') && document.querySelector('dialog.rs[open] .rs-body').innerText.includes('关闭它打开的领队和成员对话')", 'removing asks first')
+        assert any(t['id'] == fs_paused_id for t in played.teams), 'nothing removed before it is confirmed'
+        value("history.back()")
+        until("!!document.getElementById('team-remove')", 'back to the menu')
+        value("history.back()")
+        until("!!document.getElementById('team-pause-reason') && !document.getElementById('team-menu').hidden", 'back to the detail')
         browser.open(played.origin + '/?tab=tasks&skin=night&do=team&item=' + fs_paused_id, "document.documentElement.dataset.theme === 'dark' && !!document.getElementById('team-pause-reason') && !!document.getElementById('team-resume')", 'paused detail dark opened', **phone(390))
         time.sleep(.2)
         browser.picture(out / 'team-detail-paused-dark-390.png')

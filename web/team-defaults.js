@@ -196,6 +196,11 @@
     return (EFFORT_LABELS[clean] || clean).replace(/（.*）/, '');
   }
 
+  // The tag a member carries for its reasoning effort, in the short form: "思考 · 高".
+  function effortTag(level) {
+    return '思考 · ' + (shortEffortLabel(level) || '默认');
+  }
+
   function summary(tools, catalog, prefs) {
     const p = prefs || readPrefs();
     const list = (Array.isArray(tools) && tools.length ? tools : TOOLS_ORDER).filter(t => TOOLS_ORDER.includes(t));
@@ -239,6 +244,7 @@
     modelLabel,
     effortLabel,
     shortEffortLabel,
+    effortTag,
     summary
   };
 })();
