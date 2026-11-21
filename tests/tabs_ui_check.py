@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         assert value(current) == "tasks" and value("document.getElementById('heading').textContent") == "任务"
         assert shown("#sections") and not shown("#projects") and not shown("#together") and not shown("#me") and shown("#new-task") and not shown("#settings")
         assert value("document.getElementById('tab-count').textContent") == "1", "what waits for an answer is counted on its tab"
-        assert value("Array.from(document.querySelectorAll('#sections > section')).map(n=>n.id).join(',')") == 'needs,active,opened,pinned,recent'
+        assert value("Array.from(document.querySelectorAll('#sections > section')).map(n=>n.id).join(',')") == 'needs,replies,unseen,active,opened,pinned,recent'
         # Retained desktop conversations stay easy to find even among many phone-created idle terminals.
         saved_terminals = value("window.RemoteCliPage.data.terminals")
         value("window.RemoteCliPage.data.terminals = Array.from({length:30}, (_,i)=>({id:'idle-'+i, tool:'shell', title:'手机空闲 '+i, state:'running', phase:'idle', created:Date.now(), dir:'thesis'})); document.getElementById('query').dispatchEvent(new Event('input'))")

@@ -110,6 +110,7 @@ public final class MainActivity extends Activity {
     private Tabs tabs;
     private String appTab = "home";                 // the tab the app's lists were left at
     private FrameLayout root;
+    private ScrollView nativeScroll;
     private WebView web;                        // one WebView for the whole activity: its session, bridge and scroll survive a tab change
     private View connectionBanner;              // an inline retry when a computer's pages cannot be reached
     private TextView bannerText;
@@ -202,6 +203,7 @@ public final class MainActivity extends Activity {
         }
         kit = new Kit(this);
         bench = new Workbench(this, kit);
+        if (state != null) bench.restoreState(state.getBundle("workbench"));
         computerManagement = new ComputerManagement(this, kit, bench);
         uuRemote = new UuRemote(this, kit);
         appPages = new AppPages(this, kit, bench);
@@ -224,6 +226,8 @@ public final class MainActivity extends Activity {
         // Process death should reopen the tab the owner was on, not always 任务.
         out.putString("appTab", appTab);
         out.putString("origin", currentOrigin);
+        rememberWorkbenchPosition();
+        out.putBundle("workbench", bench.saveState());
     }
 
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); if (!external(intent, false)) linked(intent); }
@@ -301,6 +305,7 @@ public final class MainActivity extends Activity {
         root.removeAllViews();
         bars(kit.BG);
         ScrollView scroll = new ScrollView(this);
+        nativeScroll = scroll;
         scroll.setFillViewport(true);
         scroll.addView(content, new ViewGroup.LayoutParams(-1, -2));
         View incoming;
@@ -324,6 +329,11 @@ public final class MainActivity extends Activity {
                 .setInterpolator(new DecelerateInterpolator(2.0f)).start();
         }
         screen = name;
+        if ("home".equals(name)) bench.restorePosition(scroll);
+    }
+
+    void rememberWorkbenchPosition() {
+        if ("home".equals(screen) && nativeScroll != null) bench.rememberPosition(nativeScroll);
     }
 
     // ---- the app's own lists: back to the one that was open last, or to 任务 with what went wrong
@@ -337,6 +347,7 @@ public final class MainActivity extends Activity {
     }
     void appPage(String tab) {
         if (!Tabs.has(tab)) return;
+        rememberWorkbenchPosition();
         appTab = tab;
         if ("home".equals(tab)) { home(""); return; }
         repaint();
@@ -529,6 +540,13 @@ public final class MainActivity extends Activity {
     }
     /** The computer's page with the sheet of a new conversation: in one of its projects, in an application or in a terminal. */
     void startNew(String address) { openPage(address, "", "/?tab=tasks&new=1"); }
+    void organize(String address, String tool, String session) {
+        String target = session.isEmpty() ? "" : "&session=" + Uri.encode(session) + "&tool=" + Uri.encode(tool);
+        openPage(address, "", "/?tab=tasks&organize=1&from=bench" + target);
+    }
+    void readSession(String address, String tool, String session) {
+        openPage(address, "", "/?tab=tasks&from=bench&read=" + Uri.encode(session) + "&tool=" + Uri.encode(tool));
+    }
     // ---- reminders: off until the person turns them on
     boolean watching() { return prefs.getBoolean("watch", false); }
     String reminderStatus() {
@@ -646,6 +664,8 @@ public final class MainActivity extends Activity {
     }
 
     private void openPage(String address, String password, String path) {
+        rememberWorkbenchPosition();
+        nativeScroll = null;
         ticker.removeCallbacks(watch);
         bench.stop();
         computerManagement.stop();
@@ -956,8 +976,11 @@ public final class MainActivity extends Activity {
         /** The name this phone gave the computer whose pages are shown, for the line under the page's heading. */
         @JavascriptInterface public String computer() {
             JSONArray list = computers();
-            for (int i = 0; i < list.length(); i++) { JSONObject one = list.optJSONObject(i); if (one != null && currentOrigin.equals(one.optString("url"))) return one.optString("name"); }
-            return "";
+            for (int i = 0; i < list.length(); i++) {
+                JSONObject one = list.optJSONObject(i);
+                if (one != null && currentOrigin.equals(one.optString("url")) && !one.optString("name").isEmpty()) return one.optString("name");
+            }
+            return host(currentOrigin);
         }
         @JavascriptInterface public void disconnect() { home(); }
         /** Removes the currently opened computer from this phone without needing its password. */

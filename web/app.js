@@ -334,6 +334,8 @@
   // the computer is asked at once, and the terminal that follows leads back to the workbench.
   const startParams = new URLSearchParams(location.search);
   let take = startParams.get('take') || '', anew = startParams.get('new') === '1', fromBench = !!take || anew || startParams.get('from') === 'bench';
+  let readFromBench = startParams.get('read') || '';
+  let organizeFromBench = startParams.get('organize') === '1';
   let wantedTeam = startParams.get('do') === 'team' && /^[a-f0-9]{16,32}$/.test(startParams.get('item') || '') ? startParams.get('item') : '';
   // A terminal's page; for one that runs a conversation through its tool's structured mode, the conversation's (chat/).
   function open(terminal, form, extra) {
@@ -342,7 +344,7 @@
       url += '&team=' + encodeURIComponent(extra.team);
       if (project) url += '&returnProject=' + encodeURIComponent(project);
       else if (tab && tab !== 'together') url += '&returnTab=' + encodeURIComponent(tab);
-    }
+    } else if (!fromBench) url += '&returnList=' + (extra?.returnList || saveListPosition());
     location.href = url;
   }
   // What the app's own lists opened this page for (a new conversation, one conversation's window) leads back to
@@ -393,7 +395,38 @@
   // A saved conversation is gone on with the way its owner begins conversations (begin.js): as a conversation, or in
   // a terminal for one who chose terminals. The other way is behind a held press.
   const asChat = s => chatOk(s.tool) && saved('newkind', '') !== 'term';
-  const goOn = s => asChat(s) ? chat(s.tool, s.dir, s.id) : start(s.tool, s.dir, s.id, false);
+  const goOn = (s, extra) => asChat(s) ? chat(s.tool, s.dir, s.id, false, extra) : start(s.tool, s.dir, s.id, false, false, extra);
+
+  async function readHistory(session) {
+    if (!usable()) { toast('电脑离线，暂时无法打开'); return false; }
+    if (!pageHost.has('peek')) return goOn(session);
+    const key = fromBench ? '' : saveListPosition();
+    const ui = window.RemoteSheet.ui;
+    const title = session.organize?.title || session.title || TOOLS[session.tool];
+    const sheet = window.RemoteSheet.open({ full: true, title, build(p) {
+      const record = el('div', { className: 'said saved-reader', ariaLabel: '对话记录' });
+      const load = async () => {
+        record.replaceChildren(ui.note('正在读取对话…'));
+        try {
+          const reply = await api('api/conversation', { id: newId(), session: session.id });
+          const content = el('div');
+          if (reply.more) content.append(ui.note('更早的内容在电脑上'));
+          if (!reply.messages?.length) content.append(ui.empty('这段对话暂无可读内容'));
+          await writeSaid(content, reply.messages || [], TOOLS[session.tool], new Set(), new Map());
+          record.replaceChildren(content);
+        } catch (error) {
+          record.replaceChildren(ui.note(error.message, 'bad'), ui.row({ label: '重试读取', act: load }));
+        }
+      };
+      p.body.append(record);
+      p.foot.append(...ui.go('继续对话', () => p.sheet.close(true)).nodes);
+      load();
+    } });
+    const next = await sheet.result;
+    if (key) restoreListPosition(key, false);
+    if (next && key) return goOn(session, { returnList: key });
+    return next ? goOn(session) : false;
+  }
   // A message for a running terminal without going into it: what the box of its page would send. The relay puts it
   // the way the program takes pasted text and adds Enter (the operation "say").
   async function say(t) {
@@ -1032,6 +1065,12 @@
         source: 'app', pinned: false, hidden: false, state: live ? 'active' : 'history'
       });
     });
+    for (const x of out) {
+      if (!x.s) continue;
+      x.organize = x.s.organize;
+      x.originalTitle = x.organize?.original_title || x.s.title || x.title;
+      if (x.organize?.title) x.title = x.organize.title;
+    }
     return out;
   }
   const needsYou = x => x.live && x.phase === 'confirm';
@@ -1059,19 +1098,64 @@
       const rosterModels = Array.isArray(c.roster) ? c.roster.map(r => [r && r.model, r && r.effort].filter(Boolean).join('\n')).filter(Boolean).join('\n') : '';
       return [x.title, x.place, '协作任务', TEAM_MODES[c.mode] || c.mode || '', c.auto_roster ? '自动组队' : '', label, c.note || '', x.teamConfirmText || '', (x.teamTools || []).map(t => TOOLS[t] || t).join('\n'), models, rosterModels, SOURCE.app].join('\n').toLowerCase();
     }
-    return [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
+    return [x.title, x.originalTitle, x.organize?.summary, ...(x.organize?.tags || []), x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
   };
   // what a card shows: it is built again when any of this changes
   const signed = x => x.team ? ['team', x.team.id, x.team.state, x.team.phase, !!x.team.last, x.team.goal, x.team.dir, x.team.note, x.team.updated, x.teamConfirm, x.teamConfirmText, x.teamTools, x.team.models || null, x.team.roster || null, !!x.team.auto_roster, x.team.awaited || null]
-    : x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned, x.place, x.apart]
-    : [x.s.id, x.phase, x.s.now, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), canEnd(x.s), endingSessions.has(x.s.id), x.s.ask || null, x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state, x.source];
+    : x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned, x.place, x.apart, x.organize]
+    : [x.s.id, x.phase, x.s.now, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), canEnd(x.s), endingSessions.has(x.s.id), x.s.ask || null, x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state, x.source, x.organize];
 
   // ---- the filters: by tool, and by where a thing runs. They last as long as the page is kept open.
-  let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 2, hiddenShown = false;
+  let filter = { tool: '', source: '', follow: false }, resultsShown = 30, recentShown = 2, hiddenShown = false;
   try { filter = Object.assign(filter, JSON.parse(sessionStorage.getItem('rcli-filter') || '{}')); } catch (error) { /* no storage */ }
   if (!SOURCE[filter.source]) filter.source = '';
   const hasTool = (x, tool) => x.team ? (x.teamTools || []).includes(tool) : x.tool === tool;
   const pass = x => (!filter.tool || hasTool(x, filter.tool)) && (!filter.source || x.source === filter.source);
+  const passTasks = x => pass(x) && (!filter.follow || !!x.organize?.follow_up);
+  const taskWords = () => $('query').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matchesTask = (x, asked) => asked.every(word => wordsOf(x).includes(word));
+  const listKey = x => x.team ? 'team:' + x.team.id : (x.s ? 'session:' + x.s.tool + ':' + x.s.id : 'terminal:' + x.t.id);
+  const storedPosition = key => 'rcli-list:' + location.pathname + ':' + key;
+  function saveListPosition() {
+    const key = history.state?.listKey || newId();
+    const rows = [...document.querySelectorAll('[data-list-key]')].filter(row => row.getClientRects().length);
+    const index = rows.findIndex(row => row.getBoundingClientRect().bottom > 0);
+    const anchors = index < 0 ? [] : [rows[index], rows[index + 1], rows[index - 1]].filter(Boolean)
+      .map(row => [row.dataset.listKey, row.getBoundingClientRect().top]);
+    try {
+      sessionStorage.setItem(storedPosition(key), JSON.stringify({ tab, project, cameFrom, filter, resultsShown, recentShown, shown, endedShown,
+        hiddenShown, projectFolds, query: $('query').value, search: $('search').value, y: scrollY, anchors }));
+      history.replaceState({ ...history.state, listKey: key }, '');
+    } catch (error) { /* Browsing still works without storage. */ }
+    return key;
+  }
+  function restoreListPosition(key, restoreFields = true) {
+    let state;
+    try { state = JSON.parse(sessionStorage.getItem(storedPosition(key))); } catch (error) { return false; }
+    if (!state) return false;
+    if (restoreFields) {
+      ({ tab, project, cameFrom, filter, resultsShown, recentShown, shown, endedShown, hiddenShown } = state);
+      Object.assign(projectFolds, state.projectFolds);
+      $('query').value = state.query;
+      $('search').value = state.search;
+      draw();
+    }
+    requestAnimationFrame(() => {
+      const visible = [...document.querySelectorAll('[data-list-key]')].filter(row => row.getClientRects().length);
+      for (const [id, top] of state.anchors) {
+        const row = visible.find(one => one.dataset.listKey === id);
+        if (row) { scrollBy(0, row.getBoundingClientRect().top - top); return; }
+      }
+      scrollTo(0, state.y);
+    });
+    return true;
+  }
+  function organizeCandidates() {
+    const asked = taskWords();
+    return things().filter(x => supportsOrganize(x.s) && !x.twice && !x.hidden && passTasks(x) && matchesTask(x, asked))
+      .map(x => ({ session: x.s.id, tool: x.s.tool }));
+  }
+  const supportsOrganize = s => !!s && ['codex', 'claude', 'agy'].includes(s.tool);
   // a project is one of a tool or of a kind by what its folder is used for, or by what is in it now
   const passProject = (folder, inside) => (!filter.tool || (folder.tools || []).includes(filter.tool) || inside.some(x => hasTool(x, filter.tool)))
     && (!filter.source || (folder.kinds || []).some(kind => sourceOfKind(kind) === filter.source) || inside.some(x => x.source === filter.source));
@@ -1114,6 +1198,7 @@
   }
   async function manage(x) {
     const s = x.s, choices = [];
+    if (supportsOrganize(s) && pageHost.has('organize')) choices.push({ label: '整理这段对话', value: 'organize' });
     if (s && marks()) choices.push({ label: s.pinned ? '取消置顶' : '置顶', value: 'pin' });
     if (s && !x.t && marks() && (!s.live || s.hidden || s.now === false)) choices.push({ label: s.hidden ? '取消隐藏' : '从列表隐藏', value: 'hide' });
     if (s && !x.t && canEnd(s) && usable()) choices.push({ label: '结束电脑上的这段对话', value: 'finish', kind: 'danger' });
@@ -1128,7 +1213,8 @@
     if (s && !x.t && !s.live && s.dir && usable() && (data.device.features || []).includes('delete')) choices.push({ label: '删除对话', value: 'delete', kind: 'danger' });
     if (!choices.length) return;
     const choice = await ask(x.title, '', choices);
-    if (choice === 'pin') mark(s, { pinned: !s.pinned });
+    if (choice === 'organize') window.RemoteOrganize.open({ session: s.id, tool: s.tool });
+    else if (choice === 'pin') mark(s, { pinned: !s.pinned });
     else if (choice === 'hide') mark(s, s.hidden ? { hidden: false } : { hidden: true, pinned: false });
     else if (choice === 'add') addFolder(folder);
     else if (choice === 'enter') enter(x.project);
@@ -1192,13 +1278,26 @@
   const named = x => el('b', null, x.pinned ? el('i', { className: 'pin', html: ICON.pin }) : '', x.title);
   // where it is: its project, or the folder a conversation is open in when that is no project
   function placed(meta, x) {
+    if (x.organize?.follow_up) meta.append(pill('waiting', '待跟进'));
     if (!x.place) return;
     meta.append(el('span', { className: 'chip' + (x.apart ? ' apart' : ''), textContent: x.place, title: x.place, ariaLabel: (x.apart ? '文件夹：' : '项目：') + x.place }));
     if (x.apart) meta.append(el('span', { textContent: '未加入项目' }));
   }
   const card = x => {
-    if (x.team) return teamCard(x);
-    const made = x.t ? terminalCard(x) : sessionCard(x);
+    const made = x.team ? teamCard(x) : x.t ? terminalCard(x) : sessionCard(x);
+    made.dataset.listKey = listKey(x);
+    if (x.team) return made;
+    const summary = x.organize?.summary;
+    const query = taskWords();
+    const matched = x.organize?.tags?.filter(tag => query.some(word => tag.toLowerCase().includes(word))) || [];
+    if (summary || matched.length) made.querySelector('.open .text')?.append(el('span', {
+      className: 'organized-summary',
+      textContent: matched.length ? '主题 · ' + matched.join('、') + (summary ? ' · ' + summary : '') : summary
+    }));
+    if (supportsOrganize(x.s) && pageHost.has('organize')) made.insertBefore(el('button', {
+      type: 'button', className: 'side organize-more', ariaLabel: '对话操作', title: '对话操作', textContent: '⋯',
+      onclick: () => manage(x)
+    }), made.querySelector('.ask'));
     if (!x.t && canEnd(x.s)) made.insertBefore(el('button', { type: 'button', className: 'side end-session', ariaLabel: '结束电脑上的这段对话', title: '结束对话', html: ICON.stop, disabled: !usable() || endingSessions.has(x.s.id), onclick: () => endConversation(x.s) }), made.querySelector('.ask'));
     return held(made, () => manage(x));
   };
@@ -1281,7 +1380,7 @@
     else if (x.hidden) meta.append(pill('locked', '已隐藏'));
     placed(meta, x);
     meta.append(el('span', { textContent: whereOf(x) + ' · ' + ago(s.updated) }));
-    return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => { if (!usable()) return toast('电脑离线，暂时无法打开'); if (s.live) takeOver(s); else goOn(s); } },
+    return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => { if (!usable()) return toast('电脑离线，暂时无法打开'); if (s.live) takeOver(s); else readHistory(s); } },
       el('span', { className: 'tool ' + s.tool, html: ICON[s.tool] }), el('span', { className: 'text' }, named(x), meta), el('span', { className: 'chev', html: ICON.chev })));
   }
   // Lists are rebuilt only when what they show has changed, so a press or a scroll is not interrupted every few seconds.
@@ -1332,6 +1431,10 @@
     $('heading').textContent = project || TABS[tab];
     document.querySelector('#home .top').classList.toggle('large', !project);
     $('new-task').hidden = tab !== 'tasks'; $('settings').hidden = tab !== 'me';
+    $('organize').hidden = tab !== 'tasks' || !pageHost.has('organize');
+    $('organize').disabled = !ready;
+    $('follow-filter').hidden = tab !== 'tasks' || !pageHost.has('organize');
+    $('follow-filter').setAttribute('aria-pressed', String(!!filter.follow));
     document.querySelectorAll('#tabs button').forEach(button => { if (button.dataset.tab === tab) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
     // conversations open on the computer are counted with the terminals, by how they stand
     const stands = (list, ...phases) => list.filter(x => x.live && phases.includes(x.phase)).length;
@@ -1357,20 +1460,26 @@
     if (!lists) { if (views[tab]) views[tab].draw(); return; }
 
     if (!project) {
-      const all = everything.filter(pass), asked = $('query').value.trim().toLowerCase().split(/\s+/).filter(Boolean), searching = asked.length > 0, tick = [stamp(1), ready], tasks = tab === 'tasks';
+      const tasks = tab === 'tasks', all = everything.filter(tasks ? passTasks : pass), asked = taskWords();
+      const searching = asked.length > 0 || tasks && filter.follow, tick = [stamp(1), ready];
       $('find').hidden = tasks ? !everything.length : names.length < 2;
-      $('query').placeholder = tasks ? '搜索对话、终端和项目' : '搜索项目';
+      $('query').placeholder = tasks && pageHost.has('organize') ? '搜索标题、主题或项目' : tasks ? '搜索对话、终端和项目' : '搜索项目';
       drawFilters(everything);
       $('results').hidden = !searching || !tasks; $('sections').hidden = searching || !tasks;
       $('tasks-empty').hidden = everything.length > 0; $('first-task').hidden = !ready;
       if (!tasks) { /* the projects only */ } else if (searching) {
         // everything is looked through, what is hidden too; what is open comes first
-        const found = all.filter(x => !x.twice && asked.every(word => wordsOf(x).includes(word))).sort((a, b) => (b.live - a.live) || (b.pinned - a.pinned) || (a.live ? byRank(a, b) : byTime(a, b)));
-        show($('results-list'), found.slice(0, resultsShown), tick);
+        const titleMatch = x => asked.every(word => [x.title, x.originalTitle].join('\n').toLowerCase().includes(word));
+        const found = all.filter(x => !x.twice && matchesTask(x, asked)).sort((a, b) => (titleMatch(b) - titleMatch(a)) || (b.live - a.live) || (b.pinned - a.pinned) || (a.live ? byRank(a, b) : byTime(a, b)));
+        $('results').querySelector('h2').textContent = !asked.length && filter.follow ? '待跟进' : '搜索结果';
+        show($('results-list'), found.slice(0, resultsShown), tick.concat(asked));
         $('results-summary').textContent = found.length ? found.length + ' 个' : '没有找到';
         $('more-results').hidden = found.length <= resultsShown;
       } else {
-        const listed = all.filter(x => !x.twice), needs = listed.filter(needsYou).sort(byOpen), rest = listed.filter(x => !needsYou(x));
+        const listed = all.filter(x => !x.twice), needs = listed.filter(needsYou).sort(byOpen);
+        const replies = listed.filter(x => x.live && x.phase === 'waiting' && !x.team).sort(byOpen);
+        const unseen = listed.filter(x => x.live && x.phase === 'done' && !x.team).sort(byOpen);
+        const rest = listed.filter(x => !needsYou(x) && !replies.includes(x) && !unseen.includes(x));
         const pinned = rest.filter(x => x.pinned && !x.live).sort(byTime), free = rest.filter(x => !x.pinned || x.live);
         const active = free.filter(working).sort(byOpen);
         const opened = free.filter(x => x.live && !working(x)).sort(byOpened);
@@ -1378,6 +1487,10 @@
         $('needs').hidden = !needs.length;
         show($('needs-list'), needs, tick);
         $('needs-summary').textContent = needs.length + ' 个等你确认';
+        $('replies').hidden = !replies.length;
+        show($('replies').querySelector('ul'), replies, tick);
+        $('unseen').hidden = !unseen.length;
+        show($('unseen').querySelector('ul'), unseen, tick);
         $('pinned').hidden = !pinned.length;
         show($('pinned-list'), pinned, tick);
         $('pinned-summary').textContent = pinned.length + ' 个';
@@ -1391,7 +1504,7 @@
         show($('recent-list'), recent.slice(0, recentShown), [stamp(5), ready]);
         $('recent-summary').textContent = recent.length + ' 个';
         $('more-recent').hidden = recent.length <= recentShown;
-        $('nothing').hidden = !(filter.tool || filter.source) || needs.length + pinned.length + active.length + recent.length + opened.length > 0;
+        $('nothing').hidden = !(filter.tool || filter.source) || listed.length > 0;
       }
       // the projects: all of them, or those the search names
       // (with a filter chosen, those of that tool or kind)
@@ -1445,7 +1558,7 @@
     // what was pinned comes first; what was hidden is left out until it is asked for
     const saved = here.filter(x => !x.live && x.state === 'history').sort((a, b) => (b.pinned - a.pinned) || byTime(a, b)), put = saved.filter(x => x.hidden).length;
     const all = saved.filter(x => hiddenShown || !x.hidden), wanted = $('search').value.trim().toLowerCase();
-    const found = wanted ? all.filter(x => x.title.toLowerCase().includes(wanted)) : all;
+    const found = wanted ? all.filter(x => matchesTask(x, wanted.split(/\s+/))) : all;
     $('p-history').hidden = !saved.length;
     $('search').hidden = all.length <= 8;
     $('history-count').textContent = wanted ? found.length + ' / ' + all.length + ' 段' : all.length + ' 段';
@@ -1501,6 +1614,10 @@
   });
   $('new-task').addEventListener('click', () => beginAnywhere());
   $('first-task').addEventListener('click', () => beginAnywhere());
+  $('organize').addEventListener('click', () => window.RemoteOrganize.open({
+    targets: organizeCandidates(), filtered: !!($('query').value.trim() || filter.tool || filter.source || filter.follow)
+  }));
+  $('follow-filter').addEventListener('click', () => choose({ follow: !filter.follow }));
   // While something is typed the tabs make room: the keyboard takes the foot of the screen.
   document.addEventListener('focusin', event => { if (event.target.matches && event.target.matches('#home input, #home textarea')) document.body.classList.add('typing'); });
   document.addEventListener('focusout', () => document.body.classList.remove('typing'));
@@ -1525,7 +1642,9 @@
       data = (asked && await asked) || await api('api/terminal');
       if (data.device.shell) TOOLS.shell = data.device.shell;
       if (first && views[tab] && views[tab].open) views[tab].open();
-      draw(); peeks();
+      const returnList = first ? startParams.get('backList') || history.state?.listKey : '';
+      if (!returnList || !restoreListPosition(returnList)) draw();
+      peeks();
       if (window.RemoteTeams && window.RemoteTeams.sync) window.RemoteTeams.sync();
       if (wantedTeam && tab !== 'together') {
         const id = wantedTeam;
@@ -1544,21 +1663,39 @@
         take = ''; history.replaceState(history.state, '', location.pathname + (project ? '?project=' + encodeURIComponent(project) : ''));
         if (wanted && usable()) (wanted.live ? takeOver(wanted) : start(wanted.tool, wanted.dir, wanted.id, false)).then(leave);
       }
+      if (readFromBench) {
+        const wanted = (data.sessions || []).find(s => s.id === readFromBench && s.tool === startParams.get('tool'));
+        readFromBench = '';
+        if (wanted) (wanted.live ? takeOver(wanted) : readHistory(wanted)).then(leave);
+        else toast('这段对话已不在当前列表');
+      }
+      if (organizeFromBench && window.RemoteOrganize) {
+        organizeFromBench = false;
+        if (!pageHost.has('organize') || !usable()) return toast('当前电脑暂时无法整理对话');
+        const sheet = window.RemoteOrganize.open({ session: startParams.get('session'), tool: startParams.get('tool') });
+        sheet.result.then(() => leave(false));
+      }
     }
     catch (error) { if (!$('home').hidden) { $('device-text').textContent = error.message; $('dot').className = 'off'; } }
     if (!$('home').hidden) timer = setTimeout(refresh, document.hidden ? 15000 : 2500);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('home').hidden) refresh(); });
-  window.addEventListener('pageshow', event => { if (event.persisted && !$('home').hidden) refresh(); });      // back from a terminal
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted || $('home').hidden) return;
+    const key = history.state?.listKey;
+    if (key) restoreListPosition(key, false);
+    refresh();
+  });
 
   // What the views of their own work with: the page's helpers, what the computer last said, and the ways into a
   // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
-  window.RemoteCliPage = {
+  const pageHost = window.RemoteCliPage = {
     $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, closeReader, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep, loadMarkdown, markdownNode,
     get data() { return data; },
     get relayVersion() { return relayVersion; }, startAgyShell,
     get tab() { return tab; },
     get project() { return project; },
+    get computerName() { return computerName; },
     has: feature => !!data && (data.device.features || []).includes(feature),
     refresh: () => refresh(),
     view(name, made) { views[name] = made; if (data) { if (tab === name && made.open) made.open(); draw(); } }

@@ -83,6 +83,9 @@ final class AggregateSessions {
         String folder = "";
         /** What the owner said of the conversation, kept by the computer: it stands first, or is left out of the lists. */
         boolean pinned, hidden;
+        String organizedTitle = "", originalTitle = "", organizeSummary = "";
+        List<String> organizeTags = Collections.emptyList();
+        boolean followUp;
         boolean apart() { return project.isEmpty() && !folder.isEmpty(); }
         /** Where it is, in a word: its project, or the name of the folder it is open in. */
         String place() {
@@ -159,7 +162,7 @@ final class AggregateSessions {
             return tool;
         }
         String toolName() { String shown = displayTool(); return "shell".equals(shown) ? (shell.isEmpty() ? "PowerShell" : shell) : AggregateSessions.toolName(shown); }
-        String shownTitle() { return title.isEmpty() ? (team ? "协作任务" : toolName()) : title; }
+        String shownTitle() { return !organizedTitle.isEmpty() ? organizedTitle : title.isEmpty() ? (team ? "协作任务" : toolName()) : title; }
     }
     static String teamModeLabel(String mode) {
         if ("lead".equals(mode)) return "分工协作";
@@ -293,7 +296,7 @@ final class AggregateSessions {
                 for (String m : entry.teamModels.values()) sb.append('\n').append(m);
                 return sb.toString().toLowerCase(java.util.Locale.ROOT);
             }
-            return (entry.shownTitle() + '\n' + entry.place() + '\n' + entry.toolName() + '\n' + sourceLabel(entry.source()) + '\n' + (entry.terminal && entry.running() ? (entry.chat ? "手机对话\n" : "手机终端\n") : "") + entry.origin + '\n' + entry.kind + '\n' + computer + '\n' + label(kind)
+            return (entry.shownTitle() + '\n' + entry.originalTitle + '\n' + entry.organizeSummary + '\n' + String.join("\n", entry.organizeTags) + '\n' + entry.place() + '\n' + entry.toolName() + '\n' + sourceLabel(entry.source()) + '\n' + (entry.terminal && entry.running() ? (entry.chat ? "手机对话\n" : "手机终端\n") : "") + entry.origin + '\n' + entry.kind + '\n' + computer + '\n' + label(kind)
                 + (entry.apart() ? "\n未加入项目" : "") + (entry.pinned ? "\n置顶" : "") + (entry.hidden ? "\n已隐藏" : "")).toLowerCase(java.util.Locale.ROOT);
         }
     }
@@ -313,23 +316,27 @@ final class AggregateSessions {
      * what is hidden too. tool and source narrow every list ("" for any).
      */
     static final class Board {
-        final List<Thing> needs = new ArrayList<>(), pinned = new ArrayList<>(), active = new ArrayList<>(), opened = new ArrayList<>(), recent = new ArrayList<>(), found = new ArrayList<>();
+        final List<Thing> needs = new ArrayList<>(), replies = new ArrayList<>(), unseen = new ArrayList<>(), pinned = new ArrayList<>(), active = new ArrayList<>(), opened = new ArrayList<>(), recent = new ArrayList<>(), found = new ArrayList<>();
         boolean searched;
         final Set<String> tools = new java.util.LinkedHashSet<>(), sources = new java.util.LinkedHashSet<>();     // what there is to tell apart by, before narrowing
     }
     static Board board(List<Thing> things, String query, String tool, String source) {
+        return board(things, query, tool, source, false);
+    }
+    static Board board(List<Thing> things, String query, String tool, String source, boolean followOnly) {
         Board board = new Board();
         // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
         Set<String> saved = new HashSet<>();
         for (Thing thing : things) if (!thing.entry.terminal && !thing.entry.team) saved.add(thing.url + '\n' + thing.entry.tool + '\n' + thing.entry.id);
         List<String> words = new ArrayList<>();
         for (String word : query.trim().toLowerCase(java.util.Locale.ROOT).split("\\s+")) if (!word.isEmpty()) words.add(word);
-        board.searched = !words.isEmpty();
+        board.searched = !words.isEmpty() || followOnly;
         for (String known : new String[]{"claude", "codex", "agy", "opencode", "qoder", "cline", "pi", "shell"}) for (Thing thing : things) if (thing.entry.matchesTool(known)) { board.tools.add(known); break; }
         for (String known : new String[]{"term", "app"}) for (Thing thing : things) if (known.equals(thing.entry.source())) { board.sources.add(known); break; }
         for (Thing thing : things) {
             Entry entry = thing.entry;
             if (!entry.matchesTool(tool) || !source.isEmpty() && !source.equals(entry.source())) continue;
+            if (followOnly && !entry.followUp) continue;
             if (entry.terminal && !entry.running() && !entry.session.isEmpty() && saved.contains(thing.url + '\n' + entry.tool + '\n' + entry.session)) continue;
             boolean past = isPast(thing.kind);
             if (board.searched) {
@@ -339,6 +346,8 @@ final class AggregateSessions {
                 if (has) board.found.add(thing);
             }
             else if (thing.running() && needs(thing.kind)) board.needs.add(thing);
+            else if (entry.open() && "waiting".equals(thing.kind)) board.replies.add(thing);
+            else if (entry.open() && "done".equals(thing.kind)) board.unseen.add(thing);
             else if (entry.open() && working(thing.kind)) board.active.add(thing);
             else if (entry.open()) board.opened.add(thing);
             else if (entry.pinned && past) board.pinned.add(thing);
@@ -350,9 +359,18 @@ final class AggregateSessions {
         Comparator<Thing> open = (a, b) -> a.entry.open() != b.entry.open() ? (a.entry.open() ? -1 : 1) : a.entry.open() ? standing.compare(a, b) : lately.compare(a, b);
         Comparator<Thing> pinnedFirst = (a, b) -> a.entry.pinned != b.entry.pinned ? (a.entry.pinned ? -1 : 1) : standing.compare(a, b);
         Comparator<Thing> opened = (a, b) -> compareOpened(a.entry, b.entry);
-        Collections.sort(board.needs, pinnedFirst); Collections.sort(board.active, pinnedFirst); Collections.sort(board.opened, opened);
-        Collections.sort(board.pinned, open); Collections.sort(board.found, open); Collections.sort(board.recent, lately);
+        Collections.sort(board.needs, pinnedFirst); Collections.sort(board.replies, pinnedFirst); Collections.sort(board.unseen, pinnedFirst);
+        Collections.sort(board.active, pinnedFirst); Collections.sort(board.opened, opened);
+        Collections.sort(board.pinned, open);
+        board.found.sort(Comparator.comparing((Thing item) -> !titleMatches(item.entry, words)).thenComparing(open));
+        Collections.sort(board.recent, lately);
         return board;
+    }
+
+    private static boolean titleMatches(Entry entry, List<String> words) {
+        String title = (entry.shownTitle() + '\n' + entry.originalTitle).toLowerCase(java.util.Locale.ROOT);
+        for (String word : words) if (!title.contains(word)) return false;
+        return true;
     }
 
     static final class Project {

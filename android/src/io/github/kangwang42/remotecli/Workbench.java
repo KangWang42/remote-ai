@@ -8,6 +8,8 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.ScrollView;
+import android.os.Bundle;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.IOException;
@@ -58,6 +60,19 @@ final class Workbench {
     }
     /** A new conversation: on the computer that is online, or on the one that is chosen. Its page asks the rest (web/begin.js). */
     private void newConversation() { activity.pick("新建对话", reachable(), activity::startNew); }
+
+    private void organize() {
+        List<String> computers = new ArrayList<>();
+        for (String url : reachable()) {
+            Snapshot snapshot = snapshots.get(url);
+            if (snapshot != null && snapshot.can.contains("organize")) computers.add(url);
+        }
+        if (computers.isEmpty()) {
+            android.widget.Toast.makeText(activity, "暂无在线电脑支持对话整理", android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        activity.pick("整理哪台电脑的对话", computers, url -> activity.organize(url, "", ""));
+    }
     /** How many things wait for an answer, on every computer: said on the tab of 任务. */
     private int waiting() {
         int waiting = 0;
@@ -87,11 +102,79 @@ final class Workbench {
     private boolean recentOpen;         // "最近" shows more than its first few
     // What is searched for, and what the lists are narrowed to: a tool, and where a thing runs ("" for any).
     private String query = "", tool = "", source = "";
+    private boolean followOnly;
+    private int foundShown = FOUND, scrollY, rowOffset;
+    private String rowAnchor = "";
+    private final Map<String, View> taskRows = new java.util.LinkedHashMap<>();
+    private View organizeButton;
+    private ScrollView taskScroll;
     private LinearLayout filters;
     private String filtersMark;
     private final Map<String, TextView> peeks = new HashMap<>();       // address, line break, terminal -> the line it last said
 
     Workbench(MainActivity activity, Kit kit) { this.activity = activity; this.kit = kit; }
+
+    void rememberPosition(ScrollView scroll) {
+        scrollY = scroll.getScrollY();
+        rowAnchor = "";
+        int[] viewport = new int[2], position = new int[2];
+        scroll.getLocationInWindow(viewport);
+        for (Map.Entry<String, View> item : taskRows.entrySet()) {
+            View row = item.getValue();
+            if (!row.isShown()) continue;
+            row.getLocationInWindow(position);
+            int top = position[1] - viewport[1];
+            if (top + row.getHeight() <= 0 || top >= scroll.getHeight()) continue;
+            rowAnchor = item.getKey();
+            rowOffset = top;
+            break;
+        }
+    }
+
+    void restorePosition(ScrollView scroll) {
+        taskScroll = scroll;
+        scroll.post(() -> {
+            if (!scroll.isShown()) return;
+            View row = taskRows.get(rowAnchor);
+            int y = scrollY;
+            if (row != null && row.isShown()) {
+                int[] viewport = new int[2], position = new int[2];
+                scroll.getLocationInWindow(viewport);
+                row.getLocationInWindow(position);
+                y = scroll.getScrollY() + position[1] - viewport[1] - rowOffset;
+            }
+            scroll.scrollTo(0, Math.max(0, y));
+        });
+    }
+
+    Bundle saveState() {
+        Bundle state = new Bundle();
+        state.putString("query", query);
+        state.putString("tool", tool);
+        state.putString("source", source);
+        state.putString("row", rowAnchor);
+        state.putInt("offset", rowOffset);
+        state.putInt("scroll", scrollY);
+        state.putInt("shown", foundShown);
+        state.putBoolean("search", searchOpen);
+        state.putBoolean("follow", followOnly);
+        state.putBoolean("recent", recentOpen);
+        return state;
+    }
+
+    void restoreState(Bundle state) {
+        if (state == null) return;
+        query = state.getString("query", "");
+        tool = state.getString("tool", "");
+        source = state.getString("source", "");
+        rowAnchor = state.getString("row", "");
+        rowOffset = state.getInt("offset");
+        scrollY = state.getInt("scroll");
+        foundShown = state.getInt("shown", FOUND);
+        searchOpen = state.getBoolean("search");
+        followOnly = state.getBoolean("follow");
+        recentOpen = state.getBoolean("recent");
+    }
 
     // ---- which finished work the user has already looked at: {address: {terminal: phase change}}
     private JSONObject seenAll() {
@@ -138,6 +221,7 @@ final class Workbench {
         holders.clear(); marks.clear(); attentionMark = null; filtersMark = null; filters = null; attention = null; recent = null;
         metrics = null; metricCells = null; metricLabels = null; metricDots = null; external = null;
         summary = null; statusPillHost = null; pillName = null; pillState = null; pillDotWrap = null; searchBox = null;
+        organizeButton = null; taskRows.clear(); taskScroll = null;
 
         if (tasks) {
             if (list.length() > 0) {
@@ -158,7 +242,13 @@ final class Workbench {
                 TextView heroTitle = kit.bold("任务", 31, kit.INK);
                 heroTitle.setIncludeFontPadding(false);
                 heroTitle.setLetterSpacing(-0.02f);
-                page.addView(heroTitle, kit.below(10));
+                LinearLayout heading = kit.row();
+                heading.addView(heroTitle, new LinearLayout.LayoutParams(0, -2, 1));
+                organizeButton = filterChip("整理对话", "", false, this::organize);
+                organizeButton.setMinimumHeight(kit.dp(48));
+                organizeButton.setVisibility(View.GONE);
+                heading.addView(organizeButton);
+                page.addView(heading, kit.below(10));
             } else {
                 summary = kit.standing("还没有添加电脑");
                 page.addView(kit.head("任务", summary));
@@ -230,7 +320,7 @@ final class Workbench {
 
             // Inline search bar (revealed by Search circle button, or stays open while query is active)
             page.setFocusable(true); page.setFocusableInTouchMode(true);
-            searchBox = kit.field("搜索对话、终端和项目", android.text.InputType.TYPE_CLASS_TEXT);
+            searchBox = kit.field("搜索标题、主题或项目", android.text.InputType.TYPE_CLASS_TEXT);
             searchBox.setMinHeight(kit.dp(48)); searchBox.setTextSize(15); searchBox.setText(query);
             searchBox.setBackground(kit.shape(kit.PANEL, kit.cardBorder(), 24));
             android.graphics.drawable.Drawable searchIcon = activity.getDrawable(R.drawable.ic_search);
@@ -245,7 +335,7 @@ final class Workbench {
             searchBox.addTextChangedListener(new android.text.TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) { }
                 @Override public void onTextChanged(CharSequence text, int start, int before, int count) { }
-                @Override public void afterTextChanged(android.text.Editable text) { query = text.toString(); draw(); }
+                @Override public void afterTextChanged(android.text.Editable text) { query = text.toString(); foundShown = FOUND; draw(); }
             });
             searchBox.setVisibility(searchOpen || !query.isEmpty() ? View.VISIBLE : View.GONE);
             page.addView(searchBox, kit.below(12));
@@ -467,6 +557,14 @@ final class Workbench {
                     entry.optString("host"), entry.optString("terminal"), entry.optString("session"),
                     entry.optBoolean("done"), entry.optLong("phase_at"));
                 made.said = entry.optString(terminal ? "said" : "last");
+                JSONObject organized = entry.optJSONObject("organize");
+                if (organized != null) {
+                    made.organizedTitle = organized.optString("title");
+                    made.originalTitle = organized.optString("original_title");
+                    made.organizeSummary = organized.optString("summary");
+                    made.organizeTags = strings(organized.optJSONArray("tags"));
+                    made.followUp = organized.optBoolean("follow_up");
+                }
                 JSONArray reach = terminal ? null : entry.optJSONArray("reach");
                 made.reached = reach != null;
                 made.canTakeover = entry.optBoolean("can_takeover");
@@ -507,9 +605,18 @@ final class Workbench {
                 strings(card.optJSONArray("tools")), models, strings(card.optJSONArray("awaited"))));
         }
         prune(url, alive);
-        Set<String> pinned = new HashSet<>();
-        for (AggregateSessions.Entry entry : entries) if (!entry.terminal && entry.pinned) pinned.add(entry.tool + ':' + entry.id);
-        for (AggregateSessions.Entry entry : entries) if (entry.terminal && !entry.session.isEmpty() && pinned.contains(entry.tool + ':' + entry.session)) entry.pinned = true;
+        Map<String, AggregateSessions.Entry> saved = new HashMap<>();
+        for (AggregateSessions.Entry entry : entries) if (!entry.terminal && !entry.team) saved.put(entry.tool + ':' + entry.id, entry);
+        for (AggregateSessions.Entry entry : entries) if (entry.terminal && !entry.session.isEmpty()) {
+            AggregateSessions.Entry original = saved.get(entry.tool + ':' + entry.session);
+            if (original == null) continue;
+            entry.pinned = original.pinned;
+            entry.organizedTitle = original.organizedTitle;
+            entry.originalTitle = original.originalTitle;
+            entry.organizeSummary = original.organizeSummary;
+            entry.organizeTags = original.organizeTags;
+            entry.followUp = original.followUp;
+        }
         List<AggregateSessions.Project> groups = AggregateSessions.projects(names, entries);
         for (int i = 0; projects != null && i < projects.length(); i++) {
             JSONObject project = projects.optJSONObject(i);
@@ -563,6 +670,7 @@ final class Workbench {
         JSONArray list = activity.computers();
         List<AggregateSessions.Thing> things = new ArrayList<>();
         int online = 0, known = 0;
+        boolean organizes = false;
         List<String> agyProcesses = new ArrayList<>();
         int[] total = new int[4];
         for (int i = 0; i < list.length(); i++) {
@@ -574,6 +682,7 @@ final class Workbench {
             known++;
             if (!"on".equals(snapshot.state)) continue;
             online++;
+            organizes |= snapshot.can.contains("organize");
             for (long at : snapshot.agyStarts) agyProcesses.add(name + " · " +
                 java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(new java.util.Date(at)) + " 启动");
             Map<String, Long> looked = seen(url);
@@ -631,23 +740,26 @@ final class Workbench {
             }
         }
         if (attention == null) return;
-        AggregateSessions.Board board = AggregateSessions.board(things, query, tool, source);
-        drawFilters(board);
+        if (organizeButton != null) organizeButton.setVisibility(organizes ? View.VISIBLE : View.GONE);
+        AggregateSessions.Board board = AggregateSessions.board(things, query, tool, source, followOnly);
+        drawFilters(board, organizes);
         boolean several = list.length() > 1;
         long now = System.currentTimeMillis();
         StringBuilder mark = new StringBuilder();
         List<AggregateSessions.Thing> all = new ArrayList<>();
-        for (List<AggregateSessions.Thing> part : java.util.Arrays.asList(board.needs, board.pinned, board.active, board.opened, board.recent, board.found)) {
+        for (List<AggregateSessions.Thing> part : java.util.Arrays.asList(board.needs, board.replies, board.unseen, board.pinned, board.active, board.opened, board.recent, board.found)) {
             mark.append(part.size()).append('|');
             for (AggregateSessions.Thing task : part) {
                 all.add(task);
                 mark.append(task.url).append('\n').append(task.entry.id).append('\n').append(task.kind).append('\n').append(task.entry.shownTitle()).append('\n').append(task.computer).append('\n')
                     .append(AggregateSessions.where(task.entry)).append('\n').append(task.entry.pinned).append(task.entry.hidden).append(canEnd(task.url, task.entry)).append(ending.contains(task.url + '\n' + task.entry.id))
-                    .append(task.entry.team ? "\nT:" + task.entry.teamPhase + ":" + task.entry.teamNote + ":" + task.entry.teamConfirm : "").append('\n');
+                    .append(task.entry.team ? "\nT:" + task.entry.teamPhase + ":" + task.entry.teamNote + ":" + task.entry.teamConfirm : "")
+                    .append(task.entry.organizeSummary).append(task.entry.organizeTags).append(task.entry.followUp).append('\n');
                 if (!task.running()) mark.append(AggregateSessions.ago(AggregateSessions.recent(task.entry), now)).append('\n');
             }
         }
-        mark.append(recentOpen).append(folded("active")).append(folded("opened")).append(folded("recent")).append(board.searched).append(several).append(tool).append('|').append(source).append(online).append('/').append(known);
+        mark.append(recentOpen).append(folded("active")).append(folded("opened")).append(folded("recent")).append(board.searched)
+            .append(foundShown).append(followOnly).append(query).append(several).append(tool).append('|').append(source).append(online).append('/').append(known);
         if (mark.toString().equals(attentionMark)) {
             for (AggregateSessions.Thing task : all) {
                 TextView peek = peeks.get(task.url + '\n' + task.entry.id);
@@ -658,23 +770,25 @@ final class Workbench {
             return;
         }
         attentionMark = mark.toString();
+        if (taskScroll != null && !taskRows.isEmpty()) rememberPosition(taskScroll);
+        taskRows.clear();
+        if (taskScroll != null && (scrollY > 0 || !rowAnchor.isEmpty())) restorePosition(taskScroll);
         peeks.clear();
         attention.removeAllViews(); recent.removeAllViews();
         if (board.searched) {
-            attention.addView(heading("搜索结果", board.found.isEmpty() ? "没有找到" : board.found.size() + " 个"), kit.below(14));
+            String resultTitle = followOnly && query.trim().isEmpty() ? "待跟进" : "搜索结果";
+            String resultCount = board.found.isEmpty() ? "没有找到" : board.found.size() + " 个";
+            if (online < list.length()) resultCount += " · 仅在线电脑";
+            attention.addView(heading(resultTitle, resultCount), kit.below(14));
             if (!board.found.isEmpty()) {
-                LinearLayout group = kit.cardBox(22);
-                int count = Math.min(FOUND, board.found.size());
-                for (int i = 0; i < count; i++) {
-                    if (i > 0) group.addView(kit.insetDivider(66));
-                    group.addView(compactTaskRow(board.found.get(i), several));
-                }
-                attention.addView(group, kit.below(10));
+                Object[] more = board.found.size() > foundShown ? new Object[]{"显示更多", (Runnable) () -> { foundShown += FOUND; draw(); }} : null;
+                groupedSection(attention, "", "", board.found, foundShown, several, null, more);
             }
-            if (board.found.size() > FOUND) attention.addView(kit.text("另外 " + (board.found.size() - FOUND) + " 个没有列出，再输几个字可以找到。", 12.5f, kit.MUTED), kit.below(8));
             return;
         }
         heroSection(attention, "等你确认", board.needs.size() + " 个", board.needs, board.needs.size(), several, null);
+        groupedSection(attention, "等你回复", board.replies.size() + " 个", board.replies, board.replies.size(), several, null, null);
+        groupedSection(attention, "刚完成 · 未看", board.unseen.size() + " 个", board.unseen, board.unseen.size(), several, null, null);
         heroSection(attention, "正在运行", board.active.size() + " 个", board.active, TASKS, several, "active");
         if (!folded("active") && board.active.size() > TASKS) attention.addView(kit.text("另外 " + (board.active.size() - TASKS) + " 个在各自的项目里。", 12.5f, kit.MUTED), kit.below(8));
         groupedSection(attention, "已打开", "等待输入的排在前面", board.opened, TASKS, several, "opened", null);
@@ -721,7 +835,7 @@ final class Workbench {
     private void heroSection(LinearLayout into, String title, String note, List<AggregateSessions.Thing> things, int most, boolean several, String fold) {
         if (things.isEmpty()) return;
         boolean folded = fold != null && folded(fold);
-        into.addView(fold == null ? heading(title, note) : heading(title, note, folded, () -> fold(fold)), kit.below(into.getChildCount() == 0 ? 16 : 20));
+        if (!title.isEmpty()) into.addView(fold == null ? heading(title, note) : heading(title, note, folded, () -> fold(fold)), kit.below(into.getChildCount() == 0 ? 16 : 20));
         for (int i = 0; !folded && i < Math.min(most, things.size()); i++) {
             into.addView(heroTaskCard(things.get(i), several), kit.below(i == 0 && fold != null ? 2 : 10));
         }
@@ -756,7 +870,7 @@ final class Workbench {
         return out;
     }
 
-    private void drawFilters(AggregateSessions.Board board) {
+    private void drawFilters(AggregateSessions.Board board, boolean organizes) {
         if (filters == null) return;
         List<String> tools = new ArrayList<>(board.tools), sources = new ArrayList<>(board.sources);
         for (Snapshot snapshot : snapshots.values()) for (AggregateSessions.Project project : snapshot.projects) {
@@ -767,12 +881,13 @@ final class Workbench {
         if (!source.isEmpty() && !sources.contains(source)) sources.add(source);
         if (tools.size() < 2 && tool.isEmpty()) tools.clear();
         if (sources.size() < 2 && source.isEmpty()) sources.clear();
-        String mark = tools + "|" + sources + "|" + tool + "|" + source;
+        String mark = tools + "|" + sources + "|" + tool + "|" + source + "|" + organizes + "|" + followOnly;
         if (mark.equals(filtersMark)) return;
         filtersMark = mark;
         filters.removeAllViews();
-        if (tools.isEmpty() && sources.isEmpty()) return;
-        filters.addView(filterChip("全部", "", tool.isEmpty() && source.isEmpty(), () -> { tool = ""; source = ""; draw(); }));
+        if (tools.isEmpty() && sources.isEmpty() && !organizes && !followOnly) return;
+        filters.addView(filterChip("全部", "", tool.isEmpty() && source.isEmpty() && !followOnly, () -> { tool = ""; source = ""; followOnly = false; foundShown = FOUND; draw(); }));
+        if (organizes || followOnly) filters.addView(filterChip("待跟进", "", followOnly, () -> { followOnly = !followOnly; foundShown = FOUND; draw(); }));
         for (final String one : tools) filters.addView(filterChip(AggregateSessions.toolName(one), one, one.equals(tool), () -> { tool = one.equals(tool) ? "" : one; draw(); }));
         if (!tools.isEmpty() && !sources.isEmpty()) {
             View between = new View(activity);
@@ -915,10 +1030,12 @@ final class Workbench {
             stLp.leftMargin = kit.dp(8);
             actions.addView(stopBtn, stLp);
         }
+        if (canOrganize(task)) actions.addView(organizeMenu(task));
         card.addView(actions, kit.below(12));
 
         kit.press(card, () -> openTask(task));
         card.setOnLongClickListener(v -> { manage(task); return true; });
+        taskRows.put(taskKey(task), card);
         return card;
     }
 
@@ -938,7 +1055,19 @@ final class Workbench {
         metaParts.add(entry.team ? AggregateSessions.teamWho(entry) : entry.toolName());
         if (several) metaParts.add(task.computer);
         if (entry.pinned) metaParts.add("置顶");
+        if (entry.followUp) metaParts.add("待跟进");
         texts.addView(kit.line(android.text.TextUtils.join(" · ", metaParts), 12.5f, kit.MUTED, false), kit.below(3));
+        List<String> topics = new ArrayList<>();
+        String asked = query.trim().toLowerCase(java.util.Locale.ROOT);
+        for (String tag : entry.organizeTags) {
+            if (asked.isEmpty()) break;
+            for (String word : asked.split("\\s+")) if (tag.toLowerCase(java.util.Locale.ROOT).contains(word)) {
+                topics.add(tag);
+                break;
+            }
+        }
+        String preview = topics.isEmpty() ? entry.organizeSummary : "主题 · " + android.text.TextUtils.join("、", topics);
+        if (!preview.isEmpty()) texts.addView(kit.line(preview, 12, kit.MUTED, false), kit.below(3));
 
         if (entry.team) {
             if (!entry.said.isEmpty()) texts.addView(kit.line(entry.said, 12, kit.MUTED, false), kit.below(3));
@@ -950,36 +1079,60 @@ final class Workbench {
         }
         row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
 
-        boolean closing = ending.contains(task.url + '\n' + entry.id);
+        boolean closing = ending.contains(task.url + '\n' + entry.id), organizer = canOrganize(task);
+        LinearLayout status = organizer ? texts : row;
         if (AggregateSessions.isPast(task.kind)) {
             String when = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
             String pastText = entry.team
                 ? (when.isEmpty() ? AggregateSessions.label(task.kind) : AggregateSessions.label(task.kind) + " · " + when)
                 : (when.isEmpty() ? AggregateSessions.label(task.kind) : when + (entry.terminal ? "结束" : ""));
-            row.addView(kit.text(pastText, 12, "team-failed".equals(task.kind) ? kit.BAD : kit.MUTED));
+            status.addView(kit.text(pastText, 12, "team-failed".equals(task.kind) ? kit.BAD : kit.MUTED));
         } else if (closing) {
-            row.addView(kit.statusPill("正在结束", kit.MUTED, kit.RAISED, 0));
+            status.addView(kit.statusPill("正在结束", kit.MUTED, kit.RAISED, 0));
         } else if (AggregateSessions.needs(task.kind)) {
-            row.addView(kit.statusPill(AggregateSessions.label(task.kind), kit.BAD, kit.badSoft(), kit.BAD));
+            status.addView(kit.statusPill(AggregateSessions.label(task.kind), kit.BAD, kit.badSoft(), kit.BAD));
         } else if ("done".equals(task.kind) || "waiting".equals(task.kind)) {
-            row.addView(kit.statusPill("done".equals(task.kind) ? "已完成" : "等你回复", kit.accentInk(), kit.accentSoft(), kit.ACCENT));
+            status.addView(kit.statusPill("done".equals(task.kind) ? "已完成" : "等你回复", kit.accentInk(), kit.accentSoft(), kit.ACCENT));
         } else if (AggregateSessions.working(task.kind)) {
-            row.addView(kit.statusPill(AggregateSessions.label(task.kind), kit.busyInk(), kit.busySoft(), kit.busyDot()));
+            status.addView(kit.statusPill(AggregateSessions.label(task.kind), kit.busyInk(), kit.busySoft(), kit.busyDot()));
         } else if ("team-paused".equals(task.kind)) {
-            row.addView(kit.statusPill("已暂停", kit.busyInk(), kit.busySoft(), 0));
+            status.addView(kit.statusPill("已暂停", kit.busyInk(), kit.busySoft(), 0));
         } else {
-            row.addView(kit.statusPill(entry.hidden ? "已隐藏" : AggregateSessions.label(task.kind), kit.MUTED, kit.RAISED, 0));
+            status.addView(kit.statusPill(entry.hidden ? "已隐藏" : AggregateSessions.label(task.kind), kit.MUTED, kit.RAISED, 0));
         }
 
         kit.press(row, () -> openTask(task));
         row.setOnLongClickListener(v -> { manage(task); return true; });
+        if (organizer) row.addView(organizeMenu(task));
+        taskRows.put(taskKey(task), row);
         return row;
+    }
+
+    private String taskKey(AggregateSessions.Thing task) {
+        AggregateSessions.Entry entry = task.entry;
+        String session = entry.conversation();
+        return task.url + '\n' + (session.isEmpty() ? "view:" + entry.id : entry.tool + ':' + session);
+    }
+
+    private boolean canOrganize(AggregateSessions.Thing task) {
+        Snapshot snapshot = snapshots.get(task.url);
+        return snapshot != null && snapshot.can.contains("organize") && !task.entry.conversation().isEmpty()
+            && java.util.Arrays.asList("codex", "claude", "agy").contains(task.entry.tool);
+    }
+
+    private View organizeMenu(AggregateSessions.Thing task) {
+        return kit.circleAction(R.drawable.ic_more, "对话操作：" + task.entry.shownTitle(), false, () -> manage(task));
     }
 
     private void openTask(AggregateSessions.Thing task) {
         AggregateSessions.Entry entry = task.entry;
         if (entry.team) { activity.together(task.url, "team", entry.id); return; }
-        if (!entry.terminal) { activity.openSession(task.url, entry.project, entry.id); return; }
+        if (!entry.terminal) {
+            Snapshot snapshot = snapshots.get(task.url);
+            if (!entry.live && snapshot != null && snapshot.can.contains("peek")) activity.readSession(task.url, entry.tool, entry.id);
+            else activity.openSession(task.url, entry.project, entry.id);
+            return;
+        }
         markSeen(task.url, entry.id, entry.at);
         activity.openTerminal(task.url, entry.id, entry.chat);
     }
@@ -991,6 +1144,7 @@ final class Workbench {
         Snapshot snapshot = snapshots.get(task.url);
         boolean marks = snapshot != null && snapshot.marks && !entry.conversation().isEmpty();
         final List<String> labels = new ArrayList<>(), does = new ArrayList<>();
+        if (canOrganize(task)) { labels.add("整理这段对话"); does.add("organize"); }
         boolean canQuickSay = !"confirm".equals(task.kind) && ((entry.terminal && "running".equals(entry.state)) || (entry.reached && entry.canSay));
         if (canQuickSay) { labels.add("发消息"); does.add("say"); }
         if (marks) { labels.add(entry.pinned ? "取消置顶" : "置顶"); does.add("pin"); }
@@ -1002,7 +1156,8 @@ final class Workbench {
         if (labels.isEmpty()) return;
         kit.sheet(entry.shownTitle(), AggregateSessions.where(entry), labels.toArray(new String[0]), null, danger, which -> {
             String what = does.get(which);
-            if ("say".equals(what)) sayTask(task);
+            if ("organize".equals(what)) activity.organize(task.url, entry.tool, entry.conversation());
+            else if ("say".equals(what)) sayTask(task);
             else if ("pin".equals(what)) markRemote(task, true, !entry.pinned);
             else if ("hide".equals(what)) markRemote(task, false, !entry.hidden);
             else if ("add".equals(what)) addFolder(task);

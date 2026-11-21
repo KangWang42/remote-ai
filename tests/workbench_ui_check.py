@@ -59,7 +59,9 @@ assert 'optJSONArray("team_cards")' in workbench and 'optString("team")' in work
     "Workbench must parse device.team_cards and child team membership"
 assert 'activity.together(task.url, "team", entry.id)' in workbench and 'activity.together(url, "team", entry.id)' in workbench, \
     "Workbench team cards must open existing team detail via activity.together"
-assert '"领队验收"' in app_pages, "AppPages team rows must display verify phase as 领队验收"
+java_states = (ROOT / "android/src/io/github/kangwang42/remotecli/AggregateSessions.java").read_text(encoding="utf-8")
+assert 'AggregateSessions.label(kind)' in app_pages and 'case "team-verify": return "领队验收"' in java_states, \
+    "AppPages team rows must display verify phase through the shared 领队验收 label"
 assert "data.device.team_cards" in web and "teamCard(" in web, "Web lists must collapse team members into parent team cards"
 assert "teams-models" in teams_js and "team_models" in teams_js and "teams-effort" in teams_js and "领队验收" in teams_js and "member_sessions" in teams_js and "分工协作" in teams_js and "执行成员" in teams_js, \
     "Teams UI must support teams-models, teams-effort, unified terminology, verify phase display and member_sessions history fallback"

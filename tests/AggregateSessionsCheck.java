@@ -169,22 +169,22 @@ public final class AggregateSessionsCheck {
         require("a".equals(ids.apply(board.needs)), "only confirmation requests enter needs");
         require("past-2".equals(ids.apply(board.pinned)), "saved pinned records remain in pinned: " + ids.apply(board.pinned));
         require("c out".equals(ids.apply(board.active)), "pinned running tasks remain in the running group");
-        require("b desk 看日志".equals(ids.apply(board.opened)), "desktop conversations precede idle phone terminals");
+        require("b".equals(ids.apply(board.replies)) && "desk 看日志".equals(ids.apply(board.opened)), "waiting for a reply is separate from idle terminals");
         held.now = false;
         held.used = 1000;
-        require("desk b 看日志".equals(ids.apply(AggregateSessions.board(things, "", "", "").opened)), "idle desktop conversations sort by recent use");
+        require("desk 看日志".equals(ids.apply(AggregateSessions.board(things, "", "", "").opened)), "idle desktop conversations precede phone terminals");
         shell.pinned = true;
-        require("看日志 desk b".equals(ids.apply(AggregateSessions.board(things, "", "", "").opened)), "explicit pin remains first");
+        require("看日志 desk".equals(ids.apply(AggregateSessions.board(things, "", "", "").opened)), "explicit pin remains first");
         shell.pinned = false; held.used = 0; held.now = true;
         // an ended terminal whose conversation is listed is not listed twice; hidden history is left out
         require("past-1 只有画面的终端".equals(ids.apply(board.recent)) && !board.searched && board.found.isEmpty(), "what was used lately: " + ids.apply(board.recent));
         require("[claude, codex, shell]".equals(board.tools.toString()) && "[term, app]".equals(board.sources.toString()), board.tools + " " + board.sources);
         // narrowed by tool and by where a thing runs
         AggregateSessions.Board claudeOnly = AggregateSessions.board(things, "", "claude", "");
-        require("a".equals(ids.apply(claudeOnly.needs)) && "past-2".equals(ids.apply(claudeOnly.pinned)) && claudeOnly.active.isEmpty() && "b".equals(ids.apply(claudeOnly.opened)) && "past-1".equals(ids.apply(claudeOnly.recent)), "one tool");
+        require("a".equals(ids.apply(claudeOnly.needs)) && "past-2".equals(ids.apply(claudeOnly.pinned)) && claudeOnly.active.isEmpty() && "b".equals(ids.apply(claudeOnly.replies)) && "past-1".equals(ids.apply(claudeOnly.recent)), "one tool");
         // in a terminal (one of the phone's, a command line on the computer), or in an app
         AggregateSessions.Board termOnly = AggregateSessions.board(things, "", "", "term"), appOnly = AggregateSessions.board(things, "", "", "app");
-        require(termOnly.active.isEmpty() && "b 看日志".equals(ids.apply(termOnly.opened)) && termOnly.tools.size() == 3, "terminal waiting sessions are opened");
+        require(termOnly.active.isEmpty() && "b".equals(ids.apply(termOnly.replies)) && "看日志".equals(ids.apply(termOnly.opened)) && termOnly.tools.size() == 3, "explicit replies and idle terminals both respect source filtering");
         require("c out".equals(ids.apply(appOnly.active)) && "desk".equals(ids.apply(appOnly.opened)) && !ids.apply(appOnly.recent).contains("past"), "app filtering keeps both running and opened groups");
         // one that no program has open is told by what started it, where the computer says so
         AggregateSessions.Entry drawn = new AggregateSessions.Entry(false, "drawn", "web-shop", "桌面版里画的", "codex", "", "", "", false, "", "", ""), typed = new AggregateSessions.Entry(false, "typed", "web-shop", "终端里写的", "codex", "", "", "", false, "", "", "");
@@ -224,6 +224,12 @@ public final class AggregateSessionsCheck {
         require("past-3".equals(ids.apply(AggregateSessions.board(things, "旧的 codex", "", "").found)) && "b".equals(ids.apply(AggregateSessions.board(things, "台式机", "", "").found)), "the hidden one is found; and by the computer");
         require("out".equals(ids.apply(AggregateSessions.board(things, "未加入项目", "", "").found)) && AggregateSessions.board(things, "没有这样的", "", "").found.isEmpty(), "by what a card says; and nothing");
         require(AggregateSessions.board(things, "旧的", "claude", "").found.isEmpty(), "a search stays within what the filters leave");
+        past1.organizedTitle = "摘要整理"; past1.originalTitle = "摘要翻译";
+        past1.organizeTags = Collections.singletonList("断线重连"); past1.followUp = true;
+        past2.organizeSummary = "验证断线重连"; past2.followUp = true;
+        require("past-2 past-1".equals(ids.apply(AggregateSessions.board(things, "断线重连", "", "", true).found)), "topic and summary search can span projects");
+        require("past-1".equals(ids.apply(AggregateSessions.board(things, "摘要翻译", "", "").found)), "search retains the original title");
+        require(AggregateSessions.board(Collections.singletonList(on.apply(finished)), "", "", "").unseen.size() == 1, "finished and unread work has its own group");
         require("out".equals(outside.conversation()) && "past-1".equals(gone.conversation()) && shell.conversation().isEmpty(), "the conversation a mark is kept of");
         // A single identity moves between groups; pinning must not change its state category.
         for (String status : Arrays.asList("confirm", "busy", "waiting", "idle", "closed")) {
@@ -232,7 +238,8 @@ public final class AggregateSessionsCheck {
             AggregateSessions.Board moved = AggregateSessions.board(Collections.singletonList(on.apply(moving)), "", "", "");
             require(moved.needs.size() == ("confirm".equals(status) ? 1 : 0), "confirmation membership: " + status);
             require(moved.active.size() == ("busy".equals(status) ? 1 : 0), "execution membership: " + status);
-            require(moved.opened.size() == ("waiting".equals(status) || "idle".equals(status) ? 1 : 0), "opened membership: " + status);
+            require(moved.opened.size() == ("idle".equals(status) ? 1 : 0), "opened membership: " + status);
+            require(moved.replies.size() == ("waiting".equals(status) ? 1 : 0), "reply membership: " + status);
             require(moved.pinned.size() == ("closed".equals(status) ? 1 : 0), "saved pin membership: " + status);
         }
         require(AggregateSessions.counts(one, looked)[1] == 1, "completed but still open terminal is counted as opened");

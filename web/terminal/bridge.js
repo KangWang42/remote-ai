@@ -28,6 +28,7 @@
   // Opened from a collaboration task's member chip, back leads to that team; from the app's workbench, back there.
   const searchParams = new URLSearchParams(location.search);
   const fromBench = searchParams.get('from') === 'bench';
+  const returnList = /^[a-f0-9]{32}$/.test(searchParams.get('returnList') || '') ? searchParams.get('returnList') : '';
   const fromTeam = /^[a-f0-9]{16,32}$/.test(searchParams.get('team') || '') ? searchParams.get('team') : '';
   const returnTab = ['tasks', 'projects', 'together', 'me'].includes(searchParams.get('returnTab') || '') ? searchParams.get('returnTab') : '';
   const rawReturnProject = (searchParams.get('returnProject') || '').trim();
@@ -37,6 +38,7 @@
     if (fromTeam) tail += '&team=' + encodeURIComponent(fromTeam);
     if (returnProject) tail += '&returnProject=' + encodeURIComponent(returnProject);
     else if (returnTab) tail += '&returnTab=' + encodeURIComponent(returnTab);
+    if (returnList) tail += '&returnList=' + returnList;
     return tail;
   };
   const leave = () => {
@@ -47,7 +49,9 @@
       location.replace(target);
       return;
     }
-    if (fromBench && native && native.home) native.home(); else home();
+    if (fromBench && native && native.home) native.home();
+    else if (returnList) location.replace('../?backList=' + returnList);
+    else home();
   };
   // Quick tunnels buffer SSE; a held JSON response is delivered without that delay.
   let after = 0, terminal = null, loaded = false, streamed = !location.hostname.endsWith('.trycloudflare.com'), failures = 0, reader = null, run = 0, fetching = false, gone = false;

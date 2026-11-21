@@ -213,7 +213,9 @@ def main():
             overview()
             assert names('#needs') == [sessions[0]['title']]
             assert names('#active') == [sessions[1]['title'], '正在启动的终端']
-            assert set(names('#opened')) == {sessions[2]['title'], sessions[3]['title'], retained['title'], '等待输入的终端'}
+            assert names('#replies') == [sessions[2]['title']]
+            assert names('#unseen') == ['等待输入的终端']
+            assert set(names('#opened')) == {sessions[3]['title'], retained['title']}
             assert names('#pinned') == [], 'a live pinned task stays in its state group'
             assert value("document.querySelector('#project-list').textContent.includes('2 个正在运行')")
             assert value("document.querySelector('#active .chip').textContent") == PROJECT
@@ -267,7 +269,7 @@ def main():
             value("document.querySelector('.end-session').click()")
             until("document.querySelectorAll('.end-session').length === 0")
             assert len(asked) == before + 1 and asked[-1]['action'] == 'end' and asked[-1]['session'] == CLI
-            assert sessions[1]['title'] not in names('#active') + names('#opened')
+            assert sessions[1]['title'] not in names('#active') + names('#opened') + names('#replies')
             assert sessions[1]['title'] in names('#pinned'), 'closed pinned conversation is retained as a saved record'
             sessions[:] = original
             board_mode[0] = False
