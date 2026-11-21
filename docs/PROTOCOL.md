@@ -785,7 +785,7 @@ Once a task is removed nothing carries its id any more and its conversations are
 `team` that is not among `team_cards` (an older terminal the relay still keeps) as no task.
 
 **Older relays and computers.** A relay from before these filters `info.features` to what it knows and rebuilds each
-question field by field: it drops `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort` and `teams-flex-rounds` from `device.features`, gives no `team_cards` and
+question field by field: it drops `organize`, `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort` and `teams-flex-rounds` from `device.features`, gives no `team_cards` and
 no `team` fields, refuses `team_models` as unsupported, and passes `team_start` and `team_swap` without `models`, `model`, `efforts` or `effort`. A viewer therefore offers models, grouping, roster and reasoning effort only where `device.features` has those words (degrading unsupported reasoning effort to tool default with an upgrade note), which only a
 relay and a computer that both have them give. A computer without `teams-models` or `teams-effort` is refused non-empty model/effort choices by the relay, and one
 without `teams-flex-rounds` is refused `rounds` 0, so a team never starts silently with defaults the owner did not choose.
@@ -827,7 +827,9 @@ commands in `system` / `background_tasks_changed` (`tasks`, the whole list each 
 `task_notification`, an empty list, and goes on by itself in a turn of its own (`result` with `origin`). Codex
 0.163.0 waits for its command within the same turn. The phone is shown every turn as it ends; a collaboration task
 (Teams.cs) takes a member's turn as over only when nothing it started still runs in the background, and passes on
-what it said at the end of the turn that follows.
+what it said at the end of the turn that follows. Entries marked `ambient` (for example, live-update watchers)
+do not hold a member's result. A subagent marked `awaited` reports to its waiting tool call and does not start
+a follow-up turn, so it does not hold the result either.
 
 On Windows (`agent-windows/Peers.cs`), a chat can consult another installed chat-capable AI in the same project
 mid-turn through a per-conversation local MCP server (`remote_ai`, tool `ask_ai(tool, question, fresh?)`) bridged by

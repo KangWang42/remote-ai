@@ -436,7 +436,11 @@ public sealed class ClaudeChat : Chat {
             else if (Text(m, "subtype") == "status" && Text(m, "status") == "requesting" && Status == "idle") State("busy");
             // the commands it runs in the background (Claude Code 2.1.322: the whole list, each time it changes); when
             // one ends it goes on by itself, in a turn of its own
-            else if (Text(m, "subtype") == "background_tasks_changed") { var tasks = At(m, "tasks") as System.Collections.ICollection; Background(tasks == null ? 0 : tasks.Count); }
+            else if (Text(m, "subtype") == "background_tasks_changed") {
+                // Watchers stay alive across turns. An awaited agent reports into its tool
+                // call. Neither produces a later turn for the collaboration to wait for.
+                Background(Many(m, "tasks").Count(task => !true.Equals(At(task, "ambient")) && !true.Equals(At(task, "awaited"))));
+            }
             return;
         }
         if (type == "stream_event") { Streamed(At(m, "event")); return; }

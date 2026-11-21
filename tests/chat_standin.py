@@ -100,7 +100,12 @@ def claude(args):
         put({"type": "result", "subtype": "success", "is_error": False, "result": "测试在后台运行，跑完后汇报。", "session_id": session})
         time.sleep(0.8)
         put({"type": "system", "subtype": "task_notification", "task_id": "b1", "status": "completed", "tool_use_id": use})
-        put({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
+        # A live-update watcher remains after the command. The resumed subagent
+        # reports into its waiting tool call and never creates a follow-up turn.
+        put({"type": "system", "subtype": "background_tasks_changed", "tasks": [
+            {"task_id": "watch", "task_type": "local_bash", "ambient": True},
+            {"task_id": "child", "task_type": "local_agent", "awaited": True},
+        ]})
         put({"type": "system", "subtype": "init", "session_id": session, "cwd": ".", "tools": ["Bash"]})
         put({"type": "system", "subtype": "status", "status": "requesting"})
         said("测试全部通过，改了 checkout.js。")
