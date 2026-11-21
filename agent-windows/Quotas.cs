@@ -172,6 +172,13 @@ public sealed class Quotas {
         return windows;
     }
 
+    /// A running conversation's `account/rateLimits/updated`. With an API-key provider Codex sends it on every turn
+    /// with `primary`, `secondary` and `credits` all null (seen on the Codex in use on 2026-11-21); such an update
+    /// tells nothing and must not replace the balance or windows read from the account.
+    public void NoteCodexEvent(object limits) {
+        if (At(limits, "primary") == null && At(limits, "secondary") == null && At(limits, "credits") == null) return;
+        NoteCodex(limits);
+    }
     public void NoteCodex(object limits, string login = "", Dictionary<string, object> apiBalance = null) {
         if (login == "apiKey") {
             Write("codex", new Window[0], "", apiBalance ?? new Dictionary<string, object> { { "type", "api" } });

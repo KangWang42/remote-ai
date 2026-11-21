@@ -107,6 +107,8 @@ provider. Windows makes a read-only HTTPS `GET` to `<base_url>/usage` with the s
 credential and parses `balance` (or `remaining`) and `unit`. The query discards redirects. `{"type":"api"}` alone
 identifies API billing when a numeric balance is unavailable. `{"type":"credits","balance":"12.5"}` or
 `{"type":"credits","unlimited":true}` describes extra Codex credits reported with the ChatGPT rate limits.
+A running Codex conversation also sends `account/rateLimits/updated`; with an API-key provider every turn carries
+`primary`, `secondary` and `credits` as null. Such an update is ignored so it does not replace the balance read above.
 The `/usage` convention is also used by [Cockpit Tools 1.4.2](https://github.com/jlcodes99/cockpit-tools/blob/v1.4.2/src-tauri/src/commands/codex_model_provider_commands.rs).
 Antigravity CLI is asked by
 `agy -p /usage --output-format json` (with `AGY_CLI_DISABLE_AUTO_UPDATE=true`) at most every ten minutes, reporting the

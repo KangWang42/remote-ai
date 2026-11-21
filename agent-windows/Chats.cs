@@ -793,7 +793,7 @@ public sealed class CodexChat : JsonRpcChat {
                 break;
             }
             case "error": Note(Text(At(p, "error"), "message").Length > 0 ? Text(At(p, "error"), "message") : "Codex 出错"); break;
-            case "account/rateLimits/updated": if (quotas != null) quotas.NoteCodex(At(p, "rateLimits")); break;
+            case "account/rateLimits/updated": if (quotas != null) quotas.NoteCodexEvent(At(p, "rateLimits")); break;
         }
     }
     readonly HashSet<string> thoughts = new HashSet<string>();

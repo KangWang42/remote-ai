@@ -87,6 +87,13 @@ public static class QuotasCheck {
             codexReport = quotas.Report().Cast<Dictionary<string, object>>().Single(item => (string)item["tool"] == "codex");
             billing = (Dictionary<string, object>)codexReport["billing"];
             Require((string)billing["balance"] == "0" && (string)billing["unit"] == "USD" && billing.Count == 3, "API balance preserves zero and excludes everything but amount and unit");
+            quotas.NoteCodexEvent(json.DeserializeObject("{\"limit_id\":\"codex\",\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":null}"));
+            quotas.NoteCodexEvent(null);
+            codexReport = quotas.Report().Cast<Dictionary<string, object>>().Single(item => (string)item["tool"] == "codex");
+            Require(codexReport.ContainsKey("billing") && (string)((Dictionary<string, object>)codexReport["billing"])["balance"] == "0", "an empty update from an API-key conversation keeps the provider balance: " + json.Serialize(codexReport));
+            quotas.NoteCodexEvent(json.DeserializeObject("{\"primary\":{\"usedPercent\":7,\"windowDurationMins\":300},\"secondary\":null,\"credits\":null}"));
+            Require(quotas.Of("codex").Length == 1 && quotas.Of("codex")[0].Used == 7, "a conversation update with a window is kept");
+            quotas.NoteCodex(null, "apiKey", apiBalance);
             Require((string)CodexApiBalance.Parse("{\"remaining\":\"-1.5\",\"unit\":\"USD\"}")["balance"] == "-1.5", "use remaining when balance is absent");
             Require(CodexApiBalance.Parse("{\"balance\":12}") == null && CodexApiBalance.Parse("{\"balance\":true,\"unit\":\"USD\"}") == null, "reject missing unit and non-numeric amount");
 
