@@ -527,6 +527,18 @@ class TerminalRelayTests(unittest.TestCase):
         overview = self.relay.overview(now=1007)["device"]
         self.assertIn("teams-effort", overview["features"])
         self.assertEqual(overview["team_cards"][0]["roster"][0]["effort"], "high")
+        # free rounds (`rounds: 0`, 分工协作 only): refused by a computer that does not say it can, then passed on
+        free = dict(item, rounds=0, roster=[leader, worker])
+        with self.assertRaisesRegex(RemoteError, "自由轮数"):
+            self.relay.work({"id": "d" * 32, "action": "team_start", "item": free}, now=1008, wait=0)
+        self.info["features"] = features + ["teams-effort", "teams-flex-rounds"]
+        self.relay.agent({"info": self.info}, now=1009)
+        self.assertIn("teams-flex-rounds", self.relay.overview(now=1009)["device"]["features"])
+        asked, _ = self._carried({"id": "e" * 32, "action": "team_start", "item": free}, {"team": {}})
+        self.assertEqual(asked["item"]["rounds"], 0)
+        for bad_rounds in ({"id": team, "mode": "review", "dir": "demo", "goal": "写", "tools": ["claude", "codex"], "rounds": 0}, dict(free, rounds=-1), dict(free, rounds=11), dict(free, rounds=True)):
+            with self.assertRaisesRegex(RemoteError, "轮数"):
+                self.relay.work({"id": "f" * 32, "action": "team_start", "item": bad_rounds}, now=1010, wait=0)
 
     def test_team_cards_and_members_are_listed_for_the_owner(self):
         team, sid = "e" * 32, "11111111-2222-3333-4444-555555555555"

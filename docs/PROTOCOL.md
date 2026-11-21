@@ -176,7 +176,7 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `file-upload`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped`, `teams-roster` and `teams-effort`
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `file-upload`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort` and `teams-flex-rounds`
 (the work capabilities: "The owner's work", below). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 Every session and every terminal carries `team`: the id of the collaboration task it is or was a member of, `""` for
@@ -527,7 +527,7 @@ on as the operation `work_<action>` and keeps nothing.
 | `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
 | `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
 | `teams` | none; needs `teams` | `{"teams": [...]}`: multi-AI collaboration tasks kept on this computer |
-| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for legacy `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), optional `roster` (for `lead` with `teams-roster`: `[{role, tool, model, effort?}]`, first entry `leader`, optional `member-1`..`member-3`; `auto_roster: true` supplies only `leader`), `rounds` (1 to 10, default 3; 1 for `compare`), optional `models` (`{tool: model}` for tools of `tools`; a non-empty model needs `teams-models`), optional `efforts` (`{tool: effort}` or `roster[*].effort`; a non-empty effort needs `teams-effort`) | `{"team": {...}}` |
+| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for legacy `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), optional `roster` (for `lead` with `teams-roster`: `[{role, tool, model, effort?}]`, first entry `leader`, optional `member-1`..`member-3`; `auto_roster: true` supplies only `leader`), `rounds` (1 to 10, default 3; 1 for `compare`; `0` for `lead` leaves the number to the leader, 自由轮数, and needs `teams-flex-rounds`), optional `models` (`{tool: model}` for tools of `tools`; a non-empty model needs `teams-models`), optional `efforts` (`{tool: effort}` or `roster[*].effort`; a non-empty effort needs `teams-effort`) | `{"team": {...}}` |
 | `team_models` | none; needs `teams-models` | `{"models": {"codex": [{"id", "label", "efforts"?, "default_effort"?, "is_default"?}], "claude": [...], "agy": [...]}}`: for each chat tool installed on the computer, the models and reasoning effort tiers it lists itself (empty lists where it lists none: only its default is offered) |
 | `team_say` | `team`: its `id`, `text` (1 to 4,000 characters), optional `target` (role or tool name, max 32 chars); needs `teams-v2` | `{"team": {...}}`: interjects while `running`, resumes with guidance while `paused`, refines candidates while `choose`, or starts a follow-up round after `done`/`stopped` (`review`/`lead`) |
 | `team_pick` | `team`: its `id`, `tool`: winning tool name (from `CHAT_TOOLS`) or `""` to discard all; needs `teams-v2` | `{"team": {...}}`: checks and applies the chosen `compare` worktree patch to the main project folder (or discards all) and removes all temporary worktrees |
@@ -612,7 +612,10 @@ for `team_resume`.
   changes and quotas, inspects the results and runs applicable checks. A `DONE` before the first assignment opens verification
   for work the leader completed directly. A `VERIFIED: <checks and results>` followed by `DONE: <summary>` in a verification turn
   marks the task `done` and stores the evidence in the log under `验收`. A new assignment in verification increments `round` and
-  starts another member batch. At the final round, further assignments or a second reply without verification evidence
+  starts another member batch. Each round's aim is the leader's, by what it has seen (the changes, checks and members'
+  reports): a first round that meets the goal goes straight to acceptance and ends, and a later round may be a read-only
+  re-check alone. With `rounds` 0 (自由轮数, `team.rounds` stays 0, also in `teams.dat`) no round is the last before the
+  20th, which any task may have at most; there further assignments stop the task. At the final round, further assignments or a second reply without verification evidence
   leave the task `paused` with the rounds spent: the assignments are kept, nothing goes out, and the note says so;
   `team_resume` (or a `team_say`, whose text goes along) adds one round and sends the kept assignments, or asks the leader
   to go on where none were kept. A task stops instead only at 20 rounds. Earlier rounds pause after a second reply without
@@ -676,10 +679,10 @@ Once a task is removed nothing carries its id any more and its conversations are
 `team` that is not among `team_cards` (an older terminal the relay still keeps) as no task.
 
 **Older relays and computers.** A relay from before these filters `info.features` to what it knows and rebuilds each
-question field by field: it drops `teams-models`, `teams-grouped`, `teams-roster` and `teams-effort` from `device.features`, gives no `team_cards` and
+question field by field: it drops `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort` and `teams-flex-rounds` from `device.features`, gives no `team_cards` and
 no `team` fields, refuses `team_models` as unsupported, and passes `team_start` and `team_swap` without `models`, `model`, `efforts` or `effort`. A viewer therefore offers models, grouping, roster and reasoning effort only where `device.features` has those words (degrading unsupported reasoning effort to tool default with an upgrade note), which only a
-relay and a computer that both have them give. A computer without `teams-models` or `teams-effort` is refused non-empty model/effort choices by the relay, so a
-team never starts silently with defaults the owner did not choose.
+relay and a computer that both have them give. A computer without `teams-models` or `teams-effort` is refused non-empty model/effort choices by the relay, and one
+without `teams-flex-rounds` is refused `rounds` 0, so a team never starts silently with defaults the owner did not choose.
 
 ## Chats
 

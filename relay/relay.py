@@ -1317,8 +1317,10 @@ class Relay:
                     raise RemoteError("领队需要一个领队和 1 至 3 个不同的成员")
                 if mode == "compare" and (not 2 <= len(tools) <= 3 or len(set(tools)) != len(tools)):
                     raise RemoteError("并行比稿需要 2 至 3 个不同的 AI")
-                if type(rounds) is not int or not 1 <= rounds <= 10:
+                if type(rounds) is not int or not (1 <= rounds <= 10 or rounds == 0 and mode == "lead"):
                     raise RemoteError("轮数需在 1 到 10 之间")
+                if rounds == 0 and "teams-flex-rounds" not in features:     # 0: the leader decides how many (自由轮数)
+                    raise RemoteError("这台电脑的电脑端版本较旧，不支持自由轮数，请更新电脑端")
                 rules = item.get("rules", "")
                 if not isinstance(rules, str) or len(rules.strip()) > 1000 or "\0" in rules:
                     raise RemoteError("分工偏好不能超过 1000 字")
@@ -1491,7 +1493,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

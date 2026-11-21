@@ -279,6 +279,81 @@ public static class TeamsCheck {
         Require(tools[again.All().Single(t => t.Id == chosen).Members["reviewer"]] == "agy:read#gemini-3-pro", "begun anew with its model");
     }
 
+    /// 分工协作 with free rounds (`rounds` 0): the leader sets each round's aim by what it has seen; a first round that
+    /// meets the goal goes straight to acceptance and ends; a later round may only re-check; rounds go on past what a
+    /// fixed task may set, up to the most any task may have; kept across a restart. Fixed rounds stay as they were.
+    static void FreeRounds(string folder) {
+        string file = Path.Combine(folder, "free.dat");
+        var teams = new Teams(file, Hands());
+        // only 分工协作 leaves the rounds to the leader
+        foreach (string mode in new[] { "review", "compare" }) {
+            bool refused = false;
+            try { teams.Start(new Dictionary<string, object> { { "id", "5a5a5a5a5a5a5a5" + (mode == "review" ? "1" : "2") }, { "mode", mode }, { "dir", "web-shop" }, { "goal", "改" }, { "tools", new object[] { "claude", "codex" } }, { "rounds", 0 } }); }
+            catch (ArgumentException) { refused = true; }
+            Require(refused, "free rounds are refused for " + mode);
+        }
+        Require(teams.Start(new Dictionary<string, object> { { "id", "5b5b5b5b5b5b5b5b" }, { "mode", "review" }, { "dir", "web-shop" }, { "goal", "改" }, { "tools", new object[] { "claude", "codex" } } }).Rounds == 3, "rounds not given: three, as before");
+        teams.Stop("5b5b5b5b5b5b5b5b");
+
+        // the first round meets the goal: straight to acceptance, and done in round 1
+        string early = "5c5c5c5c5c5c5c5c";
+        var started = teams.Start(Lead(early, new object[] { "codex", "claude" }, 0));
+        string leader = started.Members["leader"];
+        Require(started.Rounds == 0 && started.Free && Last(leader).Contains("不限轮数") && Last(leader).Contains("根据当前证据") && Last(leader).Contains("第一轮就达标时，直接验收结束"),
+            "the leader is told the rounds are free and that it sets each round's aim by what it has seen");
+        teams.Turned(leader, "done", "ASSIGN claude: 修购物车数量");
+        teams.Turned(Team(teams, early).Members["claude"], "done", "改好了，cart 测试 8 项通过");
+        var team = Team(teams, early);
+        Require(team.Phase == "verify" && !team.Last && Last(leader).Contains("第 1 轮（不限轮数）") && !Last(leader).Contains("最后一轮"), "its results go to the acceptance, which is not a last one");
+        teams.Turned(leader, "done", "VERIFIED: 跑了 cart 测试 8 项通过，数量为 0 时有提示\nDONE: 购物车已修好");
+        team = Team(teams, early);
+        Require(team.State == "done" && team.Round == 1, "met in the first round: done in it");
+
+        // a later round only re-checks: a member reads and reports, the leader accepts
+        string recheck = "5d5d5d5d5d5d5d5d";
+        leader = teams.Start(Lead(recheck, new object[] { "codex", "claude", "agy" }, 0)).Members["leader"];
+        teams.Turned(leader, "done", "ASSIGN claude: 实现结账页");
+        teams.Turned(Team(teams, recheck).Members["claude"], "done", "结账页做好了");
+        Require(Last(leader).Contains("只差复核时，只派只读复核"), "the acceptance is told to aim the next round by what it found");
+        teams.Turned(leader, "done", "实现看过了，只差独立复核。\nASSIGN agy: 只读复核结账页金额计算，不要改文件");
+        team = Team(teams, recheck);
+        string agy = team.Members["agy"];
+        Require(team.Round == 2 && team.Phase == "" && team.Awaited.SequenceEqual(new[] { "agy" }) && Last(agy).Contains("只读复核结账页金额计算"), "the second round is the re-check alone");
+        teams.Turned(agy, "done", "复核：金额四舍五入正确，没有问题");
+        teams.Turned(leader, "done", "VERIFIED: 读了 agy 的复核并自己跑了结账测试，通过\nDONE: 结账页完成");
+        Require(Team(teams, recheck).State == "done" && Team(teams, recheck).Round == 2, "accepted after the re-check");
+
+        // free rounds go on past what a fixed task may set (10), and are kept across a restart
+        string longer = "5e5e5e5e5e5e5e5e";
+        leader = teams.Start(Lead(longer, new object[] { "codex", "claude" }, 0)).Members["leader"];
+        teams.Turned(leader, "done", "ASSIGN claude: 第一步");
+        for (int round = 1; round < 12; round++) {
+            teams.Turned(Team(teams, longer).Members["claude"], "done", "第 " + round + " 步做好了");
+            Require(Team(teams, longer).Phase == "verify" && !Team(teams, longer).Last, "no last acceptance in round " + round);
+            teams.Turned(leader, "done", "还要继续。\nASSIGN claude: 第 " + (round + 1) + " 步");
+        }
+        team = Team(teams, longer);
+        Require(team.State == "running" && team.Round == 12 && team.Rounds == 0, "round 12 of free rounds");
+        var restarted = Hands(); restarted.Say = (terminal, words) => { throw new InvalidOperationException("gone"); };
+        var again = new Teams(file, restarted);
+        team = Team(again, longer);
+        Require(team.State == "paused" && team.Free && team.Round == 12, "kept across a restart, free");
+        again.Resume(longer);
+        again.Turned(Team(again, longer).Members["claude"], "done", "第 12 步做好了");
+        team = Team(again, longer);
+        string reopened = team.Members["leader"];
+        Require(team.Phase == "verify" && !team.Last && team.Round == 12 && Last(reopened).Contains("第 12 轮（不限轮数）"), "after the restart it goes on, still free");
+        // the most any task may have: the acceptance in round 20 is the last, and wanting more there stops it
+        for (int round = 12; round < 20; round++) {
+            again.Turned(Team(again, longer).Members["leader"], "done", "继续。\nASSIGN claude: 第 " + (round + 1) + " 步");
+            again.Turned(Team(again, longer).Members["claude"], "done", "第 " + (round + 1) + " 步做好了");
+        }
+        team = Team(again, longer);
+        Require(team.Round == 20 && team.Last && Last(team.Members["leader"]).Contains("最多的 20 轮"), "round 20 is the last acceptance");
+        again.Turned(team.Members["leader"], "done", "还差一点。\nASSIGN claude: 再改");
+        Require(Team(again, longer).State == "stopped", "past the most rounds a task may have, it stops");
+    }
+
     /// A team's members' conversations: known by the terminals that run them, kept when they are replaced, listed
     /// under the task until it is removed; the tasks in short for the lists.
     static void Grouping(string file) {
@@ -621,8 +696,9 @@ public static class TeamsCheck {
             Choosing(file);
             Grouping(file);
             Roster(folder);
+            FreeRounds(folder);
         } finally { try { Directory.Delete(folder, true); } catch { } }
-        Console.WriteLine("teams: review, lead with acceptance, flexible roster, discuss-first, parallel compare/pick, interject/continue, quotas, models, member sessions, cards, stop/resume and persistence ok");
+        Console.WriteLine("teams: review, lead with acceptance, free rounds, flexible roster, discuss-first, parallel compare/pick, interject/continue, quotas, models, member sessions, cards, stop/resume and persistence ok");
         return 0;
     }
 }

@@ -21,7 +21,9 @@ namespace RemoteCli {
 ///   and assigns (`ASSIGN <member>: <task>` / `DONE: <summary>`), weighing each tool's remaining quota (`Quotas.cs`).
 ///   A DONE is not taken at its word: it opens a turn of acceptance (phase `verify`) in which the leader inspects the
 ///   changes and runs the checks itself, or has another member check or fix; only `VERIFIED: <evidence>` with `DONE`
-///   in that turn ends the task as done. Rounds running out end it `stopped`, never `done`.
+///   in that turn ends the task as done. Rounds running out pause it with the fixes the leader still wants kept
+///   (“继续” adds a round), never `done`. `rounds` 0 leaves the number of rounds to the leader (自由轮数, up to
+///   `MaxTotalRounds`): each round it sets that round's aim by what it has seen, and ends once the goal is met.
 /// - compare (并行比稿): 2–3 distinct AIs work in parallel inside isolated Git worktrees (`Worktrees.cs`); once done,
 ///   the task enters `choose` so the owner can compare diffs, ask for refinements (`Say`), and pick one to apply (`Pick`)
 ///   or discard all, cleaning up temporary worktrees automatically.
@@ -36,7 +38,11 @@ public sealed class Teams {
         public RosterMember[] Roster = new RosterMember[0];
         public bool AutoRoster;
         public string LeaderInput = "";
+        /// The rounds set (0: free, lead only, `Cap`), and the one under way.
         public int Rounds = 3, Round = 1;
+        public bool Free { get { return Rounds == 0; } }
+        /// The round after which no more go out without the owner: the rounds set, or the most any task may have.
+        public int Cap { get { return Free ? MaxTotalRounds : Rounds; } }
         public long Created;
         public List<Step> Log = new List<Step>();
         /// Each member's conversation: role -> terminal ("writer", "reviewer", "leader", "discuss:<tool>", or tool name).
@@ -401,19 +407,26 @@ public sealed class Teams {
             + "\n如果目标写明由成员执行或要求组队，请把对应工作写成 ASSIGN 行。只有回复中的 ASSIGN 行才会交给成员执行。"
             + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件；有先后依赖的工作按顺序分批派出。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 成员交回后由你统筹：汇总各成员的结果，检查是否冲突、遗漏或偏离目标，必要时自己合并和修订，再决定结束还是继续派工。成员交回的如果只是进度（还在运行、等结果），说明它还没做完，用 ASSIGN 让它接着做完再验收。\n5. 成员可能在某些方面比你更擅长，可以采纳它们的专长；但成员只看到自己负责的部分，它们的结论和“已完成”要由你对照实际改动核实后再采信。"
             + (rooms.Count > 0 ? "\n6. 按额度分配工作量：额度已用尽或不可用的成员不要再派工；额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
+            + "\n\n" + RoundsGuide(t)
             + "\n\n分派时，把 ASSIGN 放在回答的最后，每位成员一条（用上面的成员编号或英文名）：\nASSIGN 成员名: 任务内容\n任务较长时，可以在 ASSIGN 行下面接着写分步清单；到下一条 ASSIGN 之前的内容都会交给这位成员。\n若已自行完成任务，回答的最后写：\nDONE: 总结\n成员执行完或你自行完成后，会进入当轮验收。请亲自查看结果，运行相关检查，确认无误后结束。\n成员正在做的工作你不要同时动手，以免改动互相覆盖；成员交回后，合并与修订由你决定。";
+    }
+    /// How the rounds go: the leader sets each round's aim by what it has seen; free rounds end when the goal is met.
+    static string RoundsGuide(Team t) {
+        return "轮次：每一轮由你根据当前证据（实际改动、检查结果、成员回报）确定本轮要达到什么，只派这一轮需要的工作；第一轮就达标时，直接验收结束。"
+            + "后续轮次只需要复核时，派一位成员只读复核，或你自己复核后验收，不要为了用满轮数重做已经通过的部分。"
+            + (t.Free ? "本任务不限轮数（最多 " + MaxTotalRounds + " 轮），达到目标就结束。" : "本任务最多 " + t.Rounds + " 轮。");
     }
     /// The leader's turn of acceptance: it inspects what changed and runs the checks itself (or has another member
     /// check or fix); `last` where no more rounds may be given out.
     public static string VerifyAsk(Team t, string changes, IDictionary<string, string> rooms, bool last) {
         return "【协作任务 · 领队验收" + (last ? " · 最后一轮" : "") + "】"
-            + "第 " + t.Round + " 轮。"
-            + (last ? "已到设定的 " + t.Rounds + " 轮上限，请做最后一次验收。" : "请汇总本轮结果并单独验收。")
+            + "第 " + t.Round + (t.Free ? " 轮（不限轮数）。" : " 轮，共 " + t.Rounds + " 轮。")
+            + (last ? (t.Free ? "已到协作任务最多的 " + MaxTotalRounds + " 轮，请做最后一次验收。" : "已到设定的 " + t.Rounds + " 轮上限，请做最后一次验收。") : "请汇总本轮结果并单独验收。")
             + "\n\n整体目标：" + Cut(t.Goal, 2000)
             + (changes.Length > 0 ? "\n\n## 文件夹中的当前改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
             + "\n\n验收要求：\n1. 亲自查看项目里的实际改动，汇总各成员的结果，确认它们互不冲突、没有遗漏并达到目标；成员的说明只作线索，以实际改动和检查结果为准。\n2. 发现小的冲突、遗漏或错误时，可以自己直接合并修订，改完再检查。\n3. 运行与这次改动相关的检查，例如构建、测试、lint，或实际运行一遍关键功能。"
-            + (last ? "" : "\n4. 需要较多工作的修复，给出可执行的修改意见并派给成员，派工后才进入下一轮。")
+            + (last ? "" : "\n4. 需要较多工作的修复，给出可执行的修改意见并派给成员，派工后才进入下一轮。先按这次验收的发现定下一轮要达到什么：只差复核时，只派只读复核。")
             + "\n\n验收通过时，在回答的最后写两行：\nVERIFIED: 你实际做了哪些检查、看到了什么结果（写明命令或查看的文件）\nDONE: 总结"
             + (last ? "\n没有通过时，说明还差什么，并用 ASSIGN 成员名: 修改内容 写出要做的修复。轮数已经用完，这些修复先保留，用户追加一轮后再派给成员。"
                 : "\n发现问题时，用 ASSIGN 成员名: 修改内容 把修复派给成员，完成后会请你再次验收。");
@@ -443,7 +456,7 @@ public sealed class Teams {
         return Answers(t, answers)
             + (changes.Length > 0 ? "\n\n## 文件夹中的改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
-            + "\n\n请检查结果，再分派下一步（ASSIGN 成员名: 任务）或结束（DONE: 总结）。";
+            + "\n\n请检查结果，按这些证据决定下一步：分派下一步（ASSIGN 成员名: 任务）或结束（DONE: 总结）。";
     }
     static string Answers(Team t, Dictionary<string, string> answers) {
         return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + RoleLabel(t, p.Key) + "\n" + Cut(p.Value, 8000)));
@@ -541,6 +554,7 @@ public sealed class Teams {
         object raw; given.TryGetValue("tools", out raw);
         var tools = (raw as IEnumerable ?? new object[0]).Cast<object>().Select(Convert.ToString).ToArray();
         int rounds; Int32.TryParse(word("rounds"), out rounds);
+        if (given.ContainsKey("rounds") && rounds == 0 && word("mode") != "lead") throw new ArgumentException("只有分工协作可以不限轮数");
         string rules = word("rules").Trim();
         if (rules.Length > 1000) throw new ArgumentException("分工偏好不能超过 1000 字");
         string mode = word("mode");
@@ -563,7 +577,7 @@ public sealed class Teams {
         var team = new Team {
             Id = word("id"), Dir = word("dir"), Mode = mode, Goal = word("goal").Trim(), Rules = rules,
             Discuss = discuss, Tools = tools, Models = RemoteCli.Models.Chosen(models, tools), Efforts = RemoteCli.Models.ChosenEfforts(efforts, tools), Roster = roster, AutoRoster = auto,
-            Rounds = Math.Max(1, Math.Min(MostRounds, rounds == 0 ? (mode == "compare" ? 1 : 3) : rounds)),
+            Rounds = given.ContainsKey("rounds") && rounds == 0 ? 0 : Math.Max(1, Math.Min(MostRounds, rounds == 0 ? (mode == "compare" ? 1 : 3) : rounds)),
             Created = Now()
         };
         if (!Regex.IsMatch(team.Id, @"\A[a-f0-9]{16,32}\z") || Array.IndexOf(Modes, team.Mode) < 0) throw new ArgumentException("协作任务无效");
@@ -712,7 +726,7 @@ public sealed class Teams {
             } else {
                 // `done` or `stopped` for `review` / `lead`: begin another round with the owner's follow-up
                 team.Round++;
-                if (team.Round > team.Rounds) team.Rounds = Math.Min(MaxTotalRounds, team.Round + 2);
+                if (!team.Free && team.Round > team.Rounds) team.Rounds = Math.Min(MaxTotalRounds, team.Round + 2);
                 team.State = "running"; team.Note = ""; team.Phase = ""; team.Reminded = false; team.Last = false;
                 team.Awaited.Clear(); team.Answers.Clear();
                 Save();
@@ -1398,10 +1412,10 @@ public sealed class Teams {
     /// The rounds are spent while the work still wants more (`why`): it waits for its owner with `held` kept, and
     /// “继续” adds a round (`Extend`). Past the most rounds a task may have it stops, as no pass.
     void Hold(Team team, Dictionary<string, string> held, string why) {
-        if (team.Round >= MaxTotalRounds) { End(team, "stopped", "已到 " + team.Rounds + " 轮，" + why); return; }
+        if (team.Round >= MaxTotalRounds) { End(team, "stopped", "已到 " + team.Round + " 轮，" + why); return; }
         lock (gate) {
             team.State = "paused"; team.Spent = true; team.Held = new Dictionary<string, string>(held);
-            team.Note = "已到 " + team.Rounds + " 轮，" + why + "：点“继续”追加一轮" + (held.Count > 0 ? "，保留的修改随后派出" : "");
+            team.Note = "已到 " + team.Round + " 轮，" + why + "：点“继续”追加一轮" + (held.Count > 0 ? "，保留的修改随后派出" : "");
             team.Awaited.Clear();
             foreach (string role in held.Count > 0 ? held.Keys.ToArray() : new[] { "leader" }) team.Awaited.Add(role);
             Save();
@@ -1415,7 +1429,7 @@ public sealed class Teams {
         Dictionary<string, string> held;
         lock (gate) {
             if (!team.Spent) return;        // (given already)
-            team.Round++; team.Rounds = Math.Min(MaxTotalRounds, Math.Max(team.Rounds, team.Round));
+            team.Round++; if (!team.Free) team.Rounds = Math.Min(MaxTotalRounds, Math.Max(team.Rounds, team.Round));
             team.State = "running"; team.Note = ""; team.Phase = ""; team.Last = false; team.Reminded = false; team.Spent = false;
             team.Answers.Clear(); team.Awaited.Clear(); team.Nudged.Clear();
             held = team.Held; team.Held = new Dictionary<string, string>();
@@ -1472,7 +1486,7 @@ public sealed class Teams {
         lock (gate) {
             if (counted || team.Roster.Length > 0) {
                 team.Phase = "verify";
-                team.Last = team.Round >= team.Rounds;
+                team.Last = team.Round >= team.Cap;
                 team.Reminded = false;
             }
             verifying = team.Phase == "verify"; last = team.Last;
@@ -1485,7 +1499,7 @@ public sealed class Teams {
     }
     /// The leader said the work is done: a turn of its own to accept it, with what changed in front of it.
     void Verify(Team team) {
-        lock (gate) { team.Phase = "verify"; team.Last = team.Round >= team.Rounds; team.Reminded = false; Save(); }
+        lock (gate) { team.Phase = "verify"; team.Last = team.Round >= team.Cap; team.Reminded = false; Save(); }
         Log(team, "验收", "领队表示已完成，开始单独验收");
         Ask(team, "leader", team.Tools[0], VerifyAsk(team, Changes(team), Rooms(team), team.Last), false);
     }
