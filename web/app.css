@@ -509,21 +509,21 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-round-tag { font-size: .78rem; font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; }
 .team-pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: start; gap: 0; }
 .team-stage { position: relative; display: grid; justify-items: center; gap: 5px; min-width: 0; padding: 0 2px; text-align: center; }
-.team-stage::before, .team-stage::after { content: ""; position: absolute; top: 10px; height: 2px; background: var(--divider, var(--line)); z-index: 0; }
+.team-stage::before, .team-stage::after { content: ""; position: absolute; top: 10px; height: 2px; background: var(--line); z-index: 0; }
 .team-stage::before { left: 0; right: 50%; }
 .team-stage::after { left: 50%; right: 0; }
 .team-stage:first-child::before, .team-stage:last-child::after { display: none; }
-.team-stage.done::before, .team-stage.done::after { background: var(--good-dot, var(--good)); }
-.team-stage.active::before, .team-stage.pause::before, .team-stage.fail::before { background: var(--good-dot, var(--good)); }
-.team-stage .stage-node { position: relative; z-index: 1; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; background: var(--panel); border: 1.5px solid var(--line); color: var(--muted); font-variant-numeric: tabular-nums; }
+.team-stage.done::before { background: var(--good-dot, var(--good)); }
+.team-stage.done:has(+ .done)::after { background: var(--good-dot, var(--good)); }
+.team-stage .stage-node { position: relative; z-index: 1; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--surface-sub, var(--panel)); border: 1.5px solid color-mix(in srgb, var(--muted) 42%, var(--line)); color: var(--muted); font-variant-numeric: tabular-nums; }
 .team-stage.done .stage-node { background: var(--good-soft); border-color: var(--good-dot, var(--good)); color: var(--good-ink, var(--good)); }
 .team-stage.active .stage-node { background: var(--busy-soft); border-color: var(--busy-dot, var(--busy)); color: var(--busy-ink, var(--busy)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--busy-dot, var(--busy)) 24%, transparent); }
-.team-stage.pause .stage-node { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.team-stage.pause .stage-node { background: var(--busy-soft); border: 1.5px dashed var(--busy-dot, var(--busy)); color: var(--busy-ink, var(--busy)); }
 .team-stage.fail .stage-node { background: var(--bad-soft); border-color: var(--bad); color: color-mix(in srgb, var(--bad) 75%, var(--ink)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent); }
 .team-stage .stage-label { font-size: .72rem; line-height: 1.25; color: var(--muted); font-weight: 550; overflow-wrap: anywhere; }
 .team-stage.done .stage-label { color: var(--good-ink, var(--good)); }
 .team-stage.active .stage-label { color: var(--busy-ink, var(--ink)); font-weight: 650; }
-.team-stage.pause .stage-label { color: var(--accent-ink, var(--accent)); font-weight: 600; }
+.team-stage.pause .stage-label { color: var(--busy-ink, var(--busy)); font-weight: 600; }
 .team-stage.fail .stage-label { color: var(--bad); font-weight: 650; }
 .team-members { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
 .team-chip { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 9px 12px; border: 1px solid var(--card-border, var(--line)); border-radius: 16px; background: var(--panel); color: var(--ink); font-size: .84rem; text-align: left; transition: background-color .14s ease, border-color .14s ease; }

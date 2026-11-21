@@ -367,7 +367,7 @@ def main():
                 shot(base + "/files/?dir=cohort-study", "folder.png", "document.querySelectorAll('#entries li').length > 5")
                 # The menu at the top right is a page of the sheet the other pages use (web/ui/sheet.js): how the folder
                 # is ordered is one of three, hidden files a switch, and pressing them changes the list behind it.
-                def menu(name, expected):
+                def menu(name, expected, sections=None):
                     ask("Runtime.evaluate", expression="document.getElementById('more').click()")
                     until = time.time() + 5
                     while time.time() < until and not ask("Runtime.evaluate", expression="!!document.querySelector('dialog.rs[open] .rs-row')", returnByValue=True)["result"].get("value"):
@@ -375,10 +375,27 @@ def main():
                     time.sleep(.4)
                     if name:
                         (out / name).write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
-                    shown = ask("Runtime.evaluate", expression="[...document.querySelectorAll('dialog.rs[open] .rs-row b, dialog.rs[open] .rs-seg button')].map(n => n.textContent)", returnByValue=True)["result"]["value"]
-                    assert shown == expected, shown
+                    info = ask("Runtime.evaluate", expression="""(() => {
+                      const dlg = document.querySelector('dialog.rs[open]');
+                      const rows = [...dlg.querySelectorAll('.rs-row')];
+                      const lefts = rows.map(r => Math.round(r.querySelector('b').getBoundingClientRect().left));
+                      const multiInset = [...dlg.querySelectorAll('.rs-group')].filter(g => g.children.length > 1).every(g => g.classList.contains('inset'));
+                      return {
+                        shown: [...dlg.querySelectorAll('.rs-row b, .rs-seg button')].map(n => n.textContent),
+                        sections: [...dlg.querySelectorAll('.rs-label')].map(n => n.textContent),
+                        allIcons: rows.every(r => !!r.querySelector('.rs-glyph')),
+                        alignSpan: lefts.length ? Math.max(...lefts) - Math.min(...lefts) : 0,
+                        multiInset
+                      };
+                    })()""", returnByValue=True)["result"]["value"]
+                    assert info["shown"] == expected, info
+                    if sections is not None:
+                        assert info["sections"] == sections, info
+                    assert info["allIcons"] and info["alignSpan"] <= 1 and info["multiInset"], info
                     assert not ask("Runtime.evaluate", expression="!!document.querySelector('#sheet, .choice')", returnByValue=True)["result"]["value"]
-                menu("folder-menu.png", ["名称", "修改时间", "大小", "显示隐藏的文件", "刷新", "回到项目"])
+                ask("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=1, mobile=True)
+                menu("folder-menu.png", ["名称", "修改时间", "大小", "显示隐藏的文件", "刷新", "回到项目"], ["排列", "列表", "返回"])
+                ask("Emulation.setDeviceMetricsOverride", width=500, height=960, deviceScaleFactor=1, mobile=True)
                 ask("Runtime.evaluate", expression="document.querySelector('dialog.rs[open] .rs-seg button[data-value=size]').click()")
                 time.sleep(.5)
                 assert ask("Runtime.evaluate", expression="localStorage.getItem('rcli-files-sort')", returnByValue=True)["result"]["value"] == "size"
@@ -448,7 +465,7 @@ def main():
                 assert ask("Runtime.evaluate", expression="!!document.querySelector('#view .code') && !document.querySelector('#view .doc h1')", returnByValue=True)["result"]["value"], "源码 shows the source"
                 shot(view(made["code"]), "code.png", drawn["code"])
                 assert ask("Runtime.evaluate", expression="document.getElementById('upload').hidden && !document.getElementById('download')", returnByValue=True)["result"]["value"]
-                menu("file-menu.png", ["下载文件", "复制路径", "长行自动换行", "回到项目"])
+                menu("file-menu.png", ["下载文件", "复制路径", "长行自动换行", "回到项目"], ["文件操作", "阅读", "返回"])
                 ask("Runtime.evaluate", expression="history.back()")
                 time.sleep(.8)
                 # Saving inside the app: the page hands the file to the phone piece by piece. A stand-in for the app
@@ -457,7 +474,7 @@ def main():
                                "savePiece(d) { this.got.push(d); return ''; }, saveEnd() { this.done = true; return '下载 / RemoteAI'; }, saveCancel() { this.cancelled = true; }, openSaved() {}, chrome() {}, pref() { return ''; }, setPref() {} };")
                 # Previewable file saves through the sheet menu ("保存到手机").
                 shot(view(made["code"]), "code-native.png", drawn["code"])
-                menu(None, ["保存到手机", "复制路径", "长行自动换行", "回到项目"])
+                menu(None, ["保存到手机", "复制路径", "长行自动换行", "回到项目"], ["文件操作", "阅读", "返回"])
                 ask("Runtime.evaluate", expression="document.getElementById('menu-download').click()")
                 deadline = time.time() + 20
                 while time.time() < deadline and ask("Runtime.evaluate", expression="window.RemoteCliNative.done === true", returnByValue=True).get("result", {}).get("value") is not True:
@@ -466,7 +483,7 @@ def main():
                 (out / "code-native.png").unlink()
                 # Unpreviewable file keeps only its center save button, with no duplicate download entry in the menu.
                 shot(view("bundle.zip"), "save.png", "!!document.querySelector('.unknown button')")
-                menu(None, ["复制路径", "回到项目"])
+                menu(None, ["复制路径", "回到项目"], ["文件操作", "返回"])
                 ask("Runtime.evaluate", expression="history.back()")
                 time.sleep(.6)
                 ask("Runtime.evaluate", expression="document.querySelector('.unknown button').click()")

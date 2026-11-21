@@ -526,6 +526,11 @@
   }
   function menuPage(depth) {
     const kit = window.RemoteSheet.ui;
+    const rowsGroup = (...rows) => {
+      const box = kit.group(...rows);
+      if (rows.length > 1) box.classList.add('inset');
+      return box;
+    };
     return { title: place.file ? '文件' : '文件夹', build(p) {
       if (place.file) {
         const actions = [];
@@ -539,22 +544,25 @@
           p.sheet.close(null);
           toast(await window.RemoteSheet.copy(join(place.path, place.file)) ? '已复制' : '这里不能复制');
         } }));
+        p.body.append(kit.section('文件操作', rowsGroup(...actions)));
         if (current && current.hasCode) {
-          actions.push(kit.row({ label: '长行自动换行', id: 'menu-wrap', end: kit.toggle(wrap, on => { wrap = on; keep('files-wrap', on ? '1' : ''); document.querySelectorAll('.code').forEach(c => c.classList.toggle('wrap', on)); }, '长行自动换行') }));
+          p.body.append(kit.section('阅读', rowsGroup(kit.row({
+            icon: 'lines', tint: 'muted', label: '长行自动换行', id: 'menu-wrap',
+            end: kit.toggle(wrap, on => { wrap = on; keep('files-wrap', on ? '1' : ''); document.querySelectorAll('.code').forEach(c => c.classList.toggle('wrap', on)); }, '长行自动换行')
+          }))));
         }
-        p.body.append(kit.group(...actions));
       } else {
         p.body.append(kit.section('排列', kit.seg([['name', '名称'], ['time', '修改时间'], ['size', '大小']], sort, key => { sort = key; keep('files-sort', key); show(); }, { label: '排列', full: true })));
-        p.body.append(kit.group(
-          kit.row({ label: '显示隐藏的文件', id: 'menu-hidden', end: kit.toggle(hidden, on => { hidden = on; keep('files-hidden', on ? '1' : ''); show(); }, '显示隐藏的文件') }),
+        p.body.append(kit.section('列表', rowsGroup(
+          kit.row({ icon: 'hide', tint: 'muted', label: '显示隐藏的文件', id: 'menu-hidden', end: kit.toggle(hidden, on => { hidden = on; keep('files-hidden', on ? '1' : ''); show(); }, '显示隐藏的文件') }),
           kit.row({ icon: 'refresh', tint: 'muted', label: '刷新', id: 'menu-refresh', act: () => { p.sheet.close(null); folders.delete(place.path); show(); toast('正在刷新…'); } })
-        ));
+        )));
       }
       const away = [];
       // back to the terminal: the steps taken on this page, the sheet's own, and the one that came here
       if (from) away.push(kit.row({ icon: 'term', tint: 'good', label: '回到终端', id: 'menu-terminal', act: () => { const steps = depth + p.sheet.entries + 1; p.sheet.close(null, true); history.go(-steps); } }));
       away.push(kit.row({ icon: 'folder', tint: 'file', label: '回到项目', value: dir, id: 'menu-project', act: () => { p.sheet.close(null, true); location.href = '../?project=' + encodeURIComponent(dir); } }));
-      p.body.append(kit.group(...away));
+      p.body.append(kit.section('返回', rowsGroup(...away)));
     } };
   }
   $('more').addEventListener('click', () => window.RemoteSheet.open(menuPage((history.state && history.state.depth) || 0), place.file ? '文件选项' : '文件夹选项'));

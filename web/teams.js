@@ -16,7 +16,8 @@
   const EFFORT_LABELS = (defaults && defaults.EFFORT_LABELS) || { none: '无（none）', minimal: '极低（minimal）', low: '低（low）', medium: '中（medium）', high: '高（high）', xhigh: '极高（xhigh）', max: '最高（max）', ultra: '极致（ultra）' };
   const effortTag = level => defaults ? defaults.effortTag(level) : '思考 · ' + ((EFFORT_LABELS[String(level || '').trim().toLowerCase()] || '').replace(/（.*）/, '') || '默认');
   const MENU_ICON = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>';
-  // the colour of the state dot beside the task, the same as the header's badge (badgeInfo)
+  const STAGE_PAUSE_ICON = '<svg viewBox="0 0 12 12" width="10" height="10" fill="currentColor" aria-hidden="true"><rect x="2.5" y="2" width="2.4" height="8" rx="1"/><rect x="7.1" y="2" width="2.4" height="8" rx="1"/></svg>';
+  // the colour of the state dot on the detail menu, matching the header's badge (badgeInfo)
   const TONE_DOT = { busy: 'var(--busy-dot, var(--busy))', confirm: 'var(--bad)', good: 'var(--good-dot, var(--good))', starting: 'var(--accent)', ended: 'var(--muted)' };
   let teams = null, failure = '', loading = null, activeSync = null, loadEpoch = 0;
   let modelCatalog = null, modelError = '', modelLoading = false, modelPromise = null;
@@ -941,7 +942,9 @@
       const renderTrack = (roundTag, stages, ariaLabel) => {
         const list = el('ol', { className: 'team-pipeline' }, ...stages.map(([label, state], idx) =>
           el('li', { className: 'team-stage' + (state ? ' ' + state : '') },
-            el('span', { className: 'stage-node', ariaHidden: 'true', textContent: state === 'done' ? '✓' : state === 'fail' ? '!' : String(idx + 1) }),
+            el('span', state === 'pause'
+              ? { className: 'stage-node', ariaHidden: 'true', html: STAGE_PAUSE_ICON }
+              : { className: 'stage-node', ariaHidden: 'true', textContent: state === 'done' ? '✓' : state === 'fail' ? '!' : String(idx + 1) }),
             el('span', { className: 'stage-label team-step' + (state ? ' ' + state : ''), textContent: label }))
         ));
         return el('div', { className: 'team-round-steps', id: 'team-round-steps', ariaLabel },
@@ -1066,14 +1069,14 @@
       const memberInfos = memberKeys.map(role => inspectMember(team, role, terminals));
       const pendingAsks = memberInfos.filter(info => info.asking);
       // Each fact is said once: the state in the header's badge, the round and phase on the stage track, who works
-      // on it beside the goal (with a dot in the badge's colour), each member with its model on its card.
+      // on it beside the goal (without repeating the status dot), each member with its model on its card.
       const badge = badgeInfo(team, pendingAsks);
       if (activePage && activePage.setHeader) {
         activePage.setHeader({ title: (MODES[team.mode] || '协作') + (team.dir ? ' · ' + team.dir : ''), subtitle: '', badge: badge[0], tone: badge[1] });
       }
 
       const overviewParts = [];
-      const heroParts = [kit.who({ icon: 'spark', tint: 'agy', title: team.goal || '协作任务', line: who(team), state: TONE_DOT[badge[1]] || '' })];
+      const heroParts = [kit.who({ icon: 'spark', tint: 'agy', title: team.goal || '协作任务', line: who(team) })];
       const stageBar = buildStageSteps(team);
       if (stageBar) heroParts.push(stageBar);
       if (team.state === 'running' && team.phase === 'verify') {

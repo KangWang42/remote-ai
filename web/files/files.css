@@ -7,7 +7,6 @@
 #page { max-width: 720px; }
 #where { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .note { color: var(--muted); font-size: .86rem; text-align: center; margin: 18px 8px; }
-.tick { margin-left: auto; font-style: normal; font-weight: 700; color: var(--accent); }
 #transfer { display: grid; gap: 10px; margin: 4px 0 12px; padding: 12px 14px; border: 1px solid var(--card-border, var(--line)); border-radius: 16px; background: var(--panel); box-shadow: var(--elevate, none); }
 #transfer.error { border-color: color-mix(in srgb, var(--bad) 36%, var(--card-border, var(--line))); background: var(--bad-soft); color: var(--bad); }
 .transfer-head { display: flex; align-items: flex-start; gap: 10px; }

@@ -891,15 +891,25 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert fs_box["scrollHeight"] > fs_box["clientHeight"] + 150, fs_box
         time.sleep(.22)
         browser.picture(out / 'team-detail-decision-light-390.png')
-        # the stage track is one line: each stage's half-lines reach its neighbour's, with no gap between the stages
+        # the stage track is one line: each stage's half-lines reach its neighbour's, with no gap between the stages;
+        # only completed (done -> done) segments show completion green, and no redundant dots appear on the badge or hero
         track = value("""(() => {
           const stages = [...document.querySelectorAll('#team-round-steps .team-stage')];
           const gaps = stages.slice(1).map((li, i) => Math.abs(li.getBoundingClientRect().left - stages[i].getBoundingClientRect().right));
           const ends = stages.map((li, i) => [getComputedStyle(li, '::before'), getComputedStyle(li, '::after')]
             .map((pseudo, side) => (side === 0 && i === 0) || (side === 1 && i === stages.length - 1) ? 'end' : pseudo.display !== 'none' && (side === 0 ? pseudo.left : pseudo.right) === '0px' ? 'edge' : 'short'));
-          return {count: stages.length, gaps, ends};
+          const segs = stages.map(li => [getComputedStyle(li, '::before').backgroundColor, getComputedStyle(li, '::after').backgroundColor]);
+          const badge = document.querySelector('dialog.rs.rs-full[open] .rs-badge');
+          return {
+            count: stages.length, gaps, ends, segs,
+            heroDot: !!document.querySelector('dialog.rs.rs-full[open] .team-hero .rs-who small i'),
+            badgeBefore: getComputedStyle(badge, '::before').content
+          };
         })()""")
         assert track["count"] >= 3 and max(track["gaps"]) < 0.5 and all(e in ('end', 'edge') for pair in track["ends"] for e in pair), track
+        assert track["heroDot"] is False and track["badgeBefore"] == "none", track
+        # stage 0 (done) -> stage 1 (done) is green; stage 1 (done) -> stage 2 (active) stays neutral (same as stage 2 -> stage 3)
+        assert track["segs"][0][1] == track["segs"][1][0] and track["segs"][1][1] == track["segs"][2][0] == track["segs"][2][1] and track["segs"][0][1] != track["segs"][2][0], track
         # the foot is one line to write in: whom to, the words and send; what is done seldom is in the menu
         foot = value("""(() => {
           const foot = document.querySelector('dialog.rs.rs-full[open] .rs-foot');
@@ -1053,6 +1063,16 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         })()""")
         assert paused_box["badge"] == "已暂停" and "提前结束" in paused_box["reasonText"] and "待继续" in paused_box["m1Text"], paused_box
         assert paused_box["reasonVisible"] and paused_box["resumeVisible"], paused_box
+        pause_stage = value("""(() => {
+          const stages = [...document.querySelectorAll('#team-round-steps .team-stage')];
+          return {
+            hasPauseIcon: !!document.querySelector('#team-round-steps .team-stage.pause .stage-node svg'),
+            seg01After: getComputedStyle(stages[0], '::after').backgroundColor,
+            seg01Before: getComputedStyle(stages[1], '::before').backgroundColor,
+            seg12After: getComputedStyle(stages[1], '::after').backgroundColor
+          };
+        })()""")
+        assert pause_stage["hasPauseIcon"] and pause_stage["seg01After"] == pause_stage["seg01Before"] == pause_stage["seg12After"], pause_stage
         time.sleep(.2)
         browser.picture(out / 'team-detail-paused-light-390.png')
         # paused: 继续 stands where send is, in the same one line, until something is written
@@ -1237,21 +1257,52 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert opened_at == {'dir': 'web-shop', 'path': '.remote-ai/attachments', 'file': first, 'from': 'terminal'}, opened_at
         played.info["features"] = [f for f in played.info["features"] if f not in ("file-upload", "attachments")]
 
-        # 4) 390px dark theme (skin=night) across running, confirm, and ended team detail + contrast verification
-        for name, tid, ready_expr in [
-            ('team-detail-running-dark-390.png', fs_running_id, "document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队验收'"),
-            ('team-detail-confirm-dark-390.png', fs_confirm_id, "!!document.querySelector('dialog.rs.rs-full[open] .team-ask-banner')"),
-            ('team-detail-done-dark-390.png', fs_done_id, "document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '已完成'"),
-        ]:
-            browser.open(played.origin + '/?tab=tasks&skin=night&do=team&item=' + tid, "!!document.querySelector('dialog.rs.rs-full[open]') && " + ready_expr, name, **phone(390))
-            time.sleep(.2)
-            dark_metrics = value("""(() => {
-              const p=document.documentElement, f=document.querySelector('dialog.rs.rs-full[open] .rs-body');
-              return {theme:p.dataset.theme, scroll:Math.max(p.scrollWidth, document.body.scrollWidth), client:p.clientWidth,
-                bodyOverflow:f.scrollWidth > f.clientWidth, scrollTop:f.scrollTop, errors:window.__errors};
-            })()""")
-            assert dark_metrics["theme"] == "dark" and dark_metrics["scroll"] <= 390 and not dark_metrics["bodyOverflow"] and dark_metrics["scrollTop"] == 0 and not dark_metrics["errors"], dark_metrics
-            browser.picture(out / name)
+        # 4) 390px light & dark comparison across running (verify), confirm, done, and unverified-stop (fail) states
+        fs_fail_id = "c" * 32
+        fs_fail = {
+            "id": fs_fail_id, "dir": "web-shop", "mode": "lead",
+            "goal": "核对验收未通过状态的节点与连接线样式",
+            "rules": "", "state": "stopped",
+            "note": "验收阶段存在未解决项，请处理后再继续。",
+            "phase": "verify", "last": True, "discuss": False, "picked": "", "tools": ["codex", "claude", "agy"],
+            "roster": [
+                {"role": "leader", "tool": "codex", "model": "gpt-6.2-astra", "effort": "high"},
+                {"role": "member-1", "tool": "claude", "model": "claude-opus-5-5", "effort": "high"},
+            ],
+            "auto_roster": False, "rounds": 3, "round": 3, "created": played.now - 600000,
+            "models": {}, "members": {}, "awaited": [], "failed": {"leader": True},
+            "member_sessions": {},
+            "log": [
+                {"at": played.now - 600000, "who": "目标", "text": "核对验收未通过状态的节点与连接线样式"},
+                {"at": played.now - 120000, "who": "leader", "text": "尚有 1 项回归未通过，暂停收尾。"},
+            ]
+        }
+        played.teams.append(fs_fail)
+        for skin_key, suffix in (('paper', 'light'), ('night', 'dark')):
+            for label, tid, ready_expr in [
+                ('running', fs_running_id, "document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队验收'"),
+                ('confirm', fs_confirm_id, "!!document.querySelector('dialog.rs.rs-full[open] .team-ask-banner')"),
+                ('done', fs_done_id, "document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '已完成'"),
+                ('fail', fs_fail_id, "document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '未完成' && !!document.querySelector('#team-round-steps .team-stage.fail')"),
+            ]:
+                if suffix == 'light' and label in ('confirm', 'done'):
+                    continue
+                name = 'team-detail-%s-%s-390.png' % (label, suffix)
+                browser.open(played.origin + '/?tab=tasks&skin=' + skin_key + '&do=team&item=' + tid, "!!document.querySelector('dialog.rs.rs-full[open]') && " + ready_expr, name, **phone(390))
+                time.sleep(.2)
+                state_metrics = value("""(() => {
+                  const p=document.documentElement, f=document.querySelector('dialog.rs.rs-full[open] .rs-body');
+                  const stages=[...document.querySelectorAll('#team-round-steps .team-stage')];
+                  const segs=stages.map(li => [getComputedStyle(li, '::before').backgroundColor, getComputedStyle(li, '::after').backgroundColor]);
+                  return {theme:p.dataset.theme, scroll:Math.max(p.scrollWidth, document.body.scrollWidth), client:p.clientWidth,
+                    bodyOverflow:f.scrollWidth > f.clientWidth, scrollTop:f.scrollTop, errors:window.__errors, segs};
+                })()""")
+                assert state_metrics["theme"] == suffix and state_metrics["scroll"] <= 390 and not state_metrics["bodyOverflow"] and state_metrics["scrollTop"] == 0 and not state_metrics["errors"], (name, state_metrics)
+                if label == 'fail':
+                    # stage 0 (done) -> stage 1 (done) is green; stage 1 (done) -> stage 2 (fail) stays neutral
+                    assert state_metrics["segs"][0][1] == state_metrics["segs"][1][0] and state_metrics["segs"][1][1] == state_metrics["segs"][2][0] and state_metrics["segs"][0][1] != state_metrics["segs"][2][0], (name, state_metrics)
+                browser.picture(out / name)
+        played.teams.remove(fs_fail)
         # Restore light skin for subsequent viewport sweep
         browser.open(played.origin + '/?tab=together&skin=paper', "document.documentElement.dataset.theme === 'light'", 'restore light skin', **phone(390))
 
