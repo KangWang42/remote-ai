@@ -131,16 +131,7 @@ final class AggregateSessions {
          * finished work is "done" until then, as in the pages.
          */
         String kind(Map<String, Long> seen) {
-            if (team) {
-                if (teamConfirm) return "confirm";
-                if ("choose".equals(state)) return "team-choose";
-                if ("running".equals(state)) return "verify".equals(teamPhase) ? "team-verify" : "discuss".equals(teamPhase) ? "team-discuss" : "team-running";
-                if ("paused".equals(state)) return "team-paused";
-                if ("done".equals(state)) return "team-done";
-                if ("stopped".equals(state)) return "team-stopped";
-                if ("failed".equals(state)) return "team-failed";
-                return "team-done";
-            }
+            if (team) return teamKind(state, teamPhase, teamConfirm);
             if (!terminal) {
                 if (!live) return "history";
                 if (!now) return "held";
@@ -199,10 +190,26 @@ final class AggregateSessions {
         }
         return sb.toString();
     }
+    static String teamKind(String state, String phase, boolean confirm) {
+        if (confirm) return "confirm";
+        switch (state) {
+            case "choose": return "team-choose";
+            case "paused": return "team-paused";
+            case "stopped": return "team-stopped";
+            case "failed": return "team-failed";
+            case "running":
+                if ("decision".equals(phase)) return "team-decision";
+                if ("verify".equals(phase)) return "team-verify";
+                if ("discuss".equals(phase)) return "team-discuss";
+                return "team-running";
+            default: return "team-done";
+        }
+    }
     static String label(String kind) {
         switch (kind) {
             case "confirm": return "等你确认";
             case "team-choose": return "待选方案";
+            case "team-decision": return "领队处理中";
             case "team-verify": return "领队验收";
             case "team-discuss": return "讨论方案";
             case "team-running": return "进行中";
@@ -231,7 +238,7 @@ final class AggregateSessions {
         if ("confirm".equals(kind) || "team-choose".equals(kind)) return 0;
         if ("done".equals(kind)) return 1;
         if ("waiting".equals(kind)) return 2;
-        if ("busy".equals(kind) || "team-verify".equals(kind) || "team-running".equals(kind) || "team-discuss".equals(kind)) return 3;
+        if ("busy".equals(kind) || activeTeam(kind)) return 3;
         if ("starting".equals(kind)) return 4;
         if ("idle".equals(kind) || "team-paused".equals(kind)) return 5;
         if ("stopped".equals(kind)) return 6;
@@ -291,7 +298,10 @@ final class AggregateSessions {
         }
     }
     static boolean needs(String kind) { return "confirm".equals(kind) || "team-choose".equals(kind); }
-    static boolean working(String kind) { return "busy".equals(kind) || "starting".equals(kind) || "pc-busy".equals(kind) || "team-running".equals(kind) || "team-verify".equals(kind) || "team-discuss".equals(kind); }
+    static boolean activeTeam(String kind) {
+        return "team-running".equals(kind) || "team-decision".equals(kind) || "team-verify".equals(kind) || "team-discuss".equals(kind);
+    }
+    static boolean working(String kind) { return "busy".equals(kind) || "starting".equals(kind) || "pc-busy".equals(kind) || activeTeam(kind); }
     static boolean isPast(String kind) { return "ended".equals(kind) || "history".equals(kind) || "team-done".equals(kind) || "team-stopped".equals(kind) || "team-failed".equals(kind); }
     static int compareOpened(Entry a, Entry b) {
         return a.pinned != b.pinned ? (a.pinned ? -1 : 1)

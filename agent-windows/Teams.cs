@@ -408,20 +408,20 @@ public sealed class Teams {
             + "已有成员可用 ASSIGN member-1: 任务内容 继续，或加工具名切换。";
         return "【协作任务 · 领队】目标：" + t.Goal + ExtraRules(t)
             + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 成员前期方案讨论（只读）\n" + Cut(discussion, 12000))
-            + "\n\n你负责决策、按任务特点高效干净地分工、验收结果并在达标时结束。成员都在同一个项目文件夹中工作：\n" + String.Join("\n", members)
+            + "\n\n你负责确定范围、处理跨成员问题、整合并验收。成员在同一个项目文件夹工作：\n" + String.Join("\n", members)
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
             + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "") + modelGuide
-            + "\n如果目标写明由成员执行或要求组队，请把对应工作写成 ASSIGN 行。只有回复中的 ASSIGN 行才会交给成员执行。Remote AI 按这些行派给协作成员、收集结果并进入验收。工具内置的子代理只在用户明确要求时用于当前角色自己的工作；同一项工作只派一次。"
-            + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件；有先后依赖的工作按顺序分批派出。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 成员交回后由你统筹：汇总各成员的结果，检查是否冲突、遗漏或偏离目标，必要时自己合并和修订，再决定结束还是继续派工。成员交回的如果只是进度（还在运行、等结果），说明它还没做完，用 ASSIGN 让它接着做完再验收。\n5. 成员可能在某些方面比你更擅长，可以采纳它们的专长；但成员只看到自己负责的部分，它们的结论和“已完成”要由你对照实际改动核实后再采信。"
-            + (rooms.Count > 0 ? "\n6. 按额度分配工作量：额度已用尽或不可用的成员不要再派工；额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
+            + "\n\n首轮只调查到足以决定分工。可独立交付的工作尽早同批派出，等依赖的产出确认后再派后续工作。简单任务可以直接完成。用户指定成员执行或要求组队时按要求派出。"
+            + "\n每项派工写清交付物、负责范围和需要交回的验收证据，划清共享文件的修改边界。由成员自行调查、选择实现、修复并复测。跨范围的发现和需统一决定的取舍由你处理。"
+            + (rooms.Count > 0 ? "\n结合专长和同账号共享额度派工。额度已用尽或不可用时跳过；任一窗口已用 80% 以上时只派小而必要的任务，额度未知按正常对待。你自己的额度紧张时，把实现和检查交给成员。" : "")
             + "\n\n" + RoundsGuide(t)
-            + "\n\n分派时，把 ASSIGN 放在回答的最后，每位成员一条（用上面的成员编号或英文名）：\nASSIGN 成员名: 任务内容\n任务较长时，可以在 ASSIGN 行下面接着写分步清单；到下一条 ASSIGN 之前的内容都会交给这位成员。\n若已自行完成任务，回答的最后写：\nDONE: 总结\n成员执行完或你自行完成后，会进入当轮验收。请亲自查看结果，运行相关检查，确认无误后结束。\n成员正在做的工作你不要同时动手，以免改动互相覆盖；成员交回后，合并与修订由你决定。";
+            + "\n\nRemote AI 按这些行派给协作成员。分派时在回答末尾为每位成员写一条，可接多行任务说明：\nASSIGN 成员名: 任务内容\n同一项工作只派一次。工具内置的子代理只在用户明确要求时用于当前角色自己的工作。"
+            + "\n自行完成时在末尾写 DONE: 总结。成员交回结果或你自行完成后，由你独立验收。";
     }
     /// How the rounds go: the leader sets each round's aim by what it has seen; free rounds end when the goal is met.
     static string RoundsGuide(Team t) {
-        return "轮次：每一轮由你根据当前证据（实际改动、检查结果、成员回报）确定本轮要达到什么，只派这一轮需要的工作；第一轮就达标时，直接验收结束。"
-            + "后续轮次只需要复核时，派一位成员只读复核，或你自己复核后验收，不要为了用满轮数重做已经通过的部分。"
-            + (t.Free ? "本任务不限轮数（最多 " + MaxTotalRounds + " 轮），达到目标就结束。" : "本任务最多 " + t.Rounds + " 轮。");
+        return "每轮根据实际改动和检查结果安排剩余工作，只差复核时由你复核或派一位只读成员。达标即结束。"
+            + (t.Free ? "本任务不限轮数（最多 " + MaxTotalRounds + " 轮）。" : "本任务最多 " + t.Rounds + " 轮。");
     }
     /// The leader's turn of acceptance: it inspects what changed and runs the checks itself (or has another member
     /// check or fix); `last` where no more rounds may be given out.
@@ -432,39 +432,52 @@ public sealed class Teams {
             + "\n\n整体目标：" + Cut(t.Goal, 2000)
             + (changes.Length > 0 ? "\n\n## 文件夹中的当前改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
-            + "\n\n验收要求：\n1. 亲自查看项目里的实际改动，汇总各成员的结果，确认它们互不冲突、没有遗漏并达到目标；成员的说明只作线索，以实际改动和检查结果为准。\n2. 发现小的冲突、遗漏或错误时，可以自己直接合并修订，改完再检查。\n3. 运行与这次改动相关的检查，例如构建、测试、lint，或实际运行一遍关键功能。"
-            + (last ? "" : "\n4. 需要较多工作的修复，给出可执行的修改意见并派给成员，派工后才进入下一轮。先按这次验收的发现定下一轮要达到什么：只差复核时，只派只读复核。")
+            + "\n\n对照目标和成员证据检查实际交付及跨成员影响，亲自运行与这次改动相关的检查。核实用户补充要求是否已落实。小的整合问题可直接修订并复查，仍需执行的工作按范围交给成员。"
             + "\n\n验收通过时，在回答的最后写两行：\nVERIFIED: 你实际做了哪些检查、看到了什么结果（写明命令或查看的文件）\nDONE: 总结"
             + (last ? "\n没有通过时，说明还差什么，并用 ASSIGN 成员名: 修改内容 写出要做的修复。轮数已经用完，这些修复先保留，用户追加一轮后再派给成员。"
                 : "\n发现问题时，用 ASSIGN 成员名: 修改内容 把修复派给成员，完成后会请你再次验收。");
     }
     const string VerifyRemind = "【协作任务 · 领队验收】这次回答里没有找到验收证据。请在回答的最后写：\nVERIFIED: 你实际运行的检查和看到的结果\nDONE: 总结\n还有问题时，用 ASSIGN 成员名: 修改内容 安排修复。";
     /// A member that handed in a note of progress (its turn ended while what it waits for still runs) is sent back.
-    public const string KeepAtIt = "【协作任务】你刚才交回的是进度说明，任务还没有完成，领队在等你的结果。请查看你在等的命令或测试的结果（需要时重新运行），把分派的任务做完，再交回实际改动、检查结果和结论。";
+    public const string KeepAtIt = "【协作任务】请等到当前操作返回，继续核对、修复并复测，完成后交回结果。确实无法继续时，写明阻塞原因和需要领队处理的事项。";
     const int MostNudges = 2;
-    static readonly Regex Underway = new Regex(@"(正在|还在|仍在)(运行|执行|跑|等待|等|进行|测试|构建|编译)|待.{0,24}(返回|完成|结束|出来|跑完)后|等.{0,24}(结果|完成|结束|跑完|返回)(后|再)|稍后(回报|汇报|继续|再)|\b(still running|in progress|will (report|continue)|once (it|they|the \w+) (finish|complete)|waiting for)\b", RegexOptions.IgnoreCase);
-    /// Whether a member's answer is a note of progress, not a result: its last paragraph says that something still
-    /// runs or that it goes on once that ends. A result that ends otherwise is taken; the leader is told to send back
-    /// what slips by (LeaderFirst).
+    static readonly Regex Underway = new Regex(
+        @"(?:正在|还在|仍在)(?:运行|执行|跑|等待|等(?!待)|进行|测试|构建|编译|生成)(?!的)|待.{0,24}(?:返回|完成|结束|出来|跑完)后|等.{0,24}(?:结果|完成|结束|跑完|返回)(?:后|再)|稍后(?:回报|汇报|继续|再)"
+        + @"|\b(?<!was )(?<!were )(?<!had been )(?<!no longer )(?:still running|in progress|waiting for)\b"
+        + @"|\b(?:will|['’]ll) (?:report|continue)\b|\b(?:once|as soon as) (?:it|they|the \w+) (?:finish(?:es)?|completes?|ends?|returns?)\b"
+        + @"|\b(?:I['’]m|I am|we['’]re|we are) (?:still |currently )?(?:generating|running|building|testing|compiling) [^.!?\r\n]+\bnow\b", RegexOptions.IgnoreCase);
+    static readonly Regex Blocked = new Regex(
+        @"^[ \t>*_`#-]*(?:(?:阻塞|受阻|Blocked)[*_`]*[ \t]*[:：][*_` \t]*[^\s*_`]|\b(?:I|we) (?:cannot|can['’]t) (?:continue|proceed)\b|(?:我(?:们)?)?(?:目前|暂时)?无法继续)",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline);
+    static readonly Regex CompletedWork = new Regex(
+        @"已(?:经)?(?:全部|均|都)?(?:通过|完成|跑完)|(?:核对|查验|验证|检查|复核)了|(?:测试|检查)(?:全部|均|都)?通过"
+        + @"|\b(?:I|we) (?:inspected|confirmed|verified)\b|\b(?<!not )(?:passed|succeeded)\b", RegexOptions.IgnoreCase);
     public static bool Progress(string said) {
+        if (!String.IsNullOrEmpty(Finished(said)) || Blocked.IsMatch(said ?? "")) return false;
         var paragraphs = Regex.Split((said ?? "").Trim(), @"\n\s*\n");
         string last = paragraphs[paragraphs.Length - 1];
-        return Underway.IsMatch(last.Length > 400 ? last.Substring(last.Length - 400) : last);
+        if (last.Length > 400) last = last.Substring(last.Length - 400);
+        var pending = Underway.Matches(last).Cast<Match>().LastOrDefault();
+        return pending != null && !CompletedWork.IsMatch(last, pending.Index + pending.Length);
     }
+    const string MemberGuide = "\n\n在分派范围内自主调查、选择实现、修复并复测。跨范围发现交领队裁决，组队和派工由领队负责。只有用户明确要求时才使用工具内置的子代理。"
+        + "\n等操作和检查结束再交回，写明实际产出、改动文件、关键取舍及检查结果。完成时可用 DONE: 总结。确实无法继续时用“阻塞：”说明原因、已经尝试的办法和需要领队决定的事项。";
     public static string MemberTask(Team t, string task) {
         return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task
-            + "\n\n项目目标供参考：" + t.Goal + "\n\n请只执行领队分派给你的任务。组队和分派由领队负责。只有用户明确要求时才使用工具内置的子代理；由你核验结果并交回领队。完成后简要说明结果及改动。";
+            + "\n\n项目目标供参考：" + t.Goal + MemberGuide;
     }
     public static string CompareFirst(Team t, string tool) {
         return "【协作任务 · 并行比稿】目标：" + t.Goal + ExtraRules(t)
             + "\n\n你正在该项目的独立 Git worktree 副本中工作，不会与其他候选 AI 冲突。请直接完成你的最佳实现并验证关键路径，完成后简明说明你的方案思路、改了哪些文件以及取舍理由。用户会对比各候选方案并选择一个合并。";
     }
-    public static string Results(Team t, Dictionary<string, string> answers, string changes, IDictionary<string, string> rooms) {
+    public static string Results(Team t, Dictionary<string, string> answers, string changes, IDictionary<string, string> rooms, string guide = "") {
         return Answers(t, answers)
             + (changes.Length > 0 ? "\n\n## 文件夹中的改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
-            + "\n\n请检查结果，按这些证据决定下一步：分派下一步（ASSIGN 成员名: 任务）或结束（DONE: 总结）。";
+            + "\n\n" + (guide.Length > 0 ? guide : "请根据结果继续分派（ASSIGN 成员名: 任务）或确认完成（DONE: 总结）。");
     }
+    const string DecideNext = "本轮仍有未完成的分工。请根据回报解决阻塞、明确范围或改派，只安排剩余工作。达到整体目标后再写 DONE: 总结。";
+    const string SupplementGuide = "请结合补充要求调整受影响的分工。把仍适用和本轮新增的任务尽早写成 ASSIGN 行，简单工作可直接完成。";
     static string Answers(Team t, Dictionary<string, string> answers) {
         return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + RoleLabel(t, p.Key) + "\n" + Cut(p.Value, 8000)));
     }
@@ -677,7 +690,7 @@ public sealed class Teams {
     }
 
     /// Sends an owner message into a collaboration task:
-    /// - while running: interjects to `target` (or currently awaited members);
+    /// - while running: interjects to `target` (defaults to the leader in lead mode after discussion);
     /// - while paused: resumes and delivers the guidance;
     /// - while waiting to choose in `compare`: asks one or all candidates to refine in their worktrees;
     /// - after `done` or `stopped` (`review` / `lead`): starts a new follow-up round.
@@ -708,7 +721,8 @@ public sealed class Teams {
                         team.Awaited.Clear();
                         team.Awaited.Add("leader");
                     }
-                    targets.AddRange(team.Awaited.Count > 0 ? team.Awaited : new List<string> { mode == "review" ? "writer" : mode == "lead" ? "leader" : team.Tools[0] });
+                    if (state == "running" && mode == "lead" && phase != "discuss") targets.Add("leader");
+                    else targets.AddRange(team.Awaited.Count > 0 ? team.Awaited : new List<string> { mode == "review" ? "writer" : mode == "lead" ? "leader" : team.Tools[0] });
                     foreach (string r in targets) if (!team.Awaited.Contains(r)) team.Awaited.Add(r);
                 }
                 if (state == "paused") { team.State = "running"; team.Note = ""; }
@@ -763,7 +777,7 @@ public sealed class Teams {
         } else {
             var rooms = Rooms(team);
             string prompt = "【用户新一轮要求 · 第 " + team.Round + " 轮】\n" + text + RoomsBlock(team, rooms)
-                + "\n\n请检查新要求并继续分派（ASSIGN 成员名: 任务）或确认完成（DONE: 总结）。";
+                + "\n\n" + SupplementGuide + " 完成后写 DONE: 总结。";
             Ask(team, "leader", team.Tools[0], prompt, false, null);
         }
         return Of(id);
@@ -958,12 +972,13 @@ public sealed class Teams {
             return LeaderFirst(team, Rooms(team))
                 + (recent.Length > 0 ? "\n\n## 此前协作进展\n" + Cut(recent, 8000) : "")
                 + (verifying ? "\n\n" + VerifyAsk(team, changes, new Dictionary<string, string>(), team.Last) : changes.Length > 0 ? "\n\n## 当前工作区改动\n" + Cut(changes, 16000) : "")
+                + (team.Phase == "decision" ? "\n\n" + DecideNext : "")
                 + extra;
         }
         return "【协作任务 · 接手成员任务】\n整体目标：" + team.Goal + ExtraRules(team)
             + (!String.IsNullOrEmpty(pending) ? "\n\n原分派给 " + Label(fromTool) + " 的任务：\n" + Cut(pending, 4000) : "")
             + (changes.Length > 0 ? "\n\n## 当前工作区已有改动\n" + Cut(changes, 16000) : "")
-            + extra + "\n\n请基于当前进展继续完成该任务，完成后简要说明你做了什么、改了哪些文件。";
+            + extra + MemberGuide;
     }
 
     /// Removes a task that is not at work, closing every terminal it began (its conversations stay in the tools'
@@ -1023,6 +1038,10 @@ public sealed class Teams {
                 string changes = "";
                 try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
                 verify = "\n\n" + VerifyAsk(team, changes, Rooms(team), team.Last);
+            } else if (team.Phase == "decision") {
+                string pending;
+                lock (gate) team.Pending.TryGetValue(role, out pending);
+                verify = "\n\n" + (pending ?? DecideNext);
             }
             prompt = LeaderFirst(team, Rooms(team)) + verify + (words == "继续完成上面的任务。" ? "" : "\n\n" + words);
         }
@@ -1311,7 +1330,7 @@ public sealed class Teams {
                     leaderTool = backup;
                 }
             }
-            Open(team, "leader", leaderTool, LeaderFirst(team, Rooms(team), discussion), false, null);
+            Ask(team, "leader", leaderTool, LeaderFirst(team, Rooms(team), discussion), false);
         }
     }
 
@@ -1357,18 +1376,18 @@ public sealed class Teams {
     void Led(Team team, string role, string said) {
         if (role == "leader") {
             string summary = Finished(said);
-            bool verifying, last, hasInput;
-            lock (gate) { verifying = team.Phase == "verify"; last = team.Last; hasInput = team.LeaderInput.Length > 0; }
+            bool verifying, deciding, last, hasInput;
+            lock (gate) { verifying = team.Phase == "verify"; deciding = team.Phase == "decision"; last = team.Last; hasInput = team.LeaderInput.Length > 0; }
             if (hasInput) {
                 Ask(team, "leader", team.Tools[0], verifying ? VerifyAsk(team, Changes(team), Rooms(team), last)
-                    : "【协作任务】收到用户补充要求，请据此继续当前任务，必要时重新分派。", false);
+                    : "【协作任务 · 用户补充】\n" + (deciding ? DecideNext + "\n" : "") + SupplementGuide, false);
                 return;
             }
             var tasks = team.Roster.Length == 0 ? Assigned(said, LeadMembers(team)) : AssignRoster(team, said, !last);
             if (tasks.Count > 0) {
-                if (verifying && last) { Hold(team, tasks, "领队验收时仍要求修改，还没有通过验收"); return; }
+                if (last) { Hold(team, tasks, verifying ? "领队验收时仍要求修改，还没有通过验收" : "本轮仍有工作需要完成"); return; }
                 lock (gate) {
-                    if (verifying) team.Round++;
+                    if (verifying || deciding) team.Round++;
                     team.Phase = "";
                     team.Reminded = false; team.Answers.Clear(); team.Awaited.Clear(); team.Nudged.Clear();
                     foreach (string member in tasks.Keys) if (!team.Awaited.Contains(member)) team.Awaited.Add(member);
@@ -1387,7 +1406,7 @@ public sealed class Teams {
             }
             bool reminded; lock (gate) { reminded = team.Reminded; team.Reminded = true; Save(); }
             if (reminded) {
-                if (verifying && last) { Hold(team, new Dictionary<string, string>(), "领队没有给出验收证据，还没有通过验收"); return; }
+                if (last) { Hold(team, new Dictionary<string, string>(), verifying ? "领队没有给出验收证据，还没有通过验收" : "仍有未完成分工，领队未给出处理决定"); return; }
                 lock (gate) { team.State = "paused"; team.Note = verifying ? "领队没有给出验收证据：点“继续”再问它一次" : "领队没有分派任务，也没有结束：点“继续”再问它一次"; team.Awaited.Clear(); team.Awaited.Add("leader"); Save(); }
                 Tell();
                 return;
@@ -1491,13 +1510,15 @@ public sealed class Teams {
         foreach (string terminal in retired) try { hands.Stop(terminal); } catch (Exception) { }
         return tasks;
     }
-    /// The last member to finish hands every result back for verification within the current round.
+    /// The last member hands the batch back for verification or a decision about unfinished work.
     /// Legacy teams can retry a batch in the same round when every member failed to start the work.
     void Collected(Team team, Dictionary<string, string> answers, bool counted, string added) {
+        bool deciding = answers.Values.Any(answer => !answer.StartsWith("【执行失败】", StringComparison.Ordinal)
+            && String.IsNullOrEmpty(Finished(answer)) && (Blocked.IsMatch(answer) || Progress(answer)));
         bool verifying, last;
         lock (gate) {
-            if (counted || team.Roster.Length > 0) {
-                team.Phase = "verify";
+            if (deciding || counted || team.Roster.Length > 0) {
+                team.Phase = deciding ? "decision" : "verify";
                 team.Last = team.Round >= team.Cap;
                 team.Reminded = false;
             }
@@ -1506,7 +1527,8 @@ public sealed class Teams {
         }
         string changes = Changes(team);
         var rooms = Rooms(team);
-        string body = verifying ? Answers(team, answers) + "\n\n" + VerifyAsk(team, changes, rooms, last) : Results(team, answers, changes, rooms);
+        string guide = deciding ? DecideNext + (last ? " 本轮已到上限，新的 ASSIGN 待用户追加一轮后发出。" : "") : "";
+        string body = verifying ? Answers(team, answers) + "\n\n" + VerifyAsk(team, changes, rooms, last) : Results(team, answers, changes, rooms, guide);
         Ask(team, "leader", team.Tools[0], body + added, false);
     }
     /// The leader said the work is done: a turn of its own to accept it, with what changed in front of it.

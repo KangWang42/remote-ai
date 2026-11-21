@@ -973,7 +973,7 @@
     const c = x.team;
     if (x.teamConfirm) return ['confirm', '等你确认'];
     if (c.state === 'choose') return ['confirm', '待选方案'];
-    if (c.state === 'running') return ['busy', c.phase === 'verify' ? '领队验收' : c.phase === 'discuss' ? '讨论方案' : '进行中'];
+    if (c.state === 'running') return ['busy', window.RemoteTeams?.phaseLabel?.(c.phase) || '进行中'];
     if (c.state === 'paused') return ['waiting', '已暂停'];
     if (c.state === 'done') return ['ended', '已完成'];
     if (c.state === 'stopped') return ['ended', c.mode === 'lead' && (c.phase === 'verify' || c.last) ? '未完成' : '已停止'];

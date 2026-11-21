@@ -178,7 +178,7 @@ def _team_cards(items):
         efforts_raw = c.get("efforts") if isinstance(c.get("efforts"), dict) else {}
         efforts = {tool: e.strip().lower() for tool, e in efforts_raw.items() if tool in tools and isinstance(e, str) and e.strip() and _effort.fullmatch(e.strip().lower())}
         card = {"id": c["id"], "dir": str(c.get("dir") or "")[:60], "goal": str(c.get("goal") or "")[:200], "mode": c["mode"], "state": c["state"],
-                "phase": c.get("phase") if c.get("phase") in ("discuss", "verify") else "", "note": str(c.get("note") or "")[:200], "updated": c["updated"],
+                "phase": c.get("phase") if c.get("phase") in ("discuss", "decision", "verify") else "", "note": str(c.get("note") or "")[:200], "updated": c["updated"],
                 "awaited": [a for a in c["awaited"][:8] if isinstance(a, str) and re.fullmatch(r"(?:discuss:)?(?:[a-z]{1,16}|member-[123])", a)] if isinstance(c.get("awaited"), list) else [],
                 "tools": tools, "models": {tool: m for tool, m in models.items() if tool in tools and isinstance(m, str) and _model.fullmatch(m)}}
         if efforts:

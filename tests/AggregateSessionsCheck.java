@@ -279,6 +279,16 @@ public final class AggregateSessionsCheck {
         require(shop.active.size() == 3, "Two active team cards + one standalone session, child member terminals collapsed: " + shop.active.size());
         require(shop.history.size() == 2, "One done team card + one orphan fallback session, done child collapsed: " + shop.history.size());
         require("team-verify".equals(teamVerify.kind(null)) && "领队验收".equals(teamVerify.label()), "Verify phase displays 领队验收: " + teamVerify.label());
+        AggregateSessions.Entry teamDecision = AggregateSessions.Entry.teamCard(
+            teamRunId, "web-shop", "处理成员阻塞", "lead", "running", "decision", "",
+            nowSec, false, Arrays.asList("codex", "claude"), teamModels, Collections.singletonList("leader"));
+        String decisionKind = teamDecision.kind(null);
+        require("领队处理中".equals(teamDecision.label()) && AggregateSessions.working(decisionKind)
+            && AggregateSessions.rank(decisionKind) == AggregateSessions.rank(teamVerify.kind(null)), "Decision card stays among active teams");
+        require("已暂停".equals(AggregateSessions.label(AggregateSessions.teamKind("paused", "decision", false)))
+            && "已完成".equals(AggregateSessions.label(AggregateSessions.teamKind("done", "decision", false)))
+            && "已停止".equals(AggregateSessions.label(AggregateSessions.teamKind("stopped", "decision", false)))
+            && "等你确认".equals(AggregateSessions.label(AggregateSessions.teamKind("running", "decision", true))), "State and confirmation take precedence over decision");
         require("confirm".equals(teamAsk.kind(null)) && teamAsk.teamConfirm, "Live child confirmation propagates to parent team card");
         require(teamVerify.used == (nowSec - 120) * 1000L && "2 分钟前".equals(AggregateSessions.ago(teamVerify.used, now)), "Unix seconds converted to ms: " + teamVerify.used);
         require(Arrays.equals(AggregateSessions.counts(teamProjects, null), new int[]{1, 1, 1, 3}), "Team confirm, standalone open, team verify active");

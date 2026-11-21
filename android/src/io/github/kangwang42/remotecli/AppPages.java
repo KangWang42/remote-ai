@@ -485,18 +485,14 @@ final class AppPages {
             JSONObject item = items.optJSONObject(i); if (item == null) continue;
             String rawMode = item.optString("mode");
             String mode = "lead".equals(rawMode) ? "分工协作" : "compare".equals(rawMode) ? "比稿" : "写审";
-            String rawState = item.optString("state");
-            String phase = item.optString("phase");
-            boolean confirm = item.optBoolean("confirm");
-            String state = confirm ? "等你确认"
-                : "running".equals(rawState) ? ("verify".equals(phase) ? "领队验收" : "discuss".equals(phase) ? "讨论方案" : "进行中")
-                : "choose".equals(rawState) ? "待选方案" : "paused".equals(rawState) ? "已暂停"
-                : "done".equals(rawState) ? "已完成" : "stopped".equals(rawState) ? "已停止" : "没有开始";
+            String kind = AggregateSessions.teamKind(item.optString("state", "failed"), item.optString("phase"), item.optBoolean("confirm"));
+            String state = AggregateSessions.label(kind);
             String desc = state + " · " + mode + ("compare".equals(rawMode) ? "" : " · 第 " + item.optInt("round", 1) + " / " + item.optInt("rounds", 3) + " 轮");
             String note = item.optString("note");
             if (!note.isEmpty()) desc += " · " + note;
-            kit.setting(body, R.drawable.ic_tab_together, TINT_AGY, item.optString("goal", "协作任务"), desc, "",
-                confirm ? kit.BAD : "running".equals(rawState) ? ("verify".equals(phase) ? TINT_WARN : kit.goodInk()) : ("paused".equals(rawState) || "choose".equals(rawState)) ? TINT_WARN : kit.MUTED,
+            int color = "confirm".equals(kind) ? kit.BAD : "team-verify".equals(kind) || "team-paused".equals(kind) || "team-choose".equals(kind)
+                ? TINT_WARN : AggregateSessions.activeTeam(kind) ? kit.goodInk() : kit.MUTED;
+            kit.setting(body, R.drawable.ic_tab_together, TINT_AGY, item.optString("goal", "协作任务"), desc, "", color,
                 () -> activity.together(url, "team", item.optString("id")));
         }
     }

@@ -226,9 +226,175 @@ public static class TeamsCheck {
         reborn.Turned(team.Members["claude"], "done", "回归测试已补，通过。");
         for (int i = 0; i < 2; i++) { reborn.Turned(agyNow(), "done", "还在跑测试，稍后回报。"); Require(Team(reborn, broke).Phase == "" && Last(agyNow()).Contains(Teams.KeepAtIt), "sent back, time " + (i + 1)); }
         reborn.Turned(agyNow(), "done", "还在跑测试，稍后回报。");
-        Require(Team(reborn, broke).Phase == "verify" && Last(Team(reborn, broke).Members["leader"]).Contains("还在跑测试"), "the third note goes to the leader, who decides (begun anew after the restart)");
+        Require(Team(reborn, broke).Phase == "decision" && Last(Team(reborn, broke).Members["leader"]).Contains("还在跑测试") && Last(Team(reborn, broke).Members["leader"]).Contains("未完成的分工"), "the third note goes to the leader, who decides (begun anew after the restart)");
         Require(!Teams.Progress("改好了。测试全部通过。") && !Teams.Progress("正在运行的测试已全部通过。\n\n改动：teams.js") && Teams.Progress("Tests are still running; I will report back once they finish."),
             "a result is a result; a note of progress in either language is one");
+    }
+
+    /// Delegation and handback verification: historical progress misjudgment, completed/blocked/retrospective-waiting
+    /// contrasts, member continuation and leader notification timing, simple direct finish vs autonomous member execution.
+    static void DelegationAndHandback(string folder) {
+        string historical = "I'm generating the icon assets and preview sheets now; I'll inspect the renders as soon as the script finishes.";
+        Require(Teams.Progress(historical), "historical progress note must be recognized as in-progress");
+        Require(Teams.Progress("Unit tests passed. " + historical), "earlier passed step does not mask trailing progress note");
+        Require(Teams.Progress("Running the test suite now; I'll report back as soon as it finishes."), "English in-progress variant recognized");
+
+        // Contrast 1: completed reports (plain Chinese, plain English reusing the same nouns, and explicit DONE)
+        Require(!Teams.Progress("已完成图标资源生成与预览检查，更新了 remote-ai.ico 和 Android 图标，python tests/icon_assets_check.py 全部通过。"), "plain Chinese completion is not progress");
+        Require(!Teams.Progress("Finished generating the icon assets and preview sheets; inspected the 16px and 32px renders and icon_assets_check.py passed."), "plain English completion reusing nouns is not progress");
+        Require(!Teams.Progress("图标资源和预览图已生成并核对完成。\nDONE: 已更新图标并通过 icon_assets_check.py"), "DONE completion is not progress");
+
+        // Contrast 2: explicitly blocked reports (even when mentioning waiting/continuing)
+        Require(!Teams.Progress("阻塞：缺少发布签名密钥目录，正在等用户确认路径，无法继续打包。"), "Chinese explicit blocker is not progress");
+        Require(!Teams.Progress("Blocked: Chrome is missing on this machine; waiting for environment setup before running browser checks."), "English explicit blocker is not progress");
+        Require(!Teams.Progress("- **受阻：** 目标目录权限不足，无法写入测试产物，需领队决定是否改用临时目录。"), "formatted blocker is not progress");
+
+        // Contrast 3: completion reports retrospectively referencing earlier waiting
+        Require(!Teams.Progress("先运行脚本生成图标，当时脚本仍在运行，等待结果返回后继续检查。\n\n结果：脚本已跑完，核对了 16px/32px 渲染图，python tests/icon_assets_check.py 全部通过。"),
+            "earlier-paragraph waiting in multi-paragraph completion report is not progress");
+        Require(!Teams.Progress("此前测试仍在运行，等待脚本跑完后我核对了全部渲染图并确认通过。\nDONE: 图标资源与预览图均已通过检查"),
+            "retrospective waiting with DONE is not progress");
+        Require(!Teams.Progress("After waiting for the script to finish, I inspected the 16px and 32px renders and confirmed icon_assets_check.py passed."),
+            "single-paragraph English completion retrospectively referencing waiting is not progress");
+        Require(!Teams.Progress("Tests were still running earlier, and the build was in progress, but all checks are green now."),
+            "past-tense retrospective waiting is not progress");
+        Require(!Teams.Progress("等脚本跑完后我核对了 16px/32px 渲染图，改动已保存且 python tests/icon_assets_check.py 全部通过。"),
+            "single-paragraph Chinese completion retrospectively referencing waiting is not progress");
+
+        var hands = Hands();
+        hands.Available = () => new[] { "claude", "codex", "agy" };
+        var teams = new Teams(Path.Combine(folder, "handback.dat"), hands);
+
+        // 1) End-to-end: historical progress sentence sends member back; leader receives only final results once all members finish
+        string iconId = "6161616161616161";
+        var iconPreset = Lead(iconId, new object[] { "codex", "claude", "agy" }, 0);
+        iconPreset["goal"] = "更新应用图标资源并验收渲染结果";
+        iconPreset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude"), Member("member-2", "agy") };
+        string leader = teams.Start(iconPreset).Members["leader"];
+        teams.Turned(leader, "done", "ASSIGN member-1: 核对图标资源引用测试\nASSIGN member-2: 生成全部图标资源与 16/32 像素预览图并检查渲染效果");
+        var team = Team(teams, iconId);
+        string m1 = team.Members["member-1"], m2 = team.Members["member-2"];
+        int toldLeader = told.Count(x => x[0] == leader);
+        teams.Turned(m1, "done", "已完成图标引用测试，python tests/icon_assets_check.py 全部通过。");
+        team = Team(teams, iconId);
+        Require(team.Phase == "" && team.Awaited.SequenceEqual(new[] { "member-2" }) && told.Count(x => x[0] == leader) == toldLeader,
+            "leader waits while second member works");
+        teams.Turned(m2, "done", historical);
+        team = Team(teams, iconId);
+        Require(team.State == "running" && team.Phase == "" && team.Awaited.SequenceEqual(new[] { "member-2" }) && Last(m2) == Teams.KeepAtIt
+            && told.Count(x => x[0] == leader) == toldLeader && team.Log.Any(s => s.Who == "继续" && s.Text.Contains("进度说明")),
+            "historical progress sentence keeps member working without waking leader");
+        teams.Turned(m2, "done", "先运行脚本生成图标并等待预览图输出。\n\n全部图标资源和 16px/32px 预览图已生成并核对无误，python tests/icon_assets_check.py 通过。");
+        team = Team(teams, iconId);
+        Require(team.Phase == "verify" && team.Awaited.SequenceEqual(new[] { "leader" }) && told.Count(x => x[0] == leader) == toldLeader + 1
+            && Last(leader).Contains("已完成图标引用测试") && Last(leader).Contains("16px/32px 预览图已生成")
+            && !Last(leader).Contains("generating the icon assets and preview sheets now"),
+            "leader receives both final results only after nudged member finishes, without the intermediate progress note");
+        teams.Turned(leader, "done", "VERIFIED: 核对两项改动并复跑 python tests/icon_assets_check.py 全部通过\nDONE: 图标资源更新与验收完成");
+        Require(Team(teams, iconId).State == "done" && Team(teams, iconId).Round == 1, "historical progress flow finishes cleanly after verification");
+
+        // 2) End-to-end: explicit blocker is NOT nudged and goes to leader decision turn
+        string blockedId = "6262626262626262";
+        leader = teams.Start(Lead(blockedId, new object[] { "codex", "claude", "agy" }, 3)).Members["leader"];
+        teams.Turned(leader, "done", "ASSIGN claude: 修复后端接口\nASSIGN agy: 跑协作浏览器检查");
+        team = Team(teams, blockedId);
+        string cc = team.Members["claude"], ag = team.Members["agy"];
+        toldLeader = told.Count(x => x[0] == leader);
+        teams.Turned(cc, "done", "后端接口已修好，单元测试 6 项通过。");
+        teams.Turned(ag, "done", "Blocked: Chrome is not installed on this machine; waiting for environment path before running together_ui_check.py. Code changes in teams.js are saved.");
+        team = Team(teams, blockedId);
+        Require(Last(ag) != Teams.KeepAtIt && team.Phase == "decision" && team.Awaited.SequenceEqual(new[] { "leader" })
+            && told.Count(x => x[0] == leader) == toldLeader + 1 && Last(leader).Contains("Blocked: Chrome") && Last(leader).Contains("未完成的分工"),
+            "explicit blocker reaches leader in decision phase without being nudged");
+        teams.Turned(leader, "done", "ASSIGN claude: 补跑 teams.js 相关静态检查并核对改动");
+        team = Team(teams, blockedId);
+        Require(team.Round == 2 && team.Phase == "" && team.Awaited.SequenceEqual(new[] { "claude" }), "leader decision dispatches follow-up into next round");
+        teams.Turned(cc, "done", "已核对 teams.js 并跑完检查，无报错。");
+        Require(Team(teams, blockedId).Phase == "verify", "resolved follow-up enters verification");
+        teams.Turned(leader, "done", "VERIFIED: 复跑单元测试与静态检查全部通过\nDONE: 已在解决阻塞后完成验收");
+        Require(Team(teams, blockedId).State == "done", "blocked task completes after leader decision and verification");
+
+        // 2b) Explicit blocker on the last round enters decision with cap notice; leader ASSIGN is held until resumed
+        string blockedLast = "6666666666666666";
+        leader = teams.Start(Lead(blockedLast, new object[] { "codex", "claude" }, 1)).Members["leader"];
+        teams.Turned(leader, "done", "ASSIGN claude: 运行完整打包脚本");
+        teams.Turned(Team(teams, blockedLast).Members["claude"], "done", "阻塞：缺少发布签名密钥目录，无法完成签名，请领队确认路径。");
+        team = Team(teams, blockedLast);
+        Require(team.Phase == "decision" && team.Last && Last(leader).Contains("本轮已到上限"), "last-round blocker enters decision with cap notice");
+        teams.Turned(leader, "done", "ASSIGN claude: 使用备用测试密钥完成验证");
+        team = Team(teams, blockedLast);
+        Require(team.State == "paused" && team.Spent && team.Held["claude"].Contains("备用测试密钥"), "last-round decision reassign holds task for owner extension");
+        teams.Resume(blockedLast);
+        Require(Team(teams, blockedLast).State == "running" && Team(teams, blockedLast).Round == 2 && Last(Team(teams, blockedLast).Members["claude"]).Contains("备用测试密钥"),
+            "resuming held decision dispatches follow-up in added round");
+        teams.Turned(Team(teams, blockedLast).Members["claude"], "done", "已用备用测试密钥验证通过。");
+        teams.Turned(leader, "done", "VERIFIED: 复核验证脚本输出通过\nDONE: 已完成验证");
+        Require(Team(teams, blockedLast).State == "done", "extended decision task finishes cleanly");
+
+        // 3) End-to-end: completion report retrospectively referencing waiting goes straight to verification
+        string retroId = "6363636363636363";
+        leader = teams.Start(Lead(retroId, new object[] { "codex", "claude", "agy" }, 2)).Members["leader"];
+        teams.Turned(leader, "done", "ASSIGN claude: 生成预览图并验收\nASSIGN agy: 跑图标检查脚本并确认通过");
+        team = Team(teams, retroId);
+        cc = team.Members["claude"]; ag = team.Members["agy"];
+        toldLeader = told.Count(x => x[0] == leader);
+        teams.Turned(cc, "done", "After waiting for the script to finish, I inspected the 16px and 32px renders and confirmed icon_assets_check.py passed.");
+        Require(Last(cc) != Teams.KeepAtIt && Team(teams, retroId).Awaited.SequenceEqual(new[] { "agy" }), "English retrospective waiting completion is not nudged");
+        teams.Turned(ag, "done", "等脚本跑完后我核对了全部预览图，改动已保存且 python tests/icon_assets_check.py 全部通过。");
+        team = Team(teams, retroId);
+        Require(Last(ag) != Teams.KeepAtIt && team.Phase == "verify" && told.Count(x => x[0] == leader) == toldLeader + 1
+            && Last(leader).Contains("inspected the 16px and 32px renders") && Last(leader).Contains("核对了全部预览图"),
+            "retrospective waiting completions go straight to leader verification");
+        teams.Turned(leader, "done", "VERIFIED: 复核两项检查输出均已通过\nDONE: 图标与检查全部完成");
+        Require(Team(teams, retroId).State == "done", "retrospective waiting task finishes cleanly");
+
+        // 4) Simple task finishes directly without spawning any member
+        string simpleId = "6464646464646464";
+        var simple = Lead(simpleId, new object[] { "codex", "claude", "agy" }, 0);
+        simple["goal"] = "修正 README.md 中的一处拼写错误";
+        simple["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude"), Member("member-2", "agy") };
+        leader = teams.Start(simple).Members["leader"];
+        Require(Last(leader).Contains("简单任务可以直接完成"), "leader is told simple tasks can finish directly");
+        int beforeSimple = made;
+        teams.Turned(leader, "done", "已直接修正 README.md 拼写错误。\nDONE: README.md 拼写已修正");
+        team = Team(teams, simpleId);
+        Require(team.State == "running" && team.Phase == "verify" && team.Members.Count == 1 && made == beforeSimple,
+            "simple task enters verification directly without spawning members");
+        teams.Turned(leader, "done", "VERIFIED: git diff README.md 确认仅修改一处拼写\nDONE: README.md 拼写已修正");
+        team = Team(teams, simpleId);
+        Require(team.State == "done" && team.Round == 1 && team.Members.Count == 1 && made == beforeSimple,
+            "simple task finishes in round 1 with zero members spawned");
+
+        // 5) Substantive task delegated to autonomous members (auto-roster, scoped multi-line tasks, queued owner interjection)
+        string subId = "6565656565656565";
+        var substantive = Lead(subId, new object[] { "codex" }, 0);
+        substantive["goal"] = "优化协作任务分工与交回，并补齐回归测试";
+        substantive["auto_roster"] = true;
+        substantive["roster"] = new[] { Member("leader", "codex") };
+        leader = teams.Start(substantive).Members["leader"];
+        Require(Last(leader).Contains("由成员自行调查、选择实现、修复并复测"), "leader is guided to delegate substantive work autonomously");
+        teams.Turned(leader, "done", "ASSIGN member-1 claude: 负责 agent-windows/Teams.cs：\n1. 优化进度识别与阻塞交回\n2. 保持已有状态机兼容\nASSIGN member-2 agy: 负责 tests/TeamsCheck.cs：\n1. 补齐分工与交回验证用例\n2. 运行 python tests/teams_check.py 交回结果");
+        team = Team(teams, subId);
+        m1 = team.Members["member-1"]; m2 = team.Members["member-2"];
+        Require(team.Awaited.OrderBy(x => x).SequenceEqual(new[] { "member-1", "member-2" })
+            && Last(m1).Contains("优化进度识别与阻塞交回") && Last(m1).Contains("在分派范围内自主调查、选择实现、修复并复测")
+            && Last(m2).Contains("补齐分工与交回验证用例") && Last(m2).Contains("在分派范围内自主调查、选择实现、修复并复测"),
+            "substantive tasks reach members with full multi-line scope and autonomy guidance");
+        // Untargeted owner interjection while members run in lead mode queues for leader rather than interrupting members
+        teams.Say(subId, "验收时重点核对阻塞回流路径", "");
+        Require(!Last(m1).Contains("阻塞回流路径") && !Last(m2).Contains("阻塞回流路径")
+            && Team(teams, subId).Awaited.OrderBy(x => x).SequenceEqual(new[] { "member-1", "member-2" }),
+            "untargeted interjection queues for leader without interrupting autonomous members");
+        changes = "文件：\n M agent-windows/Teams.cs\n M tests/TeamsCheck.cs";
+        teams.Turned(m1, "done", "已更新 agent-windows/Teams.cs 的进度识别与阻塞交回。\nDONE: Teams.cs 改动完成");
+        teams.Turned(m2, "done", "已补齐 tests/TeamsCheck.cs 并运行 python tests/teams_check.py 通过。");
+        team = Team(teams, subId);
+        Require(team.Phase == "verify" && team.Awaited.SequenceEqual(new[] { "leader" })
+            && Last(leader).Contains("Teams.cs 改动完成") && Last(leader).Contains("python tests/teams_check.py 通过")
+            && Last(leader).Contains("阻塞回流路径") && Last(leader).Contains("M tests/TeamsCheck.cs"),
+            "leader receives autonomous member results, queued owner guidance, and diff for acceptance");
+        teams.Turned(leader, "done", "VERIFIED: 复核 diff 并复跑 python tests/teams_check.py 全部通过\nDONE: 协作分工与交回优化已完成");
+        Require(Team(teams, subId).State == "done" && Team(teams, subId).Round == 1, "substantive delegated task completes in round 1");
     }
 
     /// The model each tool's members are begun with: given with the task and with a swap, used for every
@@ -302,7 +468,7 @@ public static class TeamsCheck {
         string early = "5c5c5c5c5c5c5c5c";
         var started = teams.Start(Lead(early, new object[] { "codex", "claude" }, 0));
         string leader = started.Members["leader"];
-        Require(started.Rounds == 0 && started.Free && Last(leader).Contains("不限轮数") && Last(leader).Contains("根据当前证据") && Last(leader).Contains("第一轮就达标时，直接验收结束"),
+        Require(started.Rounds == 0 && started.Free && Last(leader).Contains("不限轮数") && Last(leader).Contains("根据实际改动和检查结果") && Last(leader).Contains("达标即结束"),
             "the leader is told the rounds are free and that it sets each round's aim by what it has seen");
         teams.Turned(leader, "done", "ASSIGN claude: 修购物车数量");
         teams.Turned(Team(teams, early).Members["claude"], "done", "改好了，cart 测试 8 项通过");
@@ -317,7 +483,7 @@ public static class TeamsCheck {
         leader = teams.Start(Lead(recheck, new object[] { "codex", "claude", "agy" }, 0)).Members["leader"];
         teams.Turned(leader, "done", "ASSIGN claude: 实现结账页");
         teams.Turned(Team(teams, recheck).Members["claude"], "done", "结账页做好了");
-        Require(Last(leader).Contains("只差复核时，只派只读复核"), "the acceptance is told to aim the next round by what it found");
+        Require(Last(leader).Contains("仍需执行的工作按范围交给成员"), "the acceptance is told to delegate remaining work by scope");
         teams.Turned(leader, "done", "实现看过了，只差独立复核。\nASSIGN agy: 只读复核结账页金额计算，不要改文件");
         team = Team(teams, recheck);
         string agy = team.Members["agy"];
@@ -542,7 +708,7 @@ public static class TeamsCheck {
             string wLeader = Team(weighed, w).Members["leader"];
             Require(Last(wLeader).Contains("- codex：Codex（工具默认模型）") && Last(wLeader).Contains("；额度：5 小时窗口已用 93%（") && Last(wLeader).Contains("本周已用 40%，紧张")
                 && Last(wLeader).Contains("- agy：Antigravity CLI") && Last(wLeader).Contains("额度未知") && Last(wLeader).Contains("你自己（Claude Code）的额度：5 小时窗口已用 12%")
-                && Last(wLeader).Contains("按额度分配工作量"), "the leader is told each member's limits and its own, a tight one called so: " + Last(wLeader));
+                && Last(wLeader).Contains("80%") && Last(wLeader).Contains("只派小而必要的任务"), "the leader sees each quota and the reduced workload for tight accounts: " + Last(wLeader));
             Require(!Last(leader).Contains("额度"), "without a way to read limits nothing of them is said");
             weighed.Turned(wLeader, "done", "ASSIGN agy: 做搜索框");
             codexUsed = 99;
@@ -706,10 +872,14 @@ public static class TeamsCheck {
             Require(discarded.State == "done" && discarded.Picked == "" && appliedTo.Count == appliedBefore && cleaned.Contains(discCmp), "discard cleans worktrees without applying");
 
             Accepting(file);
+            DelegationAndHandback(folder);
             Choosing(file);
             Grouping(file);
             Roster(folder);
             FreeRounds(folder);
+        } catch (Exception problem) {
+            Console.Error.WriteLine("teams check failed: " + problem.Message + "\n" + problem.StackTrace);
+            return 1;
         } finally { try { Directory.Delete(folder, true); } catch { } }
         Console.WriteLine("teams: review, lead with acceptance, free rounds, flexible roster, discuss-first, parallel compare/pick, interject/continue, quotas, models, member sessions, cards, stop/resume and persistence ok");
         return 0;

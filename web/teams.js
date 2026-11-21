@@ -41,12 +41,14 @@
     return isFlexRounds(team) ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + roundsOf(team) + ' 轮';
   };
   const able = () => ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
-  const phaseLabel = phase => phase === 'verify' ? '领队验收' : phase === 'discuss' ? '讨论方案' : '';
+  const PHASE_LABELS = new Map([['discuss', '讨论方案'], ['decision', '领队处理中'], ['verify', '领队验收']]);
+  const phaseLabel = phase => PHASE_LABELS.get(phase) || '';
   const isUnverifiedStop = team => !!team && team.state === 'stopped' && team.mode === 'lead' && (team.phase === 'verify' || !!team.last);
   const stateInfo = team => {
     if (!team) return ['已结束', 'ended'];
     if (team.confirm) return ['等你确认', 'confirm'];
-    if (team.state === 'running' && team.phase === 'verify') return ['领队验收', 'busy'];
+    const runningPhase = team.state === 'running' && phaseLabel(team.phase);
+    if (runningPhase) return [runningPhase, 'busy'];
     if (isUnverifiedStop(team)) return ['未完成', 'ended'];
     return STATES[team.state] || [team.state || '已结束', 'ended'];
   };
@@ -824,7 +826,12 @@
       let statusText = '待开始', statusTone = 'idle';
       if (asking) { statusText = '等你确认'; statusTone = 'ask'; }
       else if (failed) { statusText = '已中断'; statusTone = 'fail'; }
-      else if (active) { statusText = team.phase === 'verify' && role === 'leader' ? '验收中' : team.phase === 'discuss' ? '讨论中' : '进行中'; statusTone = 'busy'; }
+      else if (active) {
+        statusText = team.phase === 'discuss' ? '讨论中' : '进行中';
+        if (role === 'leader' && team.phase === 'verify') statusText = '验收中';
+        if (role === 'leader' && team.phase === 'decision') statusText = phaseLabel(team.phase);
+        statusTone = 'busy';
+      }
       else if (waitingResume) { statusText = '待继续'; statusTone = 'pause'; }
       else if (liveTerm) { statusText = '当前对话'; statusTone = 'live'; }
       else if (sessionRef) { statusText = '查看历史'; statusTone = 'hist'; }
@@ -915,17 +922,13 @@
     }
 
     function badgeInfo(team, pendingAsks) {
-      if (pendingAsks.length || team.confirm) return ['等你确认', 'confirm'];
-      if (team.state === 'running' && team.phase === 'verify') return ['领队验收', 'busy'];
-      if (team.state === 'running' && team.phase === 'discuss') return ['讨论方案', 'busy'];
-      if (team.state === 'running') return ['进行中', 'busy'];
-      if (team.state === 'choose') return ['待选方案', 'confirm'];
-      if (team.state === 'paused') return ['已暂停', 'busy'];
-      if (isUnverifiedStop(team)) return ['未完成', 'confirm'];
-      if (team.state === 'done') return ['已完成', 'good'];
-      if (team.state === 'stopped') return ['已停止', 'ended'];
-      if (team.state === 'failed') return ['没有开始', 'confirm'];
-      return [team.state || '已结束', 'ended'];
+      if (pendingAsks.length) return stateInfo({ confirm: true });
+      const [label, tone] = stateInfo(team);
+      if (team.confirm) return [label, tone];
+      if (team.state === 'running' || team.state === 'paused') return [label, 'busy'];
+      if (team.state === 'done') return [label, 'good'];
+      if (team.state === 'failed' || isUnverifiedStop(team)) return [label, 'confirm'];
+      return [label, tone];
     }
 
     function buildStageSteps(team) {
@@ -936,11 +939,14 @@
       const awaited = team.awaited || [];
       if (team.mode === 'lead') {
         const hasDiscuss = !!team.discuss || team.phase === 'discuss';
-        let discussState = '', assignState = '', workState = '', verifyState = '';
+        let discussState = '', assignState = '', workState = '', decisionState = '', verifyState = '';
         if (team.state === 'done') {
           discussState = assignState = workState = verifyState = 'done';
         } else if (team.phase === 'discuss') {
           discussState = team.state === 'running' ? 'active' : 'pause';
+        } else if (team.phase === 'decision') {
+          discussState = assignState = workState = 'done';
+          decisionState = team.state === 'running' ? 'active' : team.state === 'paused' ? 'pause' : '';
         } else if (isUnverifiedStop(team)) {
           discussState = assignState = workState = 'done'; verifyState = 'fail';
         } else if (team.phase === 'verify') {
@@ -958,11 +964,10 @@
         }
         const roundTag = (flex ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + rounds + ' 轮') + (finalRound ? ' · 末轮' : '');
         const nodes = [el('span', { className: 'team-round-tag', textContent: roundTag })];
-        if (hasDiscuss) nodes.push(stepNode('讨论方案', discussState), sep());
-        nodes.push(
-          stepNode('派工', assignState), sep(),
-          stepNode('执行成员', workState), sep(),
-          stepNode(verifyState === 'fail' ? '验收未通过' : '领队验收', verifyState));
+        if (hasDiscuss) nodes.push(stepNode(phaseLabel('discuss'), discussState), sep());
+        nodes.push(stepNode('派工', assignState), sep(), stepNode('执行成员', workState), sep());
+        if (decisionState) nodes.push(stepNode(phaseLabel('decision'), decisionState), sep());
+        nodes.push(stepNode(verifyState === 'fail' ? '验收未通过' : phaseLabel('verify'), verifyState));
         return el('div', { className: 'team-round-steps', id: 'team-round-steps', ariaLabel: '本轮进度' }, ...nodes);
       }
       if (team.mode === 'review') {
@@ -981,7 +986,7 @@
           discussState = 'done'; writeState = 'pause';
         }
         const nodes = [el('span', { className: 'team-round-tag', textContent: '第 ' + round + ' / ' + rounds + ' 轮' })];
-        if (hasDiscuss) nodes.push(stepNode('讨论方案', discussState), sep());
+        if (hasDiscuss) nodes.push(stepNode(phaseLabel('discuss'), discussState), sep());
         nodes.push(stepNode('写手实现', writeState), sep(), stepNode('只读审查', reviewState), sep(), stepNode('审查通过', passState));
         return el('div', { className: 'team-round-steps', id: 'team-round-steps', ariaLabel: '本轮进度' }, ...nodes);
       }
@@ -1047,17 +1052,16 @@
       const memberInfos = memberKeys.map(role => inspectMember(team, role, terminals));
       const pendingAsks = memberInfos.filter(info => info.asking);
       const badge = badgeInfo(team, pendingAsks);
-      const phaseText = phaseLabel(team.phase);
-      const headState = pendingAsks.length ? ['等你确认', 'confirm'] : stateInfo(team);
-      const showPhaseInSub = phaseText && phaseText !== headState[0];
+      const phaseText = team.state === 'running' ? phaseLabel(team.phase) : '';
+      const phaseDetail = phaseText && phaseText !== badge[0] ? ' · ' + phaseText : '';
       const badgeRound = team.mode === 'compare' ? '' : roundBadgeText(team);
       const roundText = badgeRound ? ' · ' + badgeRound : '';
-      const subLine = headState[0] + (showPhaseInSub ? ' · ' + phaseText : '') + ' · ' + who(team) + roundText;
+      const subLine = badge[0] + phaseDetail + ' · ' + who(team) + roundText;
 
       if (activePage && activePage.setHeader) {
         activePage.setHeader({
           title: (MODES[team.mode] || '协作') + (team.dir ? ' · ' + team.dir : ''),
-          subtitle: who(team) + roundText + (phaseText && phaseText !== badge[0] ? ' · ' + phaseText : ''),
+          subtitle: who(team) + roundText + phaseDetail,
           badge: badge[0],
           tone: badge[1]
         });
@@ -1075,8 +1079,8 @@
       if (team.state === 'running' && team.phase === 'verify') {
         const round = team.round || 1, flex = isFlexRounds(team), rounds = roundsOf(team);
         const finalTag = (team.last || (!flex && round >= rounds)) ? '（末轮验收）' : '';
-        const prefix = (flex ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + rounds + ' 轮') + ' · 领队验收' + finalTag;
-        const verifyText = team.note ? (team.note.includes('领队验收') ? team.note : prefix + '：' + team.note) : prefix + '：正在核对执行成员改动与结果';
+        const prefix = (flex ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + rounds + ' 轮') + ' · ' + phaseText + finalTag;
+        const verifyText = team.note ? (team.note.includes(phaseText) ? team.note : prefix + '：' + team.note) : prefix + '：正在核对执行成员改动与结果';
         const banner = kit.summary(verifyText, '', 'spark');
         banner.classList.add('team-verify');
         heroParts.push(banner);
@@ -1708,5 +1712,5 @@
   const status = () => failure ? '读取失败，请重试；显示上次读取的任务。' : teams === null ? '正在读取协作任务…' : teams.length ? '' : '还没有协作任务。支持写审循环、分工协作、先议后写，或在独立 worktree 中并行比稿。';
   const count = () => teams && teams.length ? teams.filter(t => t.state === 'running' || t.state === 'paused' || t.state === 'choose').length + ' 个进行中 / ' + teams.length + ' 个' : '';
 
-  window.RemoteTeams = { TEAM, load, loadModels, begin, show, open, sync: () => { if (activeSync) activeSync(); }, cards, status, count, get teams() { return teams; }, get failure() { return failure; } };
+  window.RemoteTeams = { TEAM, phaseLabel, load, loadModels, begin, show, open, sync: () => { if (activeSync) activeSync(); }, cards, status, count, get teams() { return teams; }, get failure() { return failure; } };
 })();

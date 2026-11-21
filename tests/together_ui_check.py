@@ -732,8 +732,8 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         fs_running = {
             "id": fs_running_id, "dir": "web-shop", "mode": "lead",
             "goal": "全屏协作详情重构并排查成员对话返回路径",
-            "rules": "", "state": "running", "note": "执行成员 1 正在改造详情页与导航",
-            "phase": "", "discuss": False, "picked": "", "tools": ["codex", "claude", "agy"],
+            "rules": "", "state": "running", "note": "",
+            "phase": "decision", "discuss": False, "picked": "", "tools": ["codex", "claude", "agy"],
             "roster": [
                 {"role": "leader", "tool": "codex", "model": "gpt-6.2-astra", "effort": "high"},
                 {"role": "member-1", "tool": "claude", "model": "claude-opus-4-6"},
@@ -741,7 +741,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
             ],
             "auto_roster": False, "rounds": 3, "round": 1, "created": played.now - 900000,
             "models": {}, "members": {"leader": fs_live_tid, "member-1": "7" * 32},
-            "awaited": ["member-1"], "failed": {},
+            "awaited": ["leader"], "failed": {},
             "member_sessions": {"member-2": {"id": fs_done_sid, "tool": "agy"}},
             "log": list(long_logs)
         }
@@ -791,14 +791,22 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         ])
         played.team_cards = [
             {"id": fs_confirm_id, "dir": "web-shop", "goal": fs_confirm["goal"], "mode": "review", "state": "running", "phase": "", "note": fs_confirm["note"], "updated": now_sec - 10, "awaited": ["writer"], "tools": ["claude", "agy"], "models": fs_confirm["models"], "confirm": True},
-            {"id": fs_running_id, "dir": "web-shop", "goal": fs_running["goal"], "mode": "lead", "state": "running", "phase": "", "note": fs_running["note"], "updated": now_sec - 20, "awaited": ["member-1"], "tools": ["codex", "claude", "agy"], "roster": fs_running["roster"], "models": {}},
+            {"id": fs_running_id, "dir": "web-shop", "goal": fs_running["goal"], "mode": "lead", "state": "running", "phase": fs_running["phase"], "note": fs_running["note"], "updated": now_sec - 20, "awaited": fs_running["awaited"], "tools": ["codex", "claude", "agy"], "roster": fs_running["roster"], "models": {}},
             {"id": fs_done_id, "dir": "web-shop", "goal": fs_done["goal"], "mode": "lead", "state": "done", "phase": "", "note": fs_done["note"], "updated": now_sec - 1200, "awaited": [], "tools": ["codex", "claude", "agy"], "roster": fs_done["roster"], "models": {}},
         ]
 
         # 1) Open running team from 任务 home (390px light): full-screen, stage & members visible first at scrollTop=0
         browser.open(played.origin + '/?tab=tasks&skin=paper', "document.querySelectorAll('#active-list .team-card').length === 1", 'tasks home before fullscreen team', **phone(390))
+        until("document.querySelector('#active-list .team-card .pill')?.textContent === '领队处理中'", 'task card shows leader decision')
         value("document.querySelector('#active-list .team-card[data-team=\"%s\"] button.open').click()" % fs_running_id)
         until("!!document.querySelector('dialog.rs.rs-full[open]') && !!document.getElementById('team-round-steps') && document.querySelectorAll('#team-stream .team-msg').length === 12", 'fullscreen running detail opened')
+        until("document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队处理中' && document.querySelector('#team-round-steps .team-step.active')?.textContent === '领队处理中' && document.getElementById('member-leader')?.innerText.includes('领队处理中')", 'detail shows active decision step and leader')
+        assert not value("!!document.querySelector('.team-verify')")
+        decision_view = value("""(() => {
+          const root = document.documentElement;
+          return {inner: innerWidth, client: root.clientWidth, scroll: root.scrollWidth, body: document.body.scrollWidth};
+        })()""")
+        assert decision_view["inner"] == decision_view["client"] == 390 and max(decision_view["scroll"], decision_view["body"]) <= 391, decision_view
         until("!!document.querySelector('#team-stream .team-msg .body.md h3') && !!document.querySelector('#team-stream .team-msg .body.md strong') && !!document.querySelector('#team-stream .team-msg .body.md code')", 'activity log renders markdown instead of raw syntax')
         md_check = value("(() => { const b = document.querySelectorAll('#team-stream .team-msg')[1].querySelector('.body.md'); return { txt: b ? b.innerText : '', h3: b ? b.querySelectorAll('h3').length : 0, li: b ? b.querySelectorAll('li').length : 0, pre: b ? b.querySelectorAll('pre').length : 0 }; })()")
         assert md_check["h3"] == 1 and md_check["li"] == 2 and md_check["pre"] == 1 and "###" not in md_check["txt"] and "**" not in md_check["txt"], md_check
@@ -818,7 +826,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert fs_box["scrollTop"] == 0 and fs_box["stepsVisible"] and fs_box["memberVisible"] and fs_box["streamBelowMembers"], fs_box
         assert fs_box["scrollHeight"] > fs_box["clientHeight"] + 150, fs_box
         time.sleep(.22)
-        browser.picture(out / 'team-detail-running-light-390.png')
+        browser.picture(out / 'team-detail-decision-light-390.png')
         # Scroll to the Markdown activity item so visual evidence also confirms rendered Markdown
         value("document.querySelectorAll('#team-stream .team-msg')[1].scrollIntoView({ block: 'start' })")
         browser.picture(out / 'team-detail-markdown-light-390.png')
@@ -833,10 +841,12 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         })()""")
         assert before_anchor["scrollTop"] > 100 and before_anchor["key"], before_anchor
         fs_running["phase"] = "verify"
+        played.team_cards[1]["phase"] = "verify"
         fs_running["awaited"] = ["leader"]
         fs_running["note"] = "领队正在逐项核对全屏详情与返回路径改动，并补充更长的状态说明文本以测试上方高度变化时的阅读保位。"
         fs_running["log"].append({"at": played.now, "who": "leader", "text": "新进展：已进入领队验收阶段，正在核对所有路径。"})
         until("document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队验收' && document.querySelectorAll('#team-stream .team-msg').length === 13", 'status refresh updated header badge and appended log')
+        assert value("document.querySelector('#team-round-steps .team-step.active')?.textContent") == "领队验收"
         after_anchor = value("""((key) => {
           const body = document.querySelector('dialog.rs.rs-full[open] .rs-body');
           const target = [...document.querySelectorAll('#team-stream .team-msg')].find(n => n.dataset.msgKey === key);

@@ -622,14 +622,17 @@ for `team_resume`.
   to go on where none were kept. A task stops instead only at 20 rounds. Earlier rounds pause after a second reply without
   evidence. A message to a running leader is included in the next workflow turn, so a leader reply cannot advance the
   workflow while members are still reporting.
-- A member whose answer is a note of progress, not a result (its last paragraph says that something still runs, or that it
-  goes on once that ends: a turn of a tool that does not wait for its background commands, such as `agy acp`), is sent
-  back to finish (logged under `继续`) up to twice a round; after that its words go to the leader as they are, who is told
-  to send such a member back with `ASSIGN`.
+- A progress-only reply returns to the same member up to twice per round (logged under `继续`).
+  When a member reports a blocker with `阻塞：<reason>` or still reports progress after both reminders,
+  the agent collects the other members' replies and gives the batch to the leader with `phase: "decision"`.
+  The leader can resolve the issue or assign the remaining work in a new round. The usual round limit applies.
+  A leader's `DONE` in this phase opens a separate verification turn.
 - `review` likewise pauses with the reviewer's findings kept when the `rounds` are spent without `REVIEW: PASS`; going on
   hands them to the writer in the round added.
 - `compare` (并行比稿, `agent-windows/Worktrees.cs`): creates one detached Git worktree per candidate under `<dataDir>/worktrees/<teamId>/<tool>` and runs 2–3 distinct AIs in parallel; when finished, the task enters `choose` with per-candidate summaries, file stats and diffs. `team_say` can refine one or all candidates before picking; `team_pick` verifies and applies the chosen candidate's binary-safe patch (`git apply --check` then `git apply`) to the main project folder (leaving the main folder untouched on conflict) and removes all temporary worktrees (or discards all when `tool: ""`).
 - `team_say` lets the owner interject mid-run, resume a paused task with guidance, refine `compare` candidates, or continue `review`/`lead` tasks into a new round after `done`/`stopped`.
+  In a running `lead` task after the optional discussion, omitting `target` queues the message for the leader's next turn.
+  A message addressed to an execution member goes directly to that member.
 - `team_swap` lets the owner switch a role's AI or reassign a member's task to another installed AI at any time (`review`/`lead`). When a member fails mid-run (e.g. quota exhausted), `lead` mode reports the failure and live quotas back to the leader to reassign automatically (and adds an available backup AI if needed), while `review` mode and failed leaders automatically switch to an available backup AI before falling back to `paused`.
 - Agents supporting `team_say`, `team_pick`, `team_swap`, `discuss` and `compare` advertise `teams-v2`; relays reject those actions with an upgrade prompt when talking to older `teams`-only agents.
 

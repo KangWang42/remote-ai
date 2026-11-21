@@ -565,6 +565,18 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.agent({"info": dict(self.info, enabled=False, team_cards=[card])}, now=1003)
         self.assertEqual(self.relay.overview(now=1003)["device"]["team_cards"], [])
 
+    def test_team_card_preserves_leader_decision_phase(self):
+        card = {"id": "e" * 32, "mode": "lead", "state": "running", "phase": "decision",
+                "updated": 1700000000, "awaited": ["leader"], "tools": ["codex", "claude"]}
+        states = [("running", "decision", "decision"), ("paused", "decision", "decision"),
+                  ("running", "verify", "verify"), ("done", "verify", "verify"),
+                  ("running", "unknown", "")]
+        for now, (state, phase, expected) in enumerate(states, 1001):
+            with self.subTest(state=state, phase=phase):
+                self.relay.agent({"info": dict(self.info, team_cards=[dict(card, state=state, phase=phase)])}, now=now)
+                stored = self.relay.overview(now=now)["device"]["team_cards"][0]
+                self.assertEqual((stored["state"], stored["phase"], stored["awaited"]), (state, expected, ["leader"]))
+
     def test_desktop_timeout_never_claims_not_executed(self):
         self.info["features"] = ["codex-desktop-open"]
         self.relay.agent({"info": self.info}, now=1001)
