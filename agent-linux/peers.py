@@ -413,6 +413,12 @@ class Peers:
                 pass
 
 
+def _when(seconds):
+    moment = time.localtime(max(0, seconds))
+    return time.strftime("%H:%M", moment) if time.strftime("%Y-%m-%d", moment) == time.strftime("%Y-%m-%d") \
+        else time.strftime("%m月%d日 %H:%M", moment)
+
+
 def secrets_token():
     import secrets
     return secrets.token_hex(16)

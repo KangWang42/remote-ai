@@ -3926,11 +3926,11 @@ class Agent:
                 raise OpError("没有找到这个协作任务")
             return {}
         if action == "work_team_say":
-            return {"team": Teams.shown(self.teams.say(str(op.get("team") or ""), str(op.get("text") or ""), str(op.get("target") or "")))}
+            return {"team": teams.Teams.shown(self.teams.say(str(op.get("team") or ""), str(op.get("text") or ""), str(op.get("target") or "")))}
         if action == "work_team_pick":
-            return {"team": Teams.shown(self.teams.pick(str(op.get("team") or ""), str(op.get("tool") or "")))}
+            return {"team": teams.Teams.shown(self.teams.pick(str(op.get("team") or ""), str(op.get("tool") or "")))}
         if action == "work_team_swap":
-            return {"team": Teams.shown(self.teams.swap(str(op.get("team") or ""), str(op.get("role") or ""),
+            return {"team": teams.Teams.shown(self.teams.swap(str(op.get("team") or ""), str(op.get("role") or ""),
                                         str(op.get("tool") or ""), str(op.get("note") or "")))}
         if action == "work_chains":
             return {"chains": self.chains.all()}
