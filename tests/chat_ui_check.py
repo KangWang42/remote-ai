@@ -102,9 +102,9 @@ class Computer:
                 self.seen.append(op)
                 threading.Thread(target=self.carry, args=(op,), daemon=True).start()
 
-    def ack(self, op, error=""):
+    def ack(self, op, error="", result=None):
         with self.lock:
-            self.acks.append({"id": op["id"], "error": error})
+            self.acks.append(dict({"id": op["id"], "error": error}, **({"result": result} if result is not None else {})))
 
     def carry(self, op):
         action, terminal = op["action"], op.get("terminal")
@@ -120,6 +120,13 @@ class Computer:
             self.emit(terminal, t="state", state="idle", at=int(time.time() * 1000))
             if op.get("text"):
                 self.first(terminal, op)
+            return
+        if action == "session_read":
+            # what the saved conversation said, as the reader shows it before it is gone on with
+            self.ack(op, result={"title": "结算页的金额", "updated": int(time.time() * 1000), "more": False, "messages": [
+                {"role": "user", "text": "结算页的金额有时多出一位小数，帮我看看"},
+                {"role": "tool", "text": "Bash：对比两版的金额", "detail": "node compare.js --old 2.0 --new 4.0", "result": "differs in 3 of 40 rows"},
+                {"role": "assistant", "text": "问题在 formatPrice：优惠券的金额按两位小数显示了。"}]})
             return
         self.ack(op)
         if action == "answer":
@@ -435,7 +442,14 @@ def main():
             value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
             until("!document.querySelector('dialog.rs')", "the sheet closed")
             before = len(computer.seen)
+            # it opens in the reader first (8c34d4e), with what was said; 继续对话 goes on with it as a conversation
             value(card + ".querySelector('.open').click()")
+            until("(r => !!r && r.innerText.includes('优惠券的金额按两位小数显示了'))(document.querySelector('dialog.rs[open] .saved-reader'))", "the saved conversation in the reader", 20)
+            shown = value("document.querySelector('dialog.rs[open] .saved-reader').innerText")
+            assert "结算页的金额有时多出一位小数" in shown and "暂无可读内容" not in shown, shown
+            assert any(op["action"] == "session_read" and op.get("session") == SESSION for op in computer.seen[before:])
+            assert not [op for op in computer.seen[before:] if op["action"] == "start"], "reading starts nothing"
+            value("Array.from(document.querySelectorAll('dialog.rs[open] button')).find(b => b.innerText.trim() === '继续对话').click()")
             until("location.pathname.endsWith('/chat/') && document.getElementById('title').textContent === '结算页的金额'", "the saved conversation as a conversation", 20)
             resumed = [op for op in computer.seen[before:] if op["action"] == "start"]
             assert len(resumed) == 1 and resumed[0]["form"] == "chat" and resumed[0]["session"] == SESSION, resumed
