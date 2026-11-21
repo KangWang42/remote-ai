@@ -1,6 +1,6 @@
 ---
 title: 让Claude Code带着Codex一起干活
-tags: [AI编程, codex, claude, howto入门codex, howto用AI手搓APP]
+tags: [AI编程, codex, howto入门codex, howto用AI手搓APP]
 ---
 用 Claude Code、Codex 写代码久了，发现一个 AI 干活，总有几件事要我守着：它说做完了，测试其实没跑；想让另一个 AI 审一遍，得我来回复制；两种做法拿不准；做到一半额度用完。
 

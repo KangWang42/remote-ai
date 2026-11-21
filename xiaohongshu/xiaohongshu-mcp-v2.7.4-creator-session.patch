@@ -1,0 +1,89 @@
+diff --git a/xiaohongshu/creator_session.go b/xiaohongshu/creator_session.go
+index 7399d43..3700119 100644
+--- a/xiaohongshu/creator_session.go
++++ b/xiaohongshu/creator_session.go
+@@ -1,6 +1,8 @@
+ package xiaohongshu
+ 
+ import (
++	"net/url"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/go-rod/rod"
+@@ -12,6 +14,9 @@ const (
+ 	urlOfCreatorHome = `https://creator.xiaohongshu.com/?source=official`
+ 
+ 	creatorSessionCookie  = "galaxy_creator_session_id"
++	creatorUserIDCookie   = "x-user-id-creator.xiaohongshu.com"
++	webSessionCookie      = "web_session"
++	creatorHost           = "creator.xiaohongshu.com"
+ 	creatorSessionTimeout = 15 * time.Second
+ )
+ 
+@@ -28,7 +33,7 @@ func ensureCreatorSession(page *rod.Page) error {
+ 	deadline := time.Now().Add(creatorSessionTimeout)
+ 	for time.Now().Before(deadline) {
+ 		time.Sleep(500 * time.Millisecond)
+-		if hasCreatorSession(page) {
++		if hasCreatorSession(page) || onCreatorPageWithWebSession(page) {
+ 			humanize.Delay(page.GetContext(), humanize.AfterNavigate)
+ 			return nil
+ 		}
+@@ -42,7 +47,30 @@ func hasCreatorSession(page *rod.Page) bool {
+ 		return false
+ 	}
+ 	for _, c := range cks {
+-		if c.Name == creatorSessionCookie {
++		if c.Name == creatorSessionCookie || c.Name == creatorUserIDCookie {
++			return true
++		}
++	}
++	return false
++}
++
++// onCreatorPageWithWebSession 新版创作者中心复用 .xiaohongshu.com 的 web_session（issue #919）：
++// 页面停在 creator 域且没有被重定向到登录页，同时 web_session 存在，即视为已登录。
++func onCreatorPageWithWebSession(page *rod.Page) bool {
++	info, err := page.Info()
++	if err != nil {
++		return false
++	}
++	u, err := url.Parse(info.URL)
++	if err != nil || u.Host != creatorHost || strings.Contains(u.Path, "login") {
++		return false
++	}
++	cks, err := page.Browser().GetCookies()
++	if err != nil {
++		return false
++	}
++	for _, c := range cks {
++		if c.Name == webSessionCookie && c.Value != "" {
+ 			return true
+ 		}
+ 	}
+diff --git a/xiaohongshu/publish.go b/xiaohongshu/publish.go
+index 089656e..8e4682d 100644
+--- a/xiaohongshu/publish.go
++++ b/xiaohongshu/publish.go
+@@ -465,11 +465,20 @@ func submitPublish(ctx context.Context, page *rod.Page, title, content string, t
+ // （URL 不再含 /publish/publish）。超时仍未跳转 → 判定发布失败。
+ func waitPublishSuccess(page *rod.Page, timeout time.Duration) error {
+ 	deadline := time.Now().Add(timeout)
++	extended := false
+ 	for {
+ 		if info, err := page.Info(); err == nil && !strings.Contains(info.URL, "/publish/publish") {
+ 			slog.Info("发布成功，已跳转离开发布页", "url", info.URL)
+ 			return nil
+ 		}
++		// 点击发布后可能弹出「扫码验证」（issue #919），给用户留时间用 App 扫码
++		if !extended {
++			if has, _, _ := page.HasR("div", "扫码验证"); has {
++				extended = true
++				deadline = time.Now().Add(2 * time.Minute)
++				slog.Warn("检测到扫码验证弹窗，等待用户用小红书 App 扫码（最多 2 分钟）")
++			}
++		}
+ 		if time.Now().After(deadline) {
+ 			return errors.New("发布未确认成功：点击发布后未跳转离开发布页（可能校验未过或被拦截）")
+ 		}

@@ -147,8 +147,9 @@ def main():
             one.add_argument("--at", default="", help="定时发布，ISO 8601，1 小时到 14 天内")
     asked = parser.parse_args()
     if asked.step == "serve":
-        program = next(BIN.glob("xiaohongshu-mcp-*"))
-        subprocess.run([str(program), "-port", "127.0.0.1:18060"], cwd=BIN, check=True)    # cwd: cookies.json is kept beside it
+        # the build with xiaohongshu-mcp-v2.7.4-creator-session.patch (README); with a window, so that a scan asked
+        # for on publishing can be seen. cwd: cookies.json is kept beside it
+        subprocess.run([str(BIN / "xiaohongshu-mcp-windows-amd64-fixed.exe"), "-headless=false", "-port", "127.0.0.1:18060"], cwd=BIN, check=True)
     elif asked.step == "past":
         past()
     elif asked.step == "check":
