@@ -352,6 +352,8 @@ public final class MainActivity extends Activity {
     void together(String url, String what, String item) { openPage(url, "", "/?tab=together&do=" + Uri.encode(what) + "&item=" + Uri.encode(item)); }
     boolean autoUpdate() { return updater != null && updater.automatic(); }
     void toggleAutoUpdate() { if (updater == null) return; updater.automatic(!updater.automatic()); home(""); }
+    boolean previewUpdates() { return updater != null && updater.includePrereleases(); }
+    void togglePreviewUpdates() { if (updater == null) return; updater.includePrereleases(!previewUpdates()); home(""); }
     void checkUpdate() { message.setTextColor(kit.MUTED); message.setText("正在检查新版本…"); updater.check(true); }
     void manage(String url) {
         JSONArray list = computers();
@@ -881,6 +883,8 @@ public final class MainActivity extends Activity {
         /** Looks for a newer version of the app now; the answer comes as a short notice or a question. */
         @JavascriptInterface public boolean autoUpdate() { return updater != null && updater.automatic(); }
         @JavascriptInterface public void setAutoUpdate(boolean on) { runOnUiThread(() -> { if (updater != null) updater.automatic(on); }); }
+        @JavascriptInterface public boolean previewUpdates() { return MainActivity.this.previewUpdates(); }
+        @JavascriptInterface public void setPreviewUpdates(boolean on) { runOnUiThread(() -> { if (updater != null) updater.includePrereleases(on); }); }
         @JavascriptInterface public void update() { runOnUiThread(() -> { android.widget.Toast.makeText(MainActivity.this, "正在检查新版本…", android.widget.Toast.LENGTH_SHORT).show(); updater.check(true); }); }
         @JavascriptInterface public String version() { return versionName(); }
         /**

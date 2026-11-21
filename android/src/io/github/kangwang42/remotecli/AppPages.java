@@ -198,6 +198,7 @@ final class AppPages {
         LinearLayout updates = kit.settingGroup(page, "版本与更新");
         kit.setting(updates, R.drawable.ic_update, TINT_AGY, "手机 App 更新", "检查手机安装包更新", "v" + activity.versionName(), kit.MUTED, activity::checkUpdate);
         kit.settingSwitch(updates, R.drawable.ic_refresh, kit.MUTED, "自动检查手机更新", "发现新版时提示，安装前由你确认", activity.autoUpdate(), activity::toggleAutoUpdate);
+        kit.settingSwitch(updates, R.drawable.ic_update, kit.MUTED, "接收预发布版本", "关闭时只接收正式版", activity.previewUpdates(), activity::togglePreviewUpdates);
     }
 
     private TextView metricCell(LinearLayout parent, String label, boolean withDivider) {

@@ -61,6 +61,12 @@ powershell -ExecutionPolicy Bypass -File android\build.ps1 -Jdk <JDK 目录> -Sd
 
 安卓构建默认要求已有签名密钥；用 `-SecretDir <密钥目录>` 指定包含 `signing.p12` 和 `signing-password.txt` 的目录。只有首次创建独立应用签名时才传 `-CreateSigningKey`，默认目录为仓库之外的 `~/.remote-cli-signing`。正式发版必须与上一版 APK 比对证书，不能用新密钥替代已有发布密钥。
 
+### 预发布与正式版
+
+新版本默认发布到 GitHub 的预发布渠道。核对远端标签指向已验收的提交后，用 `gh release create` 上传 Windows 安装包和 Android APK，并指定 `--verify-tag --prerelease --latest=false`。发布后核对两个附件及其摘要。
+
+确认同一版本可以提供给正式版用户后，可用 `gh release edit vX.Y.Z --prerelease=false --latest` 将它晋升为正式版，沿用原标签和已验收的安装包。晋升后核对 GitHub 的最新正式版指向该标签。若还需要改动代码，递增版本号并构建新的安装包。
+
 CI 的 `Windows session behavior` 作业在 Windows 上编译并运行会话归属、活动状态、操作能力和历史去重测试；Android 的界面源文件检查不依赖 Windows 实现中的具体调用文本。
 
 ```powershell

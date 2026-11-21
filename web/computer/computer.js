@@ -219,6 +219,17 @@
         rows.push(row(null, text('自动检查更新', '有新版本时提示'), el('button', { type: 'button', className: 'flip', role: 'switch', 'aria-checked': String(on === true), 'aria-label': '自动检查更新',
           onclick: () => { native.setAutoUpdate(!on); toast('已保存'); fixed(); } })));
       }
+      if (native.previewUpdates && native.setPreviewUpdates) {
+        rows.push(row(null, text('接收预发布版本', '关闭时只接收正式版'), el('button', { type: 'button', className: 'flip', role: 'switch',
+          'aria-checked': String(native.previewUpdates() === true), 'aria-label': '接收预发布版本',
+          onclick: event => {
+            const control = event.currentTarget;
+            const on = control.getAttribute('aria-checked') !== 'true';
+            native.setPreviewUpdates(on);
+            control.setAttribute('aria-checked', String(on));
+            toast('已保存');
+          } })));
+      }
       rows.push(row({ act: () => native.update() }, text('App 版本', native.version ? 'v' + native.version() : ''), el('span', { className: 'act', textContent: '检查更新' })));
       $('app').replaceChildren(...rows);
     }
