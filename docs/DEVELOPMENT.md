@@ -48,6 +48,8 @@ Android 复用 WebView，但每次打开或重试页面都建立新的 `Connecti
 
 ## 自己构建
 
+应用图标由 `tools/build_icons.py` 生成。装有 Pillow 的开发环境可运行 `python tools/build_icons.py --preview .build/icon-preview` 更新 Android、Windows 和内嵌页面资源，并查看手机启动器裁切和 Windows 小尺寸预览。协作、图标和连接方式的[回归检查入口](../.agents/skills/remote-ai-checks/SKILL.md)按改动范围列出。
+
 ```powershell
 # 电脑端（两个 exe），只需要 Windows 自带的 .NET Framework 4.x
 powershell -ExecutionPolicy Bypass -File agent-windows\build.ps1
