@@ -11,12 +11,18 @@
   const MODES = { review: '写审', lead: '领队', compare: '比稿' }, ROUNDS = [1, 2, 3, 5, 10];
   const STATES = { running: ['进行中', 'starting'], choose: ['待选方案', 'confirm'], paused: ['已暂停', 'confirm'], done: ['已完成', 'ended'], stopped: ['已停止', 'ended'], failed: ['没有开始', 'ended'] };
   const ROLES = { writer: '写手', reviewer: '审查', leader: '领队', user: '你' };
-  const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', user: '你' };
+  const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', opencode: 'OC', qoder: 'QD', cline: 'CL', pi: 'PI', user: '你' };
   let teams = null, failure = '', loading = false;
 
   const work = (action, more) => api('api/work', Object.assign({ id: newId(), action }, more));
   const hasV2 = () => page.has('teams-v2');
-  const able = () => ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
+  // A computer names the tools that can be members (features <tool>-team); a computer that says
+  // nothing about it offers the chat trio, the way the Windows program has always done.
+  const able = () => {
+    const feats = page.data.device.features || [];
+    const flagged = (page.data.device.tools || []).filter(tool => feats.includes(tool + '-team'));
+    return flagged.length ? flagged : ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
+  };
   const toolOf = (team, role) => {
     if (!role) return '';
     if (role.startsWith('discuss:')) return role.slice(8);
@@ -59,7 +65,7 @@
     if (!page.usable()) return toast('电脑离线，暂时不能开始');
     if (!page.has('teams')) return toast('这台电脑的电脑端不支持协作任务，请更新电脑端');
     const tools = able(), projects = (page.data.device.workspaces || []);
-    if (tools.length < 2) return toast('需要这台电脑能在手机上运行至少两个 AI（Claude Code、Codex、Antigravity CLI）');
+    if (tools.length < 2) return toast('需要这台电脑至少有两个能作协作成员的 AI 工具');
     if (!projects.length) return toast('请先添加一个项目');
     const defaultWriter = tools.includes('claude') ? 'claude' : tools[0];
     const defaultReviewer = (tools.includes('agy') && defaultWriter !== 'agy') ? 'agy' : (tools.find(t => t !== defaultWriter) || tools[0]);

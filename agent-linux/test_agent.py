@@ -1954,3 +1954,80 @@ class EnvILocaleFallback(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TeamsQuiet(unittest.TestCase):
+    """A team member on a pty tool has no turn events of its own: its turn is over when its
+    conversation record has gone quiet after growing (agent.Agent.teams_step)."""
+
+    def _bot(self, store, said, begun):
+        live = agent.Live.__new__(agent.Live)
+        live.closed, live.session, live.tool = False, "s1", "opencode"
+        bot = agent.Agent.__new__(agent.Agent)
+        bot.teams = store
+        bot.team_seen = {}
+        bot.terminals = {"t1": live}
+
+        class Sessions:
+            found = [{"tool": "opencode", "id": "s1", "updated": int((time.time() - 60) * 1000)}]
+
+            @staticmethod
+            def read(session, tool, dir_name, dirs):
+                return {"messages": [{"role": "assistant", "text": "第一轮完成了"}]}
+
+        bot.sessions = Sessions
+        return bot
+
+    def _team(self, store):
+        team = agent.teams.Team()
+        team.id, team.dir, team.mode, team.goal = "b" * 24, "demo", "review", "写一个加法函数"
+        team.tools = ["claude", "opencode"]
+        team.state = "running"
+        team.members = {"reviewer": "t1"}
+        team.awaited = ["reviewer"]
+        store.items = [team]
+        return team
+
+    def _store(self, said, begun):
+        return agent.teams.Teams(os.path.join(tempfile.mkdtemp(), "teams.json"), agent.teams.Hands(
+            begin_in=lambda tool, dir_name, words, read, folder=None: begun.append(
+                (tool, dir_name, read, words)) or "t%d" % (len(begun)),
+            say=lambda terminal, words: said.append((terminal, words)),
+            stop=lambda terminal: None, changes=lambda dir_name: "",
+            available=lambda: ["claude", "opencode"]))
+
+    def test_a_growing_then_quiet_record_ends_the_turn_with_its_last_answer(self):
+        said, begun = [], []
+        store = self._store(said, begun)
+        team = self._team(store)
+        bot = self._bot(store, said, begun)
+        now = time.time()
+        bot.sessions.found[0]["updated"] = int((now - 2) * 1000)
+        bot.teams_step({"demo": "/tmp"}, now)                   # first look: a baseline, nothing yet
+        self.assertEqual(said, [])
+        self.assertEqual(store.of(team.id).state, "running")
+
+        # it wrote once more, and its record has been quiet for longer than the turn window
+        bot.sessions.found[0]["updated"] = int((now - 60) * 1000)
+        bot.teams_step({"demo": "/tmp"}, now)
+        self.assertEqual(said, [])
+        self.assertEqual(store.of(team.id).state, "running")
+
+        bot.teams_step({"demo": "/tmp"}, now)                   # still quiet: the turn is over
+        self.assertEqual(store.of(team.id).state, "running")    # the review now goes to the writer
+        self.assertEqual([one[0] for one in begun], ["claude"])  # the writer is begun anew for round 2
+        self.assertIn("审查意见", begun[0][3])
+
+    def test_a_record_still_growing_does_not_end_the_turn(self):
+        said, begun = [], []
+        store = self._store(said, begun)
+        team = self._team(store)
+        bot = self._bot(store, said, begun)
+        now = time.time()
+        bot.sessions.found[0]["updated"] = int((now - 5) * 1000)
+        bot.teams_step({"demo": "/tmp"}, now)                   # first look
+        bot.sessions.found[0]["updated"] = int((now - 2) * 1000)
+        bot.teams_step({"demo": "/tmp"}, now)                   # it grew again: the turn is at hand
+        self.assertEqual(said, [])
+        self.assertEqual(begun, [])
+        self.assertEqual(store.of(team.id).state, "running")

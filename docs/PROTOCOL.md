@@ -1081,6 +1081,17 @@ file rather than the file written again), `sessions.json` (hashes of sign-in tok
 no terminal input or output to any log. A relay for everyone keeps the same files once per space, in
 `spaces/<id>/`, with `space.json` (the hash of the space's password and when it was made) instead of a password.
 
+## Teams on the Linux agent (agent 0.7.1)
+
+The Linux agent carries the same collaboration ways as the Windows program (agent-windows/Teams.cs): a team is `review` (one member writes, another reviews read-only), `lead` (a leader assigns members with `ASSIGN <tool>: <task>` lines and collects the results), or `compare` (candidates each work in their own Git worktree and the owner merges one). It reports `teams` and `teams-v2` in its features, plus one `<tool>-team` feature per tool that can be a member, so the phone offers exactly those tools in the picker. The operations are the same eight (`work_teams`, `work_team_start/stop/resume/remove`, and under `teams-v2` `work_team_say/pick/swap`); state is kept in `teams.json` (0600) in the data folder.
+
+Two things differ from the Windows program, and both are about how a member's turn is known to have ended:
+
+- A member whose tool runs in the structured chat mode (Claude Code, Codex) reports the end of its turn itself, with the turn's whole text, the way the Windows program's chats do.
+- Any other member runs in a plain terminal. Its turn is over when its conversation record has gone quiet after growing — quiet for the same span a chain waits (`CHAIN_QUIET`, 45 seconds) — and what it said is the last answer in that record. Quota windows are not read on Linux yet (`Limits` is unset): a member whose reply shows a quota or rate-limit error still fails over by the same patterns, but no leader prompt carries live quota numbers.
+
+Members are conversations the agent begins in an allowed folder, shown on the phone like any other. `compare` needs Git worktrees and is refused where they cannot be made.
+
 ## App-wide navigation and optional Windows tools
 
 Android opens its aggregate lists even with one saved computer: four tabs over every computer (`tasks`, `projects`, `together`, `me`), the same four a computer's page draws at its foot. Its native `AppPages` reads `stats`, `teams`, `chains` and `schedules` from each computer’s existing `/api/work`, with that computer’s cookie only. Failures remain local to each computer; partial totals state their coverage and sum per-computer active time. Collaboration remains scoped to one computer. No new relay operation is introduced.
