@@ -36,12 +36,17 @@ public static class AutoUpdater {
     public static string Step(bool manual, bool remote, bool automatic) {
         return remote ? "install" : manual ? "ask" : automatic ? "tell" : "none";
     }
-    public static Task<ReleaseUpdate> CheckAsync(string current) { return Task.Run(() => Check(current)); }
-    static ReleaseUpdate Check(string current) {
+    /// Which releases are installed: "release", the latest full release (GitHub's `releases/latest`, which passes over
+    /// pre-releases), unless "pre" is chosen, which also takes the newest pre-release.
+    public static readonly string[] Channels = { "release", "pre" };
+    public static Task<ReleaseUpdate> CheckAsync(string current, string channel) { return Task.Run(() => Check(current, channel == "pre")); }
+    static ReleaseUpdate Check(string current, bool pre) {
         WebException missing = null;
         foreach (string name in Repositories) {
-            try { return Check("https://api.github.com/repos/" + name + "/releases/latest", current); }
-            catch (WebException error) {
+            try {
+                if (!pre) return Pick(new[] { Ask("https://api.github.com/repos/" + name + "/releases/latest", current) }, current, false, true);
+                return Pick(Ask("https://api.github.com/repos/" + name + "/releases?per_page=20", current) as object[], current, true, false);
+            } catch (WebException error) {
                 var answer = error.Response as HttpWebResponse;
                 if (answer == null || answer.StatusCode != HttpStatusCode.NotFound) throw;
                 missing = error;
@@ -49,24 +54,40 @@ public static class AutoUpdater {
         }
         throw missing;
     }
-    static ReleaseUpdate Check(string api, string current) {
+    static object Ask(string api, string current) {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
         var request = (HttpWebRequest)WebRequest.Create(api); request.Method = "GET"; request.Timeout = 15000;
         request.UserAgent = "RemoteCli/" + current + " (GitHub updater)"; request.Accept = "application/vnd.github+json";
-        using (var response = (HttpWebResponse)request.GetResponse()) using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
-            var json = new JavaScriptSerializer().DeserializeObject(reader.ReadToEnd()) as Dictionary<string, object>;
-            string tag = Convert.ToString(json["tag_name"]).Trim(); if (!Newer(tag, current)) return null;
-            string version = tag.TrimStart('v'); var assets = json["assets"] as object[];
-            foreach (var raw in assets ?? new object[0]) {
-                var asset = raw as Dictionary<string, object>;
-                if (asset == null || !String.Equals(Convert.ToString(asset["name"]), AssetPrefix + version + ".exe", StringComparison.OrdinalIgnoreCase)) continue;
-                string url = Convert.ToString(asset["browser_download_url"]);
-                if (!Ours(url)) throw new InvalidDataException("发布文件地址无效");
-                string digest = Convert.ToString(asset.ContainsKey("digest") ? asset["digest"] : "");
-                return new ReleaseUpdate { Version = version, Url = url, Sha256 = digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) ? digest.Substring(7).ToLowerInvariant() : "" };
-            }
-            throw new InvalidDataException("最新发布没有匹配的 Windows 安装包");
+        using (var response = (HttpWebResponse)request.GetResponse()) using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+            return new JavaScriptSerializer().DeserializeObject(reader.ReadToEnd());
+    }
+    /// Of GitHub's releases, the newest one above `current` that carries the Windows installer; null where there is
+    /// none. Drafts are passed over, and pre-releases unless `pre`. `strict`: a newer release without the installer is
+    /// an error (the one latest release), not one to pass over (a list, where an older one may have it).
+    public static ReleaseUpdate Pick(object[] releases, string current, bool pre, bool strict) {
+        ReleaseUpdate best = null;
+        foreach (var raw in releases ?? new object[0]) {
+            var release = raw as Dictionary<string, object>;
+            if (release == null || Object.Equals(Field(release, "draft"), true) || (!pre && Object.Equals(Field(release, "prerelease"), true))) continue;
+            string tag = Convert.ToString(Field(release, "tag_name") ?? "").Trim();
+            if (!Newer(tag, current) || (best != null && !Newer(tag, best.Version))) continue;
+            var found = Installer(release, tag.TrimStart('v'));
+            if (found == null && strict) throw new InvalidDataException("最新发布没有匹配的 Windows 安装包");
+            if (found != null) best = found;
         }
+        return best;
+    }
+    static object Field(Dictionary<string, object> from, string key) { object value; return from.TryGetValue(key, out value) ? value : null; }
+    static ReleaseUpdate Installer(Dictionary<string, object> release, string version) {
+        foreach (var raw in Field(release, "assets") as object[] ?? new object[0]) {
+            var asset = raw as Dictionary<string, object>;
+            if (asset == null || !String.Equals(Convert.ToString(Field(asset, "name")), AssetPrefix + version + ".exe", StringComparison.OrdinalIgnoreCase)) continue;
+            string url = Convert.ToString(Field(asset, "browser_download_url"));
+            if (!Ours(url)) throw new InvalidDataException("发布文件地址无效");
+            string digest = Convert.ToString(Field(asset, "digest") ?? "");
+            return new ReleaseUpdate { Version = version, Url = url, Sha256 = digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) ? digest.Substring(7).ToLowerInvariant() : "" };
+        }
+        return null;
     }
     public static Task<string> DownloadAsync(ReleaseUpdate update, string directory) { return Task.Run(() => Download(update, directory)); }
     static string Download(ReleaseUpdate update, string directory) {
@@ -78,8 +99,18 @@ public static class AutoUpdater {
             if (String.IsNullOrEmpty(update.Sha256)) throw new InvalidDataException("本次发布没有提供 SHA-256，无法校验安装包");
             if (!String.Equals(Hash(temporary), update.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("安装包校验未通过");
             if (new FileInfo(temporary).Length < 100000) throw new InvalidDataException("安装包大小异常");
-            if (File.Exists(final)) File.Delete(final); File.Move(temporary, final); return final;
+            if (File.Exists(final)) File.Delete(final); File.Move(temporary, final);
+            Prune(directory, final);
+            return final;
         } catch { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } throw; }
+    }
+    /// Installers of earlier updates are of no further use once a newer one is downloaded and checked; each is
+    /// about 10 MB, and they were kept for every version before.
+    public static void Prune(string directory, string keep) {
+        foreach (string old in Directory.GetFiles(directory, AssetPrefix + "*.exe")) {
+            if (String.Equals(Path.GetFullPath(old), Path.GetFullPath(keep), StringComparison.OrdinalIgnoreCase)) continue;
+            try { File.Delete(old); } catch (IOException) { } catch (UnauthorizedAccessException) { }     // (one still running: the next time)
+        }
     }
     static string Hash(string path) { using (var sha = SHA256.Create()) using (var input = File.OpenRead(path)) return BitConverter.ToString(sha.ComputeHash(input)).Replace("-", "").ToLowerInvariant(); }
 }

@@ -121,7 +121,8 @@
     { name: 'ask', needs: 'reach', title: 'Codex 的确认请求交给手机', about: '电脑无人操作时由手机回答，电脑屏幕右下角有说明；关闭后只能在电脑上回答' },
     { name: 'wait', needs: 'reach', title: '对话停下后等手机消息', sheet: true, choices: [['0', '不等'], ['60', '1 分钟'], ['300', '5 分钟'], ['900', '15 分钟'], ['1800', '30 分钟']],
       explained: '不等：对话做完就停下，电脑上看不到任何变化；手机发的消息由电脑端送进这段对话，Codex 约一两秒，Claude Code 十几秒。选了时间：电脑无人操作满 1 分钟后，对话做完先等这么久，这期间发的消息立即送达；等的时候电脑上显示钩子正在运行，有人碰键盘或鼠标就结束。' },
-    { name: 'update', title: '自动检查更新', about: '有新版本时提示' }];
+    { name: 'update', title: '自动检查更新', about: '有新版本时提示' },
+    { name: 'channel', title: '电脑端更新渠道', about: '预发布版本更早拿到改动，正式版经过验收', choices: [['release', '正式版'], ['pre', '预发布']] }];
   let device = null, told = null, busy = false, problem = '';
   const name = line => line.name || KIND[line.kind][0];
   const has = feature => !!device && (device.features || []).includes(feature);

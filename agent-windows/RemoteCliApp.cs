@@ -54,7 +54,7 @@ public sealed partial class App : Form {
     string offeredMark = "";
     readonly Switch enabledSwitch = new Switch(), autostartSwitch = new Switch(), autoUpdateSwitch = new Switch(), reachSwitch = new Switch(), askSwitch = new Switch();
     SettingRow reachRow, updateRow;
-    readonly Segmented rights = new Segmented { Items = new[] { "默认", "自动改文件", "只读" } }, protocol = new Segmented { Items = new[] { "自动", "HTTP/2" } };
+    readonly Segmented rights = new Segmented { Items = new[] { "默认", "自动改文件", "只读" } }, protocol = new Segmented { Items = new[] { "自动", "HTTP/2" } }, channelPick = new Segmented { Items = new[] { "正式版", "预发布" } };
     readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 10 * 60 * 1000 }, quietTimer = new System.Windows.Forms.Timer { Interval = 5000 };
     ReleaseUpdate waitingUpdate;
     readonly List<Panel> pages = new List<Panel>();
@@ -97,7 +97,7 @@ public sealed partial class App : Form {
         try { config = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(ConfigFile, Encoding.UTF8)); } catch { config = null; }
         if (config == null) config = new Dictionary<string, object>();
         foreach (var item in new Dictionary<string, object> { { "Mode", "lan" }, { "Port", 8722 }, { "Server", "" }, { "OwnServer", "" }, { "RemoteEnabled", true },
-            { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", true }, { "ToolInstallSuggested", "" } })
+            { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "UpdateChannel", "release" }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", true }, { "ToolInstallSuggested", "" } })
             if (!config.ContainsKey(item.Key) || config[item.Key] == null) config[item.Key] = item.Value;
         if (Array.IndexOf(new[] { "lan", "cloud", "own", "public" }, Mode) < 0) config["Mode"] = "lan";
         try { password = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(PasswordFile), null, DataProtectionScope.CurrentUser)); } catch { password = ""; }
@@ -928,6 +928,10 @@ public sealed partial class App : Form {
         askRow.Tip(tips, AskFor);
         updateButton = new RoundButton { Text = "检查更新", Glyph = Theme.IconRefresh };
         updateButton.Click += (s, e) => CheckForUpdate(true);
+        // which releases are looked for, beside the button that looks: the full releases unless pre-releases are chosen
+        channelPick.Changed += (s, e) => Set("channel", AutoUpdater.Channels[channelPick.Chosen]);
+        var updateControls = new Panel { BackColor = Theme.Panel };
+        Place(updateControls, channelPick, 0, 0, 140, 32); Place(updateControls, updateButton, 148, 0, 150, 32);
         var all = new[] {
             new SettingRow("允许手机访问", "关闭后手机立即不能操作，正在运行的终端不受影响", enabledSwitch, 46, 26),
             new SettingRow("登录 Windows 后自动启动", "开机后在托盘里运行，不弹出窗口", autostartSwitch, 46, 26),
@@ -939,7 +943,7 @@ public sealed partial class App : Form {
             new SettingRow("本机端口", "局域网直连和公网隧道使用，被占用时换一个", portBox, 96, 32),
             new SettingRow("外观", "和手机 App 相同的几种配色，默认与 App 一致", skinPick, 170, 32),
             new SettingRow("自动检查更新", "开启后定期检查，有新版本时提示", autoUpdateSwitch, 46, 26),
-            (updateRow = new SettingRow("版本 " + Version, "从 GitHub 发布页检查并安装新版本；手机上也可以发起", updateButton, 150, 32)) };
+            (updateRow = new SettingRow("版本 " + Version, UpdateAbout, updateControls, 298, 32)) };
         for (int i = 0; i < all.Length; i++) Place(rows, all[i], 2, 6 + i * 41, 648, 41);
         Action(settings, "打开数据文件夹", Theme.IconOpen, ButtonKind.Normal, 28, 552, 150, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dataDir + "\"")); } catch (Exception) { } });
         Action(settings, "项目主页", Theme.IconGlobe, ButtonKind.Ghost, 186, 552, 110, 36, (s, e) => { try { Process.Start(new ProcessStartInfo("https://github.com/KangWang42/remote-ai") { UseShellExecute = true }); } catch (Exception) { } });
@@ -1044,7 +1048,7 @@ public sealed partial class App : Form {
         }
         updateButton.Enabled = false; if (manual) Toast("正在检查 GitHub 最新版本…");
         try {
-            ReleaseUpdate found = await AutoUpdater.CheckAsync(Version); availableUpdate = found;
+            ReleaseUpdate found = await AutoUpdater.CheckAsync(Version, Convert.ToString(config["UpdateChannel"])); availableUpdate = found;
             if (agent != null) agent.Newer = found == null ? "" : found.Version;
             if (found == null) { updateButton.Text = "已是最新版"; updateButton.Glyph = Theme.IconCheck; if (manual) Toast("已是最新版"); return; }
             updateButton.Text = "更新到 v" + found.Version; updateButton.Kind = ButtonKind.Primary; updateButton.Glyph = Theme.IconDownload; nav[3].SetBadge("新");
@@ -1064,12 +1068,13 @@ public sealed partial class App : Form {
         } catch (Exception error) { updateButton.Text = "检查更新"; if (manual) Toast("检查更新失败：" + error.Message); }
         finally { updateButton.Enabled = true; }
     }
+    const string UpdateAbout = "从 GitHub 检查并安装；手机上也可发起";
     // What the row of the version says: that there is a newer one, or that one waits for the phone to finish changing the line.
     void ShowUpdate() {
         if (updateRow == null) return;
         if (waitingUpdate != null) updateRow.Say("v" + waitingUpdate.Version + " 在手机切换线路完成后安装", Theme.Busy);
         else if (availableUpdate != null) updateRow.Say("有新版本 v" + availableUpdate.Version, Theme.Busy);
-        else updateRow.Say("从 GitHub 发布页检查并安装；手机上也可以发起", Theme.Muted);
+        else updateRow.Say(UpdateAbout, Theme.Muted);
     }
     async Task InstallUpdate(ReleaseUpdate found) {
         if (Changing) { waitingUpdate = found; ShowUpdate(); Toast("手机正在切换连接线路，切换完成后自动更新"); return; }      // the program does not restart under a phone that is changing the line

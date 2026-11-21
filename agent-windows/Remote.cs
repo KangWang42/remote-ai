@@ -148,6 +148,7 @@ public sealed partial class App {
         else if (name == "tunnel" && Array.IndexOf(Protocols, word) >= 0) Keep("TunnelProtocol", word);
         else if (name == "autostart" && value is bool) Autostart = (bool)value;
         else if (name == "update" && value is bool) Keep("AutoUpdate", (bool)value);
+        else if (name == "channel" && Array.IndexOf(AutoUpdater.Channels, word) >= 0) Keep("UpdateChannel", word);
         else if (name == "ask" && value is bool) Asking = (bool)value;
         else if (name == "wait" && word != null && Array.IndexOf(Reach.Waits.Select(seconds => seconds.ToString()).ToArray(), word) >= 0) Waiting = Int32.Parse(word);
         else if (name == "reach" && value is bool) {
@@ -158,12 +159,22 @@ public sealed partial class App {
         else throw new ArgumentException("没有这项设置，或它的值无效");
         if (InvokeRequired) BeginInvoke(new Action(() => Applied(name))); else Applied(name);
     }
-    void Applied(string name) { ShowSettings(); if (name == "update" && autoUpdateSwitch.On) CheckForUpdate(false); }
+    void Applied(string name) {
+        // Another channel makes what was found before beside the point: it is looked for anew, at once where that is switched on.
+        if (name == "channel") {
+            availableUpdate = null; if (agent != null) agent.Newer = "";
+            updateButton.Kind = ButtonKind.Normal; updateButton.Glyph = Theme.IconRefresh; updateButton.Text = "检查更新"; nav[3].SetBadge("");
+            Keep("UpdateCheckUtc", ""); ShowUpdate();
+        }
+        ShowSettings();
+        if ((name == "update" || name == "channel") && autoUpdateSwitch.On) CheckForUpdate(false);
+    }
     void ShowSettings() {
         rights.Chosen = Math.Max(0, Array.IndexOf(Rights, Convert.ToString(config["RemoteMaxMode"])));
         protocol.Chosen = Math.Max(0, Array.IndexOf(Protocols, Convert.ToString(config["TunnelProtocol"])));
         autostartSwitch.On = Autostart;
         autoUpdateSwitch.On = Convert.ToString(config["AutoUpdate"]) == "True";
+        channelPick.Chosen = Math.Max(0, Array.IndexOf(AutoUpdater.Channels, Convert.ToString(config["UpdateChannel"])));
         reachSwitch.On = Reaching;
         askSwitch.On = Asking;
         waitPick.Set(WaitTitles[Array.IndexOf(Reach.Waits, Waiting)]);
@@ -193,7 +204,7 @@ public sealed partial class App {
         }
         return new Dictionary<string, object> { { "name", ComputerName }, { "version", Version }, { "lines", lines }, { "change", now },
             { "settings", new Dictionary<string, object> { { "rights", Convert.ToString(config["RemoteMaxMode"]) }, { "tunnel", Convert.ToString(config["TunnelProtocol"]) },
-                { "autostart", Autostart }, { "update", Convert.ToString(config["AutoUpdate"]) == "True" }, { "reach", Reaching }, { "ask", Asking }, { "wait", Waiting.ToString() } } }, { "reach", ReachStates() } };
+                { "autostart", Autostart }, { "update", Convert.ToString(config["AutoUpdate"]) == "True" }, { "channel", Convert.ToString(config["UpdateChannel"]) }, { "reach", Reaching }, { "ask", Asking }, { "wait", Waiting.ToString() } } }, { "reach", ReachStates() } };
     }
     static string Word(Dictionary<string, object> op, string key) { object value; return op.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : ""; }
     // Called by the agent, on its thread, for each question; what takes time is done elsewhere.

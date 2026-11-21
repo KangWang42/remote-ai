@@ -43,6 +43,26 @@ public static class InUseCheck {
         Require(AutoUpdater.Ours("https://github.com/KangWang42/remote-cli/releases/download/v1.5.7/RemoteCli-Setup-1.5.7.exe") && AutoUpdater.Ours("https://github.com/KangWang42/remote-ai/releases/download/v1.6.0/RemoteCli-Setup-1.6.0.exe")
             && !AutoUpdater.Ours("https://github.com/someone/remote-ai/releases/download/v9/RemoteCli-Setup-9.exe") && !AutoUpdater.Ours("https://example.com/KangWang42/remote-ai/releases/download/x") && !AutoUpdater.Ours("http://github.com/KangWang42/remote-ai/releases/download/x") && !AutoUpdater.Ours(null), "whose release files are taken");
         Require(AutoUpdater.Newer("v1.5.3", "1.5.2") && !AutoUpdater.Newer("v1.5.2", "1.5.2") && !AutoUpdater.Newer("1.5.1", "1.5.2") && AutoUpdater.Newer("1.10.0", "1.9.9") && !AutoUpdater.Newer("latest", "1.0.0"), "which version is newer");
+        // the channel: full releases only, or pre-releases too; drafts never, and a release without the installer is passed over in a list
+        Func<string, bool, bool, bool, Dictionary<string, object>> release = (tag, pre, draft, installer) => new Dictionary<string, object> {
+            { "tag_name", tag }, { "prerelease", pre }, { "draft", draft }, { "assets", installer ? new object[] { new Dictionary<string, object> {
+                { "name", "RemoteCli-Setup-" + tag.TrimStart('v') + ".exe" }, { "browser_download_url", "https://github.com/KangWang42/remote-ai/releases/download/" + tag + "/RemoteCli-Setup-" + tag.TrimStart('v') + ".exe" }, { "digest", "sha256:AB" } } } : new object[0] } };
+        var listed = new object[] { release("v1.13.0", false, true, true), release("v1.12.2", true, false, false), release("v1.12.1", true, false, true), release("v1.12.0", false, false, true), release("v1.11.1", false, false, true) };
+        var withPre = AutoUpdater.Pick(listed, "1.11.1", true, false);
+        Require(withPre != null && withPre.Version == "1.12.1" && withPre.Sha256 == "ab", "pre-releases: the newest with the installer, no draft");
+        var full = AutoUpdater.Pick(listed, "1.11.1", false, false);
+        Require(full != null && full.Version == "1.12.0" && AutoUpdater.Pick(listed, "1.12.1", false, false) == null, "full releases only; an installed pre-release is not replaced by an older full release");
+        bool noInstaller = false;
+        try { AutoUpdater.Pick(new object[] { release("v1.12.0", false, false, false) }, "1.11.1", false, true); } catch (InvalidDataException) { noInstaller = true; }
+        Require(noInstaller && AutoUpdater.Pick(new object[] { release("v1.11.1", false, false, true) }, "1.11.1", false, true) == null, "the latest release without the installer is an error, the same version is nothing to do");
+        // earlier installers go once a newer one is downloaded
+        string updates = Path.Combine(Path.GetTempPath(), "remote-ai-updates-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(updates);
+        foreach (string name in new[] { "RemoteCli-Setup-1.10.1.exe", "RemoteCli-Setup-1.11.1.exe", "RemoteCli-Setup-1.12.0.exe", "notes.txt" }) File.WriteAllText(Path.Combine(updates, name), "x");
+        AutoUpdater.Prune(updates, Path.Combine(updates, "RemoteCli-Setup-1.12.0.exe"));
+        var left = Array.ConvertAll(Directory.GetFiles(updates), Path.GetFileName); Array.Sort(left, StringComparer.Ordinal);
+        Require(String.Join(",", left) == "RemoteCli-Setup-1.12.0.exe,notes.txt", "only the new installer and other files stay: " + String.Join(",", left));
+        Directory.Delete(updates, true);
         // a message for a conversation that sits idle: what the session that hands it over is given, and what its answer means
         string address = "uds:\\\\.\\pipe\\LOCAL\\cc-msg-0123", prompt = ClaudeRelay.Prompt(address, ClaudeRelay.Framed("把结论再写短一点\n分两段"));
         Require(prompt.Contains("\nto:\n" + address + "\n") && prompt.Contains("not for you") && prompt.Contains("-----BEGIN-----\n" + ClaudeRelay.Framed("把结论再写短一点\n分两段") + "\n-----END-----"), "the address and the words, whole: " + prompt);
