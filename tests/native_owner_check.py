@@ -17,3 +17,6 @@ with tempfile.TemporaryDirectory(prefix='remote-cli-native-') as folder:
         shutil.copy2(exe, Path(folder)/(host + '.exe'))
     shutil.copy2(exe, Path(folder)/'claude.exe')
     subprocess.run([str(exe)],check=True,timeout=90)
+    desktop = Path(folder) / 'claude.exe'
+    agent_build.compile_check('LiveSessionsCheck', desktop, [ROOT / 'tests/LiveSessionsCheck.cs'])
+    subprocess.run([str(desktop), folder], check=True, timeout=30)

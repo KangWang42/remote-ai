@@ -64,6 +64,7 @@ public sealed class SessionOrigin {
         string name = processName ?? "";
         if (name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) || name.Equals("Codex", StringComparison.Ordinal)) return "Codex 桌面版";
         if (name.Equals("Claude", StringComparison.Ordinal)) return "Claude 桌面版";
+        if (name.Equals("Antigravity", StringComparison.OrdinalIgnoreCase)) return "Antigravity 桌面版";
         if (name.Equals("Positron", StringComparison.OrdinalIgnoreCase)) return "Positron";
         if (name.Equals("Code", StringComparison.OrdinalIgnoreCase) || name.Equals("Code - Insiders", StringComparison.OrdinalIgnoreCase)) return "VS Code";
         if (name.Equals("Cursor", StringComparison.OrdinalIgnoreCase)) return "Cursor";
@@ -120,6 +121,7 @@ public sealed class ClaudeSessions {
         public string Session = "", Dir = "", Status = "", Host = "unknown", Origin = "", Reason = "无法核实 Claude Code 会话，请先在原终端结束后重试";
         public string Socket = "";      // where it takes messages from other sessions (Claude Code's own note), "" when it says none
         public string Entry = "";       // how it was started, as Claude Code notes it: "cli", "claude-desktop…", "claude-vscode"
+        public string HostSessionId = "", Name = "";
         public int Pid;
         public long Started;
         public bool Live, CanTakeover;
@@ -166,7 +168,7 @@ public sealed class ClaudeSessions {
         try {
             var record = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
             object value; int pid; long started;
-            if (!record.TryGetValue("pid", out value) || !Int32.TryParse(Convert.ToString(value), out pid)) return result;
+            if (record == null || !record.TryGetValue("pid", out value) || !Int32.TryParse(Convert.ToString(value), out pid)) return result;
             if (!record.TryGetValue("sessionId", out value)) return result;
             result.Session = Convert.ToString(value);
             if (!Regex.IsMatch(result.Session, @"\A[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\z")) return result;
@@ -180,6 +182,8 @@ public sealed class ClaudeSessions {
                 result.Pid = pid; result.Started = started; result.Live = true;
                 if (record.TryGetValue("cwd", out value)) result.Dir = Convert.ToString(value);
                 if (record.TryGetValue("status", out value)) result.Status = Convert.ToString(value);
+                if (record.TryGetValue("hostSessionId", out value)) result.HostSessionId = value as string ?? "";
+                if (record.TryGetValue("name", out value)) result.Name = value as string ?? "";
                 if (record.TryGetValue("messagingSocketPath", out value) && value != null) result.Socket = Convert.ToString(value);
                 var origin = SessionOrigin.Inspect(pid, parents); result.Origin = origin.Name;
                 // Claude Code says itself how it was started; its app starts it as "claude-desktop".
@@ -191,6 +195,20 @@ public sealed class ClaudeSessions {
             }
         } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
         return result;
+    }
+
+    public static List<Owner> LiveSessions(Dictionary<int, int> parents = null, string sessionsDir = null) {
+        var live = new List<Owner>();
+        string[] files;
+        try { files = Directory.GetFiles(sessionsDir ?? Path.Combine(Home, "sessions"), "*.json"); }
+        catch (IOException) { return live; }
+        catch (UnauthorizedAccessException) { return live; }
+        var tree = parents ?? SessionOrigin.Parents();
+        foreach (string file in files) {
+            Owner owner = Inspect(file, tree);
+            if (owner.Live) live.Add(owner);
+        }
+        return live;
     }
 }
 // Read-only ownership checks run outside the terminal input/report lock.

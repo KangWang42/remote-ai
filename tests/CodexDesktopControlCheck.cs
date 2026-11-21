@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -213,7 +214,29 @@ public static class CodexDesktopControlCheck {
         public override long Length { get { throw new NotSupportedException(); } } public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
         public override void Flush() {} public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); } public override void SetLength(long length) { throw new NotSupportedException(); }
     }
+    static void RouterIdentity() {
+        const string installed = @"C:\Program Files\WindowsApps\OpenAI.Codex_26.1117.4957.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe";
+        Require(CodexDesktopControl.IsSupportedExecutable("chatgpt", installed), "current router identity");
+        Require(CodexDesktopControl.IsSupportedExecutable("ChatGPT", installed.Replace(@"C:\Program Files", "D:").Replace("26.1117.4957.0", "26.1007.2314.0")), "oldest supported router on a secondary drive");
+        foreach (string invalid in new[] { installed.Replace("26.1117.4957.0", "26.1007.2313.9"),
+            installed.Replace("26.1117.4957.0", "26.1117.4957.0.1"), installed.Replace("2p2nqsd0c76g0", "other"),
+            installed.Replace("x64", "x86"), installed.Replace("ChatGPT.exe", "helper.exe"), installed.Replace("Program Files", "Temp") })
+            Require(!CodexDesktopControl.IsSupportedExecutable("ChatGPT", invalid), "invalid router executable: " + invalid);
+        Require(!CodexDesktopControl.IsSupportedExecutable("codex", installed), "wrong router process name");
+
+        string name = "remote-ai-router-check-" + Guid.NewGuid().ToString("N"), path = @"\\.\pipe\" + name;
+        Require(CodexDesktopControl.PipeMissing(path), "missing router detected");
+        using (var server = new NamedPipeServerStream(name))
+        using (var client = new NamedPipeClientStream(".", name, PipeDirection.InOut)) {
+            Require(!CodexDesktopControl.PipeMissing(path), "idle listener exists");
+            client.Connect(1000);
+            server.WaitForConnection();
+            Require(!CodexDesktopControl.PipeMissing(path), "occupied listener is not missing");
+        }
+        Console.WriteLine("Codex router: package versions, process identity, absent and busy pipes passed");
+    }
     public static void Run(string root) {
+        RouterIdentity();
         var peer = new Peer();
         using (var control = new CodexDesktopControl(peer, 1000)) {
             var state = control.Inspect(Session); Require(CodexDesktopControl.Folder(state) == @"E:\中文项目" && CodexDesktopControl.Ready(state) && CodexDesktopControl.CompletionReady(state), "fragmented UTF8 snapshot");

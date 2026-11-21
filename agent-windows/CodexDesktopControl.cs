@@ -6,6 +6,7 @@ using System.IO.Pipes;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -26,9 +27,25 @@ public sealed class CodexDesktopControl : IDesktopConversation {
     string client = "", owner = "", session = "";
     Dictionary<string, object> snapshot;
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetNamedPipeServerProcessId(IntPtr pipe, out uint pid);
+    [DllImport("kernel32.dll", EntryPoint = "WaitNamedPipeW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool WaitNamedPipe(string path, uint milliseconds);
 
     public CodexDesktopControl(Stream stream, int timeoutMilliseconds) { this.stream = stream; timeout = timeoutMilliseconds; }
+    public static bool IsSupportedExecutable(string processName, string exePath) {
+        if (!String.Equals(processName, "ChatGPT", StringComparison.OrdinalIgnoreCase)) return false;
+        var match = Regex.Match(exePath ?? "",
+            @"\A[A-Z]:\\(?:Program Files\\)?WindowsApps\\OpenAI\.Codex_(\d+\.\d+\.\d+\.\d+)_x64__2p2nqsd0c76g0\\app\\ChatGPT\.exe\z",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        Version version;
+        return match.Success && Version.TryParse(match.Groups[1].Value, out version) && version >= new Version(26, 1007, 2314, 0);
+    }
+    internal static bool PipeMissing(string path) {
+        // A busy router still gets the normal connection timeout. An absent pipe returns ERROR_FILE_NOT_FOUND immediately.
+        return !WaitNamedPipe(path, 1) && Marshal.GetLastWin32Error() == 2;
+    }
     public static CodexDesktopControl Connect() {
+        if (PipeMissing(@"\\.\pipe\codex-ipc"))
+            throw new IOException("当前 Codex 桌面应用没有打开会话控制管道");
         var pipe = new NamedPipeClientStream(".", "codex-ipc", PipeDirection.InOut, PipeOptions.Asynchronous);
         try {
             pipe.Connect(800);
@@ -37,8 +54,7 @@ public sealed class CodexDesktopControl : IDesktopConversation {
             using (var process = Process.GetProcessById((int)pid)) {
                 string exe = process.MainModule.FileName;
                 // The installed Windows desktop package is the only supported router owner.
-                if (!process.ProcessName.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) ||
-                    exe.IndexOf(@"\WindowsApps\OpenAI.Codex_26.1007.2314.0_x64__2p2nqsd0c76g0\app\", StringComparison.OrdinalIgnoreCase) < 0)
+                if (!IsSupportedExecutable(process.ProcessName, exe))
                     throw new IOException("此 Codex 桌面版本的控制接口尚未适配");
             }
             return new CodexDesktopControl(pipe, 8000);
