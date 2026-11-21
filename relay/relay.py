@@ -80,7 +80,7 @@ DESKTOP_ACTIONS = ("app_open",)
 # the tools whose desktop application a computer can offer to open: it says so for each by "<tool>-desktop-open"
 DESKTOP_TOOLS = ("codex", "claude")
 UPDATE_ACTION = "update"      # the program on the computer looks for a newer version of itself and installs it
-MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 8, 12, 2_000_000, 300_000
+MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 16, 12, 2_000_000, 300_000
 LABELS = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity CLI", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi", "shell": "PowerShell"}
 OP_SECONDS = 120
 
@@ -920,7 +920,7 @@ class Relay:
                 if apart:
                     asked, payload = payload, dict(payload, folder=where)       # what the viewer sent is kept, to know the same request again
                 if sum(t["state"] in ("starting", "running") for t in state["threads"].values()) >= MAX_TERMINALS:
-                    raise RemoteError("最多同时运行 8 个终端，请先结束一个")
+                    raise RemoteError(f"最多同时运行 {MAX_TERMINALS} 个终端，请先结束一个")
                 terminal = uuid.uuid4().hex
                 if chat and not called and payload.get("text"):
                     # a new conversation is called by what it was first told, until its tool names it
@@ -1643,9 +1643,10 @@ class Relay:
                         term.update(state="closed", status="")
                         _trim(term)
                         dirty = True
-            for item in (reported or [])[:MAX_TERMINALS + MAX_HISTORY]:
-                if not isinstance(item, dict):
-                    continue
+            # Closed terminals awaiting their last output must not displace running ones in a report.
+            listings = [item for item in (reported or [])[:200] if isinstance(item, dict)]
+            listings.sort(key=lambda item: item.get("state") != "running")
+            for item in listings[:MAX_TERMINALS + MAX_HISTORY]:
                 term = state["threads"].get(item.get("id")) if isinstance(item.get("id"), str) else None
                 if term is None and isinstance(item.get("id"), str):
                     term = self._adopt(state, item, instance)

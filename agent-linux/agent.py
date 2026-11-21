@@ -206,7 +206,7 @@ SAID_NOTED = 600        # of what the tool said of its work between its steps, t
 SAID_RESULTS = 40       # of this many steps, counted from the last, the first lines of what came back are given
 # where the tools' own installers put them; a service's PATH seldom has these
 TOOL_DIRS = (".local/bin", ".npm-global/bin", "bin", ".bun/bin", ".volta/bin", ".cargo/bin", ".opencode/bin")
-MAX_TERMINALS = 8
+MAX_TERMINALS = 16
 MAX_OWN_PROJECTS = 30
 OP_TTL = 150            # seconds an operation may travel before it is refused
 CHUNK_CHARS = 12000

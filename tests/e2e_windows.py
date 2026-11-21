@@ -1,6 +1,6 @@
 """End to end on this Windows computer: relay + agent + a PowerShell terminal, driven over HTTP like the phone does.
 
-    python tests/e2e_windows.py            (build the agent first: agent-windows/build.ps1)
+    python tests/e2e_windows.py [<folder with RemoteCliAgent.exe>]
 
 Uses a temporary data folder and port 8733; nothing of an installed copy is touched.
 """
@@ -14,8 +14,10 @@ import tempfile
 import time
 from pathlib import Path
 
+from made_up import Homes
+
 ROOT = Path(__file__).resolve().parents[1]
-AGENT = ROOT / "agent-windows" / "bin" / "RemoteCliAgent.exe"
+AGENT = (Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "agent-windows" / "bin") / "RemoteCliAgent.exe"
 PORT = int(os.environ.get("RCLI_TEST_PORT", "8733"))
 password = "test-" + secrets.token_hex(8)
 new_id = lambda: secrets.token_hex(16)
@@ -27,14 +29,25 @@ def main():
     data.mkdir(); work.mkdir()
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full",
                                                   "RemoteDirs": ["demo=" + str(work)]}), encoding="utf-8")
-    env = dict(os.environ, RCLI_PASSWORD=password, PYTHONUTF8="1")
+    homes = Homes(temp.name)
+    saved = ["11111111-2222-3333-4444-555555555555", "22222222-3333-4444-5555-666666666666"]
+    for index, session in enumerate(saved):
+        homes.claude_saved(work, session, "Saved terminal %d" % index, 1)
+    tools = Path(temp.name) / "tools"
+    tools.mkdir()
+    (tools / "claude.cmd").write_text(
+        f'@"{sys.executable}" "{ROOT / "tests" / "chat_standin.py"}" claude %*\r\n', encoding="mbcs")
+    for tool in ("codex", "agy"):
+        (tools / (tool + ".cmd")).write_text("@exit /b 0\r\n", encoding="ascii")
+    env = homes.environment(RCLI_PASSWORD=password)
+    env["PATH"] = str(tools) + os.pathsep + env["PATH"]
     relay = subprocess.Popen([sys.executable, str(ROOT / "relay" / "server.py"), "--port", str(PORT), "--data", str(Path(temp.name) / "relay")],
                              env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     agent = None
     report = {}
     try:
         subprocess.run([str(AGENT), "--set-password", str(data)], input=password.encode(), check=True)
-        agent = subprocess.Popen([str(AGENT), "--data", str(data)])
+        agent = subprocess.Popen([str(AGENT.resolve()), "--data", str(data)], env=env)
         time.sleep(1)
         cookie = {}
 
@@ -108,19 +121,59 @@ def main():
         while time.time() < deadline and state != "closed":
             state = call("/api/terminal?terminal=%s&after=%d&wait=3" % (terminal, after))["terminal"]["state"]
         assert state == "closed"
+        check_terminal_limit(call, saved)
         call("/api/logout", {})
         call("/api/terminal", expect=401)
         report["closed"] = True
+        report["terminal_limit"] = 16
         print(json.dumps(report, ensure_ascii=False))
     finally:
         if agent:
-            agent.kill()
+            if agent.poll() is None:
+                subprocess.run(["taskkill.exe", "/PID", str(agent.pid), "/T", "/F"],
+                               capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            agent.wait(timeout=10)
         relay.kill()
         time.sleep(0.5)
         try:
             temp.cleanup()
         except OSError:
             pass
+
+
+def check_terminal_limit(call, saved):
+    def view():
+        return call("/api/terminal")
+
+    def wait_for(read, ready):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            value = read()
+            if ready(value):
+                return value
+            time.sleep(0.1)
+        raise AssertionError(value)
+
+    def start(tool, **options):
+        return call("/api/terminal", {"action": "start", "id": new_id(), "dir": "demo", "tool": tool, **options})["terminal"]
+
+    def running():
+        return {item["id"] for item in view()["terminals"] if item["state"] == "running"}
+
+    wait_for(view, lambda snapshot: set(saved) <= {item["id"] for item in snapshot["sessions"]})
+    terminals = [start("shell"), start("claude", session=saved[0])]
+    terminals.extend(start("claude", form="chat") for _ in range(13))
+    terminals.append(start("claude", form="chat", session=saved[1]))
+    wait_for(running, lambda ids: ids == set(terminals))
+    response = call("/api/terminal", {"action": "start", "id": new_id(), "dir": "demo", "tool": "shell"}, expect=400)
+    assert response["error"] == "最多同时运行 16 个终端，请先结束一个", response
+    call("/api/terminal", {"action": "close", "id": new_id(), "terminal": terminals[0]})
+    wait_for(running, lambda ids: ids == set(terminals[1:]))
+    terminals[0] = start("shell")
+    wait_for(running, lambda ids: ids == set(terminals))
+    for terminal in terminals:
+        call("/api/terminal", {"action": "close", "id": new_id(), "terminal": terminal})
+    wait_for(running, lambda ids: not ids)
 
 
 if __name__ == "__main__":

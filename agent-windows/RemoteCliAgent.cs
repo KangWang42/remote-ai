@@ -204,7 +204,7 @@ public sealed class TerminalAgent {
         string launcher = FindTool(tool);
         var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
         string where = Place(live, dirs);
-        if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || where == null || !Directory.Exists(where)) return;
+        if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || where == null || !Directory.Exists(where) || !HasTerminalSlot()) return;
         if (Get(kept, "form") == "chat") {
             // a conversation goes on where it was; one whose tool had not named it yet cannot be found again
             if (session.Length == 0 || !kind.Chats) return;
@@ -282,6 +282,13 @@ public sealed class TerminalAgent {
     // Terminals that ended, the last few: the phone lists them as recently used, at whichever relay the computer uses.
     readonly List<LiveTerminal> ended = new List<LiveTerminal>();
     public const int KeepRunning = 600000, KeepEnded = 120000, EndedMost = 12;
+    const int MaxTerminals = 16;
+
+    bool HasTerminalSlot() { return terminals.Values.Count(t => !t.Pty.Closed) < MaxTerminals; }
+
+    void RequireTerminalSlot() {
+        if (!HasTerminalSlot()) throw new InvalidOperationException("最多同时运行 " + MaxTerminals + " 个终端，请先结束一个");
+    }
     public sealed class ComputerTakeover {
         public string Tool, Dir, Session, Launcher;         // Dir: the folder the window opens in
         public bool PhoneTerminal;
@@ -429,7 +436,7 @@ public sealed class TerminalAgent {
         string launcher = FindTool(one.Tool);
         if (launcher == null) throw new ArgumentException("电脑上没有 " + kind.Label);
         lock (work) {
-            if (terminals.Values.Count(t => !t.Pty.Closed) >= 8) throw new InvalidOperationException("最多同时运行 8 个终端");
+            RequireTerminalSlot();
             // read only where it is asked for, and never wider than its owner allows
             string widest = Get(prefs, "RemoteMaxMode"), mode = one.Read ? "read" : widest;
             string first = one.Words.Split('\n')[0].Trim();
@@ -1677,7 +1684,7 @@ public sealed class TerminalAgent {
             }
             else if (action == "start") {
                 if (terminals.ContainsKey(terminal)) return;
-                if (terminals.Values.Count(t => !t.Pty.Closed) >= 8) throw new InvalidOperationException("最多同时运行 8 个终端");
+                RequireTerminalSlot();
                 string tool = Get(op, "tool"), dir = Get(op, "dir"), previous = Get(op, "previous"), session = Get(op, "session");
                 Tool kind = Tool.Named(tool);
                 if (Get(op, "history") == "True" && session.Length == 0 && previous.Length == 0) throw new ArgumentException("请选择具体历史对话，或重新新建对话");

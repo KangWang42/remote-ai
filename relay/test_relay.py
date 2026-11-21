@@ -711,16 +711,40 @@ class TerminalRelayTests(unittest.TestCase):
         with self.assertRaises(RemoteError):
             self.relay.command({"id": "e" * 32, "terminal": self.terminal, "action": "close"}, now=2000)
 
-    def test_close_error_and_cap_do_not_drop_existing_terminals(self):
-        self.start()
-        op = {"id": "c" * 32, "terminal": self.terminal, "action": "close"}
-        self.relay.command(op, now=1004)
-        self.relay.agent({"info": self.info, "acks": [{"id": op["id"]}], "terminals": [{"id": self.terminal, "state": "closed"}]}, now=1005)
-        self.assertEqual(self.relay.overview(self.terminal, now=1006)["terminal"]["state"], "closed")
-        for n in range(8):
-            self.relay.command({"id": "%032x" % n, "action": "start", "tool": "claude", "dir": "demo"}, now=1007)
-        with self.assertRaises(RemoteError):
-            self.relay.command({"id": "d" * 32, "action": "start", "tool": "claude", "dir": "demo"}, now=1008)
+    def test_terminal_cap_counts_pending_starts_and_all_terminal_forms(self):
+        session = "11111111-2222-3333-4444-555555555555"
+        info = dict(self.info, features=["chat"])
+        self.relay.agent({"info": info, "sessions": [
+            {"id": session, "tool": "claude", "dir": "demo", "title": "Saved", "updated": 1000},
+        ]}, now=1001)
+        operations = [{"id": "%032x" % n, "action": "start", "tool": "shell", "dir": "demo"} for n in range(1, 15)]
+        operations += [
+            {"id": "a" * 32, "action": "start", "tool": "codex", "dir": "demo", "form": "chat"},
+            {"id": "b" * 32, "action": "start", "tool": "claude", "dir": "demo", "session": session},
+        ]
+        reports = [{"id": self.relay.command(op, now=1002)["terminal"], "state": "running"} for op in operations]
+        next_op = {"id": "d" * 32, "action": "start", "tool": "shell", "dir": "demo"}
+        with self.assertRaisesRegex(RemoteError, "^最多同时运行 16 个终端，请先结束一个$"):
+            self.relay.command(next_op, now=1003)
+
+        def publish(at):
+            self.relay.agent({"info": info, "terminals": reports}, now=at)
+            return {t["id"] for t in self.relay.overview(now=at)["terminals"] if t["state"] == "running"}
+
+        self.assertEqual(publish(1004), {t["id"] for t in reports})
+        reports[0]["state"] = "closed"
+        self.assertEqual(len(publish(1005)), 15)
+        reports.append({"id": self.relay.command(next_op, now=1006)["terminal"], "state": "running"})
+        self.assertEqual(publish(1007), {t["id"] for t in reports[1:]})
+
+    def test_new_relay_adopts_all_sixteen_running_terminals_behind_closed_reports(self):
+        history = [{"id": "%032x" % n, "state": "closed", "tool": "shell", "dir": "demo", "created": n}
+                   for n in range(1, 29)]
+        running = [{"id": "%032x" % n, "state": "running", "tool": "shell", "dir": "demo", "created": n}
+                   for n in range(29, 45)]
+        self.relay.agent({"info": self.info, "terminals": history + running}, now=1001)
+        actual = {t["id"] for t in self.relay.overview(now=1001)["terminals"] if t["state"] == "running"}
+        self.assertEqual(actual, {t["id"] for t in running})
 
     def test_new_terminal_sorts_above_second_precision_history(self):
         old = {"action": "start", "id": "1" * 32, "tool": "shell", "dir": "demo"}

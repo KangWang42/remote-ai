@@ -28,7 +28,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const VERSION: &str = "0.1.0";
-const MAX_TERMINALS: usize = 8;
+const MAX_TERMINALS: usize = 16;
 const MAX_OWN_PROJECTS: usize = 30;
 const OP_TTL: f64 = 150.0; // seconds an operation may travel before it is refused
 const CHUNK_CHARS: usize = 12000; // one numbered piece of output

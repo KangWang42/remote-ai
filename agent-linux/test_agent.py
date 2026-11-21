@@ -1312,6 +1312,28 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(status, 200, result)
         return result
 
+    def test_00_sixteen_terminals_can_run_and_a_closed_slot_can_be_reused(self):
+        terminals = []
+        start = {"action": "start", "tool": "shell", "dir": "项目"}
+
+        def running():
+            return {term["id"] for term in self.overview()["terminals"] if term["state"] == "running"}
+
+        try:
+            for _ in range(16):
+                terminals.append(self.op(start)["terminal"])
+            self.poll(running, lambda ids: ids == set(terminals), seconds=40)
+            status, body = request("POST", self.base + "/api/terminal", {"id": secrets.token_hex(16), **start}, token=self.token)
+            self.assertEqual((status, body["error"]), (400, "最多同时运行 16 个终端，请先结束一个"))
+            self.op({"action": "close", "terminal": terminals[0]})
+            self.poll(running, lambda ids: ids == set(terminals[1:]))
+            terminals[0] = self.op(start)["terminal"]
+            self.poll(running, lambda ids: ids == set(terminals))
+        finally:
+            for terminal in running().intersection(terminals):
+                self.op({"action": "close", "terminal": terminal})
+            self.poll(running, lambda ids: not ids.intersection(terminals))
+
     def test_end_to_end(self):
         # 1. start a shell in the project and wait for its prompt to arrive
         started = self.op({"action": "start", "tool": "shell", "dir": "项目"})
