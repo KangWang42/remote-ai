@@ -24,26 +24,25 @@
         <h1 id="heading">文件</h1>
         <p id="device"><span id="where"></span></p>
       </div>
+      <button type="button" class="icon" id="upload" aria-label="上传文件" hidden></button>
       <button type="button" class="icon" id="more" aria-label="更多"></button>
     </header>
 
-    <div id="file-actions">
-      <button type="button" class="quiet" id="upload">上传文件</button>
-      <button type="button" class="quiet" id="refresh">刷新</button>
-      <button type="button" class="quiet" id="download" hidden>下载文件</button>
-      <input type="file" id="upload-input" aria-label="选择要上传的本地文件" multiple hidden>
-    </div>
+    <input type="file" id="upload-input" aria-label="选择要上传的本地文件" multiple hidden>
     <section id="transfer" hidden aria-label="文件传输">
-      <p id="transfer-text" role="status" aria-live="polite"></p>
+      <div class="transfer-head">
+        <p id="transfer-text" role="status" aria-live="polite"></p>
+        <button type="button" id="transfer-close" aria-label="关闭提示" hidden></button>
+      </div>
       <progress id="transfer-bar" max="100" value="0" aria-label="传输进度"></progress>
       <button type="button" class="quiet" id="transfer-cancel">取消传输</button>
     </section>
 
     <!-- a folder -->
     <div id="folder" hidden>
-      <nav id="crumbs" aria-label="所在位置"></nav>
+      <nav id="crumbs" aria-label="所在位置" hidden></nav>
       <input id="search" type="search" placeholder="在这个文件夹里找" aria-label="按名称筛选" hidden>
-      <ul class="cards" id="entries"></ul>
+      <ul class="group" id="entries"></ul>
       <p id="folder-note" class="note" hidden></p>
     </div>
 

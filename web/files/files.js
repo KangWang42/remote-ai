@@ -17,6 +17,9 @@
   const sheetOfPaper = '<path d="M7 3.5h7l4.5 4.5v11a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M14 3.5V8h4.5"/>';
   const ICON = {
     back: svg('<path d="M15 5l-7 7 7 7"/>'), more: svg('<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>'),
+    upload: svg('<path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9M4.5 15.5v2.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2.5"/>', 20),
+    download: svg('<path d="M12 4.5v11M7.5 11L12 15.5 16.5 11M4.5 16v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2"/>', 18),
+    close: svg('<path d="M7 7l10 10M17 7L7 17"/>', 16),
     chev: svg('<path d="M9 6l6 6-6 6"/>', 18),
     folder: svg('<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
     code: svg('<path d="M8.5 8l-4 4 4 4M15.5 8l4 4-4 4M13.2 5.5l-2.4 13"/>'),
@@ -62,7 +65,7 @@
   }
   paintFiles();
   if (window.RemoteCliOnSystemTheme) window.RemoteCliOnSystemTheme(paintFiles);
-  $('back').innerHTML = ICON.back; $('more').innerHTML = ICON.more;
+  $('back').innerHTML = ICON.back; $('upload').innerHTML = ICON.upload; $('more').innerHTML = ICON.more; $('transfer-close').innerHTML = ICON.close;
 
   // ---- asking the computer
   let run = 0;        // what is shown now; an answer for something left behind is dropped
@@ -165,10 +168,8 @@
   function leave() { if (from && history.length > 1) history.back(); else location.href = '../?project=' + encodeURIComponent(dir); }
   function show() {
     run++;
-    $('download').hidden = !place.file;
     $('upload').hidden = !!place.file;
-    if ($('refresh')) $('refresh').hidden = !!place.file;
-    if (!saving && !uploading) $('transfer').hidden = true;
+    if (!saving && !uploading) { $('transfer').hidden = true; $('transfer').classList.remove('error'); }
     $('problem').hidden = true; $('progress').hidden = true;
     for (const url of handed.splice(0)) URL.revokeObjectURL(url);
     if (place.file) showFile(run); else showFolder(run);
@@ -205,7 +206,9 @@
   }
   function crumbs() {
     const parts = place.path ? place.path.split('/') : [], nav = $('crumbs');
-    nav.replaceChildren(el('button', { type: 'button', textContent: dir, disabled: !parts.length, onclick: () => go({ path: '', file: '' }) }));
+    nav.hidden = !parts.length;
+    if (!parts.length) { nav.replaceChildren(); return; }
+    nav.replaceChildren(el('button', { type: 'button', textContent: dir, onclick: () => go({ path: '', file: '' }) }));
     parts.forEach((name, at) => nav.append(el('span', { html: ICON.chev }), el('button', { type: 'button', textContent: name, disabled: at === parts.length - 1,
       onclick: () => go({ path: parts.slice(0, at + 1).join('/'), file: '' }) })));
     nav.scrollLeft = nav.scrollWidth;
@@ -367,7 +370,7 @@
     $('view').textContent = ''; $('loading').hidden = false;
     $('heading').textContent = place.file; $('where').textContent = '';
     document.title = place.file + ' · 文件';
-    current = { path, kind, bytes: null, text: null };
+    current = { path, kind, bytes: null, text: null, unpreviewable: false, hasCode: false };
     try {
       // A file of a kind this page does not know is looked at by its first piece: text is shown, anything else is named.
       const first = await ask('file_read', path, 0);
@@ -375,9 +378,10 @@
       $('where').textContent = K.size(first.size) + ' · ' + ago(first.modified);
       let view = kind.view, language = kind.language;
       if (!view && K.readable(bytesOf(first.data))) { view = 'code'; language = 'plaintext'; }
-      if (!view) { $('loading').hidden = true; return $('view').replaceChildren(unknown(first.size, '这种文件不能在这里预览。')); }
+      if (!view) { current.unpreviewable = true; $('loading').hidden = true; return $('view').replaceChildren(unknown(first.size, '这种文件不能在这里预览。')); }
       const limit = kind.limit || 3e6;
-      if (first.size > limit) { $('loading').hidden = true; return $('view').replaceChildren(unknown(first.size, '文件有 ' + K.size(first.size) + '，超过了预览的上限 ' + K.size(limit) + '。')); }
+      if (first.size > limit) { current.unpreviewable = true; $('loading').hidden = true; return $('view').replaceChildren(unknown(first.size, '文件有 ' + K.size(first.size) + '，超过了预览的上限 ' + K.size(limit) + '。')); }
+      current.hasCode = view === 'code' || view === 'markdown' || kind.ext === 'svg';
       const got = await read(path, limit, mine, first);
       if (mine !== run) return;
       current.bytes = got.bytes;
@@ -409,20 +413,37 @@
   // phone's Download folder, each piece handed on as it arrives; in a browser as an ordinary download.
   const SAVE_LIMIT = 300 * 1024 * 1024;
   let saving = false, uploading = null, cancelled = false, pickedFolder = '';
+  function setBusy(busy) {
+    $('upload').disabled = busy;
+    const saveButton = document.querySelector('.unknown button');
+    if (saveButton) saveButton.disabled = busy;
+  }
   function transfer(text, at, size) {
-    $('transfer').hidden = false;
+    const box = $('transfer');
+    box.hidden = false;
+    box.classList.remove('error');
+    $('transfer-text').setAttribute('role', 'status');
     $('transfer-text').textContent = text;
+    $('transfer-close').hidden = true;
     $('transfer-bar').hidden = false;
     $('transfer-bar').value = Math.round(100 * at / Math.max(1, size));
     $('transfer-cancel').hidden = false;
-    $('upload').disabled = $('download').disabled = true;
+    setBusy(true);
   }
-  function transferDone(text) {
-    $('transfer').hidden = false;
+  function transferDone(text, failed) {
+    const box = $('transfer');
+    box.hidden = false;
+    box.classList.toggle('error', !!failed);
+    $('transfer-text').setAttribute('role', failed ? 'alert' : 'status');
     $('transfer-text').textContent = text;
     $('transfer-bar').hidden = $('transfer-cancel').hidden = true;
-    $('upload').disabled = $('download').disabled = false;
+    $('transfer-close').hidden = false;
+    setBusy(false);
   }
+  $('transfer-close').onclick = () => {
+    $('transfer').hidden = true;
+    $('transfer').classList.remove('error');
+  };
   $('transfer-cancel').onclick = () => {
     cancelled = true;
     if (uploading) uploading.cancel();
@@ -433,7 +454,6 @@
     if (native && !native.canUploadFiles) return toast('请先更新手机 App，再上传文件');
     pickedFolder = place.path; $('upload-input').value = ''; $('upload-input').click();
   };
-  if ($('refresh')) $('refresh').onclick = () => { folders.delete(place.path); show(); toast('正在刷新…'); };
   $('upload-input').onchange = async () => {
     const files = Array.from($('upload-input').files || []), folder = pickedFolder;
     if (!files.length || saving || uploading) return;
@@ -450,10 +470,9 @@
       uploading = null;
       folders.delete(folder);
       if (!place.file && place.path === folder) show();
-      transferDone('已上传 ' + done + '/' + files.length + ' 个文件到 ' + join(dir, folder) + (failure ? '。' + failure : '。'));
+      transferDone('已上传 ' + done + '/' + files.length + ' 个文件到 ' + join(dir, folder) + (failure ? '。' + failure : '。'), !!failure && !cancelled);
     }
   };
-  $('download').onclick = save;
   window.addEventListener('beforeunload', event => {
     if (saving || uploading) { event.preventDefault(); event.returnValue = ''; }
   });
@@ -463,7 +482,7 @@
     const path = join(place.path, place.file), name = place.file, parts = [];
     saving = true; cancelled = false; $('transfer-cancel').disabled = false;
     transfer('正在准备下载 ' + name, 0, 1);
-    let outcome = '';
+    let outcome = '', failed = false;
     try {
       let piece = await ask('file_read', path, 0), at = 0;
       const size = piece.size, modified = piece.modified;
@@ -492,7 +511,8 @@
     } catch (error) {
       if (native && native.saveCancel) native.saveCancel();
       outcome = error.message || '没有保存';
-    } finally { saving = false; transferDone(outcome); }
+      failed = !cancelled;
+    } finally { saving = false; transferDone(outcome, failed); }
   }
 
   // ---- the menu, and what is said after saving: pages of the sheet the other pages use (../ui/sheet.js)
@@ -508,15 +528,27 @@
     const kit = window.RemoteSheet.ui;
     return { title: place.file ? '文件' : '文件夹', build(p) {
       if (place.file) {
-        p.body.append(kit.group(kit.row({ icon: 'copy', tint: 'copy', label: '复制路径', id: 'menu-copy', act: async () => {
+        const actions = [];
+        if (!current || !current.unpreviewable) {
+          actions.push(kit.row({ icon: 'download', tint: 'file', html: ICON.download, label: native ? '保存到手机' : '下载文件', id: 'menu-download', disabled: saving || !!uploading, act: () => {
+            p.sheet.close(null);
+            save();
+          } }));
+        }
+        actions.push(kit.row({ icon: 'copy', tint: 'copy', label: '复制路径', id: 'menu-copy', act: async () => {
           p.sheet.close(null);
           toast(await window.RemoteSheet.copy(join(place.path, place.file)) ? '已复制' : '这里不能复制');
-        } })));
-        if (current && (current.kind.view === 'code' || current.kind.view === 'markdown' || current.kind.ext === 'svg' || !current.kind.view))
-          p.body.append(kit.group(kit.row({ label: '长行自动换行', id: 'menu-wrap', end: kit.toggle(wrap, on => { wrap = on; keep('files-wrap', on ? '1' : ''); document.querySelectorAll('.code').forEach(c => c.classList.toggle('wrap', on)); }, '长行自动换行') })));
+        } }));
+        if (current && current.hasCode) {
+          actions.push(kit.row({ label: '长行自动换行', id: 'menu-wrap', end: kit.toggle(wrap, on => { wrap = on; keep('files-wrap', on ? '1' : ''); document.querySelectorAll('.code').forEach(c => c.classList.toggle('wrap', on)); }, '长行自动换行') }));
+        }
+        p.body.append(kit.group(...actions));
       } else {
         p.body.append(kit.section('排列', kit.seg([['name', '名称'], ['time', '修改时间'], ['size', '大小']], sort, key => { sort = key; keep('files-sort', key); show(); }, { label: '排列', full: true })));
-        p.body.append(kit.group(kit.row({ label: '显示隐藏的文件', id: 'menu-hidden', end: kit.toggle(hidden, on => { hidden = on; keep('files-hidden', on ? '1' : ''); show(); }, '显示隐藏的文件') })));
+        p.body.append(kit.group(
+          kit.row({ label: '显示隐藏的文件', id: 'menu-hidden', end: kit.toggle(hidden, on => { hidden = on; keep('files-hidden', on ? '1' : ''); show(); }, '显示隐藏的文件') }),
+          kit.row({ icon: 'refresh', tint: 'muted', label: '刷新', id: 'menu-refresh', act: () => { p.sheet.close(null); folders.delete(place.path); show(); toast('正在刷新…'); } })
+        ));
       }
       const away = [];
       // back to the terminal: the steps taken on this page, the sheet's own, and the one that came here
