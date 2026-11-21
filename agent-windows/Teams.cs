@@ -314,8 +314,14 @@ public sealed class Teams {
         if (windows == null || windows.Length == 0) return "额度未知";
         var said = windows.Select(w => (w.Name == "five_hour" ? "5 小时窗口" : w.Name == "seven_day" ? "本周" : w.Name) + "已用 " + Math.Round(w.Used) + "%"
             + (w.Resets > 0 ? "（" + When(w.Resets) + " 重置）" : "")).ToArray();
-        string tag = IsExhausted(windows) ? "，已用尽（不可派工）" : windows.Any(w => Math.Round(w.Used) >= 80) ? "，紧张" : "";
+        string tag = IsExhausted(windows) ? "，已用尽（" + Barred + "）" : windows.Any(w => Math.Round(w.Used) >= 80) ? "，紧张" : "";
         return "额度：" + String.Join("，", said) + tag;
+    }
+    /// The mark on a tool's room that no work may go to it (spent or failed in this task): `AssignRoster` drops such lines.
+    const string Barred = "不可派工";
+    /// The tools a self-forming leader may name in an `ASSIGN`: installed, not failed and not spent, as `Rooms` found them.
+    static string[] Usable(IDictionary<string, string> rooms) {
+        return rooms.Where(p => !p.Value.Contains(Barred)).Select(p => p.Key).ToArray();
     }
     static string When(long seconds) {
         DateTime at = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(seconds).ToLocalTime();
@@ -337,9 +343,9 @@ public sealed class Teams {
             bool isFailed = failed.TryGetValue(tool, out why);
             if (hands.Limits != null) {
                 string room = Room(SafeLimits(tool));
-                rooms[tool] = isFailed ? room + "；当前不可用（" + why + "，请勿再派工）" : room;
+                rooms[tool] = isFailed ? room + "；当前不可用（" + why + "，" + Barred + "）" : room;
             } else if (isFailed) {
-                rooms[tool] = "不可用（" + why + "，请勿再派工）";
+                rooms[tool] = "不可用（" + why + "，" + Barred + "）";
             } else if (t.AutoRoster) rooms[tool] = "额度未知";
         }
         return rooms;
@@ -370,7 +376,9 @@ public sealed class Teams {
     }
     static string ExtraRules(Team t) { return String.IsNullOrEmpty(t.Rules) ? "" : "\n\n【分工偏好】\n" + Cut(t.Rules, 1000); }
     static string RoomsBlock(Team t, IDictionary<string, string> rooms) {
-        return rooms.Count > 0 ? "\n\n## 当前额度\n" + String.Join("\n", t.Tools.Distinct().Where(rooms.ContainsKey).Select(tool => "- " + Label(tool) + (tool == t.Tools[0] ? "（你）" : "") + "：" + rooms[tool])) : "";
+        // a self-forming leader may take on any installed tool, so it sees all of them
+        var tools = t.Tools.Concat(t.AutoRoster ? rooms.Keys : Enumerable.Empty<string>()).Distinct();
+        return rooms.Count > 0 ? "\n\n## 当前额度\n" + String.Join("\n", tools.Where(rooms.ContainsKey).Select(tool => "- " + Label(tool) + (tool == t.Tools[0] ? "（你）" : "") + "：" + rooms[tool])) : "";
     }
     public static string DiscussFirst(Team t, string tool) {
         return "【协作任务 · 方案讨论（只读）】目标：" + t.Goal + ExtraRules(t)
@@ -398,26 +406,41 @@ public sealed class Teams {
             return "- " + role + "：" + Label(tool) + "（" + (model.Length > 0 ? model : "工具默认模型")
                 + (seat != null && seat.Effort.Length > 0 ? " · " + seat.Effort : "") + "）" + room(tool);
         }).ToArray();
-        var tools = t.Tools.Concat(t.AutoRoster ? rooms.Keys.AsEnumerable() : Enumerable.Empty<string>()).Distinct();
+        var usable = t.AutoRoster ? Usable(rooms) : new string[0];
+        var tools = t.Tools.Concat(usable).Distinct();
         string modelGuide = "\n\n## 派工参考\n" + String.Join("\n", tools.Where(Strengths.ContainsKey).Select(tool => "- " + Label(tool) + "：" + Strengths[tool]))
             + "\n按实际配置的模型和任务难度派工。普通任务可用中等思考深度，复杂排查或验收才考虑更高档位。";
         string rosterGuide = t.Roster.Length > 0 ? "\n同一工具的各成员是独立对话，共用该工具的账号额度。" : "";
-        if (t.AutoRoster) rosterGuide += "\n你可以自行决定派给谁和派几个。已安装的工具：" + String.Join("、", rooms.Keys)
+        if (t.AutoRoster) rosterGuide += usable.Length == 0 ? "\n现在没有可以派工的工具，请自己完成或说明阻塞。"
+            : "\n你可以自行决定派给谁和派几个。可以派工的工具：" + String.Join("、", usable)
             + "。同批可使用 member-1、member-2、member-3。示例（工具名须从上面选）：\n"
-            + "ASSIGN member-1 codex: 实现输入校验并运行相关测试\nASSIGN member-2 codex: 独立检查错误信息\n"
+            + "ASSIGN member-1 " + usable[0] + ": 实现输入校验（负责 validate.py），交回改动文件和测试输出\n"
+            + "ASSIGN member-2 " + usable[usable.Length - 1] + ": 只读核对错误信息是否覆盖空值，交回核对结论\n"
             + "已有成员可用 ASSIGN member-1: 任务内容 继续，或加工具名切换。";
         return "【协作任务 · 领队】目标：" + t.Goal + ExtraRules(t)
             + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 成员前期方案讨论（只读）\n" + Cut(discussion, 12000))
             + "\n\n你负责确定范围、处理跨成员问题、整合并验收。成员在同一个项目文件夹工作：\n" + String.Join("\n", members)
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
             + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "") + modelGuide
-            + "\n\n首轮只调查到足以决定分工。可独立交付的工作尽早同批派出，等依赖的产出确认后再派后续工作。简单任务可以直接完成。用户指定成员执行或要求组队时按要求派出。"
-            + "\n每项派工写清交付物、负责范围和需要交回的验收证据，划清共享文件的修改边界。由成员自行调查、选择实现、修复并复测。跨范围的发现和需统一决定的取舍由你处理。"
-            + (rooms.Count > 0 ? "\n结合专长和同账号共享额度派工。额度已用尽或不可用时跳过；任一窗口已用 80% 以上时只派小而必要的任务，额度未知按正常对待。你自己的额度紧张时，把实现和检查交给成员。" : "")
+            + "\n\n" + DispatchGuide
+            + (rooms.Count > 0 ? "\n额度已用尽或不可用的工具跳过；任一窗口已用 80% 以上时只派小而必要的任务，额度未知按正常对待。你自己的额度紧张时，把实现和检查交给成员。" : "")
             + "\n\n" + RoundsGuide(t)
             + "\n\nRemote AI 按这些行派给协作成员。分派时在回答末尾为每位成员写一条，可接多行任务说明：\nASSIGN 成员名: 任务内容\n同一项工作只派一次。工具内置的子代理只在用户明确要求时用于当前角色自己的工作。"
             + "\n自行完成时在末尾写 DONE: 总结。成员交回结果或你自行完成后，由你独立验收。";
     }
+    /// How the leader gives out work: first what the user is to get and what proves it; then only as much working
+    /// together as the work wants (the user's word: to use each AI's strengths, not to add steps): a simple task done by
+    /// the one best placed, a design delivered as a design, a split only for large work or different strengths (by
+    /// strength, quota, dependency and file ownership), a review where it is needed. Who is picked stays the leader's
+    /// judgement; only `TeamsLive` shows it.
+    const string DispatchGuide = "## 派工\n"
+        + "先确定用户要拿到的成品和验收证据：是设计（方案、接口、界面稿或文档）、可运行的改动，还是两者都要；每项成品用什么证明达标，例如测试输出、运行结果、截图或文件内容。首轮只调查到能定下这些和做法为止。\n"
+        + "协作是为了发挥各 AI 的长处，不是为了增加流程：\n"
+        + "- 简单任务由最合适的一人直接完成：你能做完就自己做，否则只派一位成员，不为分工而拆分。\n"
+        + "- 只要设计时交付设计，不改代码。\n"
+        + "- 工作量大或需要不同专长时才分工，按专长、额度、依赖和文件归属选人，同一文件只交给一位成员。设计和实现都要分给多人时，先定下接口和文件归属，再按模块派实现；互不依赖的部分同批派出，依赖他人产出的等那份产出确认后再派。\n"
+        + "- 改动影响面大、有风险或你没有把握时，请另一位 AI 只读审阅；小改动由你验收即可。\n"
+        + "用户指定成员执行或要求组队时按要求派出。每项派工写清成品、负责的文件和要交回的验收证据。由成员自行调查、选择实现、修复并复测。跨范围的发现和需统一决定的取舍由你处理。";
     /// How the rounds go: the leader sets each round's aim by what it has seen; free rounds end when the goal is met.
     static string RoundsGuide(Team t) {
         return "每轮根据实际改动和检查结果安排剩余工作，只差复核时由你复核或派一位只读成员。达标即结束。"
@@ -432,20 +455,24 @@ public sealed class Teams {
             + "\n\n整体目标：" + Cut(t.Goal, 2000)
             + (changes.Length > 0 ? "\n\n## 文件夹中的当前改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
-            + "\n\n对照目标和成员证据检查实际交付及跨成员影响，亲自运行与这次改动相关的检查。核实用户补充要求是否已落实。小的整合问题可直接修订并复查，仍需执行的工作按范围交给成员。"
+            + "\n\n对照用户要拿到的成品和约定的验收证据，检查实际交付及跨成员影响，亲自运行与这次改动相关的检查；只交付设计时，核对设计是否覆盖目标、约束和取舍，不要求代码改动。核实用户补充要求是否已落实。小的整合问题可直接修订并复查。"
+            + "成品还没齐时（例如设计已确认、实现还没做），仍需执行的工作按范围交给成员。"
             + "\n\n验收通过时，在回答的最后写两行：\nVERIFIED: 你实际做了哪些检查、看到了什么结果（写明命令或查看的文件）\nDONE: 总结"
             + (last ? "\n没有通过时，说明还差什么，并用 ASSIGN 成员名: 修改内容 写出要做的修复。轮数已经用完，这些修复先保留，用户追加一轮后再派给成员。"
-                : "\n发现问题时，用 ASSIGN 成员名: 修改内容 把修复派给成员，完成后会请你再次验收。");
+                : "\n发现问题或还有下一步时，用 ASSIGN 成员名: 任务内容 派给成员，完成后会请你再次验收。");
     }
     const string VerifyRemind = "【协作任务 · 领队验收】这次回答里没有找到验收证据。请在回答的最后写：\nVERIFIED: 你实际运行的检查和看到的结果\nDONE: 总结\n还有问题时，用 ASSIGN 成员名: 修改内容 安排修复。";
     /// A member that handed in a note of progress (its turn ended while what it waits for still runs) is sent back.
     public const string KeepAtIt = "【协作任务】请等到当前操作返回，继续核对、修复并复测，完成后交回结果。确实无法继续时，写明阻塞原因和需要领队处理的事项。";
     const int MostNudges = 2;
     static readonly Regex Underway = new Regex(
-        @"(?:正在|还在|仍在)(?:运行|执行|跑|等待|等(?!待)|进行|测试|构建|编译|生成)(?!的)|待.{0,24}(?:返回|完成|结束|出来|跑完)后|等.{0,24}(?:结果|完成|结束|跑完|返回)(?:后|再)|稍后(?:回报|汇报|继续|再)"
+        @"(?:正在|还在|仍在)(?:运行|执行|跑|等待|等(?!待)|进行|测试|构建|编译|生成|检查|核对|验证|查看)(?!的)|待.{0,24}(?:返回|完成|结束|出来|跑完)后|等.{0,24}(?:结果|完成|结束|跑完|返回)(?:后|再)|稍后(?:回报|汇报|继续|再)"
         + @"|\b(?<!was )(?<!were )(?<!had been )(?<!no longer )(?:still running|in progress|waiting for)\b"
         + @"|\b(?:will|['’]ll) (?:report|continue)\b|\b(?:once|as soon as) (?:it|they|the \w+) (?:finish(?:es)?|completes?|ends?|returns?)\b"
-        + @"|\b(?:I['’]m|I am|we['’]re|we are) (?:still |currently )?(?:generating|running|building|testing|compiling) [^.!?\r\n]+\bnow\b", RegexOptions.IgnoreCase);
+        // "I'm checking … now", a sentence that begins "Checking … now" with no one named, and "Now checking …"
+        + @"|\b(?:I['’]m|I am|we['’]re|we are) (?:still |currently )?" + Doing + @" [^.!?\r\n]+\bnow\b"
+        + @"|(?:^|(?<=[.!?;:\n]\s*))" + Doing + @" [^.!?\r\n]+\bnow\b|(?:^|(?<=[.!?;:\n]\s*))now " + Doing + @"\b", RegexOptions.IgnoreCase);
+    const string Doing = @"(?:generating|running|building|testing|compiling|checking|verifying|reviewing|inspecting|looking (?:at|into)|working on)";
     static readonly Regex Blocked = new Regex(
         @"^[ \t>*_`#-]*(?:(?:阻塞|受阻|Blocked)[*_`]*[ \t]*[:：][*_` \t]*[^\s*_`]|\b(?:I|we) (?:cannot|can['’]t) (?:continue|proceed)\b|(?:我(?:们)?)?(?:目前|暂时)?无法继续)",
         RegexOptions.IgnoreCase | RegexOptions.Multiline);
@@ -460,8 +487,8 @@ public sealed class Teams {
         var pending = Underway.Matches(last).Cast<Match>().LastOrDefault();
         return pending != null && !CompletedWork.IsMatch(last, pending.Index + pending.Length);
     }
-    const string MemberGuide = "\n\n在分派范围内自主调查、选择实现、修复并复测。跨范围发现交领队裁决，组队和派工由领队负责。只有用户明确要求时才使用工具内置的子代理。"
-        + "\n等操作和检查结束再交回，写明实际产出、改动文件、关键取舍及检查结果。完成时可用 DONE: 总结。确实无法继续时用“阻塞：”说明原因、已经尝试的办法和需要领队决定的事项。";
+    const string MemberGuide = "\n\n按派工交付写明的成品：派的是设计就交设计，不要顺带实现。在分派范围内自主调查、选择实现、修复并复测。跨范围发现交领队裁决，组队和派工由领队负责。只有用户明确要求时才使用工具内置的子代理。"
+        + "\n等操作和检查结束再交回，写明实际产出、改动文件、关键取舍，以及派工要求的验收证据。完成时可用 DONE: 总结。确实无法继续时用“阻塞：”说明原因、已经尝试的办法和需要领队决定的事项。";
     public static string MemberTask(Team t, string task) {
         return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task
             + "\n\n项目目标供参考：" + t.Goal + MemberGuide;
@@ -474,10 +501,10 @@ public sealed class Teams {
         return Answers(t, answers)
             + (changes.Length > 0 ? "\n\n## 文件夹中的改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
-            + "\n\n" + (guide.Length > 0 ? guide : "请根据结果继续分派（ASSIGN 成员名: 任务）或确认完成（DONE: 总结）。");
+            + "\n\n" + (guide.Length > 0 ? guide : "请对照用户要拿到的成品和验收证据，继续分派（ASSIGN 成员名: 任务）或确认完成（DONE: 总结）。");
     }
-    const string DecideNext = "本轮仍有未完成的分工。请根据回报解决阻塞、明确范围或改派，只安排剩余工作。达到整体目标后再写 DONE: 总结。";
-    const string SupplementGuide = "请结合补充要求调整受影响的分工。把仍适用和本轮新增的任务尽早写成 ASSIGN 行，简单工作可直接完成。";
+    const string DecideNext = "本轮仍有未完成的分工。请根据回报解决阻塞、明确范围或改派，只安排剩余工作；改派同样按专长、额度、依赖和文件归属选人。用户要的成品都有验收证据后再写 DONE: 总结。";
+    const string SupplementGuide = "补充要求改变了用户要拿到的成品或验收证据时，先更新它们，再调整受影响的分工。把仍适用和本轮新增的任务尽早写成 ASSIGN 行，简单工作可直接完成。";
     static string Answers(Team t, Dictionary<string, string> answers) {
         return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + RoleLabel(t, p.Key) + "\n" + Cut(p.Value, 8000)));
     }

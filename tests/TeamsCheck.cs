@@ -238,6 +238,15 @@ public static class TeamsCheck {
         Require(Teams.Progress(historical), "historical progress note must be recognized as in-progress");
         Require(Teams.Progress("Unit tests passed. " + historical), "earlier passed step does not mask trailing progress note");
         Require(Teams.Progress("Running the test suite now; I'll report back as soon as it finishes."), "English in-progress variant recognized");
+        // a whole reply that only says what is being checked now (a member's real reply, taken for its result once)
+        Require(Teams.Progress("Checking the updated organizer UI, workbench guards, and Android aggregate checks now."), "a bare 'Checking … now.' is progress");
+        Require(Teams.Progress("Now verifying the relay endpoint and the phone page."), "'Now verifying …' is progress");
+        Require(Teams.Progress("I'm checking the Android aggregate now."), "'I'm checking … now' is progress");
+        Require(Teams.Progress("正在检查整理页和安卓聚合测试。"), "正在检查 is progress");
+        Require(!Teams.Progress("Checked the updated organizer UI, workbench guards, and Android aggregate checks: python tests/organize_ui_check.py and tests/android_aggregate_check.py passed."), "the same checks reported done are a result");
+        Require(!Teams.Progress("Checking the updated organizer UI, workbench guards, and Android aggregate checks now.\n\nResults: organize_ui_check.py passed, Android aggregate check passed, no changes needed."), "the opening line followed by the results is a result");
+        Require(!Teams.Progress("Checking the organizer UI now showed one overlap, which I fixed; organize_ui_check.py passed afterwards."), "a check that already ran and passed is a result");
+        Require(!Teams.Progress("已检查整理页和安卓聚合测试，全部通过。"), "已检查 … 通过 is a result");
 
         // Contrast 1: completed reports (plain Chinese, plain English reusing the same nouns, and explicit DONE)
         Require(!Teams.Progress("已完成图标资源生成与预览检查，更新了 remote-ai.ico 和 Android 图标，python tests/icon_assets_check.py 全部通过。"), "plain Chinese completion is not progress");
@@ -354,7 +363,7 @@ public static class TeamsCheck {
         simple["goal"] = "修正 README.md 中的一处拼写错误";
         simple["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude"), Member("member-2", "agy") };
         leader = teams.Start(simple).Members["leader"];
-        Require(Last(leader).Contains("简单任务可以直接完成"), "leader is told simple tasks can finish directly");
+        Require(Last(leader).Contains("简单任务由最合适的一人直接完成：你能做完就自己做"), "leader is told simple tasks can finish directly");
         int beforeSimple = made;
         teams.Turned(leader, "done", "已直接修正 README.md 拼写错误。\nDONE: README.md 拼写已修正");
         team = Team(teams, simpleId);
@@ -395,6 +404,97 @@ public static class TeamsCheck {
             "leader receives autonomous member results, queued owner guidance, and diff for acceptance");
         teams.Turned(leader, "done", "VERIFIED: 复核 diff 并复跑 python tests/teams_check.py 全部通过\nDONE: 协作分工与交回优化已完成");
         Require(Team(teams, subId).State == "done" && Team(teams, subId).Round == 1, "substantive delegated task completes in round 1");
+    }
+
+    /// How a leader is asked to give out work, at each turn it gets, and which tools it is offered. What is fixed here
+    /// is what goes out and when; whom the leader picks for which work is its own judgement (`TeamsLive` on real tools).
+    static void Dispatching() {
+        var hands = Hands();
+        hands.Available = () => new[] { "claude", "codex", "agy" };
+        var teams = new Teams(null, hands);
+        Func<string, string, Dictionary<string, object>> preset = (id, goal) => {
+            var given = Lead(id, new object[] { "codex", "claude", "agy" }, 0);
+            given["goal"] = goal;
+            given["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude"), Member("member-2", "agy") };
+            return given;
+        };
+        Func<string, string, int> at = (text, part) => text.IndexOf(part, StringComparison.Ordinal);
+
+        // the leader settles what the user gets and its evidence before choosing anyone
+        string mixedId = "7171717171717171";
+        string leader = teams.Start(preset(mixedId, "设计并实现会话自动整理：先定整理规则和接口，再实现电脑端并补测试")).Members["leader"];
+        string first = Last(leader);
+        int product = at(first, "先确定用户要拿到的成品和验收证据"), simple = at(first, "简单任务由最合适的一人直接完成"), who = at(first, "才分工，按专长、额度、依赖和文件归属选人");
+        Require(product > 0 && simple > product && who > simple, "the first prompt settles product and evidence first, then the simplest way, and splits only after");
+        Require(first.Contains("协作是为了发挥各 AI 的长处，不是为了增加流程") && first.Contains("只要设计时交付设计，不改代码")
+            && first.Contains("先定下接口和文件归属，再按模块派实现") && first.Contains("同一文件只交给一位成员")
+            && first.Contains("请另一位 AI 只读审阅；小改动由你验收即可"), "one person, design only, split by module and review where needed are all offered");
+
+        // mixed: the design goes out first; once accepted, the building is given out by file in the next round
+        teams.Turned(leader, "done", "成品：整理规则说明和电脑端实现，验收看单元测试输出。\nASSIGN member-1: 写出整理规则、接口和文件归属，交回设计说明，不改代码");
+        var team = Team(teams, mixedId);
+        string m1 = team.Members["member-1"];
+        Require(team.Awaited.SequenceEqual(new[] { "member-1" }) && !team.Members.ContainsKey("member-2")
+            && Last(m1).Contains("派的是设计就交设计，不要顺带实现") && Last(m1).Contains("派工要求的验收证据"), "only the design goes out first, and its member is held to the design");
+        teams.Turned(m1, "done", "设计说明：Organizer.cs 管队列，Organizer 接口两项，测试放 OrganizerCheck.cs。");
+        team = Team(teams, mixedId);
+        Require(team.Phase == "verify" && team.Round == 1 && Last(leader).Contains("成品还没齐时（例如设计已确认、实现还没做）")
+            && Last(leader).Contains("发现问题或还有下一步时"), "after the design the leader is asked for the next step as well as fixes");
+        teams.Turned(leader, "done", "设计可行。\nASSIGN member-1: 按设计实现 agent-windows/Organizer.cs，交回改动文件和编译结果\nASSIGN member-2: 只负责 tests/OrganizerCheck.cs，按设计写测试并交回运行输出");
+        team = Team(teams, mixedId);
+        string m2 = team.Members["member-2"];
+        Require(team.Round == 2 && team.Awaited.OrderBy(x => x).SequenceEqual(new[] { "member-1", "member-2" })
+            && Last(m1).Contains("Organizer.cs") && Last(m2).Contains("OrganizerCheck.cs"), "the building goes out in the next round, each member to its own file");
+        teams.Turned(m1, "done", "已实现 Organizer.cs，编译通过。");
+        int toldLeader = told.Count(x => x[0] == leader);
+        teams.Turned(m2, "done", "Checking the updated organizer UI, workbench guards, and Android aggregate checks now.");
+        team = Team(teams, mixedId);
+        Require(Last(m2) == Teams.KeepAtIt && team.Phase == "" && team.Awaited.SequenceEqual(new[] { "member-2" }) && told.Count(x => x[0] == leader) == toldLeader,
+            "a member that only says what it is checking now is sent back, and no acceptance opens");
+        teams.Turned(m2, "done", "Checked the organizer UI, workbench guards and Android aggregate: OrganizerCheck.cs 6 passed, android_aggregate_check.py passed.");
+        teams.Turned(leader, "done", "VERIFIED: 复跑 OrganizerCheck 6 项通过，核对 Organizer.cs 与设计一致\nDONE: 设计与实现完成");
+        Require(Team(teams, mixedId).State == "done" && Team(teams, mixedId).Round == 2, "design and building end together once accepted");
+
+        // design alone: one member, accepted on the design document without any change of code
+        string designId = "7272727272727272";
+        leader = teams.Start(preset(designId, "只做设计：给出对话整理模块的结构，不写代码")).Members["leader"];
+        int before = made;
+        teams.Turned(leader, "done", "ASSIGN member-1: 写 docs/organize-design.md，交回设计要点");
+        teams.Turned(Team(teams, designId).Members["member-1"], "done", "已写 docs/organize-design.md。");
+        team = Team(teams, designId);
+        Require(made == before + 1 && team.Phase == "verify" && Last(leader).Contains("只交付设计时，核对设计是否覆盖目标、约束和取舍，不要求代码改动"),
+            "a design alone goes to one member and is accepted as a design");
+        teams.Turned(leader, "done", "VERIFIED: 查看 docs/organize-design.md，覆盖目标、接口和取舍\nDONE: 设计已交付");
+        Require(Team(teams, designId).State == "done" && Team(teams, designId).Round == 1, "a design is done without a round of building");
+
+        // a self-forming leader is offered only tools that can take work, sees every installed tool's quota, and an
+        // ASSIGN to a spent tool goes nowhere
+        var tight = Hands();
+        tight.Available = () => new[] { "claude", "agy" };
+        tight.Limits = tool => tool == "agy" ? new[] { new Quotas.Window { Name = "five_hour", Used = 100 } } : new[] { new Quotas.Window { Name = "five_hour", Used = 20 } };
+        var formed = new Teams(null, tight);
+        string autoId = "7373737373737373";
+        var auto = Lead(autoId, new object[] { "claude" }, 0);
+        auto["auto_roster"] = true;
+        auto["roster"] = new[] { Member("leader", "claude") };
+        leader = formed.Start(auto).Members["leader"];
+        string offer = Last(leader);
+        Require(offer.Contains("可以派工的工具：claude。") && offer.Contains("ASSIGN member-1 claude:") && offer.Contains("ASSIGN member-2 claude:")
+            && !offer.Contains("codex:") && !offer.Contains("agy:"), "the examples name only a tool that can take work: " + offer);
+        Require(offer.Contains("- Antigravity CLI：额度：5 小时窗口已用 100%，已用尽（不可派工）") && offer.Contains("- Claude Code（你）："),
+            "every installed tool's quota is shown to a self-forming leader");
+        formed.Turned(leader, "done", "ASSIGN member-1 agy: 写测试");
+        Require(Team(formed, autoId).Members.Count == 1 && Last(leader).Contains("没有在你的回答里找到分派"), "a task for a spent tool goes nowhere");
+        formed.Turned(leader, "done", "ASSIGN member-1 claude: 写测试，交回运行输出");
+        Require(Team(formed, autoId).Roster.Length == 2 && Team(formed, autoId).Roster[1].Tool == "claude", "a task for a tool that can take work makes its member");
+
+        var none = Hands();
+        none.Available = () => new[] { "claude" };
+        none.Limits = tool => new[] { new Quotas.Window { Name = "five_hour", Used = 100 } };
+        var alone = new Teams(null, none);
+        auto["id"] = "7474747474747474";
+        leader = alone.Start(auto).Members["leader"];
+        Require(Last(leader).Contains("现在没有可以派工的工具") && !Last(leader).Contains("ASSIGN member-1 "), "with no tool left, no example invites a task");
     }
 
     /// The model each tool's members are begun with: given with the task and with a swap, used for every
@@ -736,7 +836,7 @@ public static class TeamsCheck {
             Require(lft.State == "running" && lft.Failed.ContainsKey("claude") && lft.Awaited.SequenceEqual(new[] { "agy" }), "lead member quota failure keeps team running and waits for parallel agy");
             failTeams.Turned(lfAgy, "done", "分页已修复");
             lft = Team(failTeams, lf);
-            Require(lft.State == "running" && lft.Awaited.SequenceEqual(new[] { "leader" }) && Last(lfLeader).Contains("分页已修复") && Last(lfLeader).Contains("【执行失败】") && Last(lfLeader).Contains("额度已用尽") && Last(lfLeader).Contains("请勿再派工"), "leader receives agy result + CC failure + unavailable marker");
+            Require(lft.State == "running" && lft.Awaited.SequenceEqual(new[] { "leader" }) && Last(lfLeader).Contains("分页已修复") && Last(lfLeader).Contains("【执行失败】") && Last(lfLeader).Contains("额度已用尽") && Last(lfLeader).Contains("不可派工"), "leader receives agy result + CC failure + unavailable marker");
             failTeams.Turned(lfLeader, "done", "ASSIGN agy: 接手修复导出");
             Require(Last(lfAgy).Contains("接手修复导出") && Team(failTeams, lf).Awaited.SequenceEqual(new[] { "agy" }), "leader reassigns CC task to agy seamlessly");
             failTeams.Turned(lfAgy, "done", "导出也修好了");
@@ -873,6 +973,7 @@ public static class TeamsCheck {
 
             Accepting(file);
             DelegationAndHandback(folder);
+            Dispatching();
             Choosing(file);
             Grouping(file);
             Roster(folder);

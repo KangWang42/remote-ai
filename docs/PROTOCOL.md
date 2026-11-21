@@ -716,6 +716,17 @@ for `team_resume`.
   the agent collects the other members' replies and gives the batch to the leader with `phase: "decision"`.
   The leader can resolve the issue or assign the remaining work in a new round. The usual round limit applies.
   A leader's `DONE` in this phase opens a separate verification turn.
+- How the leader gives out work is part of its prompts, not of the protocol: its first turn (also when its conversation
+  is begun anew) has it settle first what the user is to get and what evidence shows it is met, and then work together
+  only as much as the work wants: a simple task goes to the one best placed (the leader itself or one member), a design
+  alone is delivered as a design, work is split only where it is large or wants different strengths (by strength,
+  quota, dependency and file ownership, one file to one member; design and building split among several have the
+  interfaces and file ownership settled before the building goes out by module), and another AI reviews read only
+  where a change is wide, risky or uncertain. The decision,
+  acceptance and owner's-supplement turns ask against that product and its evidence; acceptance may give out the next
+  step as well as fixes. A member is told to deliver what was assigned (a design, not an implementation besides) with
+  the evidence asked for. Which member gets which work stays the leader's judgement: `tests/TeamsCheck.cs` fixes what
+  each turn says and when it goes out, `tests/TeamsLive.cs` runs the choice on the real tools.
 - `review` likewise pauses with the reviewer's findings kept when the `rounds` are spent without `REVIEW: PASS`; going on
   hands them to the writer in the round added.
 - `compare` (并行比稿, `agent-windows/Worktrees.cs`): creates one detached Git worktree per candidate under `<dataDir>/worktrees/<teamId>/<tool>` and runs 2–3 distinct AIs in parallel; when finished, the task enters `choose` with per-candidate summaries, file stats and diffs. `team_say` can refine one or all candidates before picking; `team_pick` verifies and applies the chosen candidate's binary-safe patch (`git apply --check` then `git apply`) to the main project folder (leaving the main folder untouched on conflict) and removes all temporary worktrees (or discards all when `tool: ""`).
@@ -732,7 +743,9 @@ the tool's default. The relay derives `tools` from the roster and includes the r
 `team_say.target` and `team_swap.role` use the role name. For example, `member-2` addresses only that member. A `team_swap`
 can also change a role's model or reasoning effort while keeping the same tool. An explicit empty `model` or `effort` selects the tool's default.
 
-With `item.auto_roster: true` (自动组队), the request supplies only a `leader` entry (including its chosen `model` and `effort`). The agent lists installed providers and their shared quotas.
+With `item.auto_roster: true` (自动组队), the request supplies only a `leader` entry (including its chosen `model` and `effort`). The agent shows the leader every installed provider's shared quota
+and offers by name, with examples built from them, only the providers that can still take work: an `ASSIGN` to one that
+failed in the task or has a spent quota window is not given out. With none left the leader is told to work alone or report the blocker.
 The leader can work directly or write `ASSIGN member-1 claude: <task>` to create a member, `ASSIGN member-1: <task>` to reuse it,
 or specify a different provider to switch it. At most three members can be allocated. The task publishes each new member's
 role and provider as it is assigned, and uses the provider's default model. Without `roster`, legacy lead tasks keep
