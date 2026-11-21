@@ -1144,6 +1144,33 @@ file rather than the file written again), `sessions.json` (hashes of sign-in tok
 no terminal input or output to any log. A relay for everyone keeps the same files once per space, in
 `spaces/<id>/`, with `space.json` (the hash of the space's password and when it was made) instead of a password.
 
+## ask_ai — a conversation consults another AI here (agent 0.7.1 on Linux)
+
+A conversation the agent runs in the chat mode is offered a local MCP server named `remote_ai` with one tool, `ask_ai` (`tool`, `question`, and an optional `fresh` that starts a new context instead of continuing the seat's cached peer chat). It asks another AI tool of this machine, in the same project folder, for a read-only opinion: the agent opens a peer conversation of that tool in read-only mode, with no MCP server of its own (a consultation never recurses) and its permission asks answered on the spot — reads and searches allowed, everything else denied. The answer is the peer's turn text; a follow-up question continues the same peer context, and every peer chat and temporary config file is disposed when the caller ends.
+
+The tool is handed a config file that launches this same agent as `agent.py --mcp <socket> <token>` — a stdio MCP bridge that forwards `initialize`, `tools/list` and `tools/call` to the agent's Unix-domain socket (one length-prefixed frame per call, the same framing the Windows named pipe uses). The socket's file name is derived from the data folder's path, and the socket is owner-only. The tool list the caller sees names the machine's other chat-capable tools with the same quota hints the leader prompts use.
+
+## Usage limits as the tools tell them (agent 0.7.1 on Linux)
+
+The Linux agent reads the same three quota sources the Windows program does, and keeps what each said in `quotas/<tool>.json` (0600) in its data folder; a report carries `quotas` in its info, projected by the relay to per-tool windows (`name`, `used` 0..100, `resets`, and a `group` label for Antigravity CLI's secondary pools; a window whose time is over is left out). Only the share used and when it starts anew leave the machine, never anything of the account.
+
+- Claude Code: a `rate_limit_event` in the structured chat's stream-json (`rate_limit_info.unifiedWindows`, each with `utilization` 0..1 and `resetsAt`); heard by every conversation run in the chat mode.
+- Codex: `account/rateLimits/read` of its app-server, asked at most once in ten minutes, and the `account/rateLimits/updated` push; `primary` and `secondary` are named by their window length (`five_hour`, `seven_day`, or `<minutes>m`).
+- Antigravity CLI: `agy -p /usage --output-format json`, asked at most once in ten minutes where the CLI is installed; the primary Gemini/Neon pool's windows are named `five_hour`/`seven_day`, and every other model pool keeps a short group label so the phone folds them behind a toggle.
+
+The teams' leader prompts carry these numbers (`Rooms`), a member whose windows are exhausted is not given work, and a failure that looks like a quota or rate-limit error fails over by the same patterns as on Windows. Where a tool has said nothing, the leader prompt says its quota is unknown and treats it as normal.
+
+## Teams on the Linux agent (agent 0.7.1)
+
+The Linux agent carries the same collaboration ways as the Windows program (agent-windows/Teams.cs): a team is `review` (one member writes, another reviews read-only), `lead` (a leader assigns members with `ASSIGN <tool>: <task>` lines and collects the results), or `compare` (candidates each work in their own Git worktree and the owner merges one). It reports `teams` and `teams-v2` in its features, plus one `<tool>-team` feature per tool that can be a member, so the phone offers exactly those tools in the picker. The operations are the same eight (`work_teams`, `work_team_start/stop/resume/remove`, and under `teams-v2` `work_team_say/pick/swap`); state is kept in `teams.json` (0600) in the data folder.
+
+Two things differ from the Windows program, and both are about how a member's turn is known to have ended:
+
+- A member whose tool runs in the structured chat mode (Claude Code, Codex) reports the end of its turn itself, with the turn's whole text, the way the Windows program's chats do.
+- Any other member runs in a plain terminal. Its turn is over when its conversation record has gone quiet after growing — quiet for the same span a chain waits (`CHAIN_QUIET`, 45 seconds) — and what it said is the last answer in that record. Quota windows are not read on Linux yet (`Limits` is unset): a member whose reply shows a quota or rate-limit error still fails over by the same patterns, but no leader prompt carries live quota numbers.
+
+Members are conversations the agent begins in an allowed folder, shown on the phone like any other. `compare` needs Git worktrees and is refused where they cannot be made.
+
 ## App-wide navigation and optional Windows tools
 
 Android opens its aggregate lists even with one saved computer: four tabs over every computer (`tasks`, `projects`, `together`, `me`), the same four a computer's page draws at its foot. Its native `AppPages` reads `stats`, `teams`, `chains` and `schedules` from each computer’s existing `/api/work`, with that computer’s cookie only. Failures remain local to each computer; partial totals state their coverage and sum per-computer active time. Collaboration remains scoped to one computer. No new relay operation is introduced.

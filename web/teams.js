@@ -11,7 +11,7 @@
   const MODES = { review: '写审', lead: '分工协作', compare: '比稿' }, ROUNDS = [1, 2, 3, 5, 10];
   const STATES = { running: ['进行中', 'starting'], choose: ['待选方案', 'confirm'], paused: ['已暂停', 'confirm'], done: ['已完成', 'ended'], stopped: ['已停止', 'ended'], failed: ['没有开始', 'ended'] };
   const ROLES = { writer: '写手', reviewer: '审查', leader: '领队', user: '你' };
-  const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', user: '你' };
+  const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', opencode: 'OC', qoder: 'QD', cline: 'CL', pi: 'PI', user: '你' };
   const EFFORT_LABELS = { none: '无（none）', minimal: '极低（minimal）', low: '低（low）', medium: '中（medium）', high: '高（high）', xhigh: '极高（xhigh）', max: '最高（max）', ultra: '极致（ultra）' };
   let teams = null, failure = '', loading = false;
   let modelCatalog = null, modelError = '', modelLoading = false, modelPromise = null;
@@ -21,7 +21,13 @@
   const hasModels = () => page.has('teams-models');
   const hasRoster = () => page.has('teams-roster');
   const hasEffort = () => page.has('teams-effort');
-  const able = () => ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
+  // A computer names the tools that can be members (features <tool>-team); a computer that says
+  // nothing about it offers the chat trio, the way the Windows program has always done.
+  const able = () => {
+    const feats = page.data.device.features || [];
+    const flagged = (page.data.device.tools || []).filter(tool => feats.includes(tool + '-team'));
+    return flagged.length ? flagged : ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
+  };
   const phaseLabel = phase => phase === 'verify' ? '领队验收' : phase === 'discuss' ? '讨论方案' : '';
   const isUnverifiedStop = team => !!team && team.state === 'stopped' && team.mode === 'lead' && (team.phase === 'verify' || !!team.last);
   const stateInfo = team => {
