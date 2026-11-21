@@ -47,10 +47,12 @@ jobs:
           cargo build --release --manifest-path agent-rust/Cargo.toml
           test -x agent-rust/target/release/remote-cli-agent
       - name: rust lint (fmt + clippy)
+        if: matrix.python-version == '3.13'
         run: |
           cargo fmt --check --manifest-path agent-rust/Cargo.toml
           cargo clippy --manifest-path agent-rust/Cargo.toml --release -- -D warnings
       - name: python lint (runtime errors only)
+        if: matrix.python-version == '3.13'
         run: |
           pip install ruff
           ruff check --select E9,F63,F7,F82 relay agent-linux tools
