@@ -333,10 +333,14 @@ def codex(args):
             put({"id": number, "result": {}})
 
 
-# ---- Antigravity CLI's ACP server (`agy acp`), in the shapes recorded from agy 1.5.12
+# ---- Antigravity CLI's ACP server (`agy acp`), in the shapes recorded from agy 1.5.12 (its options from 1.5.13)
 def agy(args):
     state = {"session": "", "next": 0, "peer_turns": 0, "mcp": []}
     waiting, stop = {}, threading.Event()
+    options = [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "gemini-4-neon",
+                "options": [{"value": "gemini-4-neon", "name": "Gemini 4 Neon"}, {"value": "gemini-4-argon", "name": "Gemini 4 Argon"}]},
+               {"id": "thought_level", "name": "Thinking Level", "category": "thought_level", "type": "select", "currentValue": "medium",
+                "options": [{"value": v, "name": v} for v in ("low", "medium", "high", "xhigh")]}]
 
     def update(**what):
         put({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": state["session"], "update": what}})
@@ -425,13 +429,25 @@ def agy(args):
         elif method == "session/new":
             state["mcp"] = params.get("mcpServers") or []
             state["session"] = str(uuid.uuid4())
-            put({"jsonrpc": "2.0", "id": number, "result": {"sessionId": state["session"]}})
+            result = {"sessionId": state["session"]}
+            if os.environ.get("STANDIN_AGY_OPTIONS"):        # agy 1.5.13 names its models and thinking levels as options
+                result["configOptions"] = options
+            put({"jsonrpc": "2.0", "id": number, "result": result})
+        elif method == "session/set_config_option" and any(o["id"] == params.get("configId") for o in options):
+            option = next(o for o in options if o["id"] == params["configId"])
+            if params.get("value") not in [v["value"] for v in option["options"]]:
+                put({"jsonrpc": "2.0", "id": number, "error": {"code": -32602, "message": "unknown value"}})
+                continue
+            option["currentValue"] = params["value"]
+            record_standin("STANDIN_AGY_RECORD", {"set": params["configId"], "value": params["value"]})
+            put({"jsonrpc": "2.0", "id": number, "result": {"configOptions": options}})
         elif method == "session/load":
             state["mcp"] = params.get("mcpServers") or []
             state["session"] = params["sessionId"]
             update(sessionUpdate="user_message_chunk", content={"type": "text", "text": "replayed, not shown again"})
             put({"jsonrpc": "2.0", "id": number, "result": {}})
         elif method == "session/prompt":
+            record_standin("STANDIN_AGY_RECORD", {"prompt": params["prompt"][0]["text"][:80]})
             threading.Thread(target=turn, args=(number, params["prompt"][0]["text"]), daemon=True).start()
         elif method == "session/cancel":
             stop.set()

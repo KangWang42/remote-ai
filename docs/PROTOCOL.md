@@ -612,10 +612,18 @@ for `team_resume`.
   changes and quotas, inspects the results and runs applicable checks. A `DONE` before the first assignment opens verification
   for work the leader completed directly. A `VERIFIED: <checks and results>` followed by `DONE: <summary>` in a verification turn
   marks the task `done` and stores the evidence in the log under `验收`. A new assignment in verification increments `round` and
-  starts another member batch. At the final round, further assignments or a second reply without verification evidence end the
-  task `stopped`. Earlier rounds pause after a second reply without evidence. A message to a running leader is included in the
-  next workflow turn, so a leader reply cannot advance the workflow while members are still reporting.
-- `review` likewise ends `stopped` when the `rounds` are spent without `REVIEW: PASS`.
+  starts another member batch. At the final round, further assignments or a second reply without verification evidence
+  leave the task `paused` with the rounds spent: the assignments are kept, nothing goes out, and the note says so;
+  `team_resume` (or a `team_say`, whose text goes along) adds one round and sends the kept assignments, or asks the leader
+  to go on where none were kept. A task stops instead only at 20 rounds. Earlier rounds pause after a second reply without
+  evidence. A message to a running leader is included in the next workflow turn, so a leader reply cannot advance the
+  workflow while members are still reporting.
+- A member whose answer is a note of progress, not a result (its last paragraph says that something still runs, or that it
+  goes on once that ends: a turn of a tool that does not wait for its background commands, such as `agy acp`), is sent
+  back to finish (logged under `继续`) up to twice a round; after that its words go to the leader as they are, who is told
+  to send such a member back with `ASSIGN`.
+- `review` likewise pauses with the reviewer's findings kept when the `rounds` are spent without `REVIEW: PASS`; going on
+  hands them to the writer in the round added.
 - `compare` (并行比稿, `agent-windows/Worktrees.cs`): creates one detached Git worktree per candidate under `<dataDir>/worktrees/<teamId>/<tool>` and runs 2–3 distinct AIs in parallel; when finished, the task enters `choose` with per-candidate summaries, file stats and diffs. `team_say` can refine one or all candidates before picking; `team_pick` verifies and applies the chosen candidate's binary-safe patch (`git apply --check` then `git apply`) to the main project folder (leaving the main folder untouched on conflict) and removes all temporary worktrees (or discards all when `tool: ""`).
 - `team_say` lets the owner interject mid-run, resume a paused task with guidance, refine `compare` candidates, or continue `review`/`lead` tasks into a new round after `done`/`stopped`.
 - `team_swap` lets the owner switch a role's AI or reassign a member's task to another installed AI at any time (`review`/`lead`). When a member fails mid-run (e.g. quota exhausted), `lead` mode reports the failure and live quotas back to the leader to reassign automatically (and adds an available backup AI if needed), while `review` mode and failed leaders automatically switch to an available backup AI before falling back to `paused`.
@@ -641,11 +649,14 @@ fixes back with `ASSIGN`; it does not edit while members are still working.
 first turn, subsequent rounds (both continuing turns on an active conversation and sessions reopened after close/restart/`team_resume`), `team_swap` or failover, `discuss` and `review` readers, and `compare` candidates. They reach the tools as:
 Claude Code `--model <id>` and `--effort <level>`; Codex `model` and `config.model_reasoning_effort` in `thread/start` / `thread/resume`, plus `model` and `effort` on every `turn/start`; an ACP server (`agy acp`) by
 `session/set_config_option` (`configId` of the session's `configOptions` entry of category `model`) or else the
-earlier `session/set_model`, after `session/new` and before the first prompt. A model or effort the tool does not offer or
+earlier `session/set_model`, and the effort by `session/set_config_option` of the entry of category `thought_level`
+(agy 1.5.13: `low`, `medium`, `high`, `xhigh`), in that order after `session/new` and before the first prompt. An ACP
+server without a `thought_level` entry runs at its own level, which the conversation notes. A model or effort the tool does not offer or
 refuses is not replaced by another: the member's turn fails with the tool's words, which the
 team treats as any failed member (failover, or `paused`). `team_models` reads the lists from the tools themselves, each
 started for a moment in `<dataDir>/models`: Claude Code's `initialize` answer (`models`: `value`, `displayName`, `supportedEffortLevels` when `supportsEffort` is not false, and `default`'s `resolvedModel` marking `is_default`), Codex's `model/list` (`id`, `displayName`, `supportedReasoningEfforts[].reasoningEffort` as `efforts`, `defaultReasoningEffort` as `default_effort`, `isDefault` as `is_default`; `hidden` ones left
-out), and an ACP server's `session/new` (the `model` config option's values, or `models.availableModels`). A list is
+out), and an ACP server's `session/new` (the `model` config option's values, or `models.availableModels`, each with the
+values of the `thought_level` option as `efforts` and its current value as `default_effort`). A list is
 kept 10 minutes (a tool that said nothing is asked again after a minute); at most 40 models a tool and 16 effort tiers a model. Model names are
 `[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,79}` (`gpt-5.1-codex`, `sonnet[1m]`, `models/gemini-3-pro`) and effort tiers are `[a-z0-9][a-z0-9_-]{0,31}` (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`): the computer and the
 relay refuse anything else, since the values go onto a command line or RPC request as-is. A team's detail (`team`) carries

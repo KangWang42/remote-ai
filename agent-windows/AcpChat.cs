@@ -16,7 +16,10 @@ namespace RemoteCli {
 /// - `session/request_permission` asks this program whether a step may run, with the tool's own options;
 /// - the models a session offers come with `session/new` (`configOptions` of category `model`, or the earlier
 ///   `models.availableModels`); one asked for is chosen before the first prompt (`session/set_config_option`, or
-///   `session/set_model`), and a session that cannot take it runs nothing (Remote AI does not fall back to another).
+///   `session/set_model`), and a session that cannot take it runs nothing (Remote AI does not fall back to another);
+/// - the thinking levels come the same way (`configOptions` of category `thought_level`, agy 1.5.13: low, medium, high,
+///   xhigh; the same for each of its models): one asked for is chosen after the model, before the first prompt. A
+///   level the session does not offer is refused like a model; a tool that has no levels at all runs at its own.
 /// The conversation's id is the tool's own: it is listed with the tool's other conversations and can be gone on with
 /// in a terminal. ACP has no way to add words to a turn that runs: what is said meanwhile waits for its end.
 public class AcpChat : JsonRpcChat {
@@ -52,8 +55,8 @@ public class AcpChat : JsonRpcChat {
                 if (id.Length == 0) { Unopened(Label + " 没有打开这段对话：" + Text(At(answer, "error"), "message"), queued.Count > 0); queued.Clear(); return; }
                 if (listing) { Offer(Offered(At(answer, "result"))); return; }
                 Known(id);
-                if (model.Length == 0) { Ready(); return; }
-                Choose(At(answer, "result"), refused => {
+                if (model.Length == 0 && effort.Length == 0) { Ready(); return; }
+                Configure(At(answer, "result"), refused => {
                     if (refused == null) { Ready(); return; }
                     // not begun with another model than the one asked for: what waits for it fails, and so does what follows
                     this.refused = refused;
@@ -69,13 +72,34 @@ public class AcpChat : JsonRpcChat {
     string refused;     // why the model asked for could not be chosen
 
     /// The models a session offers: ACP's `configOptions` entry of category `model` (its options' values, also in
-    /// groups), else the earlier `models.availableModels` (modelId, name).
+    /// groups), else the earlier `models.availableModels` (modelId, name); each with the thinking levels of the session.
     static List<Models.Choice> Offered(object result) {
         var config = ModelOption(result);
-        if (config != null) return Values(config).ToList();
-        return Many(At(result, "models"), "availableModels").Select(one => new Models.Choice { Id = Text(one, "modelId"), Label = Text(one, "name") }).ToList();
+        var levels = Option(result, "thought_level");
+        string[] efforts = levels == null ? new string[0] : Values(levels).Select(one => one.Id).ToArray();
+        string current = levels == null ? "" : Text(levels, "currentValue");
+        var offered = config != null ? Values(config).ToList()
+            : Many(At(result, "models"), "availableModels").Select(one => new Models.Choice { Id = Text(one, "modelId"), Label = Text(one, "name") }).ToList();
+        foreach (var one in offered) { one.Efforts = efforts; one.DefaultEffort = current; }
+        return offered;
     }
-    static object ModelOption(object result) { return Many(result, "configOptions").FirstOrDefault(one => Text(one, "category") == "model"); }
+    static object Option(object result, string category) { return Many(result, "configOptions").FirstOrDefault(one => Text(one, "category") == category); }
+    static object ModelOption(object result) { return Option(result, "model"); }
+    /// The model asked for, then the thinking level; `then` is given null once both are chosen, or why one was not.
+    void Configure(object opened, Action<string> then) {
+        if (model.Length == 0) { Think(opened, then); return; }
+        Choose(opened, (refused, latest) => { if (refused != null) then(refused); else Think(At(latest, "configOptions") != null ? latest : opened, then); });
+    }
+    void Think(object result, Action<string> then) {
+        if (effort.Length == 0) { then(null); return; }
+        var levels = Option(result, "thought_level");
+        if (levels == null) { Note(Label + " 不能设置思考深度，按它自己的设置运行"); then(null); return; }
+        if (!Values(levels).Any(one => one.Id == effort)) { then(Label + " 没有提供思考深度 " + effort); return; }
+        Call("session/set_config_option", new Dictionary<string, object> { { "sessionId", Session }, { "configId", Text(levels, "id") }, { "value", effort } }, answer => {
+            var error = At(answer, "error");
+            then(error == null ? null : Label + " 不能使用思考深度 " + effort + "：" + Text(error, "message"));
+        });
+    }
     static IEnumerable<Models.Choice> Values(object option) {
         foreach (var one in Many(option, "options")) {
             if (At(one, "options") != null) { foreach (var inner in Values(one)) yield return inner; }
@@ -83,14 +107,15 @@ public class AcpChat : JsonRpcChat {
         }
     }
     /// Chooses the model asked for, the way the session says it can be chosen (`session/set_config_option`, else
-    /// `session/set_model`); `then` is given null once it is chosen, or why it was not.
-    void Choose(object result, Action<string> then) {
+    /// `session/set_model`); `then` is given null once it is chosen, or why it was not, and the answer's result (the
+    /// session's options as they are now, where it says them).
+    void Choose(object result, Action<string, object> then) {
         var config = ModelOption(result);
         var offered = Offered(result);
-        if (offered.Count > 0 && !offered.Any(one => one.Id == model)) { then(Label + " 没有提供模型 " + model); return; }
+        if (offered.Count > 0 && !offered.Any(one => one.Id == model)) { then(Label + " 没有提供模型 " + model, null); return; }
         Action<Dictionary<string, object>> answered = answer => {
             var error = At(answer, "error");
-            then(error == null ? null : Label + " 不能使用模型 " + model + "：" + Text(error, "message"));
+            then(error == null ? null : Label + " 不能使用模型 " + model + "：" + Text(error, "message"), At(answer, "result"));
         };
         if (config != null) Call("session/set_config_option", new Dictionary<string, object> { { "sessionId", Session }, { "configId", Text(config, "id") }, { "value", model } }, answered);
         else Call("session/set_model", new Dictionary<string, object> { { "sessionId", Session }, { "modelId", model } }, answered);

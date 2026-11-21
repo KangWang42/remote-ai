@@ -57,6 +57,13 @@ public sealed class Teams {
         public bool Reminded;
         /// Lead: the rounds are spent and the leader's acceptance under way is the last one (no more tasks go out).
         public bool Last;
+        /// The rounds are spent while the work still wants more: it waits, paused, for its owner to add a round
+        /// ("继续"), and `Held` keeps what goes out then (role -> the leader's task for a member, or the review
+        /// findings for the writer); with nothing kept the leader is asked to go on.
+        public bool Spent;
+        public Dictionary<string, string> Held = new Dictionary<string, string>();
+        /// How often each member was sent back in this round because it handed in a note of progress, not a result.
+        internal readonly Dictionary<string, int> Nudged = new Dictionary<string, int>();
         /// The model each tool's members are begun with (tool -> the tool's name of it); a tool not named uses its default.
         public Dictionary<string, string> Models = new Dictionary<string, string>();
         /// The reasoning effort each tool's members are begun with (tool -> CLI effort tier); a tool not named uses its default.
@@ -72,7 +79,7 @@ public sealed class Teams {
             copy.Worktrees = new Dictionary<string, string>(Worktrees); copy.BaseCommits = new Dictionary<string, string>(BaseCommits);
             copy.Summaries = new Dictionary<string, string>(Summaries); copy.Stats = new Dictionary<string, string>(Stats);
             copy.Diffs = new Dictionary<string, string>(Diffs);
-            copy.Failed = new Dictionary<string, string>(Failed); copy.Pending = new Dictionary<string, string>(Pending);
+            copy.Failed = new Dictionary<string, string>(Failed); copy.Pending = new Dictionary<string, string>(Pending); copy.Held = new Dictionary<string, string>(Held);
             copy.Models = new Dictionary<string, string>(Models); copy.Efforts = new Dictionary<string, string>(Efforts);
             copy.Sessions = new Dictionary<string, Seat>(Sessions); copy.Past = Past.ToList();
             return copy;
@@ -149,6 +156,7 @@ public sealed class Teams {
             LeaderInput = word("leader_input"),
             Reminded = String.Equals(word("reminded"), "True", StringComparison.OrdinalIgnoreCase),
             Last = String.Equals(word("last"), "True", StringComparison.OrdinalIgnoreCase),
+            Spent = String.Equals(word("spent"), "True", StringComparison.OrdinalIgnoreCase), Held = map("held"),
             Tools = many("tools").Select(Convert.ToString).ToArray(),
             Members = map("members"), Answers = map("answers"), Awaited = many("awaited").Select(Convert.ToString).ToList(),
             Worktrees = map("worktrees"), BaseCommits = map("base_commits"),
@@ -172,7 +180,7 @@ public sealed class Teams {
         var all = items.Select(t => new Dictionary<string, object> {
             { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "rules", t.Rules },
             { "state", t.State }, { "note", t.Note }, { "phase", t.Phase }, { "picked", t.Picked },
-            { "discuss", t.Discuss }, { "reminded", t.Reminded }, { "last", t.Last },
+            { "discuss", t.Discuss }, { "reminded", t.Reminded }, { "last", t.Last }, { "spent", t.Spent }, { "held", t.Held },
             { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created },
             { "roster", t.Roster.Length == 0 ? null : t.Roster.Select(member => member.Shown()).ToArray() }, { "auto_roster", t.AutoRoster },
             { "leader_input", t.LeaderInput },
@@ -391,7 +399,7 @@ public sealed class Teams {
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
             + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "") + modelGuide
             + "\n如果目标写明由成员执行或要求组队，请把对应工作写成 ASSIGN 行。只有回复中的 ASSIGN 行才会交给成员执行。"
-            + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件；有先后依赖的工作按顺序分批派出。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 成员交回后由你统筹：汇总各成员的结果，检查是否冲突、遗漏或偏离目标，必要时自己合并和修订，再决定结束还是继续派工。\n5. 成员可能在某些方面比你更擅长，可以采纳它们的专长；但成员只看到自己负责的部分，它们的结论和“已完成”要由你对照实际改动核实后再采信。"
+            + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件；有先后依赖的工作按顺序分批派出。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 成员交回后由你统筹：汇总各成员的结果，检查是否冲突、遗漏或偏离目标，必要时自己合并和修订，再决定结束还是继续派工。成员交回的如果只是进度（还在运行、等结果），说明它还没做完，用 ASSIGN 让它接着做完再验收。\n5. 成员可能在某些方面比你更擅长，可以采纳它们的专长；但成员只看到自己负责的部分，它们的结论和“已完成”要由你对照实际改动核实后再采信。"
             + (rooms.Count > 0 ? "\n6. 按额度分配工作量：额度已用尽或不可用的成员不要再派工；额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
             + "\n\n分派时，把 ASSIGN 放在回答的最后，每位成员一条（用上面的成员编号或英文名）：\nASSIGN 成员名: 任务内容\n任务较长时，可以在 ASSIGN 行下面接着写分步清单；到下一条 ASSIGN 之前的内容都会交给这位成员。\n若已自行完成任务，回答的最后写：\nDONE: 总结\n成员执行完或你自行完成后，会进入当轮验收。请亲自查看结果，运行相关检查，确认无误后结束。\n成员正在做的工作你不要同时动手，以免改动互相覆盖；成员交回后，合并与修订由你决定。";
     }
@@ -407,9 +415,22 @@ public sealed class Teams {
             + "\n\n验收要求：\n1. 亲自查看项目里的实际改动，汇总各成员的结果，确认它们互不冲突、没有遗漏并达到目标；成员的说明只作线索，以实际改动和检查结果为准。\n2. 发现小的冲突、遗漏或错误时，可以自己直接合并修订，改完再检查。\n3. 运行与这次改动相关的检查，例如构建、测试、lint，或实际运行一遍关键功能。"
             + (last ? "" : "\n4. 需要较多工作的修复，给出可执行的修改意见并派给成员，派工后才进入下一轮。")
             + "\n\n验收通过时，在回答的最后写两行：\nVERIFIED: 你实际做了哪些检查、看到了什么结果（写明命令或查看的文件）\nDONE: 总结"
-            + (last ? "\n没有通过时，直接说明还差什么，不要再写 ASSIGN。" : "\n发现问题时，用 ASSIGN 成员名: 修改内容 把修复派给成员，完成后会请你再次验收。");
+            + (last ? "\n没有通过时，说明还差什么，并用 ASSIGN 成员名: 修改内容 写出要做的修复。轮数已经用完，这些修复先保留，用户追加一轮后再派给成员。"
+                : "\n发现问题时，用 ASSIGN 成员名: 修改内容 把修复派给成员，完成后会请你再次验收。");
     }
     const string VerifyRemind = "【协作任务 · 领队验收】这次回答里没有找到验收证据。请在回答的最后写：\nVERIFIED: 你实际运行的检查和看到的结果\nDONE: 总结\n还有问题时，用 ASSIGN 成员名: 修改内容 安排修复。";
+    /// A member that handed in a note of progress (its turn ended while what it waits for still runs) is sent back.
+    public const string KeepAtIt = "【协作任务】你刚才交回的是进度说明，任务还没有完成，领队在等你的结果。请查看你在等的命令或测试的结果（需要时重新运行），把分派的任务做完，再交回实际改动、检查结果和结论。";
+    const int MostNudges = 2;
+    static readonly Regex Underway = new Regex(@"(正在|还在|仍在)(运行|执行|跑|等待|等|进行|测试|构建|编译)|待.{0,24}(返回|完成|结束|出来|跑完)后|等.{0,24}(结果|完成|结束|跑完|返回)(后|再)|稍后(回报|汇报|继续|再)|\b(still running|in progress|will (report|continue)|once (it|they|the \w+) (finish|complete)|waiting for)\b", RegexOptions.IgnoreCase);
+    /// Whether a member's answer is a note of progress, not a result: its last paragraph says that something still
+    /// runs or that it goes on once that ends. A result that ends otherwise is taken; the leader is told to send back
+    /// what slips by (LeaderFirst).
+    public static bool Progress(string said) {
+        var paragraphs = Regex.Split((said ?? "").Trim(), @"\n\s*\n");
+        string last = paragraphs[paragraphs.Length - 1];
+        return Underway.IsMatch(last.Length > 400 ? last.Substring(last.Length - 400) : last);
+    }
     public static string MemberTask(Team t, string task) {
         return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task
             + "\n\n项目目标供参考：" + t.Goal + "\n\n请只执行领队分派给你的任务。组队和分派由领队负责。完成后简要说明结果及改动。";
@@ -608,20 +629,24 @@ public sealed class Teams {
             team = items.FirstOrDefault(t => t.Id == id);
             if (team == null) throw new ArgumentException("没有找到这个协作任务");
             busy = team.Awaited.Select(role => team.Members.ContainsKey(role) ? team.Members[role] : "").Where(x => x.Length > 0).ToArray();
-            team.State = "stopped"; team.Note = "已停止"; team.Awaited.Clear();
+            team.State = "stopped"; team.Note = "已停止"; team.Awaited.Clear(); team.Spent = false; team.Held.Clear();
             Save();
         }
         foreach (string terminal in busy) try { hands.Stop(terminal); } catch (Exception) { }
         Tell();
     }
 
-    /// Goes on where it was cut: every member whose turn was awaited is told to go on.
+    /// Goes on where it was cut: every member whose turn was awaited is told to go on. Work whose rounds were spent
+    /// is given one more (`Extend`).
     public void Resume(string id) {
         Team team; List<KeyValuePair<string, string>> again;
         lock (gate) {
             team = items.FirstOrDefault(t => t.Id == id);
             if (team == null) throw new ArgumentException("没有找到这个协作任务");
             if (team.State != "paused") throw new InvalidOperationException("这个协作任务没有暂停");
+        }
+        if (team.Spent) { Extend(team, ""); return; }
+        lock (gate) {
             team.State = "running"; team.Note = "";
             again = team.Awaited.Select(role => new KeyValuePair<string, string>(role, team.Members.ContainsKey(role) ? team.Members[role] : null)).ToList();
             Save();
@@ -648,7 +673,8 @@ public sealed class Teams {
                 throw new InvalidOperationException("比稿方案已结束并清理工作区，请新建协作任务");
             state = team.State; phase = team.Phase; mode = team.Mode;
 
-            if (state == "running" || state == "paused") {
+            if (state == "paused" && team.Spent) { /* its rounds were spent: the words go with the round they add (Extend) */ }
+            else if (state == "running" || state == "paused") {
                 if (target.Length > 0) {
                     string resolved = ResolveRole(team, target);
                     if (resolved == null) throw new ArgumentException("没有找到这个成员");
@@ -694,6 +720,7 @@ public sealed class Teams {
         }
 
         Log(team, "user", (target.Length > 0 ? "@" + RoleLabel(team, ResolveRole(team, target) ?? target) + " " : "") + text);
+        if (state == "paused" && team.Spent) { Extend(team, text); return Of(id); }
 
         if (state == "running" || state == "paused") {
             string prefix = state == "running" ? "【用户插话】\n" : "【用户补充】\n";
@@ -1296,8 +1323,8 @@ public sealed class Teams {
         }
         bool? verdict = Verdict(said);
         if (verdict == true) { End(team, "done", "审查通过（第 " + team.Round + " 轮）"); return; }
-        // (rounds running out is no pass: it stops, and the owner can go on with it)
-        if (team.Round >= team.Rounds) { End(team, "stopped", "已到 " + team.Rounds + " 轮，最后一轮的审查意见没有处理，审查未通过"); return; }
+        // (rounds running out is no pass: it waits with the findings for its owner to add a round)
+        if (team.Round >= team.Rounds) { Hold(team, new Dictionary<string, string> { { "writer", said } }, "最后一轮的审查意见还没有处理，审查未通过"); return; }
         lock (gate) { team.Round++; Save(); }
         Ask(team, "writer", team.Tools[0], WriterAgain(team, said), false);
     }
@@ -1313,11 +1340,11 @@ public sealed class Teams {
             }
             var tasks = team.Roster.Length == 0 ? Assigned(said, LeadMembers(team)) : AssignRoster(team, said, !last);
             if (tasks.Count > 0) {
-                if (verifying && last) { End(team, "stopped", "已到 " + team.Rounds + " 轮，领队验收时仍要求修改，任务没有通过验收"); return; }
+                if (verifying && last) { Hold(team, tasks, "领队验收时仍要求修改，还没有通过验收"); return; }
                 lock (gate) {
                     if (verifying) team.Round++;
                     team.Phase = "";
-                    team.Reminded = false; team.Answers.Clear(); team.Awaited.Clear();
+                    team.Reminded = false; team.Answers.Clear(); team.Awaited.Clear(); team.Nudged.Clear();
                     foreach (string member in tasks.Keys) if (!team.Awaited.Contains(member)) team.Awaited.Add(member);
                     Save();
                 }
@@ -1334,7 +1361,7 @@ public sealed class Teams {
             }
             bool reminded; lock (gate) { reminded = team.Reminded; team.Reminded = true; Save(); }
             if (reminded) {
-                if (verifying && last) { End(team, "stopped", "已到 " + team.Rounds + " 轮，领队没有给出验收证据，任务没有通过验收"); return; }
+                if (verifying && last) { Hold(team, new Dictionary<string, string>(), "领队没有给出验收证据，还没有通过验收"); return; }
                 lock (gate) { team.State = "paused"; team.Note = verifying ? "领队没有给出验收证据：点“继续”再问它一次" : "领队没有分派任务，也没有结束：点“继续”再问它一次"; team.Awaited.Clear(); team.Awaited.Add("leader"); Save(); }
                 Tell();
                 return;
@@ -1342,6 +1369,7 @@ public sealed class Teams {
             Ask(team, "leader", team.Tools[0], verifying ? VerifyRemind : Remind, false);
             return;
         }
+        if (Progress(said) && Nudge(team, role)) return;
         Dictionary<string, string> answers = null;
         lock (gate) {
             team.Answers[role] = said;
@@ -1350,6 +1378,60 @@ public sealed class Teams {
             answers = new Dictionary<string, string>(team.Answers); team.Answers.Clear(); Save();
         }
         Collected(team, answers, true, "");
+    }
+    /// Sends a member back to finish (`KeepAtIt`), where it was not sent back too often in this round already.
+    bool Nudge(Team team, string role) {
+        string terminal; int times;
+        lock (gate) {
+            team.Nudged.TryGetValue(role, out times);
+            if (times >= MostNudges) return false;
+            team.Nudged[role] = times + 1;
+            team.Members.TryGetValue(role, out terminal);
+            team.Finishing.Remove(role);
+            if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
+            Save();
+        }
+        Log(team, "继续", RoleLabel(team, role) + " 交回的是进度说明，已请它做完再交回");
+        DeliverOrReopen(team, role, terminal, KeepAtIt);
+        return true;
+    }
+    /// The rounds are spent while the work still wants more (`why`): it waits for its owner with `held` kept, and
+    /// “继续” adds a round (`Extend`). Past the most rounds a task may have it stops, as no pass.
+    void Hold(Team team, Dictionary<string, string> held, string why) {
+        if (team.Round >= MaxTotalRounds) { End(team, "stopped", "已到 " + team.Rounds + " 轮，" + why); return; }
+        lock (gate) {
+            team.State = "paused"; team.Spent = true; team.Held = new Dictionary<string, string>(held);
+            team.Note = "已到 " + team.Rounds + " 轮，" + why + "：点“继续”追加一轮" + (held.Count > 0 ? "，保留的修改随后派出" : "");
+            team.Awaited.Clear();
+            foreach (string role in held.Count > 0 ? held.Keys.ToArray() : new[] { "leader" }) team.Awaited.Add(role);
+            Save();
+        }
+        Log(team, "结果", team.Note);
+        Tell();
+    }
+    /// One more round for work whose rounds were spent: what was kept goes out, with the owner's `words` where there
+    /// are any; with nothing kept the leader is asked to go on.
+    void Extend(Team team, string words) {
+        Dictionary<string, string> held;
+        lock (gate) {
+            if (!team.Spent) return;        // (given already)
+            team.Round++; team.Rounds = Math.Min(MaxTotalRounds, Math.Max(team.Rounds, team.Round));
+            team.State = "running"; team.Note = ""; team.Phase = ""; team.Last = false; team.Reminded = false; team.Spent = false;
+            team.Answers.Clear(); team.Awaited.Clear(); team.Nudged.Clear();
+            held = team.Held; team.Held = new Dictionary<string, string>();
+            if (held.Count == 0) held["leader"] = "";
+            foreach (string role in held.Keys) team.Awaited.Add(role);
+            Save();
+        }
+        Log(team, "继续", "追加第 " + team.Round + " 轮");
+        string added = words.Length > 0 ? "\n\n【用户补充】\n" + words : "";
+        foreach (var one in held) {
+            string prompt = one.Key == "writer" ? WriterAgain(team, one.Value)
+                : one.Key == "leader" ? "【协作任务 · 第 " + team.Round + " 轮】用户追加了一轮。请按上一轮验收的结论继续：用 ASSIGN 成员名: 修改内容 派出还要做的修复，或自己修好后写 DONE: 总结。"
+                : MemberTask(team, one.Value);
+            Ask(team, one.Key, ToolOf(team, one.Key), prompt + added, false);
+        }
+        Tell();
     }
     Dictionary<string, string> AssignRoster(Team team, string said, bool canAssign) {
         var tasks = new Dictionary<string, string>();

@@ -163,11 +163,14 @@ public static class TeamsCheck {
         before = made;
         teams.Turned(leader, "done", "还没好。\nASSIGN claude: 再改");
         team = Team(teams, capped);
-        Require(team.State == "stopped" && team.Note.Contains("没有通过验收") && made == before && !team.Awaited.Any(), "more work wanted when no round is left: stopped, nothing given out");
-        // the owner goes on with it: a new round, out of the acceptance
+        Require(team.State == "paused" && team.Spent && team.Note.Contains("已到 1 轮") && team.Note.Contains("继续") && made == before && team.Held["claude"] == "再改"
+            && team.Awaited.SequenceEqual(new[] { "claude" }), "more work wanted when no round is left: paused with the fix kept, nothing given out yet");
+        // the owner goes on with it, with words of their own: one more round, the kept fix goes out with them
+        string capClaude = team.Members["claude"];
         teams.Say(capped, "再给一轮，把剩下的改完");
         team = Team(teams, capped);
-        Require(team.State == "running" && team.Phase == "" && !team.Last && team.Rounds >= 2, "its owner goes on with it");
+        Require(team.State == "running" && team.Phase == "" && !team.Last && !team.Spent && team.Round == 2 && team.Rounds == 2 && team.Held.Count == 0
+            && Last(capClaude).Contains("再改") && Last(capClaude).Contains("再给一轮，把剩下的改完") && team.Awaited.SequenceEqual(new[] { "claude" }), "its owner goes on with it");
 
         // a leader that fails in the acceptance is followed by one that is told to accept
         string handed = "2424242424242424";
@@ -182,6 +185,47 @@ public static class TeamsCheck {
 
         // kept across a restart
         Require(new Teams(Path.Combine(Path.GetDirectoryName(file), "accepting.dat"), Hands()).All().Single(t => t.Id == capped).Phase == "", "the phase is kept");
+
+        // As it went on 2026-11-21: one round; Antigravity handed in a note of progress while its tests ran, the leader
+        // accepted too early and wanted fixes, and the task ended. Now the note sends it back, and the fixes wait.
+        string broke = "2525252525252525";
+        string brokeFile = Path.Combine(Path.GetDirectoryName(file), "broke.dat");
+        var breaking = new Teams(brokeFile, Hands());
+        breaking.Start(Lead(broke, new object[] { "codex", "claude", "agy" }, 1));
+        leader = Team(breaking, broke).Members["leader"];
+        breaking.Turned(leader, "done", "ASSIGN claude: 电脑端更新渠道\nASSIGN agy: 协作详情全屏，跑协作浏览器测试");
+        team = Team(breaking, broke);
+        string cc = team.Members["claude"], ag = team.Members["agy"];
+        breaking.Turned(cc, "done", "更新渠道做好了，已提交，测试通过。");
+        int toldLeader = told.Count(x => x[0] == leader);
+        breaking.Turned(ag, "done", "已改好详情页。\n\n正在运行协作浏览器测试（含全屏详情、状态刷新阅读保位），待结果返回后继续核对截图与断言。");
+        team = Team(breaking, broke);
+        Require(team.Phase == "" && team.Awaited.SequenceEqual(new[] { "agy" }) && Last(ag) == Teams.KeepAtIt && told.Count(x => x[0] == leader) == toldLeader
+            && team.Log.Any(x => x.Who == "继续" && x.Text.Contains("进度说明")), "a note of progress sends the member back; the leader is not asked yet");
+        breaking.Turned(ag, "done", "测试 14 项通过，详情页全屏，返回后回到原任务。");
+        team = Team(breaking, broke);
+        Require(team.Phase == "verify" && team.Last && Last(leader).Contains("测试 14 项通过") && Last(leader).Contains("更新渠道做好了") && !Last(leader).Contains("正在运行协作浏览器测试"),
+            "the result, not the note, goes to the acceptance");
+        breaking.Turned(leader, "done", "还差两项。\nASSIGN agy: 修刷新后阅读位置\nASSIGN claude: 补渠道切换的回归测试");
+        team = Team(breaking, broke);
+        Require(team.State == "paused" && team.Spent && team.Held.Count == 2 && team.Held["agy"] == "修刷新后阅读位置" && Last(ag).Contains("测试 14 项通过") == false && Last(ag) != "修刷新后阅读位置",
+            "the last acceptance wanting more pauses with the fixes kept, not an end");
+        // kept across a restart, and 继续 there adds the round and sends the fixes (the old conversations are gone: begun anew)
+        var after = Hands(); after.Say = (terminal, words) => { throw new InvalidOperationException("gone"); };
+        var reborn = new Teams(brokeFile, after);
+        Require(Team(reborn, broke).State == "paused" && Team(reborn, broke).Spent && Team(reborn, broke).Held["claude"] == "补渠道切换的回归测试", "what waits is kept across a restart");
+        reborn.Resume(broke);
+        team = Team(reborn, broke);
+        Require(team.State == "running" && team.Round == 2 && team.Rounds == 2 && team.Awaited.OrderBy(x => x).SequenceEqual(new[] { "agy", "claude" })
+            && Last(team.Members["agy"]).Contains("修刷新后阅读位置") && Last(team.Members["claude"]).Contains("补渠道切换的回归测试"), "继续 adds one round and sends what was kept");
+        // a member that keeps handing in notes is sent back twice in a round, then its words go to the leader as they are
+        Func<string> agyNow = () => Team(reborn, broke).Members["agy"];      // (each word to it begins it anew here)
+        reborn.Turned(team.Members["claude"], "done", "回归测试已补，通过。");
+        for (int i = 0; i < 2; i++) { reborn.Turned(agyNow(), "done", "还在跑测试，稍后回报。"); Require(Team(reborn, broke).Phase == "" && Last(agyNow()).Contains(Teams.KeepAtIt), "sent back, time " + (i + 1)); }
+        reborn.Turned(agyNow(), "done", "还在跑测试，稍后回报。");
+        Require(Team(reborn, broke).Phase == "verify" && Last(Team(reborn, broke).Members["leader"]).Contains("还在跑测试"), "the third note goes to the leader, who decides (begun anew after the restart)");
+        Require(!Teams.Progress("改好了。测试全部通过。") && !Teams.Progress("正在运行的测试已全部通过。\n\n改动：teams.js") && Teams.Progress("Tests are still running; I will report back once they finish."),
+            "a result is a result; a note of progress in either language is one");
     }
 
     /// The model each tool's members are begun with: given with the task and with a swap, used for every
@@ -320,7 +364,11 @@ public static class TeamsCheck {
             string writer = Team(teams, spent).Members["writer"];
             teams.Turned(writer, "done", "写好了");
             teams.Turned(Team(teams, spent).Members["reviewer"], "done", "REVIEW: CHANGES\n还不行");
-            Require(Team(teams, spent).State == "stopped" && Team(teams, spent).Note.Contains("已到 1 轮") && Team(teams, spent).Note.Contains("未通过"), "no more rounds than were set, and that is no pass");
+            Require(Team(teams, spent).State == "paused" && Team(teams, spent).Note.Contains("已到 1 轮") && Team(teams, spent).Note.Contains("未通过") && Team(teams, spent).Held["writer"].Contains("还不行"),
+                "no more rounds than were set, and that is no pass: the findings wait for another round");
+            teams.Resume(spent);
+            Require(Team(teams, spent).State == "running" && Team(teams, spent).Round == 2 && Last(writer).Contains("还不行") && Last(writer).Contains("第 2 轮"), "继续: the writer gets the findings in a round added");
+            teams.Stop(spent);
 
             // ---- 领队: tasks go out at once, the results go back when every member has answered, until it says DONE
             string lead = "d4d4d4d4d4d4d4d4";
@@ -453,7 +501,7 @@ public static class TeamsCheck {
             failTeams.Turned(lf2Leader, "done", "ASSIGN agy: 修日志格式");
             failTeams.Turned(Team(failTeams, lf2).Members["agy"], "done", "日志修好了");
             lf2t = Team(failTeams, lf2);
-            Require(lf2t.State == "running" && lf2t.Phase == "verify" && lf2t.Last && Last(lf2Leader).Contains("日志修好了") && Last(lf2Leader).Contains("最后一轮") && Last(lf2Leader).Contains("不要再写 ASSIGN"),
+            Require(lf2t.State == "running" && lf2t.Phase == "verify" && lf2t.Last && Last(lf2Leader).Contains("日志修好了") && Last(lf2Leader).Contains("最后一轮") && Last(lf2Leader).Contains("用户追加一轮后再派给成员"),
                 "the rounds are spent: the results go to the leader for a last acceptance, not to an end");
             failTeams.Turned(lf2Leader, "done", "VERIFIED: 运行 python log_check.py，输出的时间格式正确\nDONE: 日志格式已修好");
             Require(Team(failTeams, lf2).State == "done", "auto-added backup completes work");
