@@ -162,15 +162,15 @@ class TerminalRelayTests(unittest.TestCase):
 
     def test_codex_billing_keeps_only_declared_fields(self):
         self.info["quotas"] = [
-            {"tool": "codex", "at": 1001, "billing": {"type": "api", "key": "private", "balance": "50"}},
+            {"tool": "codex", "at": 1001, "billing": {"type": "api", "key": "private", "balance": "0", "unit": "USD"}},
             {"tool": "codex", "at": 1002, "billing": {"type": "credits", "balance": "0.5", "email": "private"}},
-            {"tool": "codex", "at": 1003, "billing": {"type": "credits", "balance": "NaN"}},
+            {"tool": "codex", "at": 1003, "billing": {"type": "api", "balance": "NaN", "unit": "USD"}},
             {"tool": "claude", "at": 1004, "billing": {"type": "credits", "balance": "10"}},
         ]
         self.relay.agent({"info": self.info}, now=1001)
         quotas = self.relay.overview(now=1002)["device"]["quotas"]
         self.assertEqual([q.get("billing") for q in quotas],
-                         [{"type": "api"}, {"type": "credits", "balance": "0.5"}, None, None])
+                         [{"type": "api", "balance": "0", "unit": "USD"}, {"type": "credits", "balance": "0.5"}, {"type": "api"}, None])
 
     def test_fresh_start_never_becomes_anonymous_resume(self):
         payload = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": True}

@@ -106,7 +106,8 @@
     const lines = [];
     known.forEach(q => {
       const line = (title, detail) => el('li', null, el('div', { className: 'line' }, el('b', { textContent: title }), el('span', { textContent: detail })));
-      if (q.billing?.type === 'api') lines.push(line('Codex · API 余额', '请在服务商后台查看'));
+      if (q.billing?.type === 'api') lines.push(line('Codex · API 余额',
+        q.billing.balance && q.billing.unit ? q.billing.balance + ' ' + q.billing.unit : '暂未读到余额'));
       if (q.billing?.type === 'credits') lines.push(line('Codex · 额外额度', q.billing.unlimited ? '不限量' : q.billing.balance + ' 点'));
       if (q.why && !q.windows.length) lines.push(line(TOOLS[q.tool] || q.tool, q.why));
       const main = q.windows.filter(w => !w.group), extra = main.length ? q.windows.filter(w => w.group) : [];

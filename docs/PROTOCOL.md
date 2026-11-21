@@ -102,8 +102,12 @@ If unavailable, it can use the chat's `rate_limit_event` or its status line. The
 the computer's status line and is restored when the computer removes its hook. Every ten minutes at most, the computer
 asks the Codex app-server for `account/read` and `account/rateLimits/read`. Where the selected provider does not use
 OpenAI login, it inspects `config/read` locally to distinguish an external API from a local runtime. A Codex reading
-may include `billing`. `{"type":"api"}` identifies API billing. `{"type":"credits","balance":"12.5"}` or
+may include `billing`. `{"type":"api","balance":"12.5","unit":"USD"}` reports the balance and unit from a compatible
+provider. Windows makes a read-only HTTPS `GET` to `<base_url>/usage` with the selected provider's configured bearer
+credential and parses `balance` (or `remaining`) and `unit`. The query discards redirects. `{"type":"api"}` alone
+identifies API billing when a numeric balance is unavailable. `{"type":"credits","balance":"12.5"}` or
 `{"type":"credits","unlimited":true}` describes extra Codex credits reported with the ChatGPT rate limits.
+The `/usage` convention is also used by [Cockpit Tools 1.4.2](https://github.com/jlcodes99/cockpit-tools/blob/v1.4.2/src-tauri/src/commands/codex_model_provider_commands.rs).
 Antigravity CLI is asked by
 `agy -p /usage --output-format json` (with `AGY_CLI_DISABLE_AUTO_UPDATE=true`) at most every ten minutes, reporting the
 Gemini/Neon group as the primary pool (`five_hour`, `seven_day`) and other model groups with `group`. The relay keeps

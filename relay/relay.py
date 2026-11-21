@@ -120,10 +120,14 @@ def _quotas(items):
         reading = {"tool": item["tool"], "at": item["at"], "why": str(item.get("why") or "")[:80], "windows": windows}
         billing = item.get("billing")
         if item["tool"] == "codex" and isinstance(billing, dict):
+            balance = billing.get("balance")
             if billing.get("type") == "api":
                 reading["billing"] = {"type": "api"}
+                unit = billing.get("unit")
+                if (isinstance(balance, str) and len(balance) <= 32 and re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", balance)
+                        and isinstance(unit, str) and re.fullmatch(r"(?:[A-Z]{2,8}|%)", unit)):
+                    reading["billing"].update(balance=balance, unit=unit)
             elif billing.get("type") == "credits":
-                balance = billing.get("balance")
                 if billing.get("unlimited") is True:
                     reading["billing"] = {"type": "credits", "unlimited": True}
                 elif isinstance(balance, str) and len(balance) <= 24 and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", balance):

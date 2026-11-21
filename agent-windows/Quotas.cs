@@ -172,9 +172,9 @@ public sealed class Quotas {
         return windows;
     }
 
-    public void NoteCodex(object limits, string login = "") {
+    public void NoteCodex(object limits, string login = "", Dictionary<string, object> apiBalance = null) {
         if (login == "apiKey") {
-            Write("codex", new Window[0], "", new Dictionary<string, object> { { "type", "api" } });
+            Write("codex", new Window[0], "", apiBalance ?? new Dictionary<string, object> { { "type", "api" } });
             return;
         }
         if (limits == null) {
@@ -395,7 +395,7 @@ public sealed class Quotas {
         }
         return null;
     }
-    void AskCodexNow(string launcher) {
+    internal void AskCodexNow(string launcher) {
         var info = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false) };
         if (launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)) { info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"); info.Arguments = "/d /s /c \"\"" + launcher + "\" app-server\""; }
         else { info.FileName = launcher; info.Arguments = "app-server"; }
@@ -413,6 +413,7 @@ public sealed class Quotas {
                 bool accountRead = false, limitsRead = false, providerRead = true, externalProvider = false;
                 string login = "";
                 object limits = null;
+                CodexApiBalance balanceQuery = null;
                 while (DateTime.UtcNow < until) {
                     if (!read.Wait(until - DateTime.UtcNow)) break;
                     string line = read.Result; if (line == null) break;
@@ -423,7 +424,7 @@ public sealed class Quotas {
                         case "2":
                             accountRead = true;
                             login = Convert.ToString(At(At(result, "account"), "type"));
-                            if (login.Length == 0 && Object.Equals(At(result, "requiresOpenaiAuth"), false)) {
+                            if (login == "apiKey" || (login.Length == 0 && Object.Equals(At(result, "requiresOpenaiAuth"), false))) {
                                 providerRead = false;
                                 send("{\"id\":4,\"method\":\"config/read\",\"params\":{\"includeLayers\":false}}");
                             }
@@ -433,16 +434,23 @@ public sealed class Quotas {
                             providerRead = true;
                             var config = At(result, "config");
                             string provider = Convert.ToString(At(config, "model_provider"));
+                            var providerConfig = At(At(config, "model_providers"), provider);
                             Uri endpoint;
-                            externalProvider = Uri.TryCreate(Convert.ToString(At(At(At(config, "model_providers"), provider), "base_url")), UriKind.Absolute, out endpoint)
+                            externalProvider = Uri.TryCreate(Convert.ToString(At(providerConfig, "base_url")), UriKind.Absolute, out endpoint)
                                 && (endpoint.Scheme == Uri.UriSchemeHttps || endpoint.Scheme == Uri.UriSchemeHttp) && !endpoint.IsLoopback;
+                            if (externalProvider && provider != "openai") {
+                                string keyName = At(providerConfig, "env_key") as string;
+                                string key = String.IsNullOrEmpty(keyName) ? null : Environment.GetEnvironmentVariable(keyName);
+                                if (String.IsNullOrWhiteSpace(key)) key = At(providerConfig, "experimental_bearer_token") as string;
+                                balanceQuery = new CodexApiBalance(endpoint, key);
+                            }
                             break;
                     }
                     if (accountRead && limitsRead && providerRead) break;
                     read = program.StandardOutput.ReadLineAsync();
                 }
                 if (login.Length == 0 && externalProvider) login = "apiKey";
-                if (accountRead || limitsRead) NoteCodex(limits, login);
+                if (accountRead || limitsRead) NoteCodex(limits, login, login == "apiKey" && balanceQuery != null ? balanceQuery.Read() : null);
             } finally { try { if (!program.HasExited) program.Kill(); } catch { } }
         }
     }

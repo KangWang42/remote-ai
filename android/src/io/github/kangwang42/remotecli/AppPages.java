@@ -64,7 +64,7 @@ final class AppPages {
         head.addView(kit.semibold("额度", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         quotaCard.addView(head);
         for (QuotaLines.Reading one : shown) {
-            if ("api".equals(one.billingType)) quotaLine(quotaCard, "Codex · API 余额", "请在服务商后台查看", kit.MUTED, -1);
+            if ("api".equals(one.billingType)) quotaLine(quotaCard, "Codex · API 余额", one.balance.isEmpty() ? "暂未读到余额" : one.balance, kit.MUTED, -1);
             if ("credits".equals(one.billingType)) quotaLine(quotaCard, "Codex · 额外额度", one.balance, kit.MUTED, -1);
             if (one.windows.isEmpty() && !one.why.isEmpty()) quotaLine(quotaCard, QuotaLines.tool(one.tool), one.why, kit.MUTED, -1);
             for (QuotaLines.Window w : QuotaLines.primary(one)) {

@@ -82,6 +82,13 @@ public static class QuotasCheck {
             codexReport = quotas.Report().Cast<Dictionary<string, object>>().Single(item => (string)item["tool"] == "codex");
             billing = (Dictionary<string, object>)codexReport["billing"];
             Require((string)billing["type"] == "api" && !billing.ContainsKey("balance") && quotas.Of("codex").Length == 0, "API billing has no inferred balance or cached subscription windows");
+            var apiBalance = CodexApiBalance.Parse("{\"balance\":0,\"remaining\":4,\"unit\":\"usd\",\"key\":\"private\"}");
+            quotas.NoteCodex(null, "apiKey", apiBalance);
+            codexReport = quotas.Report().Cast<Dictionary<string, object>>().Single(item => (string)item["tool"] == "codex");
+            billing = (Dictionary<string, object>)codexReport["billing"];
+            Require((string)billing["balance"] == "0" && (string)billing["unit"] == "USD" && billing.Count == 3, "API balance preserves zero and excludes everything but amount and unit");
+            Require((string)CodexApiBalance.Parse("{\"remaining\":\"-1.5\",\"unit\":\"USD\"}")["balance"] == "-1.5", "use remaining when balance is absent");
+            Require(CodexApiBalance.Parse("{\"balance\":12}") == null && CodexApiBalance.Parse("{\"balance\":true,\"unit\":\"USD\"}") == null, "reject missing unit and non-numeric amount");
 
             string claudeOk = Path.Combine(folder, "fake-claude.cmd");
             string claudeJson = Path.Combine(folder, "fake-claude.json");

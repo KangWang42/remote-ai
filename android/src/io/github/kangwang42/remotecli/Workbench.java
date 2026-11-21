@@ -541,7 +541,13 @@ final class Workbench {
             }
             JSONObject billing = one.optJSONObject("billing");
             String billingType = billing == null ? "" : billing.optString("type");
-            String balance = billing == null ? "" : billing.optBoolean("unlimited") ? "不限量" : billing.optString("balance") + " 点";
+            String balance = "";
+            if ("api".equals(billingType)) {
+                String amount = billing.optString("balance"), unit = billing.optString("unit");
+                if (!amount.isEmpty() && !unit.isEmpty()) balance = amount + " " + unit;
+            } else if ("credits".equals(billingType)) {
+                balance = billing.optBoolean("unlimited") ? "不限量" : billing.optString("balance") + " 点";
+            }
             read.quotas.add(new QuotaLines.Reading(one.optString("tool"), one.optLong("at"), one.optString("why"), windows, billingType, balance));
         }
         return read;
