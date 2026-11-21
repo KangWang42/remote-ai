@@ -55,10 +55,10 @@
 
 /* ---- one file */
 #file { margin: 4px -16px 0; }
-#tabs { display: flex; gap: 4px; margin: 0 12px 10px; padding: 4px; border-radius: 14px; background: var(--panel); overflow-x: auto; scrollbar-width: none; }
-#tabs::-webkit-scrollbar { display: none; }
-#tabs button { flex: 1 0 auto; min-height: 36px; padding: 0 16px; border-radius: 10px; color: var(--muted); font-size: .88rem; white-space: nowrap; }
-#tabs button[aria-selected="true"] { background: var(--bg); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+#views { display: flex; gap: 4px; margin: 0 12px 10px; padding: 4px; border-radius: 14px; background: var(--panel); overflow-x: auto; scrollbar-width: none; }
+#views::-webkit-scrollbar { display: none; }
+#views button { flex: 1 0 auto; min-height: 36px; padding: 0 16px; border-radius: 10px; color: var(--muted); font-size: .88rem; white-space: nowrap; }
+#views button[aria-selected="true"] { background: var(--bg); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
 .wide { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 /* code: line numbers beside the lines; long lines are moved sideways, or folded when asked */

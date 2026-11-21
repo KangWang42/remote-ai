@@ -405,6 +405,14 @@ def main():
                 ask("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=1, mobile=True)
                 for kind, path in sorted(made.items()):
                     shot(view(path), kind + ".png", drawn[kind], seconds=60 if kind in ("word", "slides") else 20)
+                # The bar of views (预览 / 源码) stays above the file and takes presses: the dock of the app's own pages
+                # (#tabs in app.css) is not it.
+                shot(view(made["markdown"]), "markdown.png", drawn["markdown"])
+                bar = ask("Runtime.evaluate", expression="(s => [s.position, s.pointerEvents])(getComputedStyle(document.getElementById('views')))", returnByValue=True)["result"]["value"]
+                assert bar[0] != "fixed" and bar[1] != "none", bar
+                ask("Runtime.evaluate", expression="[...document.querySelectorAll('#views button')].find(b => b.textContent === '源码').click()")
+                time.sleep(.6)
+                assert ask("Runtime.evaluate", expression="!!document.querySelector('#view .code') && !document.querySelector('#view .doc h1')", returnByValue=True)["result"]["value"], "源码 shows the source"
                 shot(view(made["code"]), "code.png", drawn["code"])
                 menu("file-menu.png", ["复制路径", "长行自动换行", "回到项目"])
                 ask("Runtime.evaluate", expression="history.back()")

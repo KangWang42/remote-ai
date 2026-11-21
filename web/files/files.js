@@ -211,7 +211,7 @@
     nav.scrollLeft = nav.scrollWidth;
   }
   async function showFolder(mine) {
-    $('file').hidden = true; $('folder').hidden = false; $('tabs').hidden = true;
+    $('file').hidden = true; $('folder').hidden = false; $('views').hidden = true;
     $('heading').textContent = place.path ? place.path.split('/').pop() : dir;
     document.title = $('heading').textContent + ' · 文件';
     crumbs();
@@ -351,7 +351,7 @@
     return box;
   }
   function tabs(list, start) {
-    const bar = $('tabs');
+    const bar = $('views');
     bar.hidden = list.filter(t => t.label).length < 2;
     const pick = async at => {
       Array.from(bar.children).forEach((b, n) => b.setAttribute('aria-selected', String(n === at)));
@@ -363,7 +363,7 @@
   }
   async function showFile(mine) {
     const path = join(place.path, place.file), kind = K.kind(place.file);
-    $('folder').hidden = true; $('file').hidden = false; $('tabs').hidden = true;
+    $('folder').hidden = true; $('file').hidden = false; $('views').hidden = true;
     $('view').textContent = ''; $('loading').hidden = false;
     $('heading').textContent = place.file; $('where').textContent = '';
     document.title = place.file + ' · 文件';
