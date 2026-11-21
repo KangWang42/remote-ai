@@ -77,7 +77,7 @@ python tests\e2e_windows.py
 node tests\bridge_check.js                                # 传输选择、连接状态、延迟测量、连续输入和断线重试
 node tests\terminal_scroll_check.js                       # 拖动、惯性、起滑不跳动、画面跟随手指（两侧都有内容、网络停顿时的跟随、滑到列表尽头不漂移）、固定行的识别、只在终端重画时复制画面、滑动图层中途丢失时退回按行滚动、Codex 普通/全屏模式、Claude Code 的滚轮配速、鼠标编码、回到最新和程序自己的回到末尾提示的识别、提示所在行由上面的内容补上
 python tests\fullscreen_check.py <chrome.exe>             # 占满屏幕的程序：触摸拖动逐行滚动；滑动时屏幕截图与静止时的终端画面逐像素比对（每一行都在应在的位置，没有遮挡），移动图层时不重画；手机给不出滑动图层、图层中途丢失或复制画面过慢时退回按行滚动；手指点“回到最新”回到末尾，程序自己在画面上给出回到末尾的提示时（Claude Code 的 Jump to bottom）上面的内容下移一行盖住它，不留空行，没有滑动图层时才只盖住这一行，按钮按程序的方式回去；长时间运行后重新打开只读最近的输出且画面完整。真实的中转和电脑端，Codex 用替身程序；屏幕密度按手机取 2.625（`RCLI_TEST_DENSITY` 可改）；读截图需要 Pillow
-python tests\phone_line_check.py [chrome.exe [输出文件夹]]  # 手机上切换线路和更改设置：新线路在原线路旁准备好，交接后手机到达才保留，没到则回到原线路；隧道、局域网、中转互相切换；带浏览器时在页面上实际点按，并从列表给终端发一条指令。先运行 tools\package_windows.py
+python tests\phone_line_check.py [chrome.exe [输出文件夹]]  # 手机切换隧道、局域网和中转；验证到达确认、超时回退及旧进程退出。局域网使用系统分配的回环端口，隧道由测试程序模拟。带浏览器时还验证页面点按。先运行 tools\package_windows.py
 node tests\session_state_check.js                         # 运行中的会话与保留的写入锁分开显示
 python tests\android_aggregate_check.py --jdk <JDK 目录>  # 工作台的分组、排序、状态和刷新判定；按“等你确认、正在运行、已打开、置顶记录、最近”分段、搜索、按工具和运行位置筛选、未加入项目的对话
 python tests\workbench_ui_check.py                         # 工作台默认折叠、最近两条和标题可读性

@@ -14,7 +14,7 @@ With Chrome, the pages are then used as on a phone: a message is said to a runni
 going into it, and on the page of the computer's settings a setting and the line are changed by pressing them.
 
 Nothing is opened to the network: the relays listen on this computer, a stand-in takes the place of cloudflared, and
-REMOTECLI_LAN makes "the local network" this computer too. Uses temporary data folders and ports 8746 to 8750.
+REMOTECLI_LAN makes "the local network" this computer too. Uses temporary data folders and loopback ports.
 
     python tests/phone_line_check.py [chrome.exe [folder for the pictures]]
 """
@@ -35,7 +35,7 @@ from ws_client import Socket
 
 ROOT = Path(__file__).resolve().parents[1]
 STAGE = ROOT / ".build" / "windows" / "stage"
-LOCAL, FIRST, SECOND, EARLIER, DEBUG = 8746, 8747, 8748, 8749, 8750
+FIRST, SECOND, EARLIER, DEBUG = 8747, 8748, 8749, 8750
 TRIAL = 8           # seconds the phone is given to arrive (REMOTECLI_TRIAL)
 STANDIN = "https://remote-cli-standin.trycloudflare.com"
 hidden = {"creationflags": subprocess.CREATE_NO_WINDOW}
@@ -231,6 +231,9 @@ def pages(chrome, out, folder, first, addresses, config):
 
 
 def main():
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        local_port = available.getsockname()[1]
     compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
     with tempfile.TemporaryDirectory(prefix="remote-cli-phone-line-", ignore_cleanup_errors=True) as folder:
         folder = Path(folder)
@@ -259,12 +262,12 @@ def main():
         program = None
         try:
             until(lambda: all(listening(port) for port in passwords), "the relays")
-            (data / "config.json").write_text(json.dumps({"Mode": "cloud", "Port": LOCAL, "RemoteEnabled": True, "RemoteDirs": ["demo=" + str(work)]}), encoding="utf-8")
+            (data / "config.json").write_text(json.dumps({"Mode": "cloud", "Port": local_port, "RemoteEnabled": True, "RemoteDirs": ["demo=" + str(work)]}), encoding="utf-8")
             subprocess.run([str(STAGE / "RemoteCliAgent.exe"), "--set-password", str(data)], input=local_password.encode(), check=True, **hidden)
             # the three relays are added at the computer, as its owner does; the last one added is the one in use
             for port in (EARLIER, SECOND, FIRST):
                 subprocess.run([str(STAGE / "RemoteCli.exe"), "--screenshot", str(folder / "added.png"), "0", "own", origin(port), passwords[port]], env=environment, cwd=str(STAGE), check=True, timeout=120)
-                until(lambda: not listening(LOCAL), "the program's relay to go with it", 15)
+                until(lambda: not listening(local_port), "the program's relay to go with it", 15)
             config = lambda: json.loads((data / "config.json").read_text(encoding="utf-8-sig"))
             assert (config()["Mode"], config()["OwnServer"]) == ("own", origin(FIRST)), config()
 
@@ -296,7 +299,7 @@ def main():
             for name, value in (("rights", "everything"), ("port", "9000"), ("update", "yes"), ("wait", "7"), ("wait", "forever"), ("wait", True)):
                 assert "没有这项设置" in first.ask("settings_change", name=name, value=value), (name, value)
             assert config()["ReachWait"] == 0 and first.ask("settings_change", name="wait", value="300")["settings"]["wait"] == "300"
-            assert config()["Port"] == LOCAL and config()["RemoteMaxMode"] == "read"
+            assert config()["Port"] == local_port and config()["RemoteMaxMode"] == "read"
 
             def turn(phone, to, expect_address, twice=False):
                 """Asks for the line, waits until it is ready and takes it; returns what the phone is handed."""
@@ -304,7 +307,15 @@ def main():
                 assert isinstance(asked, dict) and asked["change"]["state"] in ("preparing", "ready") and asked["change"]["to"] == to, asked
                 if twice:
                     assert "正在切换" in phone.ask("line_switch", to="lan")        # one change at a time
-                until(lambda: (lambda said: isinstance(said, dict) and said["change"]["state"] == "ready")(phone.ask("settings_read")), "the line to be ready")
+                def ready():
+                    said = phone.ask("settings_read")
+                    if not isinstance(said, dict):
+                        return False
+                    change = said["change"]
+                    if change["state"] == "failed":
+                        raise AssertionError("line preparation failed: " + change["note"])
+                    return change["state"] == "ready"
+                until(ready, "the line to be ready")
                 handed = phone.ask("line_take")
                 assert isinstance(handed, dict) and handed["address"] == expect_address and handed["seconds"] == TRIAL and len(handed["key"]) == 32 and handed["ticket"], handed
                 return handed
@@ -339,23 +350,23 @@ def main():
             assert config()["OwnServer"] == origin(SECOND) and config()["Server"] == origin(SECOND), config()
 
             # ---- to the tunnel: the program's own relay and the tunnel are started beside the relay in use
-            assert not listening(LOCAL)
+            assert not listening(local_port)
             handed = turn(second, "cloud", STANDIN)
-            local = Phone(origin(LOCAL))
+            local = Phone(origin(local_port))
             assert local.sign_in(ticket=handed["ticket"]) and isinstance(local.about(), dict)
             kept = local.ask("line_keep", key=handed["key"])
             assert [line["id"] for line in kept["lines"] if line["current"]] == ["cloud"] and config()["Mode"] == "cloud", kept
-            tunnels = lambda: subprocess.run(["tasklist", "/FI", "IMAGENAME eq cloudflared.exe", "/FO", "CSV", "/NH"], capture_output=True, text=True, **hidden).stdout.count("cloudflared.exe")
+            tunnels = lambda: subprocess.run(["tasklist", "/FI", "IMAGENAME eq cloudflared.exe", "/FO", "CSV", "/NH"], capture_output=True, check=True, **hidden).stdout.count(b'"cloudflared.exe"')
             assert tunnels() >= 1
 
             # ---- from the tunnel to the local network and not arriving: the tunnel was never ended, the relay listens as before
             before = tunnels()
-            turn(local, "lan", origin(LOCAL))
+            turn(local, "lan", origin(local_port))
             back = until(lambda: (lambda said: isinstance(said, dict) and said["change"]["state"] == "failed" and said)(local.ask("settings_read")), "the return", TRIAL + 40)
             assert [line["id"] for line in back["lines"] if line["current"]] == ["cloud"] and config()["Mode"] == "cloud" and tunnels() == before, back
 
             # ---- the same, arriving: the phone stays signed in through the relay's new start, and the tunnel is ended
-            handed = turn(local, "lan", origin(LOCAL))
+            handed = turn(local, "lan", origin(local_port))
             kept = until(lambda: (lambda said: isinstance(said, dict) and said)(local.ask("line_keep", key=handed["key"])), "the program to keep the line")
             assert [line["id"] for line in kept["lines"] if line["current"]] == ["lan"] and config()["Mode"] == "lan", kept
             until(lambda: tunnels() == before - 1, "the tunnel to end", 20)
@@ -372,7 +383,7 @@ def main():
             handed = turn(local, by_port[FIRST], origin(FIRST))
             assert first.sign_in(ticket=handed["ticket"]) and isinstance(first.about(), dict)
             assert [line["id"] for line in first.ask("line_keep", key=handed["key"])["lines"] if line["current"]] == [by_port[FIRST]]
-            until(lambda: not listening(LOCAL), "the program's own relay to end", 20)
+            until(lambda: not listening(local_port), "the program's own relay to end", 20)
             assert (config()["Mode"], config()["OwnServer"]) == ("own", origin(FIRST)), config()
             until(lambda: tunnels() == before - 1, "the tunnel to end", 20)
             if len(sys.argv) > 1:

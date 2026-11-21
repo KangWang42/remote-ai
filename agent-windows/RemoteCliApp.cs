@@ -290,16 +290,16 @@ public sealed partial class App : Form {
             if (!File.Exists(Python)) { Say("安装不完整：缺少 " + Python, true); return; }
             int port = Port;
             if (Listening(port)) { Say("端口 " + port + " 已被别的程序占用，请到“设置”里换一个端口", true); return; }
+            string ip = mode == "lan" ? LanAddress() : "";
+            if (mode == "lan" && ip.Length == 0) { Say("未找到局域网地址，请先连接 Wi-Fi 或网线", true); return; }
             relay = StartRelay(mode == "lan", port, password);
             Remember();
             bool up = await Up(relay, port);
             if (mine != generation) return;
-            if (!up) { Say("本机服务没有启动成功", true); return; }
+            if (!up) { StopChildren(); Say("本机服务没有启动成功", true); return; }
             Keep("Server", "http://127.0.0.1:" + port);
             if (agent != null) agent.Reset();
             if (mode == "lan") {
-                string ip = LanAddress();
-                if (ip.Length == 0) { Say("未找到局域网地址，请先连接 Wi-Fi 或网线", true); return; }
                 ShowAddress("http://" + ip + ":" + port);
                 Say("局域网直连已就绪，用 App 扫码。连接失败可点“连接诊断”");
                 return;
@@ -321,11 +321,20 @@ public sealed partial class App : Form {
             Remember();
             string url = await given;
             if (mine != generation) return;
-            if (url.Length == 0) { Kill(tunnel); Say("公网隧道没有建立成功，请检查网络后重试", true); return; }
+            if (url.Length == 0) {
+                tunnel.Exited -= lost;
+                StopChildren();
+                Say("公网隧道没有建立成功，请检查网络后重试", true);
+                return;
+            }
             Keep(url, port);
             ShowAddress(url);
             Say("公网隧道已就绪。手机在任何网络下用 App 扫码；更新程序后地址不变");
-        } catch (Exception error) { Say("启动失败：" + error.Message, true); }
+        } catch (Exception error) {
+            if (mine != generation) return;
+            if (mode == "lan" || mode == "cloud") StopChildren();
+            Say("启动失败：" + error.Message, true);
+        }
         finally { if (held != null && held != tunnel) Kill(held); }
     }
     void Reconnect() { Task.Run(() => Connect()); }
