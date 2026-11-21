@@ -1742,10 +1742,15 @@ public sealed class TerminalAgent {
                     lastInput = DateTime.UtcNow;
                     if (action == "say") {
                         string text = Get(op, "text").Trim();
-                        if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("\u6d88\u606f\u9700\u4e3a 1 \u81f3 8000 \u5b57");
-                        string folder;
-                        if (!AllDirs(prefs).TryGetValue(live.Dir, out folder)) throw new ArgumentException("\u76ee\u5f55\u672a\u88ab\u5141\u8bb8");
-                        var attachments = Attachments.Read(folder, op.ContainsKey("attachments") ? op["attachments"] : null);
+                        object paths;
+                        IList<Attachment> attachments = null;
+                        if (op.TryGetValue("attachments", out paths) && paths != null) {
+                            string folder;
+                            if (!AllDirs(prefs).TryGetValue(live.Dir, out folder)) throw new ArgumentException("目录未被允许");
+                            attachments = Attachments.Read(folder, paths);
+                        }
+                        if ((text.Length == 0 && (attachments == null || attachments.Count == 0)) || text.Length > 8000)
+                            throw new ArgumentException("请输入文字或添加图片，文字最多 8000 字");
                         live.Chat.Say(text, id, attachments);
                     }
                     else if (action == "stop") live.Chat.Stop();

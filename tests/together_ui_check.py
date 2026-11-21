@@ -3,7 +3,9 @@
     python tests/together_ui_check.py <chrome.exe> <evidence directory>
 """
 import http.client
+import base64
 import json
+import re
 import secrets
 import sys
 import tempfile
@@ -47,6 +49,8 @@ class Controlled(pictures.Played):
     team_cards = []
     extra_terminals = []
     extra_session_teams = {}
+    refuse_upload = ""
+    PROJECT = "D:\\work\\web-shop"
 
     def __init__(self, temporary):
         super().__init__(temporary)
@@ -54,9 +58,11 @@ class Controlled(pictures.Played):
         base_work = self.relay.work
         played = self
 
+        self.files, self.uploads = {}, {}
+
         def overview_with_teams(*args, **kwargs):
             data = base_overview(*args, **kwargs)
-            for feat in ("teams-models", "teams-roster", "teams-effort", "teams-flex-rounds"):
+            for feat in ("teams-models", "teams-roster", "teams-effort", "teams-flex-rounds", "attachments"):
                 if feat in played.info.get("features", []) and feat not in data["device"]["features"]:
                     data["device"]["features"] = list(data["device"]["features"]) + [feat]
             if played.team_cards:
@@ -114,6 +120,13 @@ class Controlled(pictures.Played):
                                 one["efforts"] = efforts
                 played.asked.append({"action": "work_team_start_models", "item": raw_item})
                 return res
+            if action == "team_say" and "attachments" in payload:
+                # the computer names each picture after the words, in a line of its own
+                played.asked.append({"action": "work_team_say_attachments", "payload": dict(payload)})
+                team = next(t for t in played.teams if t["id"] == payload["team"])
+                lines = ([payload["text"]] if payload["text"] else []) + ["附图：" + played.PROJECT + "\\" + path.replace("/", "\\") for path in payload["attachments"]]
+                team["log"].append({"at": int(time.time() * 1000), "who": "user", "text": "\n".join(lines)})
+                return {"team": team}
             if action == "team_say":
                 target_team = next((t for t in played.teams if t["id"] == payload.get("team") and t.get("roster")), None)
                 if target_team is not None:
@@ -163,6 +176,43 @@ class Controlled(pictures.Played):
             return orig_get(handler)
 
         self.server.RequestHandlerClass.do_GET = get_with_chat_poll
+        orig_post = self.server.RequestHandlerClass.do_POST
+
+        def post_with_files(handler):
+            if handler.path != "/api/files":
+                return orig_post(handler)
+            payload = json.loads(handler.rfile.read(int(handler.headers["Content-Length"])))
+            played.asked.append({"action": payload["action"], "payload": {k: v for k, v in payload.items() if k != "data"}})
+            try:
+                handler.reply(played.file(payload))
+            except ValueError as refused:
+                handler.reply({"error": str(refused)}, 400)
+
+        self.server.RequestHandlerClass.do_POST = post_with_files
+
+    def file(self, op):
+        """The project's files as the computer keeps them: an upload in pieces, published whole; a piece of one read."""
+        action, path = op["action"], op["path"]
+        if action == "file_upload_start":
+            if self.refuse_upload:
+                raise ValueError(self.refuse_upload)
+            self.uploads[op["upload"]] = {"path": path, "data": bytearray()}
+            return {"offset": 0}
+        if action == "file_upload_chunk":
+            upload = self.uploads[op["upload"]]
+            upload["data"] += base64.b64decode(op["data"])
+            return {"offset": len(upload["data"])}
+        if action == "file_upload_finish":
+            self.files[(op["dir"], path)] = bytes(self.uploads.pop(op["upload"])["data"])
+            return {"offset": len(self.files[(op["dir"], path)])}
+        if action == "file_upload_cancel":
+            self.uploads.pop(op["upload"], None)
+            return {}
+        if action == "file_read" and (op["dir"], path) in self.files:
+            whole = self.files[(op["dir"], path)]
+            piece = whole[op["offset"]:op["offset"] + 737280]
+            return {"path": path, "size": len(whole), "modified": 1, "offset": op["offset"], "data": base64.b64encode(piece).decode(), "end": op["offset"] + len(piece) >= len(whole)}
+        raise ValueError("没有这个文件")
 
     def answer(self, op):
         if op["action"] == self.failed:
@@ -1105,6 +1155,87 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until(closed, 'closed flex-rounds detail')
         # Card on 协作 tab also shows 第 20 轮 · 自由轮数 (not / 0)
         until("document.getElementById('teams').innerText.includes('第 20 轮 · 自由轮数') && !document.getElementById('teams').innerText.includes('/ 0')", 'flex-rounds card text accurate')
+
+        # 3.7) Pictures with a message (ui/attach.js): no button where the computer does not take them; two picked,
+        #      one removed; a failed upload keeps words and pictures; sent up into .remote-ai/attachments and named in
+        #      `attachments`; the lines 附图 drawn as thumbnails read back with file_read, each opening in the files page
+        detail = played.origin + '/?tab=tasks&skin=%s&do=team&item=' + fs_running_id
+        browser.open(detail % 'paper', "!!document.getElementById('team-say-form')", 'detail without pictures', **phone(390))
+        assert value("document.querySelector('#team-say-form .attach-pick').hidden") is True, 'no picture button without the attachments feature'
+        played.info["features"] = played.info["features"] + ["file-upload", "attachments"]
+        browser.open(detail % 'paper', "!!document.querySelector('#team-say-form .attach-pick') && !document.querySelector('#team-say-form .attach-pick').hidden", 'detail with pictures', **phone(390))
+        pick = """(async colours => {
+          const files = [];
+          for (const colour of colours) {
+            const canvas = document.createElement('canvas'); canvas.width = 160; canvas.height = 120;
+            const ctx = canvas.getContext('2d'); ctx.fillStyle = colour; ctx.fillRect(0, 0, 160, 120); ctx.fillStyle = '#ffffff'; ctx.fillRect(20, 20, 60, 40);
+            files.push(new File([await new Promise(done => canvas.toBlob(done, 'image/png'))], colour.slice(1) + '.png', { type: 'image/png' }));
+          }
+          const box = new DataTransfer(); files.forEach(file => box.items.add(file));
+          const input = document.querySelector('#team-say-form input[type=file]'); input.files = box.files; input.dispatchEvent(new Event('change'));
+          return document.querySelectorAll('.rs-foot .attach-tray .attach-chip').length;
+        })(%s)"""
+        tray = "document.querySelectorAll('.rs-foot .attach-tray .attach-chip').length"
+        assert value(pick % json.dumps(["#2f54eb", "#16a34a"])) == 2
+        assert value("document.querySelector('.rs-foot .attach-tray').nextElementSibling.id") == "team-say-form"
+        value("document.querySelector('.rs-foot .attach-tray .attach-remove').click()")
+        until(tray + " === 1", 'one picture removed from the tray')
+        assert value(pick % json.dumps(["#ea8c00"])) == 2
+        typed('team-say-input', '按截图调整成员卡片')
+        foot_line = value("""(() => { const shown = n => !n.hidden && getComputedStyle(n).display !== 'none';
+          const kids = [...document.getElementById('team-say-form').children].filter(shown);
+          return {kids: kids.map(n => n.id || n.className), bottoms: [...new Set(kids.map(n => Math.round(n.getBoundingClientRect().bottom)))]}; })()""")
+        assert foot_line["kids"] == ["team-say-target", "attach-pick", "team-say-input", "team-say-send"] and len(foot_line["bottoms"]) == 1, foot_line
+        time.sleep(.2)
+        browser.picture(out / 'team-tray-light-390.png')
+        # a failed upload keeps the words and the pictures, and says why
+        played.refuse_upload = "磁盘空间不足"
+        value("document.getElementById('team-say-form').requestSubmit()")
+        until("document.getElementById('toast').textContent.includes('磁盘空间不足')", 'the reason the pictures did not go')
+        until("document.getElementById('team-say-send').textContent === '发送'", 'send again after the failure')
+        assert value("document.getElementById('team-say-input').value") == '按截图调整成员卡片' and value(tray) == 2
+        assert not [op for op in played.asked if op['action'] == 'work_team_say_attachments'] and not played.files
+        # sent: up first, into the project's attachments, then named in the message
+        played.refuse_upload = ""
+        value("document.getElementById('team-say-form').requestSubmit()")
+        until("document.querySelectorAll('#team-stream .team-msg.mine .attach-shot').length === 2", 'the message with its two pictures')
+        sent = [op for op in played.asked if op['action'] == 'work_team_say_attachments'][-1]['payload']
+        assert sent['text'] == '按截图调整成员卡片' and len(sent['attachments']) == 2, sent
+        for path in sent['attachments']:
+            assert re.fullmatch(r"\.remote-ai/attachments/\d{8}-\d{6}-[0-9a-f]{6}\.png", path), path
+            assert played.files[('web-shop', path)][:8] == b"\x89PNG\r\n\x1a\n", path
+        assert value(tray) == 0 and value("document.getElementById('team-say-input').value") == ''
+        assert '附图' not in value("document.getElementById('team-stream').innerText")
+        # a picture alone, without words
+        assert value(pick % json.dumps(["#c0261a"])) == 1
+        value("document.getElementById('team-say-form').requestSubmit()")
+        until("document.querySelectorAll('#team-stream .team-msg.mine .attach-shot').length === 3", 'a picture alone')
+        alone = [op for op in played.asked if op['action'] == 'work_team_say_attachments'][-1]['payload']
+        assert alone['text'] == '' and len(alone['attachments']) == 1, alone
+        # opened anew: the pictures are read back from the computer
+        reads = len([op for op in played.asked if op['action'] == 'file_read'])
+        shots_ready = "document.querySelectorAll('#team-stream .attach-shot img').length === 3 && [...document.querySelectorAll('#team-stream .attach-shot img')].every(i => i.complete && i.naturalWidth === 160)"
+        for skin in ('paper', 'night'):
+            browser.open(detail % skin, shots_ready, 'pictures read back ' + skin, **phone(390))
+            value("[...document.querySelectorAll('#team-stream .team-msg.mine')].pop().scrollIntoView({block: 'center'})")
+            assert value(pick % json.dumps(["#2f54eb", "#16a34a"])) == 2
+            time.sleep(.25)
+            browser.picture(out / ('team-shots-%s-390.png' % ('light' if skin == 'paper' else 'dark')))
+        assert len([op for op in played.asked if op['action'] == 'file_read']) >= reads + 3
+        for width in (320, 390):
+            browser.open(detail % 'paper', shots_ready, 'pictures at ' + str(width), **phone(width))
+            assert value(pick % json.dumps(["#2f54eb", "#16a34a"])) == 2
+            sizes = value("""(() => { const body = document.querySelector('dialog.rs.rs-full[open] .rs-body'), foot = document.querySelector('dialog.rs.rs-full[open] .rs-foot');
+              return {client: document.documentElement.clientWidth, html: document.documentElement.scrollWidth, body: body.scrollWidth - body.clientWidth, foot: foot.scrollWidth - foot.clientWidth}; })()""")
+            assert sizes['client'] == width and sizes['html'] <= width and sizes['body'] <= 0 and sizes['foot'] <= 0, sizes
+            browser.picture(out / ('team-shots-%d.png' % width))
+        # a picture opens in the project's files, where it lies
+        first = value("document.querySelector('#team-stream .attach-shot').dataset.name")
+        value("document.querySelector('#team-stream .attach-shot').click()")
+        until("location.pathname.endsWith('/files/')", 'the picture in the files page')
+        opened_at = value("Object.fromEntries(new URLSearchParams(location.search))")
+        assert opened_at == {'dir': 'web-shop', 'path': '.remote-ai/attachments', 'file': first, 'from': 'terminal'}, opened_at
+        played.info["features"] = [f for f in played.info["features"] if f not in ("file-upload", "attachments")]
 
         # 4) 390px dark theme (skin=night) across running, confirm, and ended team detail + contrast verification
         for name, tid, ready_expr in [

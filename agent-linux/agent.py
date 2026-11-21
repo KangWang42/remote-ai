@@ -3801,9 +3801,9 @@ class Agent:
                     self.last_input = time.time()
                     if action == "say":
                         text = str(op.get("text") or "").strip()
-                        if not text or len(text) > 8000:
-                            raise OpError("\u6d88\u606f\u9700\u4e3a 1 \u81f3 8000 \u5b57")
                         attachments = read_attachments(live.dir, op.get("attachments"))
+                        if (not text and not attachments) or len(text) > 8000:
+                            raise OpError("请输入文字或添加图片，文字最多 8000 字")
                         live.say(text, op_id, attachments)
                     elif action == "stop":
                         live.stop_turn()

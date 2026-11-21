@@ -791,6 +791,7 @@
   // ---- one: full-screen collaboration detail (stage & member status first, scrollable activity log, preserved reading position)
   function show(known) {
     let confirmDiscard = false, sending = false, busyAct = false, menuButton = null;
+    let pictures = [];        // the pictures picked for the next message; they stay while the menu is open
     let currentTeam = (teams || []).find(t => t.id === known.id) || known;
     let draftText = '', targetRole = '', activeCandidate = (currentTeam.tools && currentTeam.tools[0]) || '';
     const expanded = new Set();
@@ -1326,7 +1327,7 @@
           }
           if (meta.stage) lastStage = meta.stage;
 
-          const bodyText = meta.kind === 'dispatch' ? parsed.prose : (step.text || '');
+          const { text: bodyText, names: shotNames } = RemoteAttach.split(meta.kind === 'dispatch' ? parsed.prose : (step.text || ''));
           const compactEvent = meta.kind === 'event';
           const long = !compactEvent && (bodyText.length > 420 || bodyText.split('\n').length > 10);
           const open = compactEvent ? expanded.has(key) : (!long || expanded.has(key));
@@ -1351,7 +1352,7 @@
           }
 
           if (compactEvent) {
-            const summaryLine = String(step.text || '').replace(/^(开始|收到)：\s*/, '').replace(/\s+/g, ' ').trim();
+            const summaryLine = bodyText.replace(/^(开始|收到)：\s*/, '').replace(/\s+/g, ' ').trim();
             const li = el('li', { className: 'team-msg compact' + (open ? ' expanded' : '') },
               el('button', {
                 type: 'button', className: 'compact-row',
@@ -1362,7 +1363,7 @@
                 el('span', { className: 'action-tag subtle', textContent: meta.tag }),
                 el('span', { className: 'compact-preview', textContent: summaryLine }),
                 el('span', { className: 'at', textContent: agoText })),
-              open ? el('p', { className: 'body compact-full', textContent: step.text }) : '');
+              open ? el('p', { className: 'body compact-full', textContent: bodyText }) : '');
             li.dataset.msgKey = key; li.dataset.msgSig = sig;
             nextNodes.push(li);
             continue;
@@ -1382,6 +1383,7 @@
               ? renderRichBody(bodyText, 'body' + (open ? '' : ' clamp'))
               : el('p', { className: 'body' + (open ? '' : ' clamp'), textContent: bodyText }));
           }
+          if (shotNames.length) contentNodes.push(RemoteAttach.shots(shotNames, { dir: team.dir, from: 'terminal' }));
           if (parsed.assigns.length) {
             contentNodes.push(el('div', { className: 'team-assign-list' }, ...parsed.assigns.map(item => {
               const targetTool = item.tool || toolOf(team, item.role);
@@ -1643,7 +1645,7 @@
       let form = footBox.querySelector('#team-say-form');
       const lone = footBox.querySelector('.team-resume-only');
       if (!canSay) {
-        if (form) form.remove();
+        if (form) { form.picker.tray.remove(); form.remove(); }
         if (paused && !lone) footBox.append(el('button', { type: 'button', id: 'team-resume', className: 'team-resume team-resume-only', textContent: '继续', onclick: resume }));
         if (!paused && lone) lone.remove();
         return;
@@ -1667,6 +1669,7 @@
           if (!targets.some(([v]) => v === targetRole)) targetRole = '';
           sel.replaceChildren(...targets.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === targetRole })));
         }
+        form.picker.enabled = page.has('attachments') && !!team.dir;
         form.showAction();
         if (hadFocus) input.focus();
         return;
@@ -1684,7 +1687,7 @@
       const sendBtn = el('button', { type: 'submit', id: 'team-say-send', className: 'team-send', textContent: '发送' });
       form = el('form', { id: 'team-say-form', className: 'team-composer' }, targetSel, input, resumeBtn, sendBtn);
       form.showAction = () => {
-        const resuming = currentTeam.state === 'paused' && !input.value.trim();
+        const resuming = currentTeam.state === 'paused' && !input.value.trim() && !form.picker.count;
         resumeBtn.hidden = !resuming;
         sendBtn.hidden = resuming;
       };
@@ -1692,14 +1695,17 @@
       input.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); } });
       form.addEventListener('submit', async event => {
         event.preventDefault();
-        const text = input.value.trim();
-        if (!text || sending) return;
+        const text = input.value.trim(), picker = form.picker;
+        if ((!text && !picker.count) || sending) return;
         sending = true; sendBtn.disabled = true; sendBtn.textContent = '发送中';
         try {
+          const attachments = await picker.upload(done => { sendBtn.textContent = done + '%'; });
+          sendBtn.textContent = '发送中';
           const payload = { team: currentTeam.id, text };
           if (targetRole) payload.target = targetRole;
+          if (attachments.length) payload.attachments = attachments;
           const res = await work('team_say', payload);
-          draftText = ''; input.value = ''; grow();
+          draftText = ''; input.value = ''; grow(); picker.clear();
           updateTeamLocal(res.team);
           lastKey = keyOf(currentTeam);
           renderStream('bottom'); renderFoot(); page.refresh();
@@ -1707,8 +1713,11 @@
         } catch (err) { toast(err.message); }
         finally { sending = false; sendBtn.disabled = false; sendBtn.textContent = '发送'; form.showAction(); }
       });
-      form.showAction();
       footBox.append(form);
+      form.picker = new RemoteAttach.Picker({ form, before: input, dir: () => currentTeam.dir, toast, changed: () => { pictures = form.picker.items; form.showAction(); } });
+      form.picker.items = pictures;
+      form.picker.enabled = page.has('attachments') && !!team.dir;
+      form.picker.draw();
       grow();
     }
 

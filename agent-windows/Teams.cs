@@ -726,7 +726,8 @@ public sealed class Teams {
     public Team Say(string id, string text, string target, IList<Attachment> attachments) {
         text = (text ?? "").Trim();
         target = (target ?? "").Trim();
-        if (text.Length == 0 || text.Length > 4000) throw new ArgumentException("\u6d88\u606f\u9700\u4e3a 1 \u81f3 4000 \u5b57");
+        if ((text.Length == 0 && (attachments == null || attachments.Count == 0)) || text.Length > 4000)
+            throw new ArgumentException("请输入文字或添加图片，文字最多 4000 字");
         text = Attachments.WithText(text, attachments);
         Team team; string state, phase, mode; List<string> targets = new List<string>();
         lock (gate) {

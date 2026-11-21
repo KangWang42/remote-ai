@@ -6,6 +6,7 @@ the end. The tools are stand-ins speaking their protocols (tests/chat_standin.py
 
     python tests/chat_check.py [<folder with RemoteCliAgent.exe>]
 """
+import base64
 import http.client
 import json
 import secrets
@@ -35,9 +36,15 @@ def main():
     temp = tempfile.TemporaryDirectory(prefix="remote-ai-chat-", ignore_cleanup_errors=True)
     data, shop = Path(temp.name) / "agent", Path(temp.name) / "projects" / "web-shop"
     data.mkdir(); shop.mkdir(parents=True)
+    image = ".remote-ai/attachments/20261121-123456-a1b2c3.png"
+    (shop / image).parent.mkdir(parents=True)
+    (shop / image).write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+    ))
     homes = Homes(temp.name)
     homes.claude_saved(shop, SAVED, "修复结算页的金额显示", 1, said=("结算页的金额有时多出一位小数", "问题在 formatPrice，已经改好。"))
-    environment = homes.environment(RCLI_PASSWORD=password)
+    claude_log = Path(temp.name) / "claude.jsonl"
+    environment = homes.environment(RCLI_PASSWORD=password, STANDIN_CLAUDE_LOG=str(claude_log))
     tools = homes.stand_ins(temp.name)
     for name in ("claude", "codex", "agy"):
         (tools / (name + ".cmd")).write_text('@if "%%1"=="--help" (echo stand-in) else ("%s" "%s" %s %%*)\r\n' % (sys.executable, ROOT / "tests" / "chat_standin.py", name), encoding="mbcs")
@@ -158,8 +165,17 @@ def main():
 
             # ---- a refusal: the step does not run, the turn goes on to its end
             n = len(read.events)
-            op(action="say", terminal=terminal, text="再检查一次")
+            if tool == "claude":
+                op(action="say", terminal=terminal, text="", attachments=[image])
+                user = read.until(lambda e: e in read.events[n:] and e["t"] == "item" and e["kind"] == "user", "the screenshot echoed as a file reference")
+                assert user["text"].strip() == "附图：" + str(shop / image), user
+            else:
+                op(action="say", terminal=terminal, text="再检查一次")
             ask = read.until(lambda e: e in read.events[n:] and e["t"] == "ask", "the third question")
+            if tool == "claude":
+                packets = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+                assert {"event": "images", "count": 1} in packets, packets
+                print("Claude stand-in received one native image block")
             op(action="answer", terminal=terminal, ask=ask["id"], decision="deny")
             read.until(lambda e: e in read.events[n:] and e["t"] == "turn" and e["end"] == "done", "the turn after a refusal")
             assert not any(e["t"] == "done" and e.get("ok") for e in read.events[n:]), "the refused step did not run"

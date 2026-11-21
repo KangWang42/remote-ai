@@ -50,7 +50,12 @@ header h1 { font-size: 1rem; font-weight: 600; line-height: 1.3; letter-spacing:
 
 .user.failed { box-shadow: inset 0 0 0 1px var(--bad); }
 .user small { display: block; margin-top: 3px; color: var(--muted); font-size: .74rem; }
-.user button { display: block; min-height: 44px; margin-top: 4px; padding: 4px 0; text-decoration: underline; font-size: .84rem; }
+.user > button { display: block; min-height: 44px; margin-top: 4px; padding: 4px 0; text-decoration: underline; font-size: .84rem; }
+/* a message with pictures: its words, then the pictures (ui/attach.css) */
+.user.with-shots { display: grid; gap: 8px; }
+.user.with-shots small { margin-top: -4px; }
+.user .words { white-space: pre-wrap; }
+main > .attach-tray { margin: 4px 12px 0; padding-left: 4px; }
 .text { overflow-wrap: anywhere; }
 .text.writing::after { content: ""; display: inline-block; width: .45em; height: 1em; margin-left: 2px; vertical-align: -.12em; background: var(--accent); opacity: .75; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -107,6 +112,7 @@ header h1 { font-size: 1rem; font-weight: 600; line-height: 1.3; letter-spacing:
 #box:focus, #box:focus-visible { outline: none; }
 #send { flex: none; min-height: 40px; padding: 0 18px; border-radius: 20px; background: var(--accent); color: var(--on-accent); font-weight: 600; transition: transform .1s, opacity .15s; }
 #send:active { transform: scale(.95); }
+#send.going { min-width: 64px; font-variant-numeric: tabular-nums; }
 #go { flex: none; min-height: 40px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); font-weight: 600; }
 
 #toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 20; max-width: min(88vw, 480px); padding: 10px 18px; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: .88rem; font-weight: 600; box-shadow: 0 10px 30px rgba(14, 17, 22, .28); text-align: center; }

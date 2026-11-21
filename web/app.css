@@ -638,6 +638,7 @@ dialog.rs.rs-full .rs-bar .team-menu[hidden] { display: none; }
 .team-target { flex: none; align-self: flex-end; max-width: 7.5em; height: 38px; padding: 0 8px 0 12px; border: 0; border-radius: 19px; background: var(--raised); color: var(--ink); font-size: .8rem; font-weight: 600; text-overflow: ellipsis; }
 .team-composer textarea { flex: 1; min-width: 0; min-height: 38px; max-height: 120px; padding: 8px 4px; border: 0; background: transparent; color: var(--ink); caret-color: var(--accent); font: inherit; font-size: .92rem; line-height: 1.4; resize: none; }
 .team-composer textarea:focus, .team-composer textarea:focus-visible { outline: none; }
+.team-composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .team-send, .team-resume { flex: none; min-height: 38px; padding: 0 16px; border: 0; border-radius: 19px; background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: .88rem; }
 .team-send[hidden], .team-resume[hidden] { display: none; }
 .team-send:disabled { opacity: .55; }

@@ -6,9 +6,11 @@ it. The computer is played here, by the relay's own interface for computers: not
 Usage: python tests/chat_ui_check.py <Edge/Chrome executable> <screenshot directory>
 """
 import base64
+import binascii
 import http.client
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -23,6 +25,8 @@ sys.path.insert(0, str(ROOT / "tests"))
 from ws_client import Socket        # noqa: E402
 
 SESSION = "0199cccc-dddd-7eee-8fff-000000000001"
+PROJECT = "D:\\work\\web-shop"
+PIECE = 737280
 
 
 def free_port():
@@ -42,6 +46,8 @@ class Computer:
         self.answer = threading.Event()
         self.stopped = threading.Event()
         self.alive = True
+        self.features = ["chat", "files", "peek", "claude-desktop-open", "codex-desktop-open"]
+        self.files, self.uploads, self.refuse_upload = {}, {}, ""
         self.call("/api/login", {"password": password})
 
     def call(self, path, payload, timeout=30):
@@ -79,7 +85,7 @@ class Computer:
                     sessions[t["session"]] = {"id": t["session"], "tool": t["tool"], "dir": t["dir"], "title": "结算页的金额" if t["session"] == SESSION else "新的对话",
                                               "updated": t["created"], "live": t["state"] == "running" or sessions.get(t["session"], {}).get("live", False)}
             sessions = list(sessions.values())
-        self.call("/api/terminal/agent", {"info": {"instance": self.instance, "enabled": True, "tools": ["claude", "codex"], "workspaces": ["web-shop"], "features": ["chat", "files", "peek", "claude-desktop-open", "codex-desktop-open"],
+        self.call("/api/terminal/agent", {"info": {"instance": self.instance, "enabled": True, "tools": ["claude", "codex"], "workspaces": ["web-shop"], "features": list(self.features),
                                                     "projects": [{"name": "web-shop", "path": "D:\\work\\web-shop"}]},
                                            "terminals": terminals, "output": output, "acks": acks, "sessions": sessions})
 
@@ -106,8 +112,44 @@ class Computer:
         with self.lock:
             self.acks.append(dict({"id": op["id"], "error": error}, **({"result": result} if result is not None else {})))
 
+    def file(self, op):
+        """The project's files as the computer keeps them: an upload in pieces, published whole; a piece of one read."""
+        action, path = op["action"], op["path"]
+        if action == "file_upload_start":
+            if self.refuse_upload:
+                raise ValueError(self.refuse_upload)
+            self.uploads[op["upload"]] = {"path": path, "size": op["size"], "data": bytearray()}
+            return {"offset": 0}
+        if action == "file_upload_chunk":
+            upload = self.uploads[op["upload"]]
+            assert op["offset"] == len(upload["data"]), (op["offset"], len(upload["data"]))
+            upload["data"] += base64.b64decode(op["data"])
+            return {"offset": len(upload["data"])}
+        if action == "file_upload_finish":
+            upload = self.uploads.pop(op["upload"])
+            if path in self.files:
+                raise ValueError("已有同名文件")
+            self.files[path] = bytes(upload["data"])
+            return {"offset": len(upload["data"])}
+        if action == "file_upload_cancel":
+            self.uploads.pop(op["upload"], None)
+            return {}
+        if action == "file_read":
+            if path not in self.files:
+                raise ValueError("没有这个文件")
+            whole, at = self.files[path], op["offset"]
+            piece = whole[at:at + PIECE]
+            return {"path": path, "size": len(whole), "modified": 1, "offset": at, "data": base64.b64encode(piece).decode(), "end": at + len(piece) >= len(whole)}
+        raise ValueError("不支持此操作")
+
     def carry(self, op):
         action, terminal = op["action"], op.get("terminal")
+        if action.startswith("file_"):
+            try:
+                self.ack(op, result=self.file(op))
+            except (ValueError, KeyError, AssertionError, binascii.Error) as refused:
+                self.ack(op, error=str(refused) or "操作没有执行")
+            return
         if action == "start":
             with self.lock:
                 self.terminals[terminal] = {"id": terminal, "tool": op["tool"], "dir": op["dir"], "session": "", "status": "starting", "state": "running", "seq": 0, "said": "", "ask": "", "created": int(time.time() * 1000)}
@@ -135,7 +177,9 @@ class Computer:
             self.answer.set()
         elif action == "say":
             self.emit(terminal, t="state", state="busy", at=int(time.time() * 1000))
-            self.emit(terminal, t="item", id="u-" + op["id"], kind="user", text=op["text"], op=op["id"])
+            # the computer names each picture after the words, in a line of its own
+            shown = "\n".join(([op["text"]] if op["text"] else []) + ["附图：" + PROJECT + "\\" + path.replace("/", "\\") for path in op.get("attachments", [])])
+            self.emit(terminal, t="item", id="u-" + op["id"], kind="user", text=shown, op=op["id"])
             if "慢慢" in op["text"]:
                 self.emit(terminal, t="item", id="s3", kind="step", text="Bash：等待部署", detail="npm run deploy:staging", state="run", name="Bash")
                 for n in range(60):
@@ -263,7 +307,10 @@ def main():
             started = phone.call("/api/terminal", {"id": secrets.token_hex(16), "action": "start", "tool": "claude", "dir": "web-shop", "form": "chat", "text": "结算页的金额有时多出一位小数，帮我看看"})
             terminal = started["terminal"]
             listed = json.loads(http_get(port, "/api/terminal", phone.cookie))
-            assert [t["title"] for t in listed["terminals"] if t["id"] == terminal] == ["结算页的金额有时多出一位小数，帮我看看"], listed["terminals"]
+            entry = next(t for t in listed["terminals"] if t["id"] == terminal)
+            # The computer may already have reported the conversation's title.
+            expected = "结算页的金额" if entry["session"] else "结算页的金额有时多出一位小数，帮我看看"
+            assert entry["title"] == expected, entry
             ask("Page.navigate", url=base + "terminal/?id=" + terminal)
             until("location.pathname.endsWith('/chat/') && document.getElementById('title').textContent.includes('结算页')", "the chat page, from the terminal page's link")
             assert value("location.search") == "?id=" + terminal
@@ -305,6 +352,106 @@ def main():
             said = [op for op in computer.seen if op["action"] == "say"]
             assert said[-1]["text"] == "改完后顺便把优惠券那里也检查一下", said
 
+            # ---- pictures with a message (ui/attach.js): no picture button where the computer does not take them
+            time.sleep(1.2)
+            assert value("document.querySelector('#write .attach-pick').hidden") is True, "no picture button without the attachments feature"
+            computer.features += ["file-upload", "attachments"]
+            time.sleep(0.5)
+            ask("Page.reload")
+            until("!document.querySelector('#write .attach-pick')?.hidden && document.querySelectorAll('.user').length === 2", "the picture button where the computer takes pictures")
+            pick = """(async colours => {
+              const files = [];
+              for (const colour of colours) {
+                const canvas = document.createElement('canvas'); canvas.width = 160; canvas.height = 120;
+                const ctx = canvas.getContext('2d'); ctx.fillStyle = colour; ctx.fillRect(0, 0, 160, 120); ctx.fillStyle = '#ffffff'; ctx.fillRect(20, 20, 60, 40);
+                files.push(new File([await new Promise(done => canvas.toBlob(done, 'image/png'))], colour.slice(1) + '.png', { type: 'image/png' }));
+              }
+              const box = new DataTransfer(); files.forEach(file => box.items.add(file));
+              const input = document.querySelector('#write input[type=file]'); input.files = box.files; input.dispatchEvent(new Event('change'));
+              return document.querySelectorAll('.attach-tray .attach-chip').length;
+            })(%s)"""
+            tray = "document.querySelectorAll('main > .attach-tray .attach-chip').length"
+            assert value(pick % json.dumps(["#2f54eb", "#16a34a"])) == 2
+            assert value("!document.querySelector('main > .attach-tray').hidden && document.querySelector('main > .attach-tray').nextElementSibling.id === 'write'")
+            # one of two removed from the tray
+            value("document.querySelector('.attach-tray .attach-chip .attach-remove').click()")
+            until(tray + " === 1", "one picture removed")
+            assert value(pick % json.dumps(["#ea8c00"])) == 2
+            value("document.getElementById('box').value = '按截图里的样子改'; document.getElementById('box').dispatchEvent(new Event('input'))")
+            picture("chat-tray-light.png")
+            # a failed upload keeps the words and the pictures
+            computer.refuse_upload = "磁盘空间不足"
+            says = len([op for op in computer.seen if op["action"] == "say"])
+            value("document.getElementById('write').requestSubmit()")
+            until("!document.getElementById('toast').hidden && document.getElementById('toast').textContent.includes('磁盘空间不足')", "the reason the pictures did not go")
+            until("document.getElementById('send').textContent === '发送'", "the send button again")
+            assert value("document.getElementById('box').value") == "按截图里的样子改" and value(tray) == 2
+            assert len([op for op in computer.seen if op["action"] == "say"]) == says and not computer.files, "nothing said or kept after a failed upload"
+            # sent: up first, into the project's attachments, then named in the message
+            computer.refuse_upload = ""
+            names = value("[...document.querySelectorAll('.attach-tray .attach-chip img')].length")
+            value("document.getElementById('write').requestSubmit()")
+            until("document.querySelectorAll('.user.with-shots:not(.going) .attach-shot').length === 2", "the message given back with its two pictures", 20)
+            sent = [op for op in computer.seen if op["action"] == "say"][-1]
+            assert sent["text"] == "按截图里的样子改" and len(sent["attachments"]) == names == 2, sent
+            for path in sent["attachments"]:
+                assert re.fullmatch(r"\.remote-ai/attachments/\d{8}-\d{6}-[0-9a-f]{6}\.png", path), path
+                assert computer.files[path][:8] == b"\x89PNG\r\n\x1a\n", path
+            assert value(tray) == 0 and value("document.querySelector('main > .attach-tray').hidden") and value("document.getElementById('box').value") == ""
+            shown = value("(u => ({text: u.innerText, words: u.querySelector('.words')?.textContent}))([...document.querySelectorAll('.user.with-shots')].pop())")
+            assert shown["words"] == "按截图里的样子改" and "附图" not in shown["text"], shown
+            # a message that did not go is put back with its words and its pictures (already on the computer)
+            value("window.savedSend = ProjectTerminal.send; window.sentOps = []; ProjectTerminal.send = op => sentOps.push(op)")
+            assert value(pick % json.dumps(["#7c3aed"])) == 1
+            value("document.getElementById('box').value = '退回的消息'; document.getElementById('box').dispatchEvent(new Event('input')); document.getElementById('write').requestSubmit()")
+            until("sentOps.length === 1 && (sentOps[0].attachments || []).length === 1", "the message with its picture handed to the bridge", 20)
+            value("TerminalUI.inputState('rejected', sentOps[0], '电脑没有收到')")
+            until("!!document.querySelector('.user.failed > button')", "the message that did not go")
+            uploads = len(computer.files)
+            value("document.querySelector('.user.failed > button').click()")
+            until("document.getElementById('box').value === '退回的消息' && " + tray + " === 1 && document.querySelector('.attach-tray .attach-chip img')?.naturalWidth === 160", "words and picture back in the box")
+            assert len(computer.files) == uploads, "a picture put back is not sent up again"
+            value("ProjectTerminal.send = savedSend; document.querySelector('.attach-tray .attach-remove').click(); document.getElementById('box').value = ''; document.getElementById('box').dispatchEvent(new Event('input'))")
+            until(tray + " === 0", "the tray empty again")
+            # pictures only, no words
+            assert value(pick % json.dumps(["#c0261a"])) == 1
+            value("document.getElementById('write').requestSubmit()")
+            until("document.querySelectorAll('.user.with-shots:not(.going)').length === 2", "a message of a picture alone", 20)
+            alone = [op for op in computer.seen if op["action"] == "say"][-1]
+            assert alone["text"] == "" and len(alone["attachments"]) == 1, alone
+            assert value("[...document.querySelectorAll('.user.with-shots')].pop().innerText.trim()") == ""
+            # read again from the computer: the lines 附图 drawn as the pictures, read with file_read
+            reads = len([op for op in computer.seen if op["action"] == "file_read"])
+            ask("Page.reload")
+            until("document.querySelectorAll('.user.with-shots .attach-shot img').length === 3 && [...document.querySelectorAll('.user.with-shots .attach-shot img')].every(i => i.complete && i.naturalWidth === 160)", "the pictures read back from the computer", 20)
+            assert len([op for op in computer.seen if op["action"] == "file_read"]) >= reads + 3
+            assert "附图" not in value("document.getElementById('said').innerText")
+            value("document.getElementById('said').scrollTop = document.getElementById('said').scrollHeight")
+            assert value(pick % json.dumps(["#2f54eb", "#16a34a"])) == 2
+            picture("chat-shots-light.png")
+            for width in (320, 390):
+                ask("Emulation.setDeviceMetricsOverride", width=width, height=844, deviceScaleFactor=2, mobile=True)
+                sizes = value("({client: document.documentElement.clientWidth, html: document.documentElement.scrollWidth, body: document.body.scrollWidth, write: document.getElementById('write').scrollWidth - document.getElementById('write').clientWidth, said: document.getElementById('said').scrollWidth - document.getElementById('said').clientWidth})")
+                assert sizes["client"] == width and max(sizes["html"], sizes["body"]) <= width and sizes["write"] <= 0 and sizes["said"] <= 0, sizes
+                picture("chat-shots-%d.png" % width)
+            ask("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=2, mobile=True)
+            value("localStorage.setItem('rcli-skin', 'night')")
+            ask("Page.reload")
+            until("document.querySelectorAll('.user.with-shots .attach-shot img').length === 3 && [...document.querySelectorAll('.user.with-shots .attach-shot img')].every(i => i.naturalWidth === 160)", "the pictures in the dark skin", 20)
+            value("document.getElementById('said').scrollTop = document.getElementById('said').scrollHeight")
+            assert value(pick % json.dumps(["#2f54eb", "#16a34a"])) == 2
+            picture("chat-shots-dark.png")
+            value("localStorage.setItem('rcli-skin', 'paper')")
+            # a picture opens in the project's files, where it lies
+            first = value("[...document.querySelectorAll('.user.with-shots .attach-shot')][0].dataset.name")
+            value("[...document.querySelectorAll('.user.with-shots .attach-shot')][0].click()")
+            until("location.pathname.endsWith('/files/')", "the picture in the files page")
+            opened = value("Object.fromEntries(new URLSearchParams(location.search))")
+            assert opened == {"dir": "web-shop", "path": ".remote-ai/attachments", "file": first, "from": "terminal"}, opened
+            ask("Page.navigate", url=base + "chat/?id=" + terminal)
+            until("document.querySelectorAll('.user.with-shots').length === 2", "back in the conversation")
+            value("document.querySelectorAll('.attach-tray .attach-remove').forEach(b => b.click())")
+
             # ---- stopped while a step runs: the step ends, the turn says so, and "继续" stands beside the box
             value("document.getElementById('box').value = '慢慢部署到测试环境'; document.getElementById('write').requestSubmit()")
             until("(s => s && s.textContent.includes('npm run deploy:staging') && s.querySelector('pre')?.textContent.includes('上传'))(document.querySelectorAll('.step')[2])", "the long step printing")
@@ -317,7 +464,7 @@ def main():
 
             # ---- read again from the start (a page opened later): the same conversation
             ask("Page.reload")
-            until("document.querySelectorAll('.user').length === 3 && document.querySelectorAll('.step').length === 3 && document.getElementById('standing').textContent === '已停止'", "the same conversation after a reload")
+            until("document.querySelectorAll('.user').length === 5 && document.querySelectorAll('.step').length === 3 && document.getElementById('standing').textContent === '已停止'", "the same conversation after a reload")
             assert value("document.getElementById('asks').hidden") is True
 
             # ---- the dark skin

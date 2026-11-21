@@ -196,7 +196,10 @@ def claude(args):
                 answers[response["request_id"]][0].set()
         elif kind == "user":
             content = message["message"]["content"]
-            turns.append(content if isinstance(content, str) else content[0]["text"])
+            # pictures sent with a message come as image blocks beside the words (agent-windows/Attachments.cs)
+            if not isinstance(content, str) and any(block.get("type") == "image" for block in content):
+                record_standin("STANDIN_CLAUDE_LOG", {"event": "images", "count": sum(block.get("type") == "image" for block in content)})
+            turns.append(content if isinstance(content, str) else "\n".join(block["text"] for block in content if block.get("type") == "text"))
 
 
 # ---- Codex
@@ -322,9 +325,13 @@ def codex(args):
             note("thread/started", thread={"id": state["thread"]})
         elif method == "turn/start":
             state["turn"] = "turn-" + uuid.uuid4().hex[:8]
-            record_standin("STANDIN_CODEX_LOG", {"event": "turn/start", "model": params.get("model") or "", "effort": params.get("effort") or "", "text": params["input"][0]["text"][:160]})
+            # pictures sent with a message come as image items beside the words (agent-windows/Attachments.cs)
+            words = "\n".join(item["text"] for item in params["input"] if item.get("type") == "text")
+            record_standin("STANDIN_CODEX_LOG", {"event": "turn/start", "model": params.get("model") or "", "effort": params.get("effort") or "", "text": words[:160]})
+            if any(item.get("type") != "text" for item in params["input"]):
+                record_standin("STANDIN_CODEX_LOG", {"event": "images", "count": sum(item.get("type") != "text" for item in params["input"])})
             put({"id": number, "result": {"turn": {"id": state["turn"], "status": "inProgress", "items": []}}})
-            threading.Thread(target=turn, args=(params["input"][0]["text"], params.get("clientUserMessageId")), daemon=True).start()
+            threading.Thread(target=turn, args=(words, params.get("clientUserMessageId")), daemon=True).start()
         elif method == "turn/steer":
             if params.get("expectedTurnId") != state["turn"] or not state["turn"]:
                 put({"id": number, "error": {"code": -32600, "message": "expected active turn id"}})

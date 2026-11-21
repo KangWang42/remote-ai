@@ -93,12 +93,13 @@
     const pending = JSON.parse(pendingStore.get() || '[]');
     if (Array.isArray(pending)) pending.forEach(p => {
       if (p && /^[a-f0-9]{32}$/.test(p.id) && typeof p.text === 'string' && typeof p.draft === 'string' && p.draft.length <= 8000) {
-        mine.set(p.id, { id: p.id, text: p.text, draft: p.draft, state: ['accepted', 'rejected'].includes(p.state) ? p.state : 'unknown', error: p.error || '', node: null });
+        const pictures = Array.isArray(p.pictures) ? p.pictures.filter(name => RemoteAttach.NAME.test(name)).slice(0, RemoteAttach.MOST) : [];
+        mine.set(p.id, { id: p.id, text: p.text, draft: p.draft, pictures, state: ['accepted', 'rejected'].includes(p.state) ? p.state : 'unknown', error: p.error || '', node: null });
       }
     });
   } catch (error) { /* an unreadable receipt does not prevent the conversation from loading */ }
   function saveMine() {
-    const rows = Array.from(mine.values(), ({ id, text, draft, state, error }) => ({ id, text, draft, state, error }));
+    const rows = Array.from(mine.values(), ({ id, text, draft, pictures, state, error }) => ({ id, text, draft, pictures, state, error }));
     pendingStore.set(rows.length ? JSON.stringify(rows) : '');
   }
   const OUT_MOST = 200000;
@@ -107,6 +108,13 @@
     items = new Map(); asks = new Map(); rest = ''; writing = ''; lastEnd = '';
     said.replaceChildren();
     mine.forEach(p => { p.node = null; });
+  }
+  // What the user said: the words, then the pictures the computer named in lines of their own (ui/attach.js).
+  const shotsOf = names => RemoteAttach.shots(names, { base: '../', dir: terminal ? terminal.dir : '', from: 'terminal' });
+  function userNode(text) {
+    const { text: words, names } = RemoteAttach.split(text);
+    if (!names.length) return el('div', { className: 'user', textContent: text });
+    return el('div', { className: 'user with-shots' }, words ? el('span', { className: 'words', textContent: words }) : '', shotsOf(names));
   }
   // Successful steps collapse by default; explicit reading choices survive subsequent output.
   function stepNode(item) {
@@ -139,7 +147,7 @@
       // what this page sent comes back from the tool: the bubble that waited for it is that message now
       const waiting = e.op && mine.get(e.op);
       if (waiting) { acknowledge(waiting); mine.delete(e.op); saveMine(); if (waiting.node) waiting.node.remove(); }
-      node = el('div', { className: 'user', textContent: item.text });
+      node = userNode(item.text);
     } else if (e.kind === 'text') {
       node = el('div', { className: 'text md' });
       setText(node, item.text, true);
@@ -185,7 +193,7 @@
     box.style.display = 'contents';
     if (more) box.append(el('p', { className: 'earlier', textContent: '更早的内容在电脑上' }));
     (messages || []).forEach(m => {
-      if (m.role === 'user') box.append(el('div', { className: 'user', textContent: m.text }));
+      if (m.role === 'user') box.append(userNode(m.text));
       else if (m.role === 'assistant') { const node = el('div', { className: 'text md' }); setText(node, m.text, false); box.append(node); }
       else if (m.role === 'thought') box.append(el('div', { className: 'thought', textContent: m.text }));
       else if (m.role === 'tool') {
@@ -257,8 +265,9 @@
     $('stop').hidden = !(kind === 'busy' || kind === 'confirm');
     $('again').hidden = !(ended && terminal.session);
     $('write').hidden = !!ended;
-    $('go').hidden = !(kind === 'idle' && (lastEnd === 'stopped' || lastEnd === 'failed') && !$('box').value.trim());
+    $('go').hidden = !(kind === 'idle' && (lastEnd === 'stopped' || lastEnd === 'failed') && !$('box').value.trim() && !(picker && picker.count));
     $('send').disabled = kind === 'off';
+    $('send').classList.toggle('going', sendingPictures);
   }
   function header() {
     if (!terminal) return;
@@ -267,6 +276,7 @@
     $('where-text').textContent = (TOOLS[terminal.tool] || terminal.tool) + ' · ' + (terminal.dir || base(terminal.folder));
     $('dot').className = device.online ? 'on' : 'off';
     $('files').hidden = !terminal.dir;
+    canPicture();
     if (terminal.error && terminal.error !== lastError) { lastError = terminal.error; if (drawn) toast(terminal.error); }
   }
 
@@ -307,12 +317,17 @@
   box.value = draft.get();
   function bubble(p) {
     const labels = { queued: '正在送达', retrying: '连接中断，正在确认送达', accepted: '已提交，等待对话接收', unknown: '送达结果未知，请先检查对话', rejected: '没有送出：' + (p.error || '') };
-    const node = el('div', { className: 'user going' + (p.state === 'rejected' || p.state === 'unknown' ? ' failed' : ''), textContent: p.text },
+    const pictures = p.pictures || [];
+    const node = el('div', { className: 'user going' + (pictures.length ? ' with-shots' : '') + (p.state === 'rejected' || p.state === 'unknown' ? ' failed' : '') },
+      pictures.length ? (p.text ? el('span', { className: 'words', textContent: p.text }) : '') : p.text,
+      pictures.length ? shotsOf(pictures) : '',
       el('small', { textContent: labels[p.state] || labels.queued }));
     if (p.state === 'rejected' || p.state === 'unknown') node.append(el('button', { type: 'button', textContent: p.state === 'unknown' ? '检查后重新编辑' : '重新编辑', onclick: () => {
       const restore = () => {
-        if (box.value.trim() && box.value !== p.draft) return toast('输入框里还有未发送的文字，请先处理');
-        box.value = p.draft; draft.set(box.value); grow(); box.focus(); p.node.remove(); mine.delete(p.id); saveMine(); stands();
+        if ((box.value.trim() && box.value !== p.draft) || (p.pictures && p.pictures.length && picker.count)) return toast('输入框里还有未发送的内容，请先处理');
+        box.value = p.draft; draft.set(box.value); grow(); box.focus(); p.node.remove(); mine.delete(p.id); saveMine();
+        if (p.pictures && p.pictures.length) picker.restore(p.pictures);
+        stands();
       };
       if (p.state === 'unknown') RemoteSheet.confirm({ title: '重新编辑这条消息', text: '电脑可能已经收到，请先检查对话。再次发送会作为一条新消息。', label: '已检查，重新编辑', act: sheet => { sheet.close(true); restore(); } });
       else restore();
@@ -323,17 +338,22 @@
     draft.clear(p.draft);
     if (box.value === p.draft) { box.value = ''; grow(); }
   }
-  function say(text) {
-    const original = text; text = text.trim();
-    if (!text || !terminal || terminal.state === 'closed') return;
-    if (Array.from(mine.values()).some(p => p.text === text)) return toast('这条消息正在确认送达，请先查看它的状态');
-    const p = { id: newId(), text, draft: original, state: 'queued' };
+  const sameMessage = (p, text, pictures) => p.text === text && (p.pictures || []).join() === pictures.join();
+  function say(text, paths) {
+    const original = text, attachments = paths || [], pictures = attachments.map(path => path.split('/').pop());
+    text = text.trim();
+    if ((!text && !attachments.length) || !terminal || terminal.state === 'closed') return false;
+    if (Array.from(mine.values()).some(p => sameMessage(p, text, pictures))) { toast('这条消息正在确认送达，请先查看它的状态'); return false; }
+    const p = { id: newId(), text, draft: original, pictures, state: 'queued' };
     draft.set(box.value);
     mine.set(p.id, p);
     saveMine();
     said.querySelectorAll('.empty').forEach(node => node.remove());
     p.node = bubble(p); said.append(p.node); toEnd();
-    bridge().send({ id: p.id, action: 'say', text });
+    const op = { id: p.id, action: 'say', text };
+    if (attachments.length) op.attachments = attachments;
+    bridge().send(op);
+    return true;
   }
   const grow = () => {
     const prevScroll = box.scrollTop;
@@ -344,10 +364,29 @@
   };
   box.addEventListener('input', () => { draft.set(box.value); grow(); });
   box.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('write').requestSubmit(); } });
-  $('write').addEventListener('submit', event => {
+  // The picture button, shown where the computer takes pictures with a message and the conversation is in a project.
+  let sendingPictures = false, pictureAsked = false;
+  const picker = new RemoteAttach.Picker({ form: $('write'), before: box, base: '../', dir: () => terminal ? terminal.dir : '', toast, changed: () => stands() });
+  function canPicture() {
+    if (pictureAsked || !terminal) return;
+    pictureAsked = true;
+    work.ensure().then(data => { picker.enabled = !!(data && terminal.dir && (data.device.features || []).includes('attachments')); }, () => { pictureAsked = false; });
+  }
+  $('write').addEventListener('submit', async event => {
     event.preventDefault();
-    if (!box.value.trim()) return box.focus();
-    say(box.value); grow();
+    if (sendingPictures) return;
+    if (!box.value.trim() && !picker.count) return box.focus();
+    if (!picker.count) { say(box.value); grow(); return; }
+    if (!terminal || terminal.state === 'closed') return;
+    if (Array.from(mine.values()).some(p => sameMessage(p, box.value.trim(), picker.names))) return toast('这条消息正在确认送达，请先查看它的状态');
+    sendingPictures = true; stands();
+    const send = $('send');
+    try {
+      const paths = await picker.upload(done => { send.textContent = done + '%'; });
+      if (say(box.value, paths)) picker.clear();
+      grow();
+    } catch (error) { toast(error.message); }
+    finally { sendingPictures = false; send.textContent = '发送'; stands(); }
   });
   $('go').onclick = () => say('继续');
   $('stop').onclick = () => { $('stop').disabled = true; bridge().send({ action: 'stop' }); setTimeout(() => { $('stop').disabled = false; }, 2500); };

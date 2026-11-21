@@ -91,11 +91,13 @@ def _name(value, limit=40):
 
 _stamp = re.compile(r"[0-9.]{1,48}")         # how the file of a conversation was when it was read, in the words of the computer
 
-def _words(text, most=8000):
-    """What a person wrote, as it may be handed on: without carriage returns, not empty, not too long, and with no
+def _words(text, most=8000, allow_empty=False):
+    """What a person wrote, as it may be handed on: without carriage returns, within the length limit, and with no
     control characters but line breaks and tabs. None where it is not that."""
-    text = text.replace("\r\n", "\n").replace("\r", "\n").strip() if isinstance(text, str) else ""
-    if not text or len(text) > most or any(ord(c) < 32 and c not in "\n\t" for c in text):
+    if not isinstance(text, str):
+        return None
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if (not text and not allow_empty) or len(text) > most or any(ord(c) < 32 and c not in "\n\t" for c in text):
         return None
     return text
 
@@ -966,10 +968,10 @@ class Relay:
                     if action not in CHAT_ACTIONS:
                         raise RemoteError("这段对话不支持此操作")
                     if action == "say":
-                        text = _words(payload.get("text"))
+                        attachments = _attachments(payload)
+                        text = _words(payload.get("text"), allow_empty=bool(attachments))
                         if text is None:
                             raise RemoteError("内容为空、超过 8000 字或含有控制字符")
-                        attachments = _attachments(payload)
                         if attachments is not None and "attachments" not in self._device.get("features", []):
                             raise RemoteError("\u8bf7\u5148\u66f4\u65b0\u7535\u8111\u7aef")
                         asked, payload = payload, {"id": op_id, "action": "say", "terminal": terminal, "text": text}
@@ -1502,11 +1504,11 @@ class Relay:
                 if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
                     raise RemoteError("协作任务无效")
                 text, target = payload.get("text"), payload.get("target", "")
-                if not isinstance(text, str) or not 0 < len(text.strip()) <= 4000 or "\0" in text:
-                    raise RemoteError("消息需为 1 至 4000 字")
+                attachments = _attachments(payload)
+                if not isinstance(text, str) or len(text.strip()) > 4000 or "\0" in text or (not text.strip() and not attachments):
+                    raise RemoteError("请输入文字或添加图片，文字最多 4000 字")
                 if not isinstance(target, str) or len(target.strip()) > 32 or "\0" in target:
                     raise RemoteError("发送对象无效")
-                attachments = _attachments(payload)
                 if attachments is not None and "attachments" not in self._device.get("features", []):
                     raise RemoteError("\u8bf7\u5148\u66f4\u65b0\u7535\u8111\u7aef")
                 question["team"] = payload["team"]

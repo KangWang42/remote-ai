@@ -143,6 +143,11 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.command(request, now=1004)
         operation = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]
         self.assertEqual(operation["attachments"], [path])
+        self.relay.command(dict(request, id="e" * 32, text=""), now=1005)
+        operation = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]
+        self.assertEqual((operation["text"], operation["attachments"]), ("", [path]))
+        with self.assertRaises(RemoteError):
+            self.relay.command({"action": "say", "id": "f" * 32, "terminal": terminal, "text": ""}, now=1005)
         for bad in (
             {"attachments": []},
             {"attachments": [path] * 5},
@@ -431,7 +436,7 @@ class TerminalRelayTests(unittest.TestCase):
                 self.relay.work({"id": "7" * 32, "action": "team_start", "item": wrong}, now=1005, wait=0)
         asked, got = carried({"id": "8" * 32, "action": "team_start", "item": dict(item, mode="compare", tools=["claude", "codex", "agy"], rounds=1)}, {"team": {"state": "running"}})
         self.assertEqual((asked["item"]["mode"], asked["item"]["tools"]), ("compare", ["claude", "codex", "agy"]))
-        with self.assertRaisesRegex(RemoteError, "1 至 4000"):
+        with self.assertRaisesRegex(RemoteError, "请输入文字或添加图片"):
             self.relay.work({"id": "9" * 32, "action": "team_say", "team": "d" * 32, "text": "   "}, now=1005, wait=0)
         with self.assertRaisesRegex(RemoteError, "候选方案无效"):
             self.relay.work({"id": "9" * 32, "action": "team_pick", "team": "d" * 32, "tool": "shell"}, now=1005, wait=0)
@@ -441,6 +446,14 @@ class TerminalRelayTests(unittest.TestCase):
             self.relay.work({"id": "9" * 32, "action": "team_swap", "team": "d" * 32, "role": "writer", "tool": "agy", "note": "x" * 1001}, now=1005, wait=0)
         asked, got = carried({"id": "a" * 32, "action": "team_say", "team": "d" * 32, "text": "  改用浅色卡片  ", "target": "agy"}, {"team": {"state": "running"}})
         self.assertEqual((asked["action"], asked["team"], asked["text"], asked["target"]), ("work_team_say", "d" * 32, "改用浅色卡片", "agy"))
+        path = ".remote-ai/attachments/20261121-123456-a1b2c3.png"
+        picture = {"id": "e" * 32, "action": "team_say", "team": "d" * 32, "text": "", "target": "agy", "attachments": [path]}
+        with self.assertRaisesRegex(RemoteError, "请先更新电脑端"):
+            self.relay.work(picture, now=1005, wait=0)
+        self.info["features"].append("attachments")
+        self.relay.agent({"info": self.info}, now=1005)
+        asked, got = carried(picture, {"team": {"state": "running"}})
+        self.assertEqual((asked["action"], asked["text"], asked["target"], asked["attachments"]), ("work_team_say", "", "agy", [path]))
         asked, got = carried({"id": "d" * 32, "action": "team_swap", "team": "d" * 32, "role": "writer", "tool": "agy", "note": "  接手继续修  "}, {"team": {"state": "running"}})
         self.assertEqual((asked["action"], asked["team"], asked["role"], asked["tool"], asked["note"]), ("work_team_swap", "d" * 32, "writer", "agy", "接手继续修"))
         asked, got = carried({"id": "b" * 32, "action": "team_pick", "team": "d" * 32, "tool": "codex"}, {"team": {"state": "done", "picked": "codex"}})
