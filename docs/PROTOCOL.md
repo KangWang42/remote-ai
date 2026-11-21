@@ -1081,6 +1081,12 @@ file rather than the file written again), `sessions.json` (hashes of sign-in tok
 no terminal input or output to any log. A relay for everyone keeps the same files once per space, in
 `spaces/<id>/`, with `space.json` (the hash of the space's password and when it was made) instead of a password.
 
+## ask_ai — a conversation consults another AI here (agent 0.7.1 on Linux)
+
+A conversation the agent runs in the chat mode is offered a local MCP server named `remote_ai` with one tool, `ask_ai` (`tool`, `question`, and an optional `fresh` that starts a new context instead of continuing the seat's cached peer chat). It asks another AI tool of this machine, in the same project folder, for a read-only opinion: the agent opens a peer conversation of that tool in read-only mode, with no MCP server of its own (a consultation never recurses) and its permission asks answered on the spot — reads and searches allowed, everything else denied. The answer is the peer's turn text; a follow-up question continues the same peer context, and every peer chat and temporary config file is disposed when the caller ends.
+
+The tool is handed a config file that launches this same agent as `agent.py --mcp <socket> <token>` — a stdio MCP bridge that forwards `initialize`, `tools/list` and `tools/call` to the agent's Unix-domain socket (one length-prefixed frame per call, the same framing the Windows named pipe uses). The socket's file name is derived from the data folder's path, and the socket is owner-only. The tool list the caller sees names the machine's other chat-capable tools with the same quota hints the leader prompts use.
+
 ## Usage limits as the tools tell them (agent 0.7.1 on Linux)
 
 The Linux agent reads the same three quota sources the Windows program does, and keeps what each said in `quotas/<tool>.json` (0600) in its data folder; a report carries `quotas` in its info, projected by the relay to per-tool windows (`name`, `used` 0..100, `resets`, and a `group` label for Antigravity CLI's secondary pools; a window whose time is over is left out). Only the share used and when it starts anew leave the machine, never anything of the account.

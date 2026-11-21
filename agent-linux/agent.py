@@ -52,6 +52,7 @@ import termios
 import threading
 import time
 import quotas as quotas_store
+import peers as peers_mod
 import teams
 import worktrees
 import uuid
@@ -2236,7 +2237,7 @@ class Chat(Live):
 
     form = "chat"
 
-    def __init__(self, terminal_id, project, cwd, tool, launcher, wake, session, resume, mode):
+    def __init__(self, terminal_id, project, cwd, tool, launcher, wake, session, resume, mode, mcp=None):
         # (a terminal's fields, without a screen: Live.__init__ is not run, it would start a pty)
         self.id, self.project, self.dir, self.tool, self.session, self.status = terminal_id, project, cwd, tool, session, "starting"
         self.wake, self.lock = wake, threading.Lock()
@@ -2244,12 +2245,15 @@ class Chat(Live):
         self.pending_bytes, self.needs_sweep = 0, False
         self.closing_at, self.swept, self.closed, self.drained, self.exit_code, self.closed_at, self.told_closed = None, False, False, False, None, None, False
         self.stopping, self.fd, self.tty, self.cols, self.rows = False, -1, None, 80, 24
+        self.mcp = mcp
         self.said_last, self.gate = "", threading.RLock()
         self.asks, self.printed, self.gather, self.halting, self.errors = {}, {}, ["", "", ""], False, []
         # what has been said in the turn at hand, who hears when the turn ends (a team member's
-        # use), and who keeps what the tool says of its usage limits
+        # use), who keeps what the tool says of its usage limits, and the MCP server the tool is
+        # given (a peer's ask_ai) — all set by whoever opened the conversation
         self.turn_words, self.turned = "", None
         self.quotas_note = None
+        self.mcp, self.auto_ask = None, False
         self.start(launcher, session, resume, mode)
 
     def run(self, argv):
@@ -2397,6 +2401,12 @@ class Chat(Live):
             threading.Thread(target=heard, args=(how, words), daemon=True).start()
 
     def ask(self, request, kind, title, text, always, choices=None):
+        if self.auto_ask:
+            decision = "allow" if kind in ("read", "search") else "deny"
+            asked = {"request": request, "text": (title + ("\n" + text if text else "")).strip(),
+                     "always": always, "choices": list(choices or [])}
+            self.reply(asked, decision)
+            return
         ask = secrets.token_hex(8)
         self.asks[ask] = {"request": request, "text": (title + ("\n" + text if text else "")).strip(), "always": always, "choices": list(choices or [])}
         options = [{"id": "choice:%d" % n, "label": label} for n, label in enumerate(choices)] if choices else \
@@ -2453,6 +2463,12 @@ class Chat(Live):
     def dispose(self):
         with self.lock:
             self.stopping = True
+        if self.mcp:
+            server, self.mcp = self.mcp, None
+            try:
+                server.dispose()
+            except Exception:
+                pass
         for pipe in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
             try:
                 pipe.close()
@@ -2477,6 +2493,8 @@ class ClaudeChat(Chat):
         argv = [launcher, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                 "--replay-user-messages", "--permission-prompt-tool", "stdio", "--resume" if resume else "--session-id", session]
         argv += ["--permission-mode", "plan"] if mode == "read" else ["--permission-mode", "acceptEdits"] if mode == "edit" else []
+        if self.mcp and self.mcp.config_file:
+            argv += ["--mcp-config", self.mcp.config_file, "--strict-mcp-config"]
         self.run(argv)
         self.requests += 1
         self.send({"type": "control_request", "request_id": "init-%d" % self.requests, "request": {"subtype": "initialize"}})
@@ -2644,7 +2662,13 @@ class CodexChat(Chat):
         if resume and not session_id_ok("codex", session):
             raise OpError("对话编号无效")
         self.next, self.waiting, self.turn, self.early, self.thoughts = 0, {}, "", [], set()
-        self.run([launcher, "app-server"])
+        argv = [launcher, "app-server"]
+        if self.mcp and self.mcp.command:
+            prefix = "mcp_servers." + self.mcp.name + "."
+            quoted = lambda text: '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            argv += ["-c", prefix + "command=" + quoted(self.mcp.command),
+                     "-c", prefix + "args=[" + ",".join(quoted(one) for one in self.mcp.args) + "]"]
+        self.run(argv)
         self.call("initialize", {"clientInfo": {"name": "remote-ai", "title": "Remote AI", "version": "1"}}, lambda _: None)
         self.send({"method": "initialized", "params": {}})
         given = {"cwd": self.dir}
@@ -2840,12 +2864,12 @@ class CodexChat(Chat):
         self.send({"id": request["id"], "result": result})
 
 
-def open_chat(terminal_id, project, cwd, tool, launcher, wake, session, resume, mode):
+def open_chat(terminal_id, project, cwd, tool, launcher, wake, session, resume, mode, mcp=None):
     """A conversation of `tool`, new or (`resume`) the saved one `session` gone on with."""
     kind = ClaudeChat if tool == "claude" else CodexChat if tool == "codex" else None
     if kind is None:
         raise OpError("这个工具不支持对话")
-    return kind(terminal_id, project, cwd, tool, launcher, wake, session, resume, mode)
+    return kind(terminal_id, project, cwd, tool, launcher, wake, session, resume, mode, mcp)
 
 
 class Projects:
@@ -3479,6 +3503,9 @@ class Agent:
         self.chains = Chains(os.path.join(data, "chains.json"))
         self.quotas = quotas_store.Quotas(data)
         self.next_codex_ask = self.next_agy_ask = 0.0
+        self.peers = peers_mod.Peers(peers_mod.socket_path(data), find_tool, quota_of=self.quotas.of,
+                                     config_dir=data, chat_tools=CHAIN_TOOLS,
+                                     open_read_only=self.open_peer_chat)
         self.worktrees = worktrees.Worktrees(os.path.join(data, "worktrees"))
         self.teams = teams.Teams(os.path.join(data, "teams.json"), teams.Hands(
             begin_in=self.begin_member_in, say=self.say_to_member, stop=self.stop_member,
@@ -3933,6 +3960,25 @@ class Agent:
         brief = handover(source, read.get("messages", []), str(op.get("note") or ""))
         return {"status": "accepted", "note": self.tell(taker["tool"], taker["id"], brief), "length": len(brief)}
 
+    def open_peer_chat(self, peer_tool, launcher, folder):
+        """Opens a strictly read-only peer conversation with no MCP server of its own (so a
+        consultation never recurses); its permission asks are answered on the spot — reads and
+        searches allowed, everything else denied."""
+        cfg = read_config(self.data)
+        dirs = self.projects.all(cfg)
+        dir_name = next((name for name, path in dirs.items() if os.path.samefile(path, folder)), os.path.basename(folder.rstrip("/")))
+        session = str(uuid.uuid4()) if peer_tool in ("claude", "opencode", "qoder", "pi") else ""
+        terminal = uuid.uuid4().hex
+        if peer_tool in CHAT_TOOLS:
+            chat = open_chat(terminal, dir_name, folder, peer_tool, launcher, self.wake, session, False, "read")
+            chat.auto_ask = True
+            return chat
+        live = Live(terminal, dir_name, folder, 80, 24, tool_argv(peer_tool, launcher, session, False, "read"),
+                    self.wake, peer_tool, session)
+        self.terminals[terminal] = live
+        live.auto_ask = True
+        return live
+
     # ---- the members of a team: conversations this program begins and tells (teams.py Hands)
     def begin_member_in(self, tool, dir_name, words, read, folder_override=None):
         cfg = read_config(self.data)
@@ -3955,7 +4001,8 @@ class Agent:
             terminal = uuid.uuid4().hex
             mode = "read" if read else str(cfg.get("RemoteMaxMode") or "")
             if tool in CHAT_TOOLS:
-                chat = open_chat(terminal, dir_name, cwd, tool, launcher, self.wake, session, False, mode)
+                chat = open_chat(terminal, dir_name, cwd, tool, launcher, self.wake, session, False, mode,
+                                 mcp=None if read else self.peers.offer(tool, cwd))
                 self.terminals[terminal] = chat
                 chat.turned = lambda how, words, one=terminal: self.teams.turned(one, how, words)
                 if str(words).strip():
@@ -4111,7 +4158,9 @@ class Agent:
                 if tool not in CHAT_TOOLS or history:
                     raise OpError("对话选项无效")
                 resume = bool(op.get("session"))       # (a new one of Claude Code's is named above, as for a terminal)
-                chat = open_chat(terminal, name, cwd, tool, launcher, self.wake, session, resume, str(cfg.get("RemoteMaxMode") or ""))
+                chat = open_chat(terminal, name, cwd, tool, launcher, self.wake, session, resume,
+                                 str(cfg.get("RemoteMaxMode") or ""),
+                                 mcp=self.peers.offer(tool, cwd))
                 self.terminals[terminal] = chat
                 if resume:
                     earlier = self.sessions.read(session, tool, name, dirs)
@@ -4471,6 +4520,10 @@ def main():
             data = argv[at + 1]
     if argv and argv[0] == "--set-password":
         return set_password(argv[1] if len(argv) > 1 else data)
+    if argv and argv[0] == "--mcp":
+        if len(argv) < 3:
+            return 2
+        return peers_mod.bridge(argv[1], argv[2])
     if "--pair" in argv:
         return show_pairing(data)
     os.makedirs(data, mode=0o700, exist_ok=True)
