@@ -667,6 +667,77 @@ public static class TeamsCheck {
         Require(reread.Remove(other) && closed.SequenceEqual(new[] { otherWriter }), "removing the other task closes only its own terminal");
     }
 
+    static void CollaborationAttachments(string folder) {
+        string relative = ".remote-ai/attachments/20261121-123456-a1b2c3.png";
+        string absolute = Path.Combine(folder, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(absolute));
+        File.WriteAllBytes(absolute, new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a });
+        var attachments = Attachments.Read(folder, new object[] { relative });
+        string line = "\u9644\u56fe\uff1a" + Path.GetFullPath(absolute);
+        var hands = new Teams.Hands {
+            Begin = one => {
+                string terminal = "attach-" + (++made);
+                tools[terminal] = one.Tool;
+                told.Add(new[] { terminal, one.Tool, one.Words });
+                return terminal;
+            },
+            Say = (terminal, words) => {
+                if (terminal == "gone") throw new InvalidOperationException("member is gone");
+                told.Add(new[] { terminal, "", words });
+            },
+            Stop = terminal => { },
+            Changes = dir => ""
+        };
+
+        string direct = "a1a1a1a1a1a1a1a1";
+        var teams = new Teams(Path.Combine(folder, "attachments.dat"), hands);
+        teams.Start(new Dictionary<string, object> {
+            { "id", direct }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "read screenshots" },
+            { "tools", new object[] { "codex", "claude" } }, { "rounds", 2 },
+            { "roster", new[] { Member("leader", "codex"), Member("member-1", "claude") } }
+        });
+        string directLeader = Team(teams, direct).Members["leader"];
+        teams.Turned(directLeader, "done", "ASSIGN member-1: inspect the screenshot");
+        string member = Team(teams, direct).Members["member-1"];
+        string longText = new string('x', 3900);
+        teams.Say(direct, longText, "member-1", attachments);
+        string directWords = Last(member);
+        Require(directWords.Contains(longText) && directWords.Contains(line) && directWords.IndexOf(line, StringComparison.Ordinal) == directWords.LastIndexOf(line, StringComparison.Ordinal),
+            "targeted member receives a long message with one absolute attachment line");
+        Require(Team(teams, direct).Log.Last().Text.Contains(line), "team history keeps the absolute attachment path");
+        var reread = new Teams(Path.Combine(folder, "attachments.dat"), hands);
+        Require(Team(reread, direct).Log.Last().Text.Contains(line), "reloaded team history keeps the path for opening the original image");
+
+        string handoff = "b2b2b2b2b2b2b2b2";
+        teams.Start(new Dictionary<string, object> {
+            { "id", handoff }, { "mode", "lead" }, { "dir", "web-shop" }, { "goal", "send to leader" },
+            { "tools", new object[] { "codex", "claude" } }, { "rounds", 2 },
+            { "roster", new[] { Member("leader", "codex"), Member("member-1", "claude") } }
+        });
+        string handoffLeader = Team(teams, handoff).Members["leader"];
+        teams.Turned(handoffLeader, "done", "ASSIGN member-1: inspect the screenshot");
+        string handoffMember = Team(teams, handoff).Members["member-1"];
+        teams.Say(handoff, "queue this for the leader", "", attachments);
+        Require(!Last(handoffLeader).Contains(line), "an automatic leader handoff waits for the member batch");
+        teams.Turned(handoffMember, "done", "screenshot inspected");
+        Require(Last(handoffLeader).Contains("queue this for the leader") && Last(handoffLeader).Contains(line),
+            "an omitted target hands the attachment text to the leader");
+
+        string paused = "c3c3c3c3c3c3c3c3";
+        teams.Start(new Dictionary<string, object> {
+            { "id", paused }, { "mode", "review" }, { "dir", "web-shop" }, { "goal", "resume with screenshot" },
+            { "tools", new object[] { "claude", "codex" } }, { "rounds", 1 }
+        });
+        string writer = Team(teams, paused).Members["writer"];
+        teams.Turned(writer, "done", "initial draft");
+        string reviewer = Team(teams, paused).Members["reviewer"];
+        teams.Turned(reviewer, "done", "REVIEW: CHANGES\nplease continue");
+        Require(Team(teams, paused).State == "paused" && Team(teams, paused).Spent, "review task pauses with its round spent");
+        teams.Say(paused, "continue with the screenshot", "", attachments);
+        Require(Team(teams, paused).State == "running" && Last(writer).Contains("continue with the screenshot") && Last(writer).Contains(line),
+            "a paused team_say resumes the kept work with the attachment path");
+    }
+
     public static int Main() {
         string folder = Path.Combine(Path.GetTempPath(), "remote-ai-teams-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
@@ -991,6 +1062,7 @@ public static class TeamsCheck {
             Grouping(file);
             Roster(folder);
             FreeRounds(folder);
+            CollaborationAttachments(folder);
         } catch (Exception problem) {
             Console.Error.WriteLine("teams check failed: " + problem.Message + "\n" + problem.StackTrace);
             return 1;

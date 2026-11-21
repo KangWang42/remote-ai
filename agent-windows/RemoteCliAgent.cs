@@ -445,7 +445,7 @@ public sealed class TerminalAgent {
             live.Pty = Chat.Open(one.Tool, launcher, place, "", false, mode, Emitted(live), Quotas, one.Read ? null : Peers.Offer(one.Tool, place), one.Model, one.Effort);
             Heard(live);
             terminals[live.Id] = live;
-            live.Chat.Say(one.Words, null);
+            live.Chat.Say(Attachments.WithText(one.Words, one.Attachments), null);
             return live.Id;
         }
     }

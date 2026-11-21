@@ -111,7 +111,7 @@ public sealed class Teams {
     static readonly string[] MemberRoles = { "member-1", "member-2", "member-3" };
     /// A member's conversation to begin: its tool, the project, the first words, read only or not, the folder where it
     /// is not the project's own (a worktree, `compare`), the model and reasoning effort ("" for the tool's default).
-    public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = "", Effort = ""; public bool Read; }
+    public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = "", Effort = ""; public bool Read; public IList<Attachment> Attachments; }
     /// What the program does for a team: begin a member's conversation, tell it something, stop or close one, read project
     /// changes, read quota limits, list available chat tools, and manage Git worktrees for `compare`.
     public sealed class Hands {
@@ -510,6 +510,14 @@ public sealed class Teams {
     }
     const string Remind = "【协作任务】没有在你的回答里找到分派或结束。请在回答的最后按格式写：\nASSIGN 成员名: 任务内容（可以多行）\n或单独一行：\nDONE: 总结";
     static string Cut(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "\n…（后面省略）" : text; }
+    static string CutKeepingAttachments(string text, int most) {
+        text = text ?? "";
+        int marker = text.IndexOf("\n\n\u9644\u56fe\uff1a", StringComparison.Ordinal);
+        if (marker < 0 || text.Length <= most) return Cut(text, most);
+        string images = text.Substring(marker);
+        if (images.Length >= most) return images.Substring(0, most);
+        return text.Substring(0, most - images.Length) + images;
+    }
     static string Short(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "…" : text; }
 
     // ---- what the members say, read
@@ -728,7 +736,6 @@ public sealed class Teams {
         target = (target ?? "").Trim();
         if ((text.Length == 0 && (attachments == null || attachments.Count == 0)) || text.Length > 4000)
             throw new ArgumentException("请输入文字或添加图片，文字最多 4000 字");
-        text = Attachments.WithText(text, attachments);
         Team team; string state, phase, mode; List<string> targets = new List<string>();
         lock (gate) {
             team = items.FirstOrDefault(t => t.Id == id);
@@ -761,7 +768,8 @@ public sealed class Teams {
                     foreach (string r in targets) { team.Failed.Remove(r); team.Failed.Remove(ToolOf(team, r)); }
                 }
                 if (state == "running" && mode == "lead" && targets.Remove("leader")) {
-                    team.LeaderInput = Cut(team.LeaderInput.Length == 0 ? text : team.LeaderInput + "\n" + text, 12000);
+                    string added = Attachments.WithText(text, attachments);
+                    team.LeaderInput = Cut(team.LeaderInput.Length == 0 ? added : team.LeaderInput + "\n" + added, 12000);
                     if (MembersWorking(team)) team.Awaited.Remove("leader");
                 }
                 Save();
@@ -788,31 +796,31 @@ public sealed class Teams {
             }
         }
 
-        Log(team, "user", (target.Length > 0 ? "@" + RoleLabel(team, ResolveRole(team, target) ?? target) + " " : "") + text);
-        if (state == "paused" && team.Spent) { Extend(team, text); return Of(id); }
+        Log(team, "user", Attachments.WithText((target.Length > 0 ? "@" + RoleLabel(team, ResolveRole(team, target) ?? target) + " " : "") + text, attachments));
+        if (state == "paused" && team.Spent) { Extend(team, text, attachments); return Of(id); }
 
         if (state == "running" || state == "paused") {
             string prefix = state == "running" ? "【用户插话】\n" : "【用户补充】\n";
             foreach (string role in targets) {
                 string terminal = null;
                 lock (gate) team.Members.TryGetValue(role, out terminal);
-                DeliverOrReopen(team, role, terminal, prefix + text);
+                DeliverOrReopen(team, role, terminal, prefix + text, attachments);
             }
         } else if (mode == "compare") {
             string prompt = "【用户补充要求 · 第 " + team.Round + " 轮】\n" + text + "\n\n请在你当前独立工作区中继续完善方案，完成后简要说明改了什么。";
             foreach (string tool in targets) {
                 string wt = null; lock (gate) team.Worktrees.TryGetValue(tool, out wt);
-                Ask(team, tool, tool, prompt, false, wt);
+                Ask(team, tool, tool, prompt, false, wt, attachments);
             }
         } else if (mode == "review") {
             string prompt = "【用户新一轮要求 · 第 " + team.Round + " 轮】\n" + text
                 + "\n\n请按新要求继续修改，完成后简明说明改了什么。之后 " + Label(team.Tools[1]) + " 会再次只读审查。";
-            Ask(team, "writer", team.Tools[0], prompt, false, null);
+            Ask(team, "writer", team.Tools[0], prompt, false, null, attachments);
         } else {
             var rooms = Rooms(team);
             string prompt = "【用户新一轮要求 · 第 " + team.Round + " 轮】\n" + text + RoomsBlock(team, rooms)
                 + "\n\n" + SupplementGuide + " 完成后写 DONE: 总结。";
-            Ask(team, "leader", team.Tools[0], prompt, false, null);
+            Ask(team, "leader", team.Tools[0], prompt, false, null, attachments);
         }
         return Of(id);
     }
@@ -1056,9 +1064,12 @@ public sealed class Teams {
         return null;
     }
 
-    void DeliverOrReopen(Team team, string role, string terminal, string words) {
+    void TellMember(string terminal, string words, IList<Attachment> attachments) {
+        hands.Say(terminal, Attachments.WithText(words, attachments));
+    }
+    void DeliverOrReopen(Team team, string role, string terminal, string words, IList<Attachment> attachments = null) {
         if (!String.IsNullOrEmpty(terminal)) {
-            try { hands.Say(terminal, words); return; }
+            try { TellMember(terminal, words, attachments); return; }
             catch (Exception) { }
         }
         string tool = ToolOf(team, role);
@@ -1092,11 +1103,11 @@ public sealed class Teams {
             lock (gate) team.Pending.TryGetValue(role, out pending);
             prompt = (pending ?? MemberTask(team, team.Goal)) + "\n\n" + words;
         }
-        Open(team, role, tool, prompt, read, wt);
+        Open(team, role, tool, prompt, read, wt, attachments);
     }
 
     // ---- the members' turns
-    void Open(Team team, string role, string tool, string words, bool read, string folderOverride) {
+    void Open(Team team, string role, string tool, string words, bool read, string folderOverride, IList<Attachment> attachments = null) {
         string model, effort;
         lock (gate) {
             opening++;
@@ -1106,7 +1117,7 @@ public sealed class Teams {
             effort = member != null ? member.Effort : team.Efforts.ContainsKey(tool) ? team.Efforts[tool] : "";
         }
         try {
-            string terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "" });
+            string terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "", Attachments = attachments });
             lock (gate) {
                 team.Members[role] = terminal;
                 if (!team.Opened.Contains(terminal)) team.Opened.Add(terminal);
@@ -1128,7 +1139,7 @@ public sealed class Teams {
             Tell();
         }
     }
-    void Ask(Team team, string role, string tool, string words, bool read, string folderOverride = null) {
+    void Ask(Team team, string role, string tool, string words, bool read, string folderOverride = null, IList<Attachment> attachments = null) {
         string terminal;
         lock (gate) {
             team.Members.TryGetValue(role, out terminal);
@@ -1141,14 +1152,14 @@ public sealed class Teams {
             Save();
         }
         if (terminal != null) {
-            try { hands.Say(terminal, words); Log(team, role, "收到：" + Cut(words, 240)); return; }
+            try { TellMember(terminal, words, attachments); Log(team, role, "收到：" + Cut(words, 240)); return; }
             catch (Exception) { }       // its conversation was closed: begun anew
         }
-        Open(team, role, tool, words, read, folderOverride);
+        Open(team, role, tool, words, read, folderOverride, attachments);
     }
     void Log(Team team, string who, string text) {
         lock (gate) {
-            team.Log.Add(new Step { At = Now(), Who = who, Text = Cut(text, 4000) });
+            team.Log.Add(new Step { At = Now(), Who = who, Text = CutKeepingAttachments(text, 4000) });
             if (team.Log.Count > 200) team.Log.RemoveRange(0, team.Log.Count - 200);
             Save();
         }
@@ -1505,7 +1516,7 @@ public sealed class Teams {
     }
     /// One more round for work whose rounds were spent: what was kept goes out, with the owner's `words` where there
     /// are any; with nothing kept the leader is asked to go on.
-    void Extend(Team team, string words) {
+    void Extend(Team team, string words, IList<Attachment> attachments = null) {
         Dictionary<string, string> held;
         lock (gate) {
             if (!team.Spent) return;        // (given already)
@@ -1523,7 +1534,7 @@ public sealed class Teams {
             string prompt = one.Key == "writer" ? WriterAgain(team, one.Value)
                 : one.Key == "leader" ? "【协作任务 · 第 " + team.Round + " 轮】用户追加了一轮。请按上一轮验收的结论继续：用 ASSIGN 成员名: 修改内容 派出还要做的修复，或自己修好后写 DONE: 总结。"
                 : MemberTask(team, one.Value);
-            Ask(team, one.Key, ToolOf(team, one.Key), prompt + added, false);
+            Ask(team, one.Key, ToolOf(team, one.Key), prompt + added, false, null, attachments);
         }
         Tell();
     }
