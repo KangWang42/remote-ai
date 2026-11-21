@@ -47,6 +47,7 @@ public static class TeamsCheck {
         var team = Team(teams, id);
         string first = team.Members["member-1"], second = team.Members["member-2"];
         Require(first != second && tools[first] == "claude#sonnet" && tools[second] == "claude#opus", "separate conversations and model choices");
+        Require(Last(leader).Contains("Remote AI 按这些行派给协作成员") && Last(first).Contains("只有用户明确要求时才使用工具内置的子代理"), "leader dispatch and member-local delegation have distinct instructions");
         teams.Learn(first, "claude", "12345678-1111-4111-8111-123456789abc");
         teams.Learn(second, "claude", "12345678-2222-4222-8222-123456789abc");
         teams.Say(id, "同时看看边界情况", "leader");
