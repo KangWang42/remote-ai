@@ -103,7 +103,7 @@ console.log('ok');
                 };
                 lock (chats) chats[id] = chat;
                 note("开始 " + id + " (" + tool + (read ? ", 只读" : "") + (one.Model.Length > 0 ? ", " + one.Model : "") + ")", words);
-                chat.Say(words, null);
+                chat.Say(words, null, one.Attachments);
                 Console.WriteLine("[begin " + tool + (read ? " read" : "") + (one.Model.Length > 0 ? " " + one.Model : "") + "]");
                 return id;
             },
@@ -112,6 +112,13 @@ console.log('ok');
                 note("告诉 " + terminal + " (" + chat.Tool + ")", words);
                 chat.Say(words, null);
                 Console.WriteLine("[told " + chat.Tool + "] " + words.Replace("\n", " ").Substring(0, Math.Min(120, words.Length)));
+            },
+            SayWithAttachments = (terminal, words, attachments) => {
+                Chat chat; lock (chats) chat = chats[terminal];
+                string shown = Attachments.WithText(words, attachments);
+                note("告诉 " + terminal + " (" + chat.Tool + ")", shown);
+                chat.Say(words, null, attachments);
+                Console.WriteLine("[told " + chat.Tool + "] " + shown.Replace("\n", " ").Substring(0, Math.Min(120, shown.Length)));
             },
             Stop = terminal => { },
             Limits = tool => new[] { new Quotas.Window { Name = "five_hour", Used = tool == tight ? 96 : 15 }, new Quotas.Window { Name = "seven_day", Used = tool == tight ? 88 : 30 } },

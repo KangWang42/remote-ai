@@ -138,7 +138,8 @@ public sealed class TerminalAgent {
             return Chat.ListModels(tool, launcher, scratch, ms);
         });
         Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands {
-            Begin = BeginMember, Say = SayToMember, Stop = StopMember, Close = CloseMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
+            Begin = BeginMember, Say = SayToMember, SayWithAttachments = SayToMember, ReadAttachment = ReadQueuedAttachment,
+            Stop = StopMember, Close = CloseMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
             MakeWorktree = MakeTeamWorktree, WorktreeDiff = Worktrees.Diff, WorktreeStat = Worktrees.Stat, ApplyWorktree = ApplyTeamWorktree, CleanWorktrees = CleanTeamWorktrees });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
@@ -445,7 +446,7 @@ public sealed class TerminalAgent {
             live.Pty = Chat.Open(one.Tool, launcher, place, "", false, mode, Emitted(live), Quotas, one.Read ? null : Peers.Offer(one.Tool, place), one.Model, one.Effort);
             Heard(live);
             terminals[live.Id] = live;
-            live.Chat.Say(Attachments.WithText(one.Words, one.Attachments), null);
+            live.Chat.Say(one.Words, null, one.Attachments);
             return live.Id;
         }
     }
@@ -470,6 +471,13 @@ public sealed class TerminalAgent {
         return live.Chat;
     }
     void SayToMember(string terminal, string words) { Member(terminal).Say(words, null); }
+    void SayToMember(string terminal, string words, IList<Attachment> attachments) { Member(terminal).Say(words, null, attachments); }
+    Attachment ReadQueuedAttachment(string project, string path) {
+        string folder;
+        if (!AllDirs(Preferences()).TryGetValue(project, out folder)) return null;
+        try { return Attachments.Read(folder, new[] { path })[0]; }
+        catch (ArgumentException) { return null; }
+    }
     void StopMember(string terminal) { try { Member(terminal).Stop(); } catch (InvalidOperationException) { } }
     /// Closes a member's terminal as the phone's "close" does; one already closed is left as it is.
     void CloseMember(string terminal) {

@@ -674,10 +674,14 @@ public static class TeamsCheck {
         File.WriteAllBytes(absolute, new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a });
         var attachments = Attachments.Read(folder, new object[] { relative });
         string line = "\u9644\u56fe\uff1a" + Path.GetFullPath(absolute);
+        var deliveredImages = new Dictionary<string, string[]>();
+        var deliveredText = new Dictionary<string, string>();
+        string closed = "";
         var hands = new Teams.Hands {
             Begin = one => {
                 string terminal = "attach-" + (++made);
                 tools[terminal] = one.Tool;
+                deliveredImages[terminal] = (one.Attachments ?? new Attachment[0]).Select(image => image.RelativePath).ToArray();
                 told.Add(new[] { terminal, one.Tool, one.Words });
                 return terminal;
             },
@@ -685,6 +689,13 @@ public static class TeamsCheck {
                 if (terminal == "gone") throw new InvalidOperationException("member is gone");
                 told.Add(new[] { terminal, "", words });
             },
+            SayWithAttachments = (terminal, words, images) => {
+                if (terminal == closed) throw new InvalidOperationException("member is gone");
+                deliveredText[terminal] = words;
+                deliveredImages[terminal] = (images ?? new Attachment[0]).Select(image => image.RelativePath).ToArray();
+                told.Add(new[] { terminal, "", Attachments.WithText(words, images) });
+            },
+            ReadAttachment = (dir, path) => Attachments.Read(folder, new[] { path })[0],
             Stop = terminal => { },
             Changes = dir => ""
         };
@@ -704,9 +715,16 @@ public static class TeamsCheck {
         string directWords = Last(member);
         Require(directWords.Contains(longText) && directWords.Contains(line) && directWords.IndexOf(line, StringComparison.Ordinal) == directWords.LastIndexOf(line, StringComparison.Ordinal),
             "targeted member receives a long message with one absolute attachment line");
-        Require(Team(teams, direct).Log.Last().Text.Contains(line), "team history keeps the absolute attachment path");
+        Require(deliveredImages[member].SequenceEqual(new[] { relative }) && !deliveredText[member].Contains(line),
+            "team_say supplies a separate attachment to the existing member");
+        closed = member;
+        teams.Say(direct, "reopen with the screenshot", "member-1", attachments);
+        string reopenedMember = Team(teams, direct).Members["member-1"];
+        Require(reopenedMember != member && deliveredImages[reopenedMember].SequenceEqual(new[] { relative }),
+            "a new member receives the attachment at conversation start");
+        Require(Team(teams, direct).Log.Any(step => step.Text.Contains(line)), "team history keeps the absolute attachment path");
         var reread = new Teams(Path.Combine(folder, "attachments.dat"), hands);
-        Require(Team(reread, direct).Log.Last().Text.Contains(line), "reloaded team history keeps the path for opening the original image");
+        Require(Team(reread, direct).Log.Any(step => step.Text.Contains(line)), "reloaded team history keeps the path for opening the original image");
 
         string handoff = "b2b2b2b2b2b2b2b2";
         teams.Start(new Dictionary<string, object> {
@@ -717,11 +735,19 @@ public static class TeamsCheck {
         string handoffLeader = Team(teams, handoff).Members["leader"];
         teams.Turned(handoffLeader, "done", "ASSIGN member-1: inspect the screenshot");
         string handoffMember = Team(teams, handoff).Members["member-1"];
+        string[] newer = Enumerable.Range(4, 4).Select(i => ".remote-ai/attachments/20261121-123456-a1b2c" + i + ".png").ToArray();
+        foreach (string path in newer) File.Copy(absolute, Path.Combine(folder, path.Replace('/', Path.DirectorySeparatorChar)));
         teams.Say(handoff, "queue this for the leader", "", attachments);
+        teams.Say(handoff, "queue four more images", "", Attachments.Read(folder, newer));
         Require(!Last(handoffLeader).Contains(line), "an automatic leader handoff waits for the member batch");
+        teams = new Teams(Path.Combine(folder, "attachments.dat"), hands);
+        Require(Team(teams, handoff).State == "paused", "the interrupted task awaits resuming after reload");
+        teams.Resume(handoff);
         teams.Turned(handoffMember, "done", "screenshot inspected");
         Require(Last(handoffLeader).Contains("queue this for the leader") && Last(handoffLeader).Contains(line),
-            "an omitted target hands the attachment text to the leader");
+            "a reloaded leader handoff keeps an older image as a project file reference");
+        Require(deliveredImages[handoffLeader].SequenceEqual(newer) && newer.All(path => !deliveredText[handoffLeader].Contains(Path.GetFileName(path))),
+            "a reloaded leader handoff sends the latest four images without duplicate path text");
 
         string paused = "c3c3c3c3c3c3c3c3";
         teams.Start(new Dictionary<string, object> {
@@ -736,6 +762,7 @@ public static class TeamsCheck {
         teams.Say(paused, "continue with the screenshot", "", attachments);
         Require(Team(teams, paused).State == "running" && Last(writer).Contains("continue with the screenshot") && Last(writer).Contains(line),
             "a paused team_say resumes the kept work with the attachment path");
+        Require(deliveredImages[writer].SequenceEqual(new[] { relative }), "paused team_say resumes the member with an attachment");
     }
 
     public static int Main() {

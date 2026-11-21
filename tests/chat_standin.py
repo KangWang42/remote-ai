@@ -199,6 +199,9 @@ def claude(args):
             # pictures sent with a message come as image blocks beside the words (agent-windows/Attachments.cs)
             if not isinstance(content, str) and any(block.get("type") == "image" for block in content):
                 record_standin("STANDIN_CLAUDE_LOG", {"event": "images", "count": sum(block.get("type") == "image" for block in content)})
+                for block in content:
+                    if block.get("type") == "image" and block["source"]["media_type"] == "image/png":
+                        record_standin("STANDIN_CLAUDE_LOG", {"image_data": block["source"]["data"]})
             turns.append(content if isinstance(content, str) else "\n".join(block["text"] for block in content if block.get("type") == "text"))
 
 
@@ -396,6 +399,9 @@ def agy(args):
         put({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": state["session"], "update": what}})
 
     def turn(number, text):
+        if os.environ.get("STANDIN_TEAM_AUTO") and ("【协作任务" in text or "【用户新一轮要求" in text):
+            update(sessionUpdate="agent_message_chunk", content={"type": "text", "text": "已完成执行成员子任务并自测通过。"})
+            return ended(number, "end_turn", None)
         if "只读请教" in text or "继续请教" in text:
             state["peer_turns"] += 1
             extra = ""
@@ -475,7 +481,10 @@ def agy(args):
             waiting[number][0].set()
             continue
         if method == "initialize":
-            put({"jsonrpc": "2.0", "id": number, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}})
+            capabilities = {"loadSession": True}
+            if os.environ.get("STANDIN_AGY_IMAGE"):
+                capabilities["promptCapabilities"] = {"image": True}
+            put({"jsonrpc": "2.0", "id": number, "result": {"protocolVersion": 1, "agentCapabilities": capabilities}})
         elif method == "session/new":
             state["mcp"] = params.get("mcpServers") or []
             state["session"] = str(uuid.uuid4())
@@ -498,6 +507,9 @@ def agy(args):
             put({"jsonrpc": "2.0", "id": number, "result": {}})
         elif method == "session/prompt":
             record_standin("STANDIN_AGY_RECORD", {"prompt": params["prompt"][0]["text"][:80]})
+            for block in params["prompt"]:
+                if block.get("type") == "image" and block["mimeType"] == "image/png":
+                    record_standin("STANDIN_AGY_RECORD", {"image_data": block["data"]})
             threading.Thread(target=turn, args=(number, params["prompt"][0]["text"]), daemon=True).start()
         elif method == "session/cancel":
             stop.set()

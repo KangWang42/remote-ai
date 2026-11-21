@@ -38,6 +38,8 @@ public sealed class Teams {
         public RosterMember[] Roster = new RosterMember[0];
         public bool AutoRoster;
         public string LeaderInput = "";
+        /// Project-relative paths for the latest images in the queued leader message.
+        internal List<string> LeaderAttachments = new List<string>();
         /// The rounds set (0: free, lead only, `Cap`), and the one under way.
         public int Rounds = 3, Round = 1;
         public bool Free { get { return Rounds == 0; } }
@@ -83,6 +85,7 @@ public sealed class Teams {
         internal Team Copy() {
             var copy = (Team)MemberwiseClone();
             copy.Log = Log.ToList(); copy.Members = new Dictionary<string, string>(Members); copy.Awaited = Awaited.ToList();
+            copy.LeaderAttachments = LeaderAttachments.ToList();
             copy.Answers = new Dictionary<string, string>(Answers); copy.Tools = Tools.ToArray(); copy.Roster = Roster.ToArray();
             copy.Worktrees = new Dictionary<string, string>(Worktrees); copy.BaseCommits = new Dictionary<string, string>(BaseCommits);
             copy.Summaries = new Dictionary<string, string>(Summaries); copy.Stats = new Dictionary<string, string>(Stats);
@@ -117,6 +120,10 @@ public sealed class Teams {
     public sealed class Hands {
         public Func<Opening, string> Begin;                                      // -> terminal
         public Action<string, string> Say;                                       // terminal, words
+        /// Native image-aware member delivery. Older callers may keep using Say,
+        /// which receives the path-text fallback.
+        public Action<string, string, IList<Attachment>> SayWithAttachments;     // terminal, words, images
+        public Func<string, string, Attachment> ReadAttachment;                  // project, relative path -> image or null
         public Action<string> Stop;                                              // terminal
         public Action<string> Close;                                             // terminal: ends it; its conversation stays in the tool's history
         public Func<string, string> Changes;                                     // project -> what changed, in words
@@ -163,6 +170,7 @@ public sealed class Teams {
             Discuss = String.Equals(word("discuss"), "True", StringComparison.OrdinalIgnoreCase),
             AutoRoster = String.Equals(word("auto_roster"), "True", StringComparison.OrdinalIgnoreCase),
             LeaderInput = word("leader_input"),
+            LeaderAttachments = many("leader_attachments").OfType<string>().Take(Attachments.MaxCount).ToList(),
             Reminded = String.Equals(word("reminded"), "True", StringComparison.OrdinalIgnoreCase),
             Last = String.Equals(word("last"), "True", StringComparison.OrdinalIgnoreCase),
             Spent = String.Equals(word("spent"), "True", StringComparison.OrdinalIgnoreCase), Held = map("held"),
@@ -196,6 +204,7 @@ public sealed class Teams {
             { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created },
             { "roster", t.Roster.Length == 0 ? null : t.Roster.Select(member => member.Shown()).ToArray() }, { "auto_roster", t.AutoRoster },
             { "leader_input", t.LeaderInput },
+            { "leader_attachments", t.LeaderAttachments },
             { "members", t.Members }, { "awaited", t.Awaited }, { "answers", t.Answers },
             { "worktrees", t.Worktrees }, { "base_commits", t.BaseCommits },
             { "summaries", t.Summaries }, { "stats", t.Stats }, { "diffs", t.Diffs },
@@ -518,6 +527,10 @@ public sealed class Teams {
         if (images.Length >= most) return images.Substring(0, most);
         return text.Substring(0, most - images.Length) + images;
     }
+    static string WithoutAttachments(string text, IEnumerable<Attachment> images) {
+        var lines = new HashSet<string>(images.Select(image => "\u9644\u56fe\uff1a" + image.AbsolutePath), StringComparer.Ordinal);
+        return String.Join("\n", text.Split('\n').Where(line => !lines.Contains(line)));
+    }
     static string Short(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "…" : text; }
 
     // ---- what the members say, read
@@ -770,6 +783,9 @@ public sealed class Teams {
                 if (state == "running" && mode == "lead" && targets.Remove("leader")) {
                     string added = Attachments.WithText(text, attachments);
                     team.LeaderInput = Cut(team.LeaderInput.Length == 0 ? added : team.LeaderInput + "\n" + added, 12000);
+                    if (attachments != null)
+                        team.LeaderAttachments = attachments.Select(image => image.RelativePath).Concat(team.LeaderAttachments)
+                            .Distinct().Take(Attachments.MaxCount).ToList();
                     if (MembersWorking(team)) team.Awaited.Remove("leader");
                 }
                 Save();
@@ -1065,7 +1081,8 @@ public sealed class Teams {
     }
 
     void TellMember(string terminal, string words, IList<Attachment> attachments) {
-        hands.Say(terminal, Attachments.WithText(words, attachments));
+        if (hands.SayWithAttachments != null) hands.SayWithAttachments(terminal, words, attachments);
+        else hands.Say(terminal, Attachments.WithText(words, attachments));
     }
     void DeliverOrReopen(Team team, string role, string terminal, string words, IList<Attachment> attachments = null) {
         if (!String.IsNullOrEmpty(terminal)) {
@@ -1111,7 +1128,7 @@ public sealed class Teams {
         string model, effort;
         lock (gate) {
             opening++;
-            team.Pending[role] = Cut(words, 6000);
+            team.Pending[role] = Cut(Attachments.WithText(words, attachments), 6000);
             var member = RosterOf(team, role);
             model = member != null ? member.Model : team.Models.ContainsKey(tool) ? team.Models[tool] : "";
             effort = member != null ? member.Effort : team.Efforts.ContainsKey(tool) ? team.Efforts[tool] : "";
@@ -1141,16 +1158,32 @@ public sealed class Teams {
     }
     void Ask(Team team, string role, string tool, string words, bool read, string folderOverride = null, IList<Attachment> attachments = null) {
         string terminal;
+        string supplement = "";
+        string[] queuedPaths = new string[0];
         lock (gate) {
             team.Members.TryGetValue(role, out terminal);
             if (role == "leader" && team.LeaderInput.Length > 0) {
-                words += "\n\n【用户补充要求】\n" + team.LeaderInput;
+                supplement = "\n\n【用户补充要求】\n" + team.LeaderInput;
+                queuedPaths = team.LeaderAttachments.ToArray();
                 team.LeaderInput = "";
+                team.LeaderAttachments.Clear();
             }
-            team.Pending[role] = Cut(words, 6000);
+            team.Pending[role] = Cut(Attachments.WithText(words + supplement, attachments), 6000);
             if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
             Save();
         }
+        if (queuedPaths.Length > 0 && hands.ReadAttachment != null) {
+            var images = new List<Attachment>(attachments ?? new Attachment[0]);
+            foreach (string path in queuedPaths) {
+                if (images.Any(image => image.RelativePath == path)) continue;
+                if (images.Count >= Attachments.MaxCount) break;
+                Attachment imageFile = hands.ReadAttachment(team.Dir, path);
+                if (imageFile != null) images.Add(imageFile);
+            }
+            supplement = WithoutAttachments(supplement, images);
+            attachments = images;
+        }
+        words += supplement;
         if (terminal != null) {
             try { TellMember(terminal, words, attachments); Log(team, role, "收到：" + Cut(words, 240)); return; }
             catch (Exception) { }       // its conversation was closed: begun anew

@@ -23,6 +23,7 @@ public sealed class Attachment {
 
 public static class Attachments {
     public const long Limit = 20L * 1024 * 1024;
+    public const int MaxCount = 4;
     static readonly Regex Name = new Regex(@"\A[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(png|jpg|jpeg|webp|gif)\z", RegexOptions.None);
     static readonly Regex Path = new Regex(@"\A\.remote-ai/attachments/([^/]+)\z", RegexOptions.None);
 
@@ -46,7 +47,7 @@ public static class Attachments {
         if (value == null) return new List<Attachment>();
         if (items == null || value is string) throw Missing();
         var raw = items.Cast<object>().ToList();
-        if (raw.Count > 4) throw new ArgumentException("\u9644\u56fe\u6700\u591a 4 \u5f20");
+        if (raw.Count > MaxCount) throw new ArgumentException("\u9644\u56fe\u6700\u591a 4 \u5f20");
         string fullRoot;
         try { fullRoot = System.IO.Path.GetFullPath(root).TrimEnd('\\'); } catch { throw Missing(); }
         var result = new List<Attachment>();

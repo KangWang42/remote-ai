@@ -10,6 +10,7 @@ Verifies:
 
     python tests/teams_e2e_check.py [<folder with RemoteCliAgent.exe>]
 """
+import base64
 import http.client
 import json
 import secrets
@@ -37,12 +38,21 @@ def main():
     temp = tempfile.TemporaryDirectory(prefix="remote-ai-teams-e2e-", ignore_cleanup_errors=True)
     data, shop = Path(temp.name) / "agent", Path(temp.name) / "projects" / "web-shop"
     codex_log = Path(temp.name) / "codex.jsonl"
+    claude_log = Path(temp.name) / "claude.jsonl"
+    agy_log = Path(temp.name) / "agy.jsonl"
     data.mkdir()
     shop.mkdir(parents=True)
+    image = ".remote-ai/attachments/20261121-123456-a1b2c3.png"
+    (shop / image).parent.mkdir(parents=True)
+    pixels = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+    (shop / image).write_bytes(base64.b64decode(pixels))
     homes = Homes(temp.name)
     environment = homes.environment(
         RCLI_PASSWORD=password,
         STANDIN_CODEX_LOG=str(codex_log),
+        STANDIN_CLAUDE_LOG=str(claude_log),
+        STANDIN_AGY_RECORD=str(agy_log),
+        STANDIN_AGY_IMAGE="1",
         STANDIN_TEAM_AUTO="1",
     )
     tools = homes.stand_ins(temp.name)
@@ -207,6 +217,28 @@ def main():
         after_restart = read_codex_log()
         assert any(e["event"] == "thread/start" and e["model"] == "gpt-6.2-sol" and e["config_effort"] == "high" for e in after_restart), after_restart
         assert any(e["event"] == "turn/start" and e["model"] == "gpt-6.2-sol" and e["effort"] == "high" for e in after_restart), after_restart
+
+        # A screenshot crosses the relay, Windows collaboration and the actual tool adapter.
+        for writer, log in (("claude", claude_log), ("agy", agy_log)):
+            attachment_team = secrets.token_hex(16)
+            work("team_start", item={
+                "id": attachment_team, "mode": "review", "dir": "web-shop",
+                "goal": "协作原生图片测试", "rounds": 2, "tools": [writer, "codex"],
+            })
+            work("team_say", team=attachment_team, text="", attachments=[image])
+            deadline = time.monotonic() + 15
+            packets = []
+            while time.monotonic() < deadline:
+                if log.exists():
+                    packets = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+                    if any(packet.get("image_data") == pixels for packet in packets):
+                        break
+                time.sleep(0.15)
+            else:
+                raise AssertionError((writer, "no native image payload received", packets))
+            work("team_stop", team=attachment_team)
+            work("team_remove", team=attachment_team)
+        print("team_say delivered matching native PNG bytes to Claude stream-json and image-capable ACP")
 
         # 6) Removing the task closes the conversations it began; the history keeps them, other conversations go on
         own = op(action="start", tool="claude", dir="web-shop", form="chat", text="不属于协作的对话")["terminal"]
