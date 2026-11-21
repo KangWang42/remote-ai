@@ -350,6 +350,7 @@ public static class TeamsCheck {
         }
         team = Team(again, longer);
         Require(team.Round == 20 && team.Last && Last(team.Members["leader"]).Contains("最多的 20 轮"), "round 20 is the last acceptance");
+        Require(Equals(Teams.Shown(team)["last"], true), "clients see the final acceptance in a free-round task");
         again.Turned(team.Members["leader"], "done", "还差一点。\nASSIGN claude: 再改");
         Require(Team(again, longer).State == "stopped", "past the most rounds a task may have, it stops");
     }

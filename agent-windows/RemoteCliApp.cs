@@ -666,17 +666,23 @@ public sealed partial class App : Form {
         if (!ReferenceEquals(sideStatus.Font, small)) sideStatus.Font = small;
         if (two) { sideAbove.Set(sideLine, sideColour); sideStatus.Set(sideTools, Theme.Good); } else sideStatus.Set(sideLine, sideColour);
     }
-    // A window on this computer for the very pages the phone uses. The terminals in it are the same ones the phone
-    // shows, so a terminal can be looked at and typed into from both at once, and nothing has to be handed over.
+    // A window on this computer for the very pages the phone uses. The terminals and collaboration tasks in it are the
+    // same ones the phone shows, so everything stays in sync on both devices without handing anything over.
     // The window signs in with a ticket the relay gives out for one use: the password is never part of an address.
-    void OpenWindow(string terminal) {
+    internal const string NewTeamQuery = "?tab=together&do=team";
+    internal static string WindowUrl(string origin, string query, string ticket) {
+        string root = (origin ?? "").TrimEnd('/');
+        string search = String.IsNullOrEmpty(query) ? "" : (query.StartsWith("?") ? query : "?" + query);
+        return root + "/" + search + "#t=" + Uri.EscapeDataString(ticket ?? "");
+    }
+    void OpenWeb(string query) {
         string origin = Convert.ToString(config["Server"]).TrimEnd('/');
         if (origin.Length == 0 || password.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
         Task.Run(() => {
             try {
                 string token = Convert.ToString(Ask(origin + "/api/login", new Dictionary<string, object> { { "password", password } }, "")["token"]);
                 string ticket = Convert.ToString(Ask(origin + "/api/ticket", new Dictionary<string, object>(), token)["ticket"]);
-                string url = origin + "/" + (terminal != null ? "?open=" + terminal : "") + "#t=" + Uri.EscapeDataString(ticket);
+                string url = WindowUrl(origin, query, ticket);
                 string browser = AppBrowser();
                 // A browser's "app" window has no address bar and keeps its sign-in in a folder of its own.
                 if (browser != null) Process.Start(new ProcessStartInfo(browser, "--app=\"" + url + "\" --user-data-dir=\"" + Path.Combine(dataDir, "window") + "\" --window-size=480,880 --no-first-run --no-default-browser-check") { UseShellExecute = false });
@@ -686,6 +692,8 @@ public sealed partial class App : Form {
             }
         });
     }
+    void OpenWindow(string terminal) { OpenWeb(terminal != null ? "?open=" + terminal : ""); }
+    void OpenNewTeam() { OpenWeb(NewTeamQuery); }
     Dictionary<string, object> Ask(string url, Dictionary<string, object> payload, string token) {
         var request = (HttpWebRequest)WebRequest.Create(url); request.Method = "POST"; request.ContentType = "application/json"; request.Timeout = 8000;
         if (token.Length > 0) request.Headers["Authorization"] = "Bearer " + token;
@@ -813,6 +821,7 @@ public sealed partial class App : Form {
             if (!Confirm("换一个密码？", "换密码后，已连接的手机需要重新扫码。", "换密码", false)) return;
             SetPassword(NewPassword()); Reconnect(); Toast("密码已更新");
         });
+        Action(connect, "发起协作任务", Theme.IconAdd, ButtonKind.Normal, 530, 456, 150, 34, (s, e) => OpenNewTeam());
         Note(connect, "手机只能在“项目”中添加的文件夹内启动终端；终端启动后拥有与本机操作相同的权限，可以访问整台电脑。", 28, 506, 652, 36, Theme.Faint, 8.5f);
 
         // ---- page: projects
@@ -867,12 +876,13 @@ public sealed partial class App : Form {
         var activityPage = Page("活动", "正在执行或正开着的终端和对话。共用终端双击可在电脑上打开，手机端仍可查看和输入，无需交接。");
         var liveCard = Place(activityPage, new Card(), 28, 92, 652, 362);
         Place(liveCard, activity, 8, 8, 636, 346);
-        activity.EmptyTitle = "现在没有开着的终端或对话"; activity.EmptyAbout = "点下面的“新建或查看全部”，或在手机上选一个项目新建终端，\n它就会出现在这里，两边都能用。";
+        activity.EmptyTitle = "现在没有开着的终端或对话"; activity.EmptyAbout = "点下面的“发起协作任务”或“新建或查看全部”，或在手机上选一个项目新建终端，\n它就会出现在这里，两边都能用。";
         activity.DoubleClick += (s, e) => OpenActivity();
         activity.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; OpenActivity(); } };
         Action(activityPage, "在电脑上打开", Theme.IconTerminal, ButtonKind.Primary, 28, 468, 150, 36, (s, e) => OpenActivity());
-        Action(activityPage, "新建或查看全部", Theme.IconOpen, ButtonKind.Normal, 188, 468, 164, 36, (s, e) => OpenWindow(null));
-        Action(activityPage, "转成独立窗口", "", ButtonKind.Ghost, 362, 468, 130, 36, (s, e) => TakeoverActivity());
+        Action(activityPage, "发起协作任务", Theme.IconAdd, ButtonKind.Normal, 188, 468, 150, 36, (s, e) => OpenNewTeam());
+        Action(activityPage, "新建或查看全部", Theme.IconOpen, ButtonKind.Normal, 348, 468, 164, 36, (s, e) => OpenWindow(null));
+        Action(activityPage, "转成独立窗口", "", ButtonKind.Ghost, 522, 468, 130, 36, (s, e) => TakeoverActivity());
         Place(activityPage, activityNote, 28, 518, 652, 20); activityNote.BackColor = Theme.Bg; activityNote.ForeColor = Theme.Muted;
 
         // ---- page: settings
@@ -960,6 +970,7 @@ public sealed partial class App : Form {
         tray.DoubleClick += (s, e) => Reveal();
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("显示窗口", null, (s, e) => Reveal());
+        tray.ContextMenuStrip.Items.Add("发起协作任务", null, (s, e) => OpenNewTeam());
         tray.ContextMenuStrip.Items.Add("复制地址", null, (s, e) => { if (address.Length > 0 && Mode != "public") try { Clipboard.SetText(address); } catch (ExternalException) { } });
         tray.ContextMenuStrip.Items.Add("重新连接", null, (s, e) => Again());
         tray.ContextMenuStrip.Items.Add("-");

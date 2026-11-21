@@ -500,6 +500,9 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-slot-summary span.effort { background: var(--accent-soft); color: var(--accent-ink, var(--accent)); }
 .team-model-row-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
 .team-model-row-controls.single { grid-template-columns: minmax(0, 1fr); }
+.rs-seg.team-rounds-grid,
+.rs-seg.full.team-rounds-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; width: 100%; }
+.rs-seg.team-rounds-grid button { min-width: 0; padding: 0 6px; }
 .team-round-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-radius: 14px; background: var(--surface-sub, var(--raised)); border: 1px solid var(--divider, var(--line)); font-size: .76rem; }
 .team-round-tag { font-weight: 650; color: var(--ink); margin-right: 2px; font-variant-numeric: tabular-nums; }
 .team-step { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--panel); color: var(--muted); font-weight: 550; }

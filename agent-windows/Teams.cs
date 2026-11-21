@@ -223,6 +223,7 @@ public sealed class Teams {
             { "member_sessions", t.Sessions.ToDictionary(p => p.Key, p => (object)new Dictionary<string, object> { { "id", p.Value.Id }, { "tool", p.Value.Tool } }) },
             { "log", t.Log.Skip(Math.Max(0, t.Log.Count - 80)).Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         };
+        if (t.Last) shown["last"] = true;
         if (t.Efforts.Count > 0) shown["efforts"] = new Dictionary<string, string>(t.Efforts);
         if (t.Roster.Length > 0) {
             shown["roster"] = t.Roster.Select(member => member.Shown()).ToArray();

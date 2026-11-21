@@ -614,8 +614,9 @@ for `team_resume`.
   marks the task `done` and stores the evidence in the log under `验收`. A new assignment in verification increments `round` and
   starts another member batch. Each round's aim is the leader's, by what it has seen (the changes, checks and members'
   reports): a first round that meets the goal goes straight to acceptance and ends, and a later round may be a read-only
-  re-check alone. With `rounds` 0 (自由轮数, `team.rounds` stays 0, also in `teams.dat`) no round is the last before the
-  20th, which any task may have at most; there further assignments stop the task. At the final round, further assignments or a second reply without verification evidence
+  re-check alone. With `rounds` 0 (自由轮数, `team.rounds` stays 0, also in `teams.dat`) the workflow can run through
+  round 20 without an owner-specified cap. The last acceptance carries `team.last: true` in the detail response.
+  At the final round, further assignments or a second reply without verification evidence
   leave the task `paused` with the rounds spent: the assignments are kept, nothing goes out, and the note says so;
   `team_resume` (or a `team_say`, whose text goes along) adds one round and sends the kept assignments, or asks the leader
   to go on where none were kept. A task stops instead only at 20 rounds. Earlier rounds pause after a second reply without

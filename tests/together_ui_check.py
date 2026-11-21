@@ -2,15 +2,21 @@
 
     python tests/together_ui_check.py <chrome.exe> <evidence directory>
 """
+import http.client
 import json
+import secrets
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "relay"))
 import readme_pictures as pictures
+import server as relay_server
 
 
 class Controlled(pictures.Played):
@@ -50,7 +56,7 @@ class Controlled(pictures.Played):
 
         def overview_with_teams(*args, **kwargs):
             data = base_overview(*args, **kwargs)
-            for feat in ("teams-models", "teams-roster", "teams-effort"):
+            for feat in ("teams-models", "teams-roster", "teams-effort", "teams-flex-rounds"):
                 if feat in played.info.get("features", []) and feat not in data["device"]["features"]:
                     data["device"]["features"] = list(data["device"]["features"]) + [feat]
             if played.team_cards:
@@ -76,6 +82,11 @@ class Controlled(pictures.Played):
                 roster = list(raw_item["roster"]) if "roster" in raw_item else None
                 auto_roster = bool(raw_item.get("auto_roster"))
                 if roster is not None:
+                    if raw_item.get("rounds") == 0:
+                        if raw_item.get("mode") != "lead":
+                            raise pictures.RemoteError("轮数需在 1 到 10 之间")
+                        if "teams-flex-rounds" not in played.info.get("features", []):
+                            raise pictures.RemoteError("这台电脑的电脑端版本较旧，不支持自由轮数，请更新电脑端")
                     now_ms = int(time.time() * 1000)
                     made = {
                         "id": raw_item["id"], "dir": raw_item["dir"], "mode": raw_item["mode"], "goal": raw_item["goal"],
@@ -910,6 +921,73 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         until("document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '进行中' && !document.getElementById('team-pause-reason') && document.getElementById('member-member-1')?.innerText.includes('进行中')", 'paused task resumed via 继续 button')
         assert fs_paused["state"] == "running"
 
+        # 3.6) Flexible rounds (`teams-flex-rounds`): older-agent hint vs new-agent `rounds: 0` submission & display
+        # Without `teams-flex-rounds`: 自由轮数 is not shown, upgrade hint is visible, and rounds: 0 is never submitted
+        open_page('&do=team', opened('team-goal'))
+        press('分工协作')
+        until("!!document.getElementById('team-rounds-note')", 'older-agent flex-rounds hint rendered')
+        assert value("document.getElementById('team-round-flex')") is None, '自由轮数 must stay hidden without teams-flex-rounds'
+        old_rounds_note = value("document.getElementById('team-rounds-note').textContent")
+        assert "版本较旧" in old_rounds_note and "自由轮数" in old_rounds_note, old_rounds_note
+        value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
+        until(closed, 'closed older-agent flex-rounds sheet')
+
+        # With `teams-flex-rounds`: 写审 stays fixed 1..10, 分工协作 shows 自由轮数 in 3x2 grid, submits rounds: 0, detail/card show current round cleanly
+        played.info["features"] = played.info["features"] + ["teams-flex-rounds"]
+        open_page('&do=team', opened('team-goal'))
+        assert value("document.getElementById('team-round-flex')") is None, 'review mode does not offer 自由轮数'
+        press('分工协作')
+        until("!!document.getElementById('team-round-flex')", '自由轮数 button visible in lead mode')
+        grid_ok = value("""(() => {
+          const seg = document.getElementById('team-round-flex').parentElement;
+          const btns = [...seg.querySelectorAll('button')];
+          return {
+            display: getComputedStyle(seg).display,
+            overflow: btns.filter(b => b.scrollWidth > b.clientWidth + 1).map(b => b.textContent),
+            rows: new Set(btns.map(b => Math.round(b.getBoundingClientRect().top))).size
+          };
+        })()""")
+        assert grid_ok["display"] == "grid" and not grid_ok["overflow"] and grid_ok["rows"] == 2, grid_ok
+        value("document.getElementById('team-round-flex').click()")
+        until("document.getElementById('team-round-flex').getAttribute('aria-pressed') === 'true'", '自由轮数 selected')
+        assert "最多 20 轮" in value("document.getElementById('team-rounds-note').textContent")
+        # Switching to 写审 and back must never leak rounds: 0 into 写审
+        press('写审')
+        until("document.getElementById('team-round-flex') === null && document.querySelector('dialog.rs[open] [aria-label=轮数] [data-rounds=\"3\"]')?.getAttribute('aria-pressed') === 'true'", 'switching to review resets flex rounds to fixed 3')
+        press('分工协作')
+        until("!!document.getElementById('team-round-flex')", 'back to lead mode with flex rounds')
+        value("document.getElementById('team-round-flex').click()")
+        until("document.getElementById('team-round-flex').getAttribute('aria-pressed') === 'true'", '自由轮数 re-selected')
+        typed('team-goal', '自由轮数协作任务测试：按进展自主推进轮次')
+        value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
+        value("document.getElementById('team-round-flex').scrollIntoView({block:'center'})")
+        time.sleep(.15)
+        browser.picture(out / 'team-flex-rounds-new-390.png')
+        press('开始')
+        until("!!document.getElementById('team-round-steps') && document.getElementById('team-round-steps').innerText.includes('第 1 轮 · 自由轮数')", 'flex-rounds team detail opened')
+        flex_starts = [op for op in played.asked if op['action'] == 'work_team_start_roster']
+        assert flex_starts and flex_starts[-1]['item']['rounds'] == 0, flex_starts[-1]
+        flex_team = played.teams[-1]
+        assert flex_team['rounds'] == 0 and flex_team['round'] == 1, flex_team
+        flex_detail_txt = value("document.querySelector('dialog.rs.rs-full[open]').innerText")
+        assert "第 1 轮 · 自由轮数" in flex_detail_txt and "/ 0" not in flex_detail_txt and "末轮" not in flex_detail_txt, flex_detail_txt
+        # Advance to round 2 verify (still not final) -> shows 第 2 轮 · 自由轮数 without false 末轮
+        flex_team["round"] = 2
+        flex_team["phase"] = "verify"
+        flex_team["note"] = "正在核对第 2 轮改动"
+        until("document.getElementById('team-round-steps')?.innerText.includes('第 2 轮 · 自由轮数') && document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队验收'", 'flex-rounds round 2 verify synced')
+        r2_txt = value("document.querySelector('dialog.rs.rs-full[open]').innerText")
+        assert "/ 0" not in r2_txt and "末轮" not in r2_txt, r2_txt
+        browser.picture(out / 'team-flex-rounds-detail-390.png')
+        # When backend marks last=true (round 20 cap), 末轮 appears accurately
+        flex_team["round"] = 20
+        flex_team["last"] = True
+        until("document.getElementById('team-round-steps')?.innerText.includes('第 20 轮 · 自由轮数 · 末轮')", 'flex-rounds final round tag shown when last=true')
+        value("document.querySelector('dialog.rs.rs-full:not(.closing) .rs-close').click()")
+        until(closed, 'closed flex-rounds detail')
+        # Card on 协作 tab also shows 第 20 轮 · 自由轮数 (not / 0)
+        until("document.getElementById('teams').innerText.includes('第 20 轮 · 自由轮数') && !document.getElementById('teams').innerText.includes('/ 0')", 'flex-rounds card text accurate')
+
         # 4) 390px dark theme (skin=night) across running, confirm, and ended team detail + contrast verification
         for name, tid, ready_expr in [
             ('team-detail-running-dark-390.png', fs_running_id, "document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队验收'"),
@@ -970,4 +1048,186 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         (out / 'checks.json').write_text(json.dumps(evidence, indent=2, ensure_ascii=False), encoding='utf-8')
     finally:
         browser.close(); played.close()
-print('Collaboration: direct rule editing, partial recovery, stable save IDs, single toggle, a question on weekdays, batch results, keyboard and four viewports passed')
+
+
+def run_two_session_sync_check(chrome, out):
+    """Two independent browser sessions (computer EXE one-time ticket window + phone cookie session)
+    talking to the real relay HTTP server (relay/server.py), verifying same task ID, flex rounds (`rounds: 0`),
+    round progression, and member progress sync across devices."""
+    with tempfile.TemporaryDirectory(prefix="remote-ai-two-session-", ignore_cleanup_errors=True) as temporary:
+        password = "sync-" + secrets.token_hex(6)
+        srv = relay_server.make_server("127.0.0.1", 0, str(Path(temporary) / "relay-data"), str(ROOT / "web"), password=password)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+        origin = "http://127.0.0.1:%d" % port
+        now_ms = int(time.time() * 1000)
+        info = {
+            "instance": "e" * 32, "enabled": True, "name": "工作站", "version": "1.11.1", "shell": "PowerShell",
+            "tools": ["claude", "codex", "agy", "shell"], "workspaces": ["web-shop", "thesis"],
+            "features": ["peek", "reach", "end", "work", "chains", "chat", "chat-agy", "teams", "teams-v2",
+                         "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds"],
+        }
+        state = {"teams": [], "terminals": [], "sessions": [], "stopped": False}
+        state_lock = threading.Lock()
+
+        def cards_payload():
+            out_cards = []
+            for t in state["teams"]:
+                out_cards.append({
+                    "id": t["id"], "dir": t["dir"], "goal": t["goal"], "mode": t["mode"],
+                    "state": t["state"], "phase": t["phase"], "note": t["note"],
+                    "updated": int(time.time()), "awaited": list(t["awaited"]),
+                    "tools": list(t["tools"]), "roster": list(t.get("roster") or []),
+                    "auto_roster": bool(t.get("auto_roster")), "models": dict(t.get("models") or {}),
+                })
+            return out_cards
+
+        def push_agent(acks=None):
+            with state_lock:
+                payload = {"info": dict(info, team_cards=cards_payload()), "terminals": list(state["terminals"]), "sessions": list(state["sessions"])}
+            if acks:
+                payload["acks"] = acks
+            srv.space.relay.agent(payload)
+
+        push_agent()
+
+        def agent_loop():
+            while not state["stopped"]:
+                try:
+                    ops = srv.space.relay.pull({"instance": info["instance"], "wait": 1})["operations"]
+                except Exception:
+                    time.sleep(0.1)
+                    continue
+                if not ops:
+                    continue
+                acks = []
+                for op in ops:
+                    act = op.get("action")
+                    try:
+                        if act == "work_chains":
+                            acks.append({"id": op["id"], "error": "", "result": {"chains": []}})
+                        elif act == "work_schedules":
+                            acks.append({"id": op["id"], "error": "", "result": {"schedules": []}})
+                        elif act == "work_team_models":
+                            acks.append({"id": op["id"], "error": "", "result": {"models": Controlled.models_catalog}})
+                        elif act == "work_teams":
+                            with state_lock:
+                                acks.append({"id": op["id"], "error": "", "result": {"teams": [json.loads(json.dumps(t)) for t in state["teams"]]}})
+                        elif act == "work_team_start":
+                            item = op["item"]
+                            m1_tid = "1" * 32
+                            made = {
+                                "id": item["id"], "dir": item["dir"], "mode": item["mode"], "goal": item["goal"],
+                                "rules": item.get("rules", ""), "state": "running", "note": "执行成员 1 正在实现功能",
+                                "phase": "", "discuss": bool(item.get("discuss")), "picked": "",
+                                "tools": list(item["tools"]), "roster": list(item.get("roster") or []),
+                                "auto_roster": bool(item.get("auto_roster")), "rounds": item["rounds"], "round": 1,
+                                "created": int(time.time() * 1000), "models": dict(item.get("models") or {}),
+                                "efforts": dict(item.get("efforts") or {}),
+                                "members": {"member-1": m1_tid}, "awaited": ["member-1"], "failed": {},
+                                "member_sessions": {},
+                                "log": [
+                                    {"at": int(time.time() * 1000), "who": "目标", "text": item["goal"]},
+                                    {"at": int(time.time() * 1000), "who": "leader", "text": "第 1 轮已分派给执行成员 1 实现并自测。"},
+                                ],
+                            }
+                            with state_lock:
+                                state["teams"].insert(0, made)
+                                state["terminals"].append({
+                                    "id": m1_tid, "tool": "claude", "dir": item["dir"], "title": "执行成员 1 对话",
+                                    "form": "chat", "state": "running", "phase": "busy", "status": "busy",
+                                    "phase_at": now_ms, "created": now_ms, "team": item["id"],
+                                })
+                            acks.append({"id": op["id"], "error": "", "result": {"team": json.loads(json.dumps(made))}})
+                        else:
+                            acks.append({"id": op["id"], "error": "", "result": {}})
+                    except Exception as exc:
+                        acks.append({"id": op["id"], "error": str(exc)})
+                push_agent(acks)
+
+        threading.Thread(target=agent_loop, daemon=True).start()
+
+        def http_post(path, payload, token=""):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            headers = {"Content-Type": "application/json"}
+            if token:
+                headers["Authorization"] = "Bearer " + token
+            conn.request("POST", path, json.dumps(payload).encode("utf-8"), headers)
+            resp = conn.getresponse()
+            body = json.loads(resp.read().decode("utf-8"))
+            status = resp.status
+            conn.close()
+            return status, body
+
+        pc_dir = Path(temporary) / "pc-profile"
+        phone_dir = Path(temporary) / "phone-profile"
+        pc_dir.mkdir(); phone_dir.mkdir()
+        pc = pictures.Browser(chrome, str(pc_dir))
+        phone_browser = pictures.Browser(chrome, str(phone_dir))
+        try:
+            # 1) Computer EXE flow: POST /api/login -> POST /api/ticket -> open /?tab=together&do=team#t=<ticket>
+            st, login_body = http_post("/api/login", {"password": password})
+            assert st == 200 and login_body.get("token"), (st, login_body)
+            st, ticket_body = http_post("/api/ticket", {}, token=login_body["token"])
+            assert st == 200 and ticket_body.get("ticket"), (st, ticket_body)
+            ticket = ticket_body["ticket"]
+            exe_url = origin + "/?tab=together&do=team#t=" + quote(ticket, safe="")
+
+            pc.open(exe_url, "!!document.querySelector('dialog.rs[open] #team-goal')", "computer window opens new team sheet via one-time ticket", width=480, height=880, deviceScaleFactor=1, mobile=True)
+            assert pc.value("location.hash") == "", "ticket hash must be stripped from URL"
+            # Reusing the same one-time ticket must be rejected by relay
+            st2, _ = http_post("/api/login", {"ticket": ticket})
+            assert st2 == 401, ("one-time ticket should fail on second use", st2)
+
+            # Computer selects 分工协作 + 自由轮数 (rounds: 0), submits task
+            pc.until("(b => b && (b.click(), true))([...document.querySelectorAll('dialog.rs[open] button')].find(b => b.innerText.trim() === '分工协作'))", "pc choose lead")
+            pc.until("!!document.getElementById('team-round-flex')", "pc flex rounds visible")
+            pc.value("document.getElementById('team-round-flex').click()")
+            pc.until("document.getElementById('team-round-flex').getAttribute('aria-pressed') === 'true'", "pc flex rounds selected")
+            pc.value("(n => { n.value = '电脑端发起的自由轮数协作任务'; n.dispatchEvent(new Event('input', {bubbles:true})); })(document.getElementById('team-goal'))")
+            pc.value("[...document.querySelector('dialog.rs[open] [aria-label=项目]').querySelectorAll('.rs-chip')].find(c => c.textContent === 'web-shop').click()")
+            pc.value("document.getElementById('team-start').click()")
+            pc.until("!!document.getElementById('team-round-steps') && document.getElementById('team-round-steps').innerText.includes('第 1 轮 · 自由轮数') && document.getElementById('member-member-1')?.innerText.includes('进行中')", "pc sees created team detail with round 1 and member-1 progress")
+
+            with state_lock:
+                assert len(state["teams"]) == 1, state["teams"]
+                created_team = state["teams"][0]
+                team_id = created_team["id"]
+                assert created_team["rounds"] == 0 and created_team["round"] == 1, created_team
+
+            # 2) Independent phone session (separate profile/cookies): must be signed out first, then sign in and see exact same task ID, round & member progress
+            phone_browser.open(origin + "/?tab=tasks", "!document.getElementById('login').hidden", "phone starts signed out in isolated session", width=390, height=844, deviceScaleFactor=1, mobile=True)
+            phone_browser.value("(p => { p.value = %s; p.dispatchEvent(new Event('input', {bubbles:true})); })(document.getElementById('password'))" % json.dumps(password))
+            phone_browser.value("document.querySelector('#login button[type=submit]').click()")
+            phone_browser.until("!!document.querySelector('#active-list .team-card[data-team=\"%s\"]')" % team_id, "phone sees exact same team_id card on tasks tab")
+            phone_browser.value("document.querySelector('#active-list .team-card[data-team=\"%s\"] button.open').click()" % team_id)
+            phone_browser.until("!!document.getElementById('team-round-steps') && document.getElementById('team-round-steps').innerText.includes('第 1 轮 · 自由轮数') && document.getElementById('member-member-1')?.innerText.includes('进行中')", "phone detail synced same round 1 and member-1 status")
+
+            # 3) Advance backend to Round 2 + 领队验收: both computer and phone independently poll and sync to Round 2 & updated member status
+            with state_lock:
+                t = state["teams"][0]
+                t["round"] = 2
+                t["phase"] = "verify"
+                t["awaited"] = ["leader"]
+                t["note"] = "执行成员 1 已交付，领队正在第 2 轮验收"
+                t["log"].append({"at": int(time.time() * 1000), "who": "member-1", "text": "已完成实现并通过本地测试。"})
+            push_agent()
+
+            pc.until("document.getElementById('team-round-steps')?.innerText.includes('第 2 轮 · 自由轮数') && document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队验收' && document.getElementById('member-leader')?.innerText.includes('验收中')", "computer window synced round 2 verify")
+            phone_browser.until("document.getElementById('team-round-steps')?.innerText.includes('第 2 轮 · 自由轮数') && document.querySelector('dialog.rs.rs-full[open] .rs-badge')?.textContent === '领队验收' && document.getElementById('member-leader')?.innerText.includes('验收中')", "phone synced round 2 verify")
+            assert "/ 0" not in pc.value("document.querySelector('dialog.rs.rs-full[open]').innerText")
+            assert "/ 0" not in phone_browser.value("document.querySelector('dialog.rs.rs-full[open]').innerText")
+            pc.picture(out / "sync-computer-480.png")
+            phone_browser.picture(out / "sync-phone-390.png")
+
+            # Phone 协作 tab also shows 第 2 轮 · 自由轮数 on the card
+            phone_browser.open(origin + "/?tab=together", "document.getElementById('teams')?.innerText.includes('第 2 轮 · 自由轮数')", "phone together tab card shows round 2 flex rounds", width=390, height=844, deviceScaleFactor=1, mobile=True)
+            assert "/ 0" not in phone_browser.value("document.getElementById('teams').innerText")
+        finally:
+            state["stopped"] = True
+            pc.close(); phone_browser.close()
+            srv.shutdown(); srv.server_close()
+
+
+run_two_session_sync_check(sys.argv[1], out)
+print('Collaboration: flex rounds, older-agent hint, two-session sync, direct rule editing, partial recovery, stable save IDs, single toggle, a question on weekdays, batch results, keyboard and four viewports passed')

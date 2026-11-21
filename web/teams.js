@@ -32,6 +32,14 @@
   const hasModels = () => page.has('teams-models');
   const hasRoster = () => page.has('teams-roster');
   const hasEffort = () => page.has('teams-effort');
+  const hasFlexRounds = () => page.has('teams-flex-rounds');
+  const roundsOf = team => (team && team.rounds === 0) ? 0 : (team && team.rounds) || 3;
+  const isFlexRounds = team => !!team && team.mode === 'lead' && team.rounds === 0;
+  const roundBadgeText = team => {
+    if (!team || (team._loading && team.rounds === undefined)) return '';
+    const round = team.round || 1;
+    return isFlexRounds(team) ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + roundsOf(team) + ' 轮';
+  };
   const able = () => ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
   const phaseLabel = phase => phase === 'verify' ? '领队验收' : phase === 'discuss' ? '讨论方案' : '';
   const isUnverifiedStop = team => !!team && team.state === 'stopped' && team.mode === 'lead' && (team.phase === 'verify' || !!team.last);
@@ -283,7 +291,8 @@
       modelOverrides: {},
       effortOverrides: {},
       moreOpen: false,
-      rounds: 3
+      rounds: 3,
+      lastFixedRounds: 3
     };
 
     const effectiveToolModel = tool => {
@@ -631,7 +640,11 @@
         : plan.mode === 'lead' ? '一轮包含领队派工、执行成员完成并汇报、领队汇总验收；发现问题再进入下一轮'
         : '2–3 个 AI 在独立 Git worktree 副本中并行完成，互不干扰，做完后并排对比改动、任选一个合并';
       const modeKeys = hasV2() && tools.length >= 2 ? Object.keys(MODES) : tools.length >= 2 ? ['review', 'lead'] : ['lead'];
-      p.body.append(kit.section('方式', kit.seg(modeKeys.map(key => [key, MODES[key]]), plan.mode, value => { plan.mode = value; p.refresh(); }, { label: '方式', full: true }), modeHint));
+      p.body.append(kit.section('方式', kit.seg(modeKeys.map(key => [key, MODES[key]]), plan.mode, value => {
+        plan.mode = value;
+        if (plan.mode !== 'lead' && plan.rounds === 0) plan.rounds = plan.lastFixedRounds || 3;
+        p.refresh();
+      }, { label: '方式', full: true }), modeHint));
       const goal = kit.area({ id: 'team-goal', value: plan.goal, placeholder: '要完成什么', max: 4000, rows: 4, label: '目标' }, value => { plan.goal = value; });
       p.body.append(kit.section('目标', goal));
       p.body.append(kit.section('项目', kit.chips(projects.map(name => [name, name]), { chosen: plan.dir, label: '项目' }, value => { plan.dir = value; })));
@@ -663,7 +676,29 @@
         p.body.append(kit.section('参与比稿的 AI', kit.chips(named, { chosen: plan.compareTools, multi: true, label: '比稿 AI' }, value => { plan.compareTools = value; renderMore(); }), '至少选 2 个不同 AI；要求项目目录是已有提交的 Git 仓库'));
       }
       if (plan.mode !== 'compare') {
-        p.body.append(kit.section('最多几轮', kit.seg(ROUNDS.map(n => [n, n + ' 轮']), plan.rounds, value => { plan.rounds = value; }, { label: '轮数', full: true })));
+        const flexAllowed = plan.mode === 'lead' && hasFlexRounds();
+        if (!flexAllowed && plan.rounds === 0) plan.rounds = plan.lastFixedRounds || 3;
+        const roundChoices = (flexAllowed ? [[0, '自由轮数']] : []).concat(ROUNDS.map(n => [n, n + ' 轮']));
+        const roundNoteText = () => {
+          if (plan.mode !== 'lead') return '';
+          if (!hasFlexRounds()) return '当前电脑端或中转版本较旧，不支持「自由轮数」，更新电脑端与中转后可用';
+          return plan.rounds === 0
+            ? '由领队按每轮进展与验收结果自主决定何时结束（最多 20 轮），达标即止'
+            : '达到设定轮数仍未通过验收时会暂停，点「继续」可追加轮次；也可选择「自由轮数」';
+        };
+        const roundNoteEl = roundNoteText() ? el('p', { id: 'team-rounds-note', className: 'rs-note', textContent: roundNoteText() }) : null;
+        const roundSeg = kit.seg(roundChoices, plan.rounds, value => {
+          plan.rounds = value;
+          if (value > 0) plan.lastFixedRounds = value;
+          if (roundNoteEl) roundNoteEl.textContent = roundNoteText();
+        }, { label: '轮数', full: !flexAllowed });
+        if (flexAllowed) roundSeg.classList.add('team-rounds-grid');
+        Array.from(roundSeg.querySelectorAll('button')).forEach((btn, idx) => {
+          const val = roundChoices[idx][0];
+          btn.dataset.rounds = String(val);
+          if (val === 0) btn.id = 'team-round-flex';
+        });
+        p.body.append(kit.section('最多几轮', roundNoteEl ? [roundSeg, roundNoteEl] : roundSeg));
       }
       moreHost = el('div', { className: 'team-more-host' });
       p.body.append(moreHost);
@@ -674,6 +709,9 @@
         if (!plan.dir) throw new Error('请选择项目');
         const trimmedRules = plan.rules.trim();
         keepRules(trimmedRules);
+        const submitRounds = plan.mode === 'compare' ? 1
+          : (plan.mode === 'lead' && hasFlexRounds() && plan.rounds === 0) ? 0
+          : (plan.rounds || plan.lastFixedRounds || 3);
         let item;
         if (plan.mode === 'lead' && hasRoster()) {
           const leaderModel = effectiveLeaderModel();
@@ -692,7 +730,7 @@
             });
           }
           keepLeader({ tool: plan.leader, autoRoster: plan.autoRoster });
-          item = { id: plan.id, mode: 'lead', dir: plan.dir, goal: plan.goal.trim(), tools: roster.map(r => r.tool), roster, rounds: plan.rounds };
+          item = { id: plan.id, mode: 'lead', dir: plan.dir, goal: plan.goal.trim(), tools: roster.map(r => r.tool), roster, rounds: submitRounds };
           if (plan.autoRoster) item.auto_roster = true;
           if (plan.discuss && !plan.autoRoster) item.discuss = true;
         } else {
@@ -701,7 +739,7 @@
             : plan.compareTools.slice(0, 3);
           if (plan.mode === 'lead' && chosen.length < 2) throw new Error('请至少选一个执行成员');
           if (plan.mode === 'compare' && chosen.length < 2) throw new Error('并行比稿请至少选 2 个 AI');
-          item = { id: plan.id, mode: plan.mode, dir: plan.dir, goal: plan.goal.trim(), tools: chosen, rounds: plan.mode === 'compare' ? 1 : plan.rounds };
+          item = { id: plan.id, mode: plan.mode, dir: plan.dir, goal: plan.goal.trim(), tools: chosen, rounds: submitRounds };
           if (hasModels()) {
             const chosenModels = {};
             const chosenEfforts = {};
@@ -864,8 +902,8 @@
     function buildStageSteps(team) {
       const stepNode = (text, cls) => el('span', { className: 'team-step' + (cls ? ' ' + cls : ''), textContent: text });
       const sep = () => el('span', { className: 'team-step-sep', ariaHidden: 'true', textContent: '→' });
-      const round = team.round || 1, rounds = team.rounds || 3;
-      const finalRound = !!team.last || round >= rounds;
+      const round = team.round || 1, flex = isFlexRounds(team), rounds = roundsOf(team);
+      const finalRound = !!team.last || (!flex && round >= rounds);
       const awaited = team.awaited || [];
       if (team.mode === 'lead') {
         const hasDiscuss = !!team.discuss || team.phase === 'discuss';
@@ -889,7 +927,8 @@
         } else if (awaited.some(r => r !== 'leader')) {
           discussState = assignState = 'done';
         }
-        const nodes = [el('span', { className: 'team-round-tag', textContent: '第 ' + round + ' / ' + rounds + ' 轮' + (finalRound ? ' · 末轮' : '') })];
+        const roundTag = (flex ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + rounds + ' 轮') + (finalRound ? ' · 末轮' : '');
+        const nodes = [el('span', { className: 'team-round-tag', textContent: roundTag })];
         if (hasDiscuss) nodes.push(stepNode('讨论方案', discussState), sep());
         nodes.push(
           stepNode('派工', assignState), sep(),
@@ -982,7 +1021,8 @@
       const phaseText = phaseLabel(team.phase);
       const headState = pendingAsks.length ? ['等你确认', 'confirm'] : stateInfo(team);
       const showPhaseInSub = phaseText && phaseText !== headState[0];
-      const roundText = team.mode === 'compare' ? '' : ' · 第 ' + (team.round || 1) + ' / ' + (team.rounds || 3) + ' 轮';
+      const badgeRound = team.mode === 'compare' ? '' : roundBadgeText(team);
+      const roundText = badgeRound ? ' · ' + badgeRound : '';
       const subLine = headState[0] + (showPhaseInSub ? ' · ' + phaseText : '') + ' · ' + who(team) + roundText;
 
       if (activePage && activePage.setHeader) {
@@ -1004,9 +1044,9 @@
       const stageBar = buildStageSteps(team);
       if (stageBar) heroParts.push(stageBar);
       if (team.state === 'running' && team.phase === 'verify') {
-        const round = team.round || 1, rounds = team.rounds || 3;
-        const finalTag = (team.last || round >= rounds) ? '（末轮验收）' : '';
-        const prefix = '第 ' + round + ' / ' + rounds + ' 轮 · 领队验收' + finalTag;
+        const round = team.round || 1, flex = isFlexRounds(team), rounds = roundsOf(team);
+        const finalTag = (team.last || (!flex && round >= rounds)) ? '（末轮验收）' : '';
+        const prefix = (flex ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + rounds + ' 轮') + ' · 领队验收' + finalTag;
         const verifyText = team.note ? (team.note.includes('领队验收') ? team.note : prefix + '：' + team.note) : prefix + '：正在核对执行成员改动与结果';
         const banner = kit.summary(verifyText, '', 'spark');
         banner.classList.add('team-verify');
@@ -1607,7 +1647,7 @@
     if (found) { show(found); return; }
     const stub = Object.assign({
       id, dir: '', goal: '协作任务', mode: 'review', state: 'running', phase: '', note: '',
-      tools: [], models: {}, awaited: [], members: {}, log: [], round: 1, rounds: 3
+      tools: [], models: {}, awaited: [], members: {}, log: [], round: 1, rounds: undefined
     }, fallback || {}, { _loading: true, _error: '' });
     show(stub);
   }
@@ -1618,7 +1658,7 @@
     const meta = el('span', { className: 'meta' },
       el('span', { className: 'pill ' + state[1], textContent: state[0] }),
       el('span', { textContent: (MODES[team.mode] || team.mode) + (team.auto_roster ? ' · 自组' : '') + (team.discuss ? ' · 先议' : '') + ' · ' + who(team) }),
-      team.mode === 'compare' ? '' : el('span', { textContent: '第 ' + team.round + ' / ' + team.rounds + ' 轮' }));
+      team.mode === 'compare' ? '' : el('span', { textContent: roundBadgeText(team) }));
     return el('li', { className: 'card rule' + (team.state === 'running' || team.state === 'paused' || team.state === 'choose' ? '' : ' off') }, el('button', { type: 'button', className: 'open', onclick: () => show(team) },
       el('span', { className: 'tool plain', html: TEAM }),
       el('span', { className: 'text' }, el('b', { textContent: team.goal }), meta, team.note ? el('span', { className: 'peek', textContent: team.note }) : ''),
