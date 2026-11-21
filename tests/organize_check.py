@@ -15,7 +15,6 @@ from teams_e2e_check import free_port
 
 
 def check_agent(agent, root):
-    port = free_port()
     password = "organize-test-" + secrets.token_hex(8)
     root = Path(root)
     data, project = root / "agent", root / "project"
@@ -28,13 +27,22 @@ def check_agent(agent, root):
     (folder / (sid + ".jsonl")).write_text(
         '{"type":"user","message":{"role":"user","content":"Plan a seed library."}}\n', encoding="utf-8"
     )
+    tools = root / "tools"
+    tools.mkdir()
+    (tools / "codex.cmd").write_text(
+        f'@if "%1"=="app-server" "{sys.executable}" "{ROOT / "tests/chat_standin.py"}" organize %*\r\n', encoding="mbcs"
+    )
+    for tool in ("claude", "agy"):
+        (tools / (tool + ".cmd")).write_text("@exit /b 0\r\n", encoding="ascii")
+    gate = root / "release-model"
     env = dict(os.environ, RCLI_PASSWORD=password, CLAUDE_CONFIG_DIR=str(claude),
-               CODEX_HOME=str(root / "codex"), AGY_HOME=str(root / "agy"))
-    (data / "config.json").write_text(json.dumps({"Server": f"http://127.0.0.1:{port}", "RemoteEnabled": True,
-                                                 "RemoteDirs": [f"sample={project}"]}), encoding="utf-8")
+               CODEX_HOME=str(root / "codex"), AGY_HOME=str(root / "agy"),
+               STANDIN_ORGANIZE_GATE=str(gate), PATH=str(tools) + os.pathsep + os.environ["PATH"])
     subprocess.run([str(agent), "--set-password", str(data)], input=password.encode(), check=True)
     processes = []
     cookie = {}
+    port = 0
+    target = {"session": sid, "tool": "claude"}
 
     def call(path, body=None):
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
@@ -54,40 +62,103 @@ def check_agent(agent, root):
     def operation(verb, **fields):
         return call("/api/organize", {"id": secrets.token_hex(16), "verb": verb, **fields})
 
-    try:
-        processes.append(subprocess.Popen(
-            [sys.executable, str(ROOT / "relay/server.py"), "--port", str(port), "--data", str(root / "relay")],
-            env=env, stdout=subprocess.DEVNULL))
+    def connect(new_port):
+        nonlocal port
+        port = new_port
+        cookie.clear()
+        pending = data / "config.tmp"
+        pending.write_text(json.dumps({"Server": f"http://127.0.0.1:{port}", "RemoteEnabled": True,
+                                       "RemoteDirs": [f"sample={project}"]}), encoding="utf-8")
+        pending.replace(data / "config.json")
         for _ in range(50):
             try:
                 call("/api/login", {"password": password})
-                break
+                return
             except OSError:
                 time.sleep(0.1)
-        else:
-            raise AssertionError("relay did not start")
-        processes.append(subprocess.Popen([str(agent), "--data", str(data)], env=env))
-        for _ in range(80):
+        raise AssertionError("relay did not start")
+
+    def start_relay(name):
+        new_port = free_port()
+        processes.append(subprocess.Popen(
+            [sys.executable, str(ROOT / "relay/server.py"), "--port", str(new_port), "--data", str(root / name)],
+            env=env, stdout=subprocess.DEVNULL))
+        return new_port
+
+    def start_agent():
+        process = subprocess.Popen([str(agent), "--data", str(data)], env=env)
+        processes.append(process)
+        return process
+
+    def stop(process):
+        if process.poll() is None:
+            subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"], check=False,
+                           capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        process.wait(timeout=10)
+
+    def until(read, expected, detail):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            value = read()
+            if expected(value):
+                return value
+            time.sleep(0.1)
+        raise AssertionError(detail)
+
+    def overview(follow_up=None):
+        def current():
             view = call("/api/terminal")
-            if "organize" in view["device"].get("features", []) and view["sessions"]:
-                break
-            time.sleep(0.25)
-        else:
-            raise AssertionError("agent did not advertise organize and report its synthetic session")
-        original = view["sessions"][0]["title"]
-        item = operation("list", session=sid, tool="claude")["items"][0]
-        assert item["id"] == sid and item["state"] == "pending"
-        edited = operation("edit", session=sid, tool="claude", title="Seed library")["item"]
-        assert edited["manual_title"] == "Seed library" and edited["state"] == "pending"
-        listed = next(s for s in call("/api/terminal")["sessions"] if s["id"] == sid)
-        assert listed["title"] == original and listed["organize"]["title"] == "Seed library"
-        print("Windows EXE and local relay passed: organize capability, session_organize routing, edit, and compatible overview")
+            if view["device"]["online"] and "organize" in view["device"].get("features", []):
+                return next((item for item in view["sessions"] if item["id"] == sid), None)
+        return until(current, lambda item: item and (follow_up is None or
+                     (item.get("organize") or {}).get("follow_up") is follow_up), "overview did not report the expected follow-up")
+
+    def selected():
+        return operation("list", **target)["items"][0]
+
+    try:
+        first_line = start_relay("relay-first")
+        connect(first_line)
+        process = start_agent()
+        original = overview()["title"]
+        assert selected()["state"] == "pending"
+        added = operation("edit", **target, follow_up=True)["item"]
+        assert added["follow_up"] is True and added["title"] == original and added["state"] == "pending"
+        assert overview(True)["title"] == original
+
+        stop(process)
+        process = start_agent()
+        assert overview(True)["title"] == original and selected()["follow_up"] is True
+        second_line = start_relay("relay-second")
+        connect(second_line)
+        assert overview(True)["title"] == original and selected()["follow_up"] is True
+
+        assert operation("start", **target)["queued"] == 1
+        until(gate.with_suffix(".started").exists, bool, "model did not start")
+        assert selected()["state"] == "running"
+        removed = operation("edit", **target, follow_up=False)["item"]
+        assert removed["follow_up"] is False and removed["title"] == original and removed["state"] == "running"
+        edited = operation("edit", **target, title="Seed library plan", follow_up=True)["item"]
+        assert edited["title"] == "Seed library plan" and edited["follow_up"] is True
+        removed = operation("edit", **target, follow_up=False)["item"]
+        assert removed["title"] == "Seed library plan" and removed["follow_up"] is False
+        gate.touch()
+        completed = until(selected, lambda item: item["state"] != "running", "model did not finish")
+        assert completed["state"] == "done" and completed["summary"] == "Agree on a seed collection date."
+        assert completed["title"] == "Seed library plan" and completed["follow_up"] is False
+        legacy = operation("edit", **target, title="Seed library next steps")["item"]
+        assert legacy["title"] == "Seed library next steps" and legacy["follow_up"] is False
+
+        connect(first_line)
+        assert overview(False)["organize"]["title"] == "Seed library next steps"
+        assert selected()["follow_up"] is False
+        stop(process)
+        process = start_agent()
+        assert overview(False)["title"] == original and selected()["follow_up"] is False
+        print("Windows EXE and two local relays passed: add, remove during a model turn, combined edit, legacy title-only edit, restart and relay switch")
     finally:
         for process in reversed(processes):
-            if process.poll() is None:
-                subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"], check=True,
-                               stdout=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
-            process.wait(timeout=10)
+            stop(process)
 
 
 def main():

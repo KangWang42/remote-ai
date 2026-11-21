@@ -30,6 +30,7 @@ internal sealed class Organizer {
     public sealed class Entry {
         public Source Source;
         public string State = "", Error = "", Model = "", ManualTitle = "";
+        public bool? ManualFollowUp;
         public Metadata Data;
         public bool Automatic;
         internal Entry Copy() { return (Entry)MemberwiseClone(); }
@@ -241,9 +242,17 @@ internal sealed class Organizer {
 
     Dictionary<string, object> Edit(Dictionary<string, object> op) {
         string wanted = Target(op);
-        if (wanted.Length == 0 || !op.ContainsKey("title")) throw new ArgumentException("请选择对话并填写名称");
-        string title = Text(op, "title").Trim();
-        if (title.Length == 0 || title.Length > 80 || title.Any(Char.IsControl)) throw new ArgumentException("名称需为 1 至 80 字");
+        bool hasTitle = op.ContainsKey("title");
+        object followUp;
+        bool hasFollowUp = op.TryGetValue("follow_up", out followUp);
+        if (wanted.Length == 0 || (!hasTitle && !hasFollowUp))
+            throw new ArgumentException("请选择对话，并填写名称或设置待跟进标记");
+        string title = null;
+        if (hasTitle) {
+            title = Text(op, "title").Trim();
+            if (title.Length == 0 || title.Length > 80 || title.Any(Char.IsControl)) throw new ArgumentException("名称需为 1 至 80 字");
+        }
+        if (hasFollowUp && !(followUp is bool)) throw new ArgumentException("待跟进标记无效");
         var source = catalog(0).FirstOrDefault(s => s.Key == wanted);
         if (source == null) throw new ArgumentException("没有找到可读取的对话");
         Dictionary<string, object> result;
@@ -252,7 +261,8 @@ internal sealed class Organizer {
             Entry entry;
             entry = next.Entries.TryGetValue(wanted, out entry) ? entry.Copy() : new Entry();
             entry.Source = source;
-            entry.ManualTitle = title;
+            if (hasTitle) entry.ManualTitle = title;
+            if (hasFollowUp) entry.ManualFollowUp = (bool)followUp;
             next.Entries[wanted] = entry;
             Save(next);
             result = Public(source, entry);
@@ -275,7 +285,7 @@ internal sealed class Organizer {
         var data = entry.Data ?? new Metadata();
         return new Dictionary<string, object> {
             { "title", DisplayTitle(original, named, entry) }, { "original_title", original }, { "manual_title", entry.ManualTitle },
-            { "summary", data.Summary }, { "tags", data.Tags }, { "follow_up", data.FollowUp },
+            { "summary", data.Summary }, { "tags", data.Tags }, { "follow_up", entry.ManualFollowUp ?? data.FollowUp },
             { "state", entry.Source.Key == running ? "running" : entry.State.Length == 0 ? "pending" : entry.State },
             { "error", entry.Error }, { "model", entry.Model }
         };
@@ -374,8 +384,10 @@ internal sealed class Organizer {
             var next = Copy();
             string key = awaitingSave.Source.Key;
             var entry = awaitingSave.Copy();
-            entry.ManualTitle = next.Entries[key].ManualTitle;
-            entry.Source = next.Entries[key].Source;
+            var latest = next.Entries[key];
+            entry.ManualTitle = latest.ManualTitle;
+            entry.ManualFollowUp = latest.ManualFollowUp;
+            entry.Source = latest.Source;
             next.Entries[key] = entry;
             Save(next);
             awaitingSave = null;

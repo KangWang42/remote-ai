@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 
 out_lock = threading.Lock()
 
@@ -333,6 +334,41 @@ def codex(args):
             put({"id": number, "result": {}})
 
 
+def organize():
+    """One structured turn which the HTTP integration test releases after sending an edit."""
+    gate = Path(os.environ["STANDIN_ORGANIZE_GATE"])
+    thread = str(uuid.uuid4())
+    for message in lines():
+        number, method, params = message.get("id"), message.get("method"), message.get("params") or {}
+        if number is None:
+            continue
+        if method == "model/list":
+            result = {"data": [{"id": "gpt-6-luna", "displayName": "GPT-6 Luna"}]}
+        elif method == "config/read":
+            result = {"config": {}}
+        elif method == "thread/start":
+            assert params["ephemeral"] is True
+            result = {"thread": {"id": thread, "path": None}, "model": params["model"]}
+        elif method == "turn/start":
+            assert "follow_up" in params["outputSchema"]["required"]
+            put({"id": number, "result": {"turn": {"id": "turn-organize"}}})
+            gate.with_suffix(".started").touch()
+            deadline = time.monotonic() + 45
+            while not gate.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert gate.exists(), "integration test did not release the model"
+            text = json.dumps({"title": "Seed library", "summary": "Agree on a seed collection date.",
+                               "tags": ["seeds"], "follow_up": True})
+            put({"method": "item/completed", "params": {"threadId": thread, "turnId": "turn-organize",
+                "item": {"type": "agentMessage", "text": text}}})
+            put({"method": "turn/completed", "params": {"threadId": thread,
+                "turn": {"id": "turn-organize", "status": "completed"}}})
+            continue
+        else:
+            result = {}
+        put({"id": number, "result": result})
+
+
 # ---- Antigravity CLI's ACP server (`agy acp`), in the shapes recorded from agy 1.5.12 (its options from 1.5.13)
 def agy(args):
     state = {"session": "", "next": 0, "peer_turns": 0, "mcp": []}
@@ -462,5 +498,7 @@ if __name__ == "__main__":
         claude(rest)
     elif tool == "agy":
         agy(rest)
+    elif tool == "organize":
+        organize()
     else:
         codex(rest)

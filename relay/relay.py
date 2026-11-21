@@ -430,12 +430,16 @@ CHAT_TOOLS = ("claude", "codex", "agy")
 CHAT_FEATURES = {"agy": "chat-agy"}
 CHAT_ACTIONS = ("say", "stop", "answer", "close", "rename")
 CHAT_DECISIONS = re.compile(r"^(allow|always|deny|choice:[0-9]{1,2})$")
+# Conversation organization is a computer-side queue. The relay validates the
+# request and keeps the result only while the held request is waiting.
+ORGANIZE_VERBS = ("status", "settings", "list", "start", "retry", "edit")
+ORGANIZE_TOOLS = ("claude", "codex", "agy")
 # By which way the computer does each thing to a conversation that a program there has open (docs/PROTOCOL.md):
 # its application's own channel, its tool's hooks, its tool's own way to one that sits idle; ending closes its program.
 WAYS = {"say": ("codex-desktop", "hook", "wake"), "stop": ("codex-desktop", "hook"), "answer": ("hook",), "end": ("process",)}
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end") + COMPUTER_ACTIONS + DESKTOP_ACTIONS + tuple("work_" + name for name in WORK_ACTIONS)     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end", "session_organize") + COMPUTER_ACTIONS + DESKTOP_ACTIONS + tuple("work_" + name for name in WORK_ACTIONS)     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -488,6 +492,27 @@ def _placed(session):
     if session["dir"]:
         return {"dir": session["dir"], "folder": ""}
     return {"dir": "", "folder": session["folder"]} if _name(session.get("folder"), 260) else None
+
+
+def _organize(value):
+    """The computer's saved organization metadata, kept separate from its old session title."""
+    if not isinstance(value, dict):
+        return None
+    shown = {}
+    for key, limit in (("title", 80), ("original_title", 80), ("manual_title", 80), ("summary", 2000), ("error", 300), ("model", 80)):
+        item = value.get(key)
+        if isinstance(item, str):
+            shown[key] = item.strip()[:limit]
+    tags = value.get("tags")
+    if isinstance(tags, list):
+        shown["tags"] = [tag.strip()[:40] for tag in tags[:16] if isinstance(tag, str) and tag.strip()][:16]
+    if type(value.get("follow_up")) is bool:
+        shown["follow_up"] = value["follow_up"]
+    if value.get("state") in ("pending", "queued", "running", "done", "failed"):
+        shown["state"] = value["state"]
+    if type(value.get("updated")) is int and value["updated"] >= 0:
+        shown["updated"] = value["updated"]
+    return shown
 
 
 class Relay:
@@ -1160,6 +1185,80 @@ class Relay:
                     wait = WAKE_SECONDS
             return self._held({"id": op_id, "action": "session_" + action, "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
 
+    def organize(self, payload, now=None, wait=FILE_SECONDS):
+        """Passes a conversation organization request to the computer.
+
+        The computer owns the catalog, queue, model selection and generated metadata.
+        The relay only validates the target and bounded paging/settings fields.
+        """
+        now = time.time() if now is None else now
+        if not isinstance(payload, dict):
+            raise RemoteError("请求格式无效")
+        op_id, verb = payload.get("id"), payload.get("verb")
+        if not isinstance(op_id, str) or not _id.fullmatch(op_id):
+            raise RemoteError("操作编号无效")
+        if verb not in ORGANIZE_VERBS:
+            raise RemoteError("整理操作无效")
+        question = {"id": op_id, "action": "session_organize", "verb": verb}
+        has_tool, has_session = "tool" in payload, "session" in payload
+        if has_tool != has_session:
+            raise RemoteError("对话标识无效")
+        if has_tool:
+            tool, session = payload.get("tool"), payload.get("session")
+            if tool not in ORGANIZE_TOOLS or not isinstance(session, str) or not session_id_ok(tool, session):
+                raise RemoteError("对话标识无效")
+            question.update(tool=tool, session=session)
+        if verb == "settings":
+            if "model" in payload:
+                model = payload.get("model")
+                if not isinstance(model, str) or not _model.fullmatch(model):
+                    raise RemoteError("模型名称无效")
+                question["model"] = model
+            if "auto" in payload:
+                if type(payload.get("auto")) is not bool:
+                    raise RemoteError("自动整理设置无效")
+                question["auto"] = payload["auto"]
+        elif verb == "list":
+            offset, limit = payload.get("offset", 0), payload.get("limit", 50)
+            if type(offset) is not int or offset < 0:
+                raise RemoteError("分页位置无效")
+            if type(limit) is not int or not 1 <= limit <= 120:
+                raise RemoteError("分页大小无效")
+            question.update(offset=offset, limit=limit)
+        elif verb in ("start", "retry"):
+            scope = payload.get("scope", "")
+            if scope not in ("", "all") or (not has_tool and scope != "all"):
+                raise RemoteError("整理范围无效")
+            if scope:
+                question["scope"] = scope
+        elif verb == "edit":
+            if not has_tool or ("title" not in payload and "follow_up" not in payload):
+                raise RemoteError("请选择对话，并填写名称或设置待跟进标记")
+            if "title" in payload:
+                title = payload["title"]
+                if not isinstance(title, str) or not title.strip() or len(title) > 80 or any(ord(c) < 32 for c in title):
+                    raise RemoteError("整理名称无效")
+                question["title"] = title.strip()
+            if "follow_up" in payload:
+                if type(payload["follow_up"]) is not bool:
+                    raise RemoteError("待跟进标记无效")
+                question["follow_up"] = payload["follow_up"]
+        with self._changed:
+            self._expire(now)
+            if op_id in self._pending:
+                raise RemoteError("操作编号已被其它操作使用")
+            if not self._view(now)["online"] or not self._device["enabled"]:
+                raise RemoteError("电脑未连接或远程已关闭，请等待电脑上线后重试")
+            if "organize" not in self._device.get("features", []):
+                raise RemoteError("电脑端版本不支持对话整理，请更新电脑端")
+            answer = self._held(question, now, wait)
+            if verb == "edit" and isinstance(answer.get("item"), dict):
+                saved = next((item for item in self._sessions if item["id"] == question.get("session") and item["tool"] == question.get("tool")), None)
+                organized = _organize(answer["item"])
+                if saved is not None and organized is not None:
+                    saved["organize"] = organized
+            return answer
+
     def computer(self, payload, now=None, wait=FILE_SECONDS):
         """A question to the program on the computer about itself: its settings, and the line the phone reaches it
         by. The program answers and decides; the relay checks the shape of the question, passes it on, holds the
@@ -1487,13 +1586,14 @@ class Relay:
                      "can_takeover": s.get("can_takeover") is True, "ownership_known": s.get("ownership_known") is True,
                      "takeover_reason": str(s.get("takeover_reason") or "")[:200],
                      # the collaboration task it is or was a member of, while the computer keeps that task
-                     "team": _team(s.get("team"))}
+                     "team": _team(s.get("team")),
+                     **({"organize": _organize(s.get("organize"))} if isinstance(s.get("organize"), dict) else {})}
                     for s in payload["sessions"][:120]
                     if isinstance(s, dict) and isinstance(s.get("id"), str) and session_id_ok(s.get("tool"), s["id"]) and s.get("tool") in ("claude", "codex", "agy", "opencode", "qoder", "cline", "pi")
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

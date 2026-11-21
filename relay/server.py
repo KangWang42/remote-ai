@@ -622,7 +622,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ticket":
             return self._json(200, {"ticket": space.tickets.make()})
         call = {"/api/terminal": terminals.command, "/api/terminal/agent": terminals.agent, "/api/terminal/agent/pull": terminals.pull, "/api/files": terminals.files,
-                "/api/conversation": terminals.conversation, "/api/computer": terminals.computer, "/api/work": terminals.work}.get(path)
+                "/api/conversation": terminals.conversation, "/api/organize": terminals.organize, "/api/computer": terminals.computer, "/api/work": terminals.work}.get(path)
         if call is None:
             return self._json(404, {"error": "not found"})
         try:

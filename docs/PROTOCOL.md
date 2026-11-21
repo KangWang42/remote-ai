@@ -176,8 +176,8 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `file-upload`, `update`, `peek`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort` and `teams-flex-rounds`
-(the work capabilities: "The owner's work", below). These are forwarded
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `file-upload`, `update`, `peek`, `organize`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort` and `teams-flex-rounds`
+(the work capabilities are described in "The owner's work", below; `organize` is described in "Conversation organization"). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 Every session and every terminal carries `team`: the id of the collaboration task it is or was a member of, `""` for
 none (see "Multi-AI collaboration tasks"); `device.team_cards` lists those tasks in short.
@@ -442,6 +442,91 @@ running all that while. A conversation that has stopped is idle, and is told whe
 Nothing is kept for a conversation that runs in one of the program's own terminals (its hook was started, however
 many steps down, by the program, or tells of the conversation a terminal runs): the phone is at that terminal, where
 the tool shows its own question and takes what is typed.
+
+### Conversation organization
+
+The computer advertises the optional `organize` capability in `info.features`. A signed-in viewer calls
+`POST /api/organize`; the relay validates the request, holds it on the same asynchronous operation path as
+`/api/conversation`, and sends `session_organize` to the computer. The computer owns the conversation catalog, queue,
+Codex model selection and generated metadata. A request keeps its `id` when retried, and the relay returns the
+computer's result or its error.
+
+The identity of one conversation is always the pair `tool` and `session`. Windows organization currently accepts
+`claude`, `codex` and `agy` UUID sessions. `start` and `retry` can target that pair or use `scope: "all"`. A
+`list` request is independently paged with `offset` and `limit`, up to 120 rows per response. This paging is not the
+overview's historical-session limit, so a computer with more than 120 saved conversations is read page by page.
+
+The request verbs and representative responses are:
+
+```json
+POST /api/organize
+{"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90","verb":"status"}
+
+{"auto":false,"model":"gpt-6-luna","default_model":"gpt-6-luna",
+ "models":[{"id":"gpt-6-luna","label":"GPT-6 Luna","is_default":true}],
+ "model_available":true,"queued":0,"running":0,"done":12,"failed":1}
+```
+
+```json
+{"id":"...","verb":"settings","model":"gpt-6-luna","auto":true}
+
+{"auto":true,"model":"gpt-6-luna","default_model":"gpt-6-luna",
+ "models":[{"id":"gpt-6-luna","label":"GPT-6 Luna","is_default":true}],
+ "model_available":true,"queued":0,"running":1,"done":12,"failed":1}
+```
+
+```json
+{"id":"...","verb":"list","offset":120,"limit":50}
+
+{"items":[
+  {"id":"11111111-2222-3333-4444-555555555555","tool":"codex","dir":"demo","folder":"",
+   "title":"修复登录","original_title":"Untitled","manual_title":"",
+   "summary":"修复登录流程并补充测试","tags":["登录","测试"],"follow_up":true,
+   "updated":1700000000000,"state":"done","error":"","model":"gpt-6-luna"}
+ ],"total":173,"more":true}
+```
+
+```json
+{"id":"...","verb":"start","tool":"codex","session":"11111111-2222-3333-4444-555555555555"}
+{"queued":1,"skipped":0}
+
+{"id":"...","verb":"retry","scope":"all"}
+{"queued":3,"skipped":170}
+```
+
+```json
+{"id":"...","verb":"edit","tool":"codex",
+ "session":"11111111-2222-3333-4444-555555555555","title":"登录流程"}
+
+{"item":{"id":"11111111-2222-3333-4444-555555555555","tool":"codex","dir":"demo","folder":"",
+ "title":"登录流程","original_title":"Untitled","manual_title":"登录流程",
+ "summary":"修复登录流程并补充测试","tags":["登录","测试"],"follow_up":true,
+ "updated":1700000000000,"state":"done","error":"","model":"gpt-6-luna"}}
+```
+
+`edit` requires `tool`, `session` and at least one of `title` or `follow_up`. Omitted fields retain their values.
+Send the JSON boolean `true` to add a conversation to follow-up and `false` to remove it. Both choices are saved
+on the computer and take precedence over model results, including when a run is in progress. The effective
+`follow_up` value is returned in `item`, `list` and `session.organize` after a restart or a relay change. Existing
+records without a manual choice use the value from the model, or `false` when there is no result.
+
+```json
+{"id":"...","verb":"edit","tool":"codex",
+ "session":"11111111-2222-3333-4444-555555555555","follow_up":false}
+```
+
+An organization item has the stable identity fields `id`, `tool`, `dir` and `folder`, display fields
+`title`, `original_title` and `manual_title`, generated fields `summary` and `tags`, the effective `follow_up`, and queue fields
+`updated`, `state`, `error` and `model`. The overview keeps the existing session title and list behavior. When the
+computer includes organization metadata in a session report, the relay forwards it under `session.organize`, so old
+clients continue to use `session.title` and terminal `rename` unchanged.
+
+The computer can report `state` as `pending`, `queued`, `running`, `done` or `failed`. A failed item keeps its
+`error` text and can be sent again with `retry`. While a batch is running, `status` reports `running: 1`; the counts
+in `queued`, `done` and `failed` are queue progress, and `list` can be polled for each item's state and error.
+Missing `organize` capability, an unknown identity, an invalid page, model or title, an offline computer, and a
+malformed verb are relay errors with the usual `400` response. A space in a public relay has its own `Relay`, sign-in
+token and operation queue, so organization requests and results from two computers cannot cross.
 
 ### The program itself
 

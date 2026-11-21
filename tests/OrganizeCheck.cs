@@ -107,6 +107,12 @@ static class OrganizeCheck {
         organizer.Advance();
         Check((string)Row(organizer, second)["state"] == Organizer.Done, "retry did not complete");
         Check(organizer.Title("claude", second.Id, second.Title, true) == second.Title, "native title overwritten");
+        var saved = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(file, Encoding.UTF8));
+        var entries = (Dictionary<string, object>)saved["Entries"];
+        ((Dictionary<string, object>)entries[second.Key]).Remove("ManualFollowUp");
+        File.WriteAllText(file, Json.Serialize(saved), new UTF8Encoding(false));
+        organizer = open();
+        Check((bool)Row(organizer, second)["follow_up"], "old records lost the model's follow-up value");
         Check(Number(Op(organizer, "start", field: "scope", value: "all"), "queued") == 130, "batch missed older entries");
 
         long current = Organizer.Now(DateTime.UtcNow);
