@@ -1081,6 +1081,16 @@ file rather than the file written again), `sessions.json` (hashes of sign-in tok
 no terminal input or output to any log. A relay for everyone keeps the same files once per space, in
 `spaces/<id>/`, with `space.json` (the hash of the space's password and when it was made) instead of a password.
 
+## Usage limits as the tools tell them (agent 0.7.1 on Linux)
+
+The Linux agent reads the same three quota sources the Windows program does, and keeps what each said in `quotas/<tool>.json` (0600) in its data folder; a report carries `quotas` in its info, projected by the relay to per-tool windows (`name`, `used` 0..100, `resets`, and a `group` label for Antigravity CLI's secondary pools; a window whose time is over is left out). Only the share used and when it starts anew leave the machine, never anything of the account.
+
+- Claude Code: a `rate_limit_event` in the structured chat's stream-json (`rate_limit_info.unifiedWindows`, each with `utilization` 0..1 and `resetsAt`); heard by every conversation run in the chat mode.
+- Codex: `account/rateLimits/read` of its app-server, asked at most once in ten minutes, and the `account/rateLimits/updated` push; `primary` and `secondary` are named by their window length (`five_hour`, `seven_day`, or `<minutes>m`).
+- Antigravity CLI: `agy -p /usage --output-format json`, asked at most once in ten minutes where the CLI is installed; the primary Gemini/Neon pool's windows are named `five_hour`/`seven_day`, and every other model pool keeps a short group label so the phone folds them behind a toggle.
+
+The teams' leader prompts carry these numbers (`Rooms`), a member whose windows are exhausted is not given work, and a failure that looks like a quota or rate-limit error fails over by the same patterns as on Windows. Where a tool has said nothing, the leader prompt says its quota is unknown and treats it as normal.
+
 ## Teams on the Linux agent (agent 0.7.1)
 
 The Linux agent carries the same collaboration ways as the Windows program (agent-windows/Teams.cs): a team is `review` (one member writes, another reviews read-only), `lead` (a leader assigns members with `ASSIGN <tool>: <task>` lines and collects the results), or `compare` (candidates each work in their own Git worktree and the owner merges one). It reports `teams` and `teams-v2` in its features, plus one `<tool>-team` feature per tool that can be a member, so the phone offers exactly those tools in the picker. The operations are the same eight (`work_teams`, `work_team_start/stop/resume/remove`, and under `teams-v2` `work_team_say/pick/swap`); state is kept in `teams.json` (0600) in the data folder.

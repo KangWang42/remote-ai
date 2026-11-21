@@ -51,6 +51,7 @@ import sys
 import termios
 import threading
 import time
+import quotas as quotas_store
 import teams
 import worktrees
 import uuid
@@ -2245,8 +2246,10 @@ class Chat(Live):
         self.stopping, self.fd, self.tty, self.cols, self.rows = False, -1, None, 80, 24
         self.said_last, self.gate = "", threading.RLock()
         self.asks, self.printed, self.gather, self.halting, self.errors = {}, {}, ["", "", ""], False, []
-        # what has been said in the turn at hand, and who hears when the turn ends (a team member's use)
+        # what has been said in the turn at hand, who hears when the turn ends (a team member's
+        # use), and who keeps what the tool says of its usage limits
         self.turn_words, self.turned = "", None
+        self.quotas_note = None
         self.start(launcher, session, resume, mode)
 
     def run(self, argv):
@@ -2380,6 +2383,10 @@ class Chat(Live):
     def note(self, text):
         self.event(t="note", text=text, at=int(time.time() * 1000))
 
+    def note_quota(self, tool, windows):
+        if self.quotas_note and windows:
+            self.quotas_note(tool, windows)
+
     def turn_ended(self, how, error=""):
         more = {"error": error} if error else {}
         self.event(t="turn", end=how, at=int(time.time() * 1000), **more)
@@ -2505,6 +2512,12 @@ class ClaudeChat(Chat):
             self.whole(m.get("message") or {})
         elif kind == "user":
             self.came(m)
+        elif kind == "rate_limit_event":
+            if self.quotas_note:
+                info = m.get("rate_limit_info") if isinstance(m.get("rate_limit_info"), dict) else {}
+                windows = quotas_store.from_claude_event(info)
+                if windows:
+                    self.quotas_note("claude", windows)
         elif kind == "control_request":
             self.permission(m)
         elif kind == "control_cancel_request":
@@ -2676,6 +2689,11 @@ class CodexChat(Chat):
                 return self.call("turn/steer", {"threadId": self.session, "expectedTurnId": self.turn, "input": self.words(text), "clientUserMessageId": op_id or secrets.token_hex(16)}, steered)
             self.begin_turn(text, op_id)
 
+    def ask_rate_limits(self):
+        self.call("account/rateLimits/read", {}, lambda answer: self.note_quota(
+            "codex", quotas_store.from_codex((answer.get("result") or {}).get("rateLimits") or
+                                             (answer.get("result") or {}))))
+
     def begin_turn(self, text, op_id):
         with self.gate:
             self.turn_words = ""
@@ -2738,6 +2756,8 @@ class CodexChat(Chat):
                     self.event(t="answered", id=key, decision="gone")
             if not self.asks and self.status == "confirm":
                 self.state("busy" if self.turn else "idle")
+        elif method == "account/rateLimits/updated":
+            self.note_quota("codex", quotas_store.from_codex(p.get("rateLimits") or p))
         elif method == "error":
             self.note(str((p.get("error") or {}).get("message") or "Codex 出错"))
 
@@ -3457,10 +3477,12 @@ class Agent:
         self.stats = Stats(self.sessions.claude_home, lambda: os.environ.get("CODEX_HOME") or os.path.join(self.sessions.home, ".codex"))
         self.schedules = Schedules(os.path.join(data, "schedules.json"))
         self.chains = Chains(os.path.join(data, "chains.json"))
+        self.quotas = quotas_store.Quotas(data)
+        self.next_codex_ask = self.next_agy_ask = 0.0
         self.worktrees = worktrees.Worktrees(os.path.join(data, "worktrees"))
         self.teams = teams.Teams(os.path.join(data, "teams.json"), teams.Hands(
             begin_in=self.begin_member_in, say=self.say_to_member, stop=self.stop_member,
-            changes=self.changes_of, available=self.chat_tools_available,
+            changes=self.changes_of, available=self.chat_tools_available, limits=self.quotas.of,
             make_worktree=self.make_team_worktree, worktree_diff=self.worktrees.diff,
             worktree_stat=self.worktrees.stat, apply_worktree=self.apply_team_worktree,
             clean_worktrees=self.clean_team_worktrees))
@@ -3604,9 +3626,20 @@ class Agent:
                         self.teams_step(dirs, now)
                     except Exception as failed:
                         say("协作任务推进失败：%s" % type(failed).__name__)
+                    if now >= self.next_codex_ask:
+                        self.next_codex_ask = now + 600
+                        for one in self.terminals.values():
+                            if isinstance(one, CodexChat) and not one.closed:
+                                one.ask_rate_limits()
+                    if now >= self.next_agy_ask:
+                        self.next_agy_ask = now + 600
+                        agy = find_tool("agy")
+                        if agy:
+                            threading.Thread(target=self.quotas.ask_agy, args=(agy,), daemon=True).start()
             payload = {
                 "info": {"instance": self.instance, "enabled": enabled, "tools": self.tools[0],
-                         "features": FEATURES + [one for one in TEAM_FEATURES if one[:-5] in self.tools[0]], "version": VERSION, "newer": "",
+                         "features": FEATURES + [one for one in TEAM_FEATURES if one[:-5] in self.tools[0]],
+                         "quotas": self.quotas.report(), "version": VERSION, "newer": "",
                          "shell": os.path.basename(self.shell(cfg)),
                          "workspaces": list(dirs.keys()),
                          "projects": self.sessions.told(self.projects.entries(cfg, dirs)),
