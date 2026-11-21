@@ -158,7 +158,8 @@ public static class Setup {
     /// With a file name it only draws itself into that picture, for the documentation.
     static string Ask(string suggested, string picture = null) {
         using (var form = new Form { Text = "安装 " + Name, ClientSize = new Size(520, 250), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-                                     StartPosition = FormStartPosition.CenterScreen, BackColor = Theme.Bg, ForeColor = Theme.Ink, Font = new Font("Microsoft YaHei UI", 9f), AutoScaleMode = AutoScaleMode.None, Icon = Theme.MarkIcon(32) }) {
+                                     StartPosition = FormStartPosition.CenterScreen, BackColor = Theme.Bg, ForeColor = Theme.Ink, Font = new Font("Microsoft YaHei UI", 9f), AutoScaleMode = AutoScaleMode.None }) {
+            Theme.ApplyIcon(form);
             form.HandleCreated += (s, e) => Theme.Title(form.Handle);
             Action<Control, int, int, int, int> place = (control, x, y, w, h) => { control.SetBounds(x, y, w, h); form.Controls.Add(control); };
             place(new PictureBox { Image = Theme.Mark(96), SizeMode = PictureBoxSizeMode.Zoom, BackColor = Theme.Bg }, 24, 22, 48, 48);

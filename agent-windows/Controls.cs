@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -87,26 +89,33 @@ public static class Theme {
             if (edge.HasValue) using (var pen = new Pen(edge.Value, edgeWidth)) g.DrawPath(pen, path);
         }
     }
-    /// The program's mark: a terminal window with a prompt, drawn at any size.
-    public static Bitmap Mark(int size) {
-        var picture = new Bitmap(size, size);
-        using (var g = Graphics.FromImage(picture)) {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            float u = size / 32f;
-            using (var path = Rounded(new RectangleF(1 * u, 1 * u, 30 * u, 30 * u), 7 * u))
-            using (var fill = new LinearGradientBrush(new PointF(0, 0), new PointF(size, size), Color.FromArgb(58, 64, 104), Color.FromArgb(30, 32, 48))) g.FillPath(fill, path);
-            using (var pen = new Pen(Accent, 3.2f * u) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-                g.DrawLines(pen, new[] { new PointF(8 * u, 10.5f * u), new PointF(14.5f * u, 16 * u), new PointF(8 * u, 21.5f * u) });
-            using (var pen = new Pen(Good, 3.2f * u) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawLine(pen, 17 * u, 22 * u, 24.5f * u, 22 * u);
+    static Icon AppIcon(Size? preferred = null) {
+        using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("remote-ai.ico")) {
+            return preferred.HasValue ? new Icon(stream, preferred.Value) : new Icon(stream);
         }
-        return picture;
     }
-    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
-    public static Icon MarkIcon(int size) {
-        using (var picture = Mark(size)) {
-            IntPtr handle = picture.GetHicon();
-            try { return (Icon)Icon.FromHandle(handle).Clone(); } finally { DestroyIcon(handle); }
-        }
+    public static Bitmap Mark(int size) {
+        // System.Drawing on .NET Framework can draw a PNG-compressed ICO frame through its Win32 handle.
+        using (var icon = AppIcon(new Size(128, 128)))
+        using (var frame = Icon.FromHandle(icon.Handle))
+        using (var bitmap = frame.ToBitmap())
+            return new Bitmap(bitmap, size, size);
+    }
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+    public static Icon TrayIcon() { return AppIcon(SystemInformation.SmallIconSize); }
+    /// Applies the shared multi-size icon to a Form, binding exact small (title bar) and big (taskbar / Alt+Tab) frames.
+    public static void ApplyIcon(Form form) {
+        if (form == null) return;
+        Icon baseIcon = AppIcon(), smallIcon = AppIcon(SystemInformation.SmallIconSize), bigIcon = AppIcon(SystemInformation.IconSize);
+        form.Icon = baseIcon;
+        Action push = () => {
+            if (!form.IsHandleCreated) return;
+            SendMessage(form.Handle, 0x0080, IntPtr.Zero, smallIcon.Handle);
+            SendMessage(form.Handle, 0x0080, (IntPtr)1, bigIcon.Handle);
+        };
+        form.HandleCreated += (s, e) => push();
+        if (form.IsHandleCreated) push();
+        form.Disposed += (s, e) => { baseIcon.Dispose(); smallIcon.Dispose(); bigIcon.Dispose(); };
     }
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] static extern int SetWindowTheme(IntPtr window, string app, string ids);

@@ -63,6 +63,7 @@ internal static class ToolInstaller {
     }
     internal static void Show(Form owner, string dataDir) {
         using (var dialog = new Form { Text = "安装终端工具（可选）", Width = 510, Height = 355, StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false, FormBorderStyle = FormBorderStyle.FixedDialog }) {
+            Theme.ApplyIcon(dialog);
             var intro = new Label { Left = 20, Top = 18, Width = 450, Height = 65, Text = "可选安装 Claude Code 和 Codex 终端工具。接受后会联网下载并运行各自的官方安装程序，安装到当前用户目录。安装后需自行登录账号，使用费用由对应服务收取。" };
             var claude = new CheckBox { Left = 20, Top = 88, Width = 450, Text = "Claude Code（claude.ai）", Checked = TerminalAgent.FindTool("claude") == null };
             var codex = new CheckBox { Left = 20, Top = 118, Width = 450, Text = "Codex（chatgpt.com）", Checked = TerminalAgent.FindTool("codex") == null };

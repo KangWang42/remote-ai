@@ -759,7 +759,7 @@ public sealed partial class App : Form {
         AutoScaleMode = AutoScaleMode.None;      // positions below are for 100%; the whole window is scaled once at the end
         ClientSize = new Size(SideWidth + PageWidth, WindowHeight); FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false; StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Bg; ForeColor = Theme.Ink;
-        Icon = Theme.MarkIcon(32);
+        Theme.ApplyIcon(this);
 
         // ---- side bar
         var side = Place(this, new Panel { BackColor = Theme.Side }, 0, 0, SideWidth, WindowHeight);
@@ -975,7 +975,7 @@ public sealed partial class App : Form {
         toast.Visible = false; toast.BackColor = Theme.Ink; toast.ForeColor = Theme.OnAccent; toast.TextAlign = ContentAlignment.MiddleCenter; toast.Font = Theme.Text(9f, true);
         toastTimer.Interval = 1600; toastTimer.Tick += (s, e) => { toastTimer.Stop(); toast.Visible = false; };
         activityTimer.Interval = 2000; activityTimer.Tick += (s, e) => { RefreshActivity(); if (pages.Count > 1 && pages[1].Visible && projectPick.Chosen != 0) ShowProjects(); };
-        tray.Icon = Theme.MarkIcon(32); tray.Visible = true; tray.Text = "Remote AI";
+        tray.Icon = Theme.TrayIcon(); tray.Visible = true; tray.Text = "Remote AI";
         tray.DoubleClick += (s, e) => Reveal();
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("显示窗口", null, (s, e) => Reveal());
@@ -1128,7 +1128,8 @@ public sealed partial class App : Form {
     // under its label when it has one. Returns what was filled in, or null when the question was not agreed to.
     string[] Dialog(string title, string text, string yes, bool danger, string[] labels, string[] values) {
         using (var dialog = new Form { Text = "Remote AI", FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent,
-                                       MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Theme.Text(), BackColor = Theme.Bg, ForeColor = Theme.Ink, AutoScaleMode = AutoScaleMode.None, Icon = Icon }) {
+                                       MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Theme.Text(), BackColor = Theme.Bg, ForeColor = Theme.Ink, AutoScaleMode = AutoScaleMode.None }) {
+            Theme.ApplyIcon(dialog);
             dialog.HandleCreated += (s, e) => Theme.Title(dialog.Handle);
             Place(dialog, Theme.Label(title, Theme.Ink, Theme.Bg, 11.5f, true), 24, 22, 372, 26);
             Place(dialog, Theme.Label(text, Theme.Muted, Theme.Bg), 24, 52, 372, 40);

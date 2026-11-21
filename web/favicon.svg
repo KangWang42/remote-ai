@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Remote AI</title>
+  <desc id="desc">Remote AI terminal prompt and sparkle mark in a deep indigo rounded tile</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#223472"/>
+      <stop offset="55%" stop-color="#141d3d"/>
+      <stop offset="100%" stop-color="#0b1022"/>
+    </linearGradient>
+    <radialGradient id="glow-blue" cx="24%" cy="20%" r="62%">
+      <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.34"/>
+      <stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-mint" cx="80%" cy="82%" r="52%">
+      <stop offset="0%" stop-color="#34d399" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0f2fe" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0.10"/>
+    </linearGradient>
+    <linearGradient id="prompt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#93c5fd"/>
+    </linearGradient>
+    <linearGradient id="cursor" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#6ee7b7"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#7dd3fc"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#bg)"/>
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#glow-blue)"/>
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#glow-mint)"/>
+  <rect x="11.5" y="11.5" width="233" height="233" rx="52.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+  <path d="M66 87l56 44-56 44" fill="none" stroke="url(#prompt)" stroke-width="24.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M136 175h58" fill="none" stroke="url(#cursor)" stroke-width="24" stroke-linecap="round"/>
+  <path d="M178 54.5Q184.4 74.6 204.5 81Q184.4 87.4 178 107.5Q171.6 87.4 151.5 81Q171.6 74.6 178 54.5Z" fill="url(#spark)"/>
+</svg>
