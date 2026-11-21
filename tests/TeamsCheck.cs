@@ -278,6 +278,8 @@ public static class TeamsCheck {
             Require(Teams.Verdict("REVIEW: PASS\n没有问题") == true && Teams.Verdict("**REVIEW: CHANGES**\n1. …") == false && Teams.Verdict("\n\n  review：pass") == true && Teams.Verdict("看起来不错") == null, "the verdict, in the first lines");
             var tasks = Teams.Assigned("先这样分：\n- ASSIGN codex: 写测试\n**ASSIGN** agy：查文档\nASSIGN codex: 再跑一遍\nASSIGN gemini: 不在队里", new[] { "codex", "agy" });
             Require(tasks.Count == 2 && tasks["codex"] == "写测试\n再跑一遍" && tasks["agy"] == "查文档", "the tasks, of the members it has only");
+            tasks = Teams.Assigned("分工如下。\nASSIGN codex: 按下面的顺序做：\n1. 修额度\n\n2. 加设置\nASSIGN agy: 查文档\nVERIFIED: 不属于任务\nDONE: x", new[] { "codex", "agy" });
+            Require(tasks["codex"] == "按下面的顺序做：\n1. 修额度\n\n2. 加设置" && tasks["agy"] == "查文档", "a task's list under its ASSIGN line goes with it: " + tasks["codex"]);
             Require(Teams.Finished("都做完了。\nDONE: 已完成登录页") == "已完成登录页" && Teams.Finished("ASSIGN codex: x") == null, "done, with its summary");
 
             var teams = new Teams(file, Hands());

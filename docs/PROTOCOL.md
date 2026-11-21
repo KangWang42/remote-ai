@@ -632,7 +632,10 @@ With `item.auto_roster: true` (自动组队), the request supplies only a `leade
 The leader can work directly or write `ASSIGN member-1 claude: <task>` to create a member, `ASSIGN member-1: <task>` to reuse it,
 or specify a different provider to switch it. At most three members can be allocated. The task publishes each new member's
 role and provider as it is assigned, and uses the provider's default model. Without `roster`, legacy lead tasks keep
-their `tools`, `models` and optional `efforts` maps and use `ASSIGN <tool>: <task>`.
+their `tools`, `models` and optional `efforts` maps and use `ASSIGN <tool>: <task>`. A task continues on the lines
+under its `ASSIGN` line up to the next `ASSIGN`, `DONE` or `VERIFIED` line (at most 8000 characters), so a step list
+reaches the member whole. During acceptance the leader may merge and revise members' results itself and hands larger
+fixes back with `ASSIGN`; it does not edit while members are still working.
 
 **Models and reasoning effort** (`teams-models`, `teams-effort`, `agent-windows/Models.cs`). Tasks without a roster keep one model and optional effort per tool (`team.models`, `team.efforts`, with the tool's default for an omitted choice). Roster tasks keep `model` and optional `effort` on each role (persisted in `teams.dat` and `restart.json` across restarts and subsequent rounds). The agent uses the model and effort for the
 first turn, subsequent rounds (both continuing turns on an active conversation and sessions reopened after close/restart/`team_resume`), `team_swap` or failover, `discuss` and `review` readers, and `compare` candidates. They reach the tools as:

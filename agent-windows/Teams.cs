@@ -391,9 +391,9 @@ public sealed class Teams {
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
             + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "") + modelGuide
             + "\n如果目标写明由成员执行或要求组队，请把对应工作写成 ASSIGN 行。只有回复中的 ASSIGN 行才会交给成员执行。"
-            + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 结果达标后结束。"
+            + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件；有先后依赖的工作按顺序分批派出。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 成员交回后由你统筹：汇总各成员的结果，检查是否冲突、遗漏或偏离目标，必要时自己合并和修订，再决定结束还是继续派工。"
             + (rooms.Count > 0 ? "\n5. 按额度分配工作量：额度已用尽或不可用的成员不要再派工；额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
-            + "\n\n分派时，在回答的最后每行写一条（用上面的成员编号或英文名）：\nASSIGN 成员名: 任务内容\n若已自行完成任务，回答的最后写：\nDONE: 总结\n成员执行完或你自行完成后，会进入当轮验收。请亲自查看结果，运行相关检查，确认无误后结束。\n分派出去的工作不要自己动手做。";
+            + "\n\n分派时，把 ASSIGN 放在回答的最后，每位成员一条（用上面的成员编号或英文名）：\nASSIGN 成员名: 任务内容\n任务较长时，可以在 ASSIGN 行下面接着写分步清单；到下一条 ASSIGN 之前的内容都会交给这位成员。\n若已自行完成任务，回答的最后写：\nDONE: 总结\n成员执行完或你自行完成后，会进入当轮验收。请亲自查看结果，运行相关检查，确认无误后结束。\n成员正在做的工作你不要同时动手，以免改动互相覆盖；成员交回后，合并与修订由你决定。";
     }
     /// The leader's turn of acceptance: it inspects what changed and runs the checks itself (or has another member
     /// check or fix); `last` where no more rounds may be given out.
@@ -404,8 +404,8 @@ public sealed class Teams {
             + "\n\n整体目标：" + Cut(t.Goal, 2000)
             + (changes.Length > 0 ? "\n\n## 文件夹中的当前改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
-            + "\n\n验收要求：\n1. 亲自查看项目里的实际改动，确认它们达到目标。\n2. 运行与这次改动相关的检查，例如构建、测试、lint，或实际运行一遍关键功能。"
-            + (last ? "" : "\n3. 如果验收发现问题，请给出可执行的修改意见，派工后才进入下一轮。")
+            + "\n\n验收要求：\n1. 亲自查看项目里的实际改动，汇总各成员的结果，确认它们互不冲突、没有遗漏并达到目标。\n2. 发现小的冲突、遗漏或错误时，可以自己直接合并修订，改完再检查。\n3. 运行与这次改动相关的检查，例如构建、测试、lint，或实际运行一遍关键功能。"
+            + (last ? "" : "\n4. 需要较多工作的修复，给出可执行的修改意见并派给成员，派工后才进入下一轮。")
             + "\n\n验收通过时，在回答的最后写两行：\nVERIFIED: 你实际做了哪些检查、看到了什么结果（写明命令或查看的文件）\nDONE: 总结"
             + (last ? "\n没有通过时，直接说明还差什么，不要再写 ASSIGN。" : "\n发现问题时，用 ASSIGN 成员名: 修改内容 把修复派给成员，完成后会请你再次验收。");
     }
@@ -443,12 +443,28 @@ public sealed class Teams {
     }
     static readonly Regex Assign = new Regex(@"^[\s>*\-_`]*ASSIGN[*_`]*[ \t]+[*_`]*(claude|codex|agy|member-[123])(?:[ \t]+(claude|codex|agy))?[*_`]*[ \t]*[:：][ \t]*(.+?)[ \t]*\r?$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
     static readonly Regex Done = new Regex(@"^[\s>*\-_`]*DONE[*_`]*\s*[:：]\s*(.*)$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
-    /// The leader's tasks for its members (one line each; a member named twice is given both), of the members it has.
+    static readonly Regex AnyAssign = new Regex(@"^[\s>*\-_`]*ASSIGN\b", RegexOptions.IgnoreCase);
+    /// Each ASSIGN line with the lines under it, up to the next ASSIGN, DONE or VERIFIED line: a leader often writes a
+    /// task as one line and a numbered list under it, and the member has to be given all of it.
+    static IEnumerable<Tuple<Match, string>> Assignments(string said) {
+        var lines = (said ?? "").Replace("\r\n", "\n").Split('\n');
+        for (int i = 0; i < lines.Length; i++) {
+            var m = Assign.Match(lines[i]);
+            if (!m.Success) continue;
+            var body = new List<string> { m.Groups[3].Value.Trim() };
+            int j = i + 1;
+            for (; j < lines.Length && !AnyAssign.IsMatch(lines[j]) && !Done.IsMatch(lines[j]) && !Checked.IsMatch(lines[j]); j++) body.Add(lines[j].TrimEnd());
+            i = j - 1;
+            yield return Tuple.Create(m, Cut(String.Join("\n", body).Trim(), 8000));
+        }
+    }
+    /// The leader's tasks for its members (a member named twice is given both), of the members it has.
     public static Dictionary<string, string> Assigned(string said, IEnumerable<string> members) {
         var tasks = new Dictionary<string, string>();
         var known = new HashSet<string>(members);
-        foreach (Match m in Assign.Matches(said ?? "")) {
-            string tool = m.Groups[1].Value.ToLowerInvariant(), task = m.Groups[3].Value.Trim();
+        foreach (var one in Assignments(said)) {
+            Match m = one.Item1;
+            string tool = m.Groups[1].Value.ToLowerInvariant(), task = one.Item2;
             if (!known.Contains(tool) || m.Groups[2].Success || task.Length == 0) continue;
             tasks[tool] = tasks.ContainsKey(tool) ? tasks[tool] + "\n" + task : task;
         }
@@ -1340,13 +1356,14 @@ public sealed class Teams {
         var retired = new List<string>();
         var available = hands.Available == null ? team.Tools : hands.Available() ?? new string[0];
         lock (gate) {
-            foreach (Match match in Assign.Matches(said ?? "")) {
+            foreach (var one in Assignments(said)) {
+                Match match = one.Item1;
                 string role = match.Groups[1].Value.ToLowerInvariant();
                 if (!MemberRoles.Contains(role)) continue;
                 var member = RosterOf(team, role);
                 string requested = match.Groups[2].Value.ToLowerInvariant();
                 string tool = requested.Length > 0 ? requested : member == null ? "" : member.Tool;
-                string task = match.Groups[3].Value.Trim();
+                string task = one.Item2;
                 if (task.Length == 0 || (requested.Length > 0 && !team.AutoRoster) || !available.Contains(tool) ||
                     team.Failed.ContainsKey(tool) || IsExhausted(SafeLimits(tool)) ||
                     (team.Failed.ContainsKey(role) && member != null && member.Tool == tool))
