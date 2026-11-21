@@ -52,6 +52,7 @@ import termios
 import threading
 import time
 import teams
+import worktrees
 import uuid
 from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
@@ -187,7 +188,7 @@ UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish"
 FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "file-upload", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "teams"]
+FEATURES = ["terminal-exit", "files", "file-upload", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "teams", "teams-v2"]
 TEAM_FEATURES = tuple(tool + "-team" for tool in ("claude", "codex", "opencode", "qoder", "cline", "pi", "agy"))
 # What the phone asks about the owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
 # ("chains") is seen by watching the conversation's record grow and then go quiet — the tools' own hooks, which
@@ -3456,9 +3457,13 @@ class Agent:
         self.stats = Stats(self.sessions.claude_home, lambda: os.environ.get("CODEX_HOME") or os.path.join(self.sessions.home, ".codex"))
         self.schedules = Schedules(os.path.join(data, "schedules.json"))
         self.chains = Chains(os.path.join(data, "chains.json"))
+        self.worktrees = worktrees.Worktrees(os.path.join(data, "worktrees"))
         self.teams = teams.Teams(os.path.join(data, "teams.json"), teams.Hands(
             begin_in=self.begin_member_in, say=self.say_to_member, stop=self.stop_member,
-            changes=self.changes_of, available=self.chat_tools_available))
+            changes=self.changes_of, available=self.chat_tools_available,
+            make_worktree=self.make_team_worktree, worktree_diff=self.worktrees.diff,
+            worktree_stat=self.worktrees.stat, apply_worktree=self.apply_team_worktree,
+            clean_worktrees=self.clean_team_worktrees))
         self.team_seen = {}
         self.next_asking = 0.0
         self.sessions_sent = (0, 0.0)   # the version of the list the relay was last told, and when
@@ -3860,6 +3865,13 @@ class Agent:
             if not self.teams.remove(str(op.get("team") or "")):
                 raise OpError("没有找到这个协作任务")
             return {}
+        if action == "work_team_say":
+            return {"team": Teams.shown(self.teams.say(str(op.get("team") or ""), str(op.get("text") or ""), str(op.get("target") or "")))}
+        if action == "work_team_pick":
+            return {"team": Teams.shown(self.teams.pick(str(op.get("team") or ""), str(op.get("tool") or "")))}
+        if action == "work_team_swap":
+            return {"team": Teams.shown(self.teams.swap(str(op.get("team") or ""), str(op.get("role") or ""),
+                                        str(op.get("tool") or ""), str(op.get("note") or "")))}
         if action == "work_chains":
             return {"chains": self.chains.all()}
         if action == "work_chain_set":
@@ -3953,6 +3965,25 @@ class Agent:
 
     def chat_tools_available(self):
         return [one for one in CHAIN_TOOLS if find_tool(one)]
+
+    def make_team_worktree(self, dir_name, team_id, tool):
+        cfg = read_config(self.data)
+        folder = self.projects.all(cfg).get(dir_name)
+        if not folder:
+            raise OpError("目录未获允许")
+        return self.worktrees.create(folder, team_id, tool)
+
+    def apply_team_worktree(self, dir_name, wt_path, base_commit):
+        cfg = read_config(self.data)
+        folder = self.projects.all(cfg).get(dir_name)
+        if not folder:
+            raise OpError("目录未获允许")
+        return self.worktrees.apply(folder, wt_path, base_commit)
+
+    def clean_team_worktrees(self, dir_name, team_id):
+        cfg = read_config(self.data)
+        folder = self.projects.all(cfg).get(dir_name)
+        self.worktrees.remove_all(folder, team_id)
 
     def teams_step(self, dirs, now):
         """Moves the pty members of the teams on: a structured chat reports its own turn ending;
