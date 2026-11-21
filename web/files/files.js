@@ -46,17 +46,6 @@
   }
   let toastTimer = 0;
   function toast(text) { const box = $('toast'); box.textContent = text; box.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { box.hidden = true; }, 3000); }
-  function choose(title, choices) {
-    const form = $('sheet-form'), sheet = $('sheet');
-    form.textContent = '';
-    form.append(el('h3', { textContent: title }));
-    choices.forEach(c => form.append(el('button', { type: 'button', className: 'choice', onclick: () => { sheet.close(); c.act(); } },
-      el('span', null, c.label, c.sub ? el('small', { textContent: c.sub }) : ''), c.on ? el('i', { className: 'tick', textContent: '✓' }) : '')));
-    form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
-    sheet.onclick = event => { if (event.target === sheet) sheet.close(); };
-    sheet.showModal();
-  }
-
   // ---- look
   const TEXT = { small: '14px', normal: '15.5px', large: '17px', larger: '19px' };
   function paintFiles() {
@@ -159,8 +148,10 @@
     show();
   }
   window.addEventListener('popstate', event => {
-    const prevPath = place.path;
-    place = event.state || { path: asked.get('path') || '', file: asked.get('file') || '' };
+    if (event.state && event.state.rs) return;                                    // a step of the open sheet's
+    const prevPath = place.path, next = event.state || { path: asked.get('path') || '', file: asked.get('file') || '' };
+    if (next.path === place.path && next.file === place.file) return;             // the sheet's steps undone: still here
+    place = next;
     if (place.path !== prevPath) $('search').value = '';
     show();
   });
@@ -491,7 +482,7 @@
       if (native) {
         const where = native.saveEnd();
         if (!where) throw new Error('没有保存成功，请检查手机的存储空间');
-        choose('已保存到手机', [{ label: '打开', sub: '用手机上的应用打开 ' + name, act: () => native.openSaved() }, { label: '知道了', sub: '文件在：' + where, act: () => {} }]);
+        savedSheet(name, where);
       } else {
         const url = URL.createObjectURL(new Blob(parts, { type: 'application/octet-stream' }));
         el('a', { href: url, download: name }).click();
@@ -504,22 +495,37 @@
     } finally { saving = false; transferDone(outcome); }
   }
 
-  // ---- the menu
-  $('more').addEventListener('click', () => {
-    const list = [];
-    if (place.file) {
-      if (current && (current.kind.view === 'code' || current.kind.view === 'markdown' || current.kind.ext === 'svg' || !current.kind.view))
-        list.push({ label: '长行自动换行', sub: '关闭时可以左右滑动看完整的一行', on: wrap, act: () => { wrap = !wrap; keep('files-wrap', wrap ? '1' : ''); document.querySelectorAll('.code').forEach(c => c.classList.toggle('wrap', wrap)); } });
-      list.push({ label: '复制文件路径', sub: join(dir, join(place.path, place.file)), act: async () => { try { await navigator.clipboard.writeText(join(place.path, place.file)); toast('已复制'); } catch (error) { toast('这里不能复制'); } } });
-      list.push({ label: native ? '保存到手机' : '保存到这台设备', sub: native ? '放进手机的“下载 / RemoteAI”，之后可以用别的应用打开' : '作为浏览器的下载', act: save });
-    } else {
-      [['name', '按名称排列'], ['time', '最近修改的在前'], ['size', '最大的在前']].forEach(([key, label]) => list.push({ label, on: sort === key, act: () => { sort = key; keep('files-sort', key); show(); } }));
-      list.push({ label: '显示隐藏的文件', sub: '以 . 开头的和系统隐藏的', on: hidden, act: () => { hidden = !hidden; keep('files-hidden', hidden ? '1' : ''); show(); } });
-    }
-    if (from) list.push({ label: '回到终端', sub: '终端一直在电脑上运行', act: () => { const steps = (history.state && history.state.depth) || 0; history.go(-steps - 1); } });
-    list.push({ label: '回到项目', sub: dir, act: () => { location.href = '../?project=' + encodeURIComponent(dir); } });
-    choose(place.file ? '文件' : '文件夹', list);
-  });
+  // ---- the menu, and what is said after saving: pages of the sheet the other pages use (../ui/sheet.js)
+  function savedSheet(name, where) {
+    const kit = window.RemoteSheet.ui;
+    window.RemoteSheet.open({ title: '已保存到手机', build(p) {
+      p.body.append(kit.summary(name + '\n' + where, '', 'folder'));
+      const open = kit.go('用手机上的应用打开', async () => { p.sheet.close(null); native.openSaved(); }, { id: 'saved-open' });
+      p.foot.append(...open.nodes);
+    } });
+  }
+  function menuPage(depth) {
+    const kit = window.RemoteSheet.ui;
+    return { title: place.file ? '文件' : '文件夹', build(p) {
+      if (place.file) {
+        p.body.append(kit.group(kit.row({ icon: 'copy', tint: 'copy', label: '复制路径', id: 'menu-copy', act: async () => {
+          p.sheet.close(null);
+          toast(await window.RemoteSheet.copy(join(place.path, place.file)) ? '已复制' : '这里不能复制');
+        } })));
+        if (current && (current.kind.view === 'code' || current.kind.view === 'markdown' || current.kind.ext === 'svg' || !current.kind.view))
+          p.body.append(kit.group(kit.row({ label: '长行自动换行', id: 'menu-wrap', end: kit.toggle(wrap, on => { wrap = on; keep('files-wrap', on ? '1' : ''); document.querySelectorAll('.code').forEach(c => c.classList.toggle('wrap', on)); }, '长行自动换行') })));
+      } else {
+        p.body.append(kit.section('排列', kit.seg([['name', '名称'], ['time', '修改时间'], ['size', '大小']], sort, key => { sort = key; keep('files-sort', key); show(); }, { label: '排列', full: true })));
+        p.body.append(kit.group(kit.row({ label: '显示隐藏的文件', id: 'menu-hidden', end: kit.toggle(hidden, on => { hidden = on; keep('files-hidden', on ? '1' : ''); show(); }, '显示隐藏的文件') })));
+      }
+      const away = [];
+      // back to the terminal: the steps taken on this page, the sheet's own, and the one that came here
+      if (from) away.push(kit.row({ icon: 'term', tint: 'good', label: '回到终端', id: 'menu-terminal', act: () => { const steps = depth + p.sheet.entries + 1; p.sheet.close(null, true); history.go(-steps); } }));
+      away.push(kit.row({ icon: 'folder', tint: 'file', label: '回到项目', value: dir, id: 'menu-project', act: () => { p.sheet.close(null, true); location.href = '../?project=' + encodeURIComponent(dir); } }));
+      p.body.append(kit.group(...away));
+    } };
+  }
+  $('more').addEventListener('click', () => window.RemoteSheet.open(menuPage((history.state && history.state.depth) || 0), place.file ? '文件选项' : '文件夹选项'));
 
   if (!dir) location.replace('../'); else show();
 })();

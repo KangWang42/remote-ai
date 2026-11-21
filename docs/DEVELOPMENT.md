@@ -110,7 +110,7 @@ python tests\tunnel_download_check.py --bash <bash路径>    # 四种 Linux 架�
 python tests\tunnel_check.py <cloudflared.exe> --protocol http2  # 公网回显延迟
 python tests\tunnel_keep_check.py <cloudflared.exe>       # 程序结束后再启动，公网地址不变
 python tests\smooth_check.py                           # 历史很长时按键回显和连续输出的间隔
-python tests\files_check.py [chrome.exe <输出文件夹>]    # 查看文件：列目录、读文件、不出项目文件夹；带浏览器时给每种查看器截图
+python tests\files_check.py [chrome.exe <输出文件夹>]    # 查看文件：列目录、读文件、不出项目文件夹；带浏览器时给每种查看器截图，并检查右上角面板（排列、隐藏文件开关、返回键关闭；截图 folder-menu.png、file-menu.png）和保存后的面板
 python tests\restart_check.py                          # 电脑端和中转重启后，终端在原编号下接回
 python tests\move_check.py                             # 电脑端换到另一个中转再换回：终端、名字、画面和已结束的终端都跟着，不留下假的运行中终端
 python tests\history_check.py                          # 电脑端保留已交给中转的输出，中转缺少时从缺的地方再给一遍

@@ -589,26 +589,16 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-diff { margin: 0; padding: 10px 12px; max-height: 240px; overflow: auto; border-radius: 12px; background: var(--bg); color: var(--ink); font: .76rem/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .team-diff-empty { margin: 0; color: var(--muted); font-size: .82rem; }
 .team-pick-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.team-stream { position: relative; list-style: none; display: grid; gap: 10px; margin: 0; padding: 0 0 0 16px; min-width: 0; max-width: 100%; }
-.team-stream::before { content: ""; position: absolute; left: 5px; top: 10px; bottom: 10px; width: 2px; border-radius: 2px; background: var(--divider, var(--line)); }
+.team-stream { list-style: none; display: grid; gap: 10px; margin: 0; padding: 0; min-width: 0; max-width: 100%; }
 .team-msg { position: relative; display: grid; gap: 7px; padding: 12px 14px; border-radius: 16px; background: var(--panel); border: 1px solid var(--card-border, var(--line)); min-width: 0; max-width: 100%; box-shadow: var(--elevate); }
-.team-msg::before { content: ""; position: absolute; left: -15px; top: 18px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--muted); z-index: 1; }
-.team-msg.kind-goal::before { border-color: var(--accent); background: var(--accent); }
-.team-msg.kind-dispatch::before, .team-msg.kind-lead::before { border-color: var(--accent); background: var(--accent-soft); }
-.team-msg.kind-work::before, .team-msg.kind-discuss::before { border-color: var(--busy-dot, var(--busy)); background: var(--busy-soft); }
-.team-msg.kind-review::before { border-color: var(--accent); background: var(--panel); }
-.team-msg.kind-verify::before, .team-msg.kind-outcome::before { border-color: var(--good-dot, var(--good)); background: var(--good-dot, var(--good)); }
-.team-msg.mine::before { border-color: var(--accent); background: var(--accent); }
 .team-msg.mine { background: var(--chat-user-bg, var(--accent-soft)); border-color: var(--chat-user-border, color-mix(in srgb, var(--accent) 28%, var(--line))); }
 .team-msg.meta { background: var(--surface-sub, var(--raised)); border-style: solid; box-shadow: none; }
 .team-msg.kind-verify, .team-msg.kind-outcome { border-color: color-mix(in srgb, var(--good) 35%, var(--card-border, var(--line))); background: color-mix(in srgb, var(--good-soft) 55%, var(--panel)); }
 .team-msg.kind-dispatch { border-left: 3px solid var(--accent); }
 .team-msg.switch { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 12px; background: var(--surface-sub, var(--raised)); border: 1px solid var(--divider, var(--line)); box-shadow: none; font-size: .78rem; color: var(--muted); }
-.team-msg.switch::before { top: 50%; transform: translateY(-50%); width: 8px; height: 8px; left: -14px; border-color: var(--busy-dot, var(--busy)); background: var(--busy-soft); }
 .team-msg.switch .switch-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--busy-dot, var(--busy)); }
 .team-msg.switch .switch-text { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
 .team-msg.compact { padding: 0; background: var(--surface-sub, var(--raised)); border: 1px solid var(--divider, var(--line)); box-shadow: none; overflow: hidden; }
-.team-msg.compact::before { top: 15px; width: 8px; height: 8px; left: -14px; border-color: var(--line); background: var(--bg); }
 .team-msg.compact .compact-row { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; min-height: 38px; padding: 6px 12px; text-align: left; font-size: .8rem; color: var(--muted); }
 .team-msg.compact .compact-row:active { background: var(--raised); }
 .team-msg.compact .compact-who { flex: none; font-weight: 600; color: var(--ink); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

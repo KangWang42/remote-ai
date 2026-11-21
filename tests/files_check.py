@@ -338,6 +338,29 @@ def main():
                          "unknown": "!!document.querySelector('.unknown')"}
                 shot(base + "/?project=cohort-study", "project.png", "!document.getElementById('project').hidden")
                 shot(base + "/files/?dir=cohort-study", "folder.png", "document.querySelectorAll('#entries li').length > 5")
+                # The menu at the top right is a page of the sheet the other pages use (web/ui/sheet.js): how the folder
+                # is ordered is one of three, hidden files a switch, and pressing them changes the list behind it.
+                def menu(name, expected):
+                    ask("Runtime.evaluate", expression="document.getElementById('more').click()")
+                    until = time.time() + 5
+                    while time.time() < until and not ask("Runtime.evaluate", expression="!!document.querySelector('dialog.rs[open] .rs-row')", returnByValue=True)["result"].get("value"):
+                        time.sleep(.2)
+                    time.sleep(.4)
+                    (out / name).write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
+                    shown = ask("Runtime.evaluate", expression="[...document.querySelectorAll('dialog.rs[open] .rs-row b, dialog.rs[open] .rs-seg button')].map(n => n.textContent)", returnByValue=True)["result"]["value"]
+                    assert shown == expected, shown
+                    assert not ask("Runtime.evaluate", expression="!!document.querySelector('#sheet, .choice')", returnByValue=True)["result"]["value"]
+                menu("folder-menu.png", ["名称", "修改时间", "大小", "显示隐藏的文件", "回到项目"])
+                ask("Runtime.evaluate", expression="document.querySelector('dialog.rs[open] .rs-seg button[data-value=size]').click()")
+                time.sleep(.5)
+                assert ask("Runtime.evaluate", expression="localStorage.getItem('rcli-files-sort')", returnByValue=True)["result"]["value"] == "size"
+                ask("Runtime.evaluate", expression="document.querySelector('dialog.rs[open] .rs-switch').click()")
+                time.sleep(.3)
+                assert ask("Runtime.evaluate", expression="document.querySelector('dialog.rs[open] .rs-switch').getAttribute('aria-checked')", returnByValue=True)["result"]["value"] == "true"
+                ask("Runtime.evaluate", expression="document.querySelector('dialog.rs[open] .rs-switch').click(); history.back()")
+                time.sleep(.8)
+                assert ask("Runtime.evaluate", expression="!document.querySelector('dialog.rs[open]') && document.querySelectorAll('#entries li').length > 5", returnByValue=True)["result"]["value"], "the menu closes by the back key and the folder stays"
+                ask("Runtime.evaluate", expression="localStorage.removeItem('rcli-files-sort')")
                 # A real browser File input, including multiple files and a zero-byte document.
                 local = Path(temp.name) / "本地文件.bin"
                 local.write_bytes(contents)
@@ -382,6 +405,10 @@ def main():
                 ask("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=1, mobile=True)
                 for kind, path in sorted(made.items()):
                     shot(view(path), kind + ".png", drawn[kind], seconds=60 if kind in ("word", "slides") else 20)
+                shot(view(made["code"]), "code.png", drawn["code"])
+                menu("file-menu.png", ["复制路径", "长行自动换行", "回到项目"])
+                ask("Runtime.evaluate", expression="history.back()")
+                time.sleep(.8)
                 # Saving inside the app: the page hands the file to the phone piece by piece. A stand-in for the app
                 # collects the pieces; together they must be the file.
                 stand_in = ask("Page.addScriptToEvaluateOnNewDocument", source="window.RemoteCliNative = { got: [], saveStart(n) { this.name = n; this.got = []; return ''; }, "
@@ -394,7 +421,8 @@ def main():
                 digest = ask("Runtime.evaluate", awaitPromise=True, returnByValue=True, expression="(async () => { const n = window.RemoteCliNative, raw = n.got.map(p => atob(p)).join(''), bytes = Uint8Array.from(raw, c => c.charCodeAt(0)); "
                              "const hash = await crypto.subtle.digest('SHA-256', bytes); return n.name + ' ' + n.got.length + ' ' + Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join(''); })()")["result"]["value"]
                 assert digest == "bundle.zip 3 " + hashlib.sha256((project / "bundle.zip").read_bytes()).hexdigest(), digest
-                time.sleep(0.5)
+                time.sleep(0.8)
+                assert ask("Runtime.evaluate", expression="(d => !!d && d.innerText.includes('已保存到手机') && d.innerText.includes('下载 / RemoteAI'))(document.querySelector('dialog.rs[open]'))", returnByValue=True)["result"]["value"]
                 (out / "save.png").write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
                 for mode in ("cancel", "changed"):
                     shot(view("bundle.zip"), "download-" + mode + ".png", "!!document.querySelector('.unknown button')")
