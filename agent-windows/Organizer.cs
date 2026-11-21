@@ -49,6 +49,7 @@ internal sealed class Organizer {
 
     public sealed class Store {
         public long AutoSince;
+        public bool AutoFollowUp;
         public string Source = Off, Tool = "", ApiUrl = "", ApiKey = "";     // ApiKey: protected for this Windows user
         public Dictionary<string, string> Chosen = new Dictionary<string, string>();   // source kind -> model
         public string Model = "";                                          // the Codex model chosen before there were sources
@@ -125,7 +126,7 @@ internal sealed class Organizer {
 
     Store Copy() {
         var c = Loaded();
-        return new Store { AutoSince = c.AutoSince, Source = c.Source, Tool = c.Tool, ApiUrl = c.ApiUrl, ApiKey = c.ApiKey,
+        return new Store { AutoSince = c.AutoSince, AutoFollowUp = c.AutoFollowUp, Source = c.Source, Tool = c.Tool, ApiUrl = c.ApiUrl, ApiKey = c.ApiKey,
             Chosen = new Dictionary<string, string>(c.Chosen), Day = c.Day, Calls = c.Calls, Tokens = c.Tokens,
             Entries = new Dictionary<string, Entry>(c.Entries) };
     }
@@ -151,9 +152,10 @@ internal sealed class Organizer {
     internal Dictionary<string, object> ForList(string tool, string id, string original, bool named) {
         try {
             lock (gate) {
+                var current = Loaded();
                 Entry entry;
-                if (!Loaded().Entries.TryGetValue(Key(tool, id), out entry)) return null;
-                return Detail(original, named, entry);
+                if (!current.Entries.TryGetValue(Key(tool, id), out entry)) return null;
+                return Detail(original, named, entry, current.AutoFollowUp);
             }
         } catch (IOException) { return null; }
           catch (UnauthorizedAccessException) { return null; }
@@ -211,7 +213,8 @@ internal sealed class Organizer {
                 { "source", current.Source }, { "source_tool", current.Source == ToolSource ? current.Tool : "" },
                 { "tools", OrganizeSources.Tools.Where(installed.Contains).Select(t => new Dictionary<string, object> { { "id", t }, { "label", Tool.Named(t).Label } }).ToArray() },
                 { "api_url", current.ApiUrl }, { "api_key_set", current.ApiKey.Length > 0 },
-                { "auto", current.AutoSince > 0 }, { "model", offer.Model }, { "default_model", offer.Default },
+                { "auto", current.AutoSince > 0 }, { "auto_follow_up", current.AutoFollowUp },
+                { "model", offer.Model }, { "default_model", offer.Default },
                 { "models", offer.Models }, { "model_available", Available(offer) },
                 { "queued", current.Entries.Count(e => e.Value.State == Queued && e.Key != running) },
                 { "running", running.Length > 0 ? 1 : 0 },
@@ -228,8 +231,9 @@ internal sealed class Organizer {
         string source = op.ContainsKey("source") ? Text(op, "source") : null, tool = op.ContainsKey("source_tool") ? Text(op, "source_tool") : null;
         string model = op.ContainsKey("model") ? Text(op, "model") : null, url = op.ContainsKey("api_url") ? Text(op, "api_url").Trim() : null;
         string key = op.ContainsKey("api_key") ? Text(op, "api_key").Trim() : null;
-        object automatic;
+        object automatic, autoFollowUp;
         if (op.TryGetValue("auto", out automatic) && !(automatic is bool)) throw new ArgumentException("自动整理设置无效");
+        if (op.TryGetValue("auto_follow_up", out autoFollowUp) && !(autoFollowUp is bool)) throw new ArgumentException("自动待跟进设置无效");
         if (source != null && source != Off && source != ToolSource && source != ApiSource) throw new ArgumentException("整理来源无效");
         if (tool != null && !tools().Contains(tool)) throw new ArgumentException("这台电脑上没有所选的 AI 工具");
         if (url != null && url.Length > 0 && !ApiOrganizer.ValidAddress(url)) throw new ArgumentException("API 地址需以 http:// 或 https:// 开头");
@@ -259,6 +263,7 @@ internal sealed class Organizer {
             latest.Source = next.Source; latest.Tool = next.Tool; latest.ApiUrl = next.ApiUrl; latest.ApiKey = next.ApiKey;
             if (model != null) latest.Chosen[Kind(latest)] = model;
             if (automatic is bool) latest.AutoSince = (bool)automatic ? (latest.AutoSince > 0 ? latest.AutoSince : clock()) : 0;
+            if (autoFollowUp is bool) latest.AutoFollowUp = (bool)autoFollowUp;
             if (latest.Source == Off) Unqueue(latest);
             Save(latest);
             nextAuto = 0;
@@ -288,7 +293,7 @@ internal sealed class Organizer {
             var rows = sources.Select(s => {
                 Entry entry;
                 if (!current.Entries.TryGetValue(s.Key, out entry)) entry = new Entry { Source = s };
-                return Public(s, entry);
+                return Public(s, entry, current.AutoFollowUp);
             }).ToArray();
             offset = Math.Max(0, offset);
             limit = Math.Max(1, Math.Min(120, limit));
@@ -388,12 +393,35 @@ internal sealed class Organizer {
         return added;
     }
 
+    static bool EffectiveFollowUp(Entry entry, bool autoFollowUp) {
+        if (entry.ManualFollowUp.HasValue) return entry.ManualFollowUp.Value;
+        return autoFollowUp && entry.Data != null && entry.Data.FollowUp;
+    }
+
     Dictionary<string, object> Edit(Dictionary<string, object> op) {
-        string wanted = Target(op);
+        string wanted = Target(op), scope = Text(op, "scope");
         bool hasTitle = op.ContainsKey("title");
         object followUp;
         bool hasFollowUp = op.TryGetValue("follow_up", out followUp);
-        if (wanted.Length == 0 || (!hasTitle && !hasFollowUp))
+        if (scope == "all") {
+            if (wanted.Length > 0 || hasTitle || !hasFollowUp || !(followUp is bool) || (bool)followUp)
+                throw new ArgumentException("批量清除待跟进参数无效");
+            int cleared = 0;
+            lock (gate) {
+                var next = Copy();
+                foreach (var pair in next.Entries.ToArray()) {
+                    if (!EffectiveFollowUp(pair.Value, next.AutoFollowUp)) continue;
+                    var updated = pair.Value.Copy();
+                    updated.ManualFollowUp = false;
+                    next.Entries[pair.Key] = updated;
+                    cleared++;
+                }
+                if (cleared > 0) Save(next);
+            }
+            if (cleared > 0) Notify();
+            return new Dictionary<string, object> { { "cleared", cleared } };
+        }
+        if (scope.Length > 0 || wanted.Length == 0 || (!hasTitle && !hasFollowUp))
             throw new ArgumentException("请选择对话，并填写名称或设置待跟进标记");
         string title = null;
         if (hasTitle) {
@@ -413,14 +441,14 @@ internal sealed class Organizer {
             if (hasFollowUp) entry.ManualFollowUp = (bool)followUp;
             next.Entries[wanted] = entry;
             Save(next);
-            result = Public(source, entry);
+            result = Public(source, entry, next.AutoFollowUp);
         }
         Notify();
         return new Dictionary<string, object> { { "item", result } };
     }
 
-    Dictionary<string, object> Public(Source source, Entry entry) {
-        var result = Detail(source.Title, source.Named, entry);
+    Dictionary<string, object> Public(Source source, Entry entry, bool autoFollowUp) {
+        var result = Detail(source.Title, source.Named, entry, autoFollowUp);
         result["id"] = source.Id;
         result["tool"] = source.Tool;
         result["dir"] = source.Dir;
@@ -429,11 +457,11 @@ internal sealed class Organizer {
         return result;
     }
 
-    Dictionary<string, object> Detail(string original, bool named, Entry entry) {
+    Dictionary<string, object> Detail(string original, bool named, Entry entry, bool autoFollowUp) {
         var data = entry.Data ?? new Metadata();
         return new Dictionary<string, object> {
             { "title", DisplayTitle(original, named, entry) }, { "original_title", original }, { "manual_title", entry.ManualTitle },
-            { "summary", data.Summary }, { "tags", data.Tags }, { "follow_up", entry.ManualFollowUp ?? data.FollowUp },
+            { "summary", data.Summary }, { "tags", data.Tags }, { "follow_up", EffectiveFollowUp(entry, autoFollowUp) },
             { "state", entry.Source.Key == running ? "running" : entry.State.Length == 0 ? "pending" : entry.State },
             { "error", entry.Error }, { "model", entry.Model }
         };

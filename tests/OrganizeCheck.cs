@@ -161,9 +161,18 @@ static class OrganizeCheck {
         } finally { released.Set(); }
         worker.GetAwaiter().GetResult();
         Check(organizer.Title("claude", first.Id, first.Title, true) == "运行期间手工起名", "manual title overwritten");
-        Check((bool)Row(organizer, first)["follow_up"], "metadata was not written");
+        // Auto follow-up is off by default so completed chats do not flood 待跟进; manual follow-up and opt-in auto follow-up both work.
+        Check(!(bool)Op(organizer, "status")["auto_follow_up"] && !(bool)Row(organizer, first)["follow_up"], "model follow-up leaked while auto_follow_up is off");
+        Op(organizer, "settings", null, "auto_follow_up", true);
+        Check((bool)Op(organizer, "status")["auto_follow_up"] && (bool)Row(organizer, first)["follow_up"], "metadata follow-up not exposed when auto_follow_up is enabled");
         Op(organizer, "edit", first, "follow_up", false);
         Check(!(bool)Row(organizer, first)["follow_up"], "manual follow-up did not take precedence over the model");
+        Op(organizer, "settings", null, "auto_follow_up", false);
+        Op(organizer, "edit", first, "follow_up", true);
+        Check((bool)Row(organizer, first)["follow_up"], "manual follow-up did not work while auto_follow_up is off");
+        var cleared = Op(organizer, "edit", null, "scope", "all", "follow_up", false);
+        Check(Number(cleared, "cleared") == 1 && !(bool)Row(organizer, first)["follow_up"], "batch clear follow-up failed");
+        Refused<ArgumentException>(() => Op(organizer, "edit", null, "scope", "all", "follow_up", true), "batch edit must only allow clearing follow-up");
         organizer = open();
         Check(Number(Op(organizer, "start", first), "queued") == 0 && fake.Calls == 1, "unchanged conversation was sent again");
         Append(second, "中断这一次", at);

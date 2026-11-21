@@ -1632,8 +1632,8 @@
       } };
     }
 
-    // The foot is one line to write in, as on the conversation page: whom it goes to, the words, and send. While the
-    // task is paused and nothing is written, the button there is 继续.
+    // The foot is a full-width input with a compact bottom bar (picture attach, inline recipient pill, and send/继续).
+    // Tapping the recipient pill opens an inline chip row inside the card instead of a native <select> dialog.
     function renderFoot() {
       if (!footBox) return;
       const team = currentTeam, v2 = hasV2();
@@ -1665,41 +1665,80 @@
         const input = form.querySelector('#team-say-input');
         const hadFocus = document.activeElement === input;
         if (input.placeholder !== placeholder) input.placeholder = placeholder;
-        const sel = form.querySelector('#team-say-target');
-        const sig = JSON.stringify(targets);
-        if (sel.dataset.sig !== sig) {
-          sel.dataset.sig = sig;
-          if (!targets.some(([v]) => v === targetRole)) targetRole = '';
-          sel.replaceChildren(...targets.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === targetRole })));
-        }
+        form.syncTargets(targets);
         form.picker.enabled = page.has('attachments') && !!team.dir;
         form.showAction();
         if (hadFocus) input.focus();
         return;
       }
 
+      let targetOpen = false;
+      const chevIcon = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
       const input = el('textarea', {
         id: 'team-say-input', rows: 1, maxLength: 4000, value: draftText, placeholder, ariaLabel: '向协作任务发消息'
       });
-      const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(120, Math.max(38, input.scrollHeight)) + 'px'; };
-      const targetSel = el('select', { id: 'team-say-target', className: 'team-target', ariaLabel: '发送对象' },
-        ...targets.map(([val, label]) => el('option', { value: val, textContent: label, selected: val === targetRole })));
-      targetSel.dataset.sig = JSON.stringify(targets);
-      targetSel.addEventListener('change', () => { targetRole = targetSel.value; });
+      const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(140, Math.max(38, input.scrollHeight)) + 'px'; };
+      const targetTray = el('div', { id: 'team-target-tray', className: 'team-target-tray', role: 'listbox', ariaLabel: '选择发送对象', hidden: true });
+      const targetText = el('span', { className: 'team-target-label' });
+      const targetBtn = el('button', {
+        type: 'button', id: 'team-say-target', className: 'team-target',
+        'aria-label': '发送对象', 'aria-expanded': 'false', 'aria-controls': 'team-target-tray',
+        onclick: () => setTargetOpen(!targetOpen)
+      }, targetText, el('span', { className: 'team-target-chev', 'aria-hidden': 'true', html: chevIcon }));
+      const setTargetOpen = open => {
+        targetOpen = !!open;
+        targetTray.hidden = !targetOpen;
+        targetBtn.setAttribute('aria-expanded', String(targetOpen));
+      };
+      const syncTargets = list => {
+        const sig = JSON.stringify(list);
+        if (!list.some(([v]) => v === targetRole)) targetRole = '';
+        const chosen = list.find(([v]) => v === targetRole) || list[0] || ['', '自动分配'];
+        targetBtn.dataset.value = chosen[0];
+        targetBtn.classList.toggle('pinned', !!chosen[0]);
+        targetText.textContent = chosen[0] ? '发给 · ' + chosen[1] : chosen[1];
+        if (targetTray.dataset.sig !== sig || targetTray.dataset.selected !== chosen[0]) {
+          targetTray.dataset.sig = sig;
+          targetTray.dataset.selected = chosen[0];
+          targetTray.replaceChildren(...list.map(([val, label]) => el('button', {
+            type: 'button',
+            className: 'team-target-chip' + (val === chosen[0] ? ' on' : ''),
+            role: 'option',
+            'aria-selected': String(val === chosen[0]),
+            'data-value': val,
+            textContent: label,
+            onclick: () => {
+              targetRole = val;
+              setTargetOpen(false);
+              syncTargets(list);
+            }
+          })));
+        }
+      };
+      const toolsBox = el('div', { className: 'team-composer-tools' }, targetBtn);
       const resumeBtn = el('button', { type: 'button', id: 'team-resume', className: 'team-resume', textContent: '继续', onclick: resume });
       const sendBtn = el('button', { type: 'submit', id: 'team-say-send', className: 'team-send', textContent: '发送' });
-      form = el('form', { id: 'team-say-form', className: 'team-composer' }, targetSel, input, resumeBtn, sendBtn);
+      const bar = el('div', { className: 'team-composer-bar' }, toolsBox, resumeBtn, sendBtn);
+      form = el('form', { id: 'team-say-form', className: 'team-composer' }, input, targetTray, bar);
+      form.syncTargets = syncTargets;
       form.showAction = () => {
         const resuming = currentTeam.state === 'paused' && !input.value.trim() && !form.picker.count;
         resumeBtn.hidden = !resuming;
         sendBtn.hidden = resuming;
       };
+      syncTargets(targets);
       input.addEventListener('input', () => { draftText = input.value; grow(); form.showAction(); });
-      input.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); } });
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); }
+      });
+      form.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && targetOpen) { event.preventDefault(); event.stopPropagation(); setTargetOpen(false); targetBtn.focus(); }
+      });
       form.addEventListener('submit', async event => {
         event.preventDefault();
         const text = input.value.trim(), picker = form.picker;
         if ((!text && !picker.count) || sending) return;
+        setTargetOpen(false);
         sending = true; sendBtn.disabled = true; sendBtn.textContent = '发送中';
         try {
           const attachments = await picker.upload(done => { sendBtn.textContent = done + '%'; });
@@ -1717,7 +1756,8 @@
         finally { sending = false; sendBtn.disabled = false; sendBtn.textContent = '发送'; form.showAction(); }
       });
       footBox.append(form);
-      form.picker = new RemoteAttach.Picker({ form, before: input, dir: () => currentTeam.dir, toast, changed: () => { pictures = form.picker.items; form.showAction(); } });
+      form.picker = new RemoteAttach.Picker({ form, before: null, dir: () => currentTeam.dir, toast, changed: () => { pictures = form.picker.items; form.showAction(); } });
+      toolsBox.prepend(form.picker.button);
       form.picker.items = pictures;
       form.picker.enabled = page.has('attachments') && !!team.dir;
       form.picker.draw();

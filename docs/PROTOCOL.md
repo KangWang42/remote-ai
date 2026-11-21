@@ -477,7 +477,7 @@ The request verbs and representative responses are:
 POST /api/organize
 {"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90","verb":"status"}
 
-{"source":"tool","source_tool":"codex","api_url":"","api_key_set":false,"auto":false,
+{"source":"tool","source_tool":"codex","api_url":"","api_key_set":false,"auto":false,"auto_follow_up":false,
  "tools":[{"id":"codex","label":"Codex"},{"id":"claude","label":"Claude Code"}],
  "model":"gpt-6-luna","default_model":"gpt-6-luna",
  "models":[{"id":"gpt-6-luna","label":"GPT-6 Luna","is_default":true}],
@@ -486,7 +486,7 @@ POST /api/organize
 ```
 
 ```json
-{"id":"...","verb":"settings","source":"tool","source_tool":"codex","model":"gpt-6-luna","auto":true}
+{"id":"...","verb":"settings","source":"tool","source_tool":"codex","model":"gpt-6-luna","auto":true,"auto_follow_up":false}
 {"id":"...","verb":"settings","source":"api","api_url":"https://api.example.com/v1","model":"small-chat","api_key":"sk-..."}
 {"id":"...","verb":"settings","source":"off"}
 
@@ -531,15 +531,17 @@ POST /api/organize
  "updated":1700000000000,"state":"done","error":"","model":"gpt-6-luna"}}
 ```
 
-`edit` requires `tool`, `session` and at least one of `title` or `follow_up`. Omitted fields retain their values.
+`edit` requires `tool`, `session` and at least one of `title` or `follow_up`, or `scope: "all"` with `follow_up: false` to clear all follow-up marks (returning `{"cleared": <count>}`). Omitted fields retain their values.
 Send the JSON boolean `true` to add a conversation to follow-up and `false` to remove it. Both choices are saved
 on the computer and take precedence over model results, including when a run is in progress. The effective
-`follow_up` value is returned in `item`, `list` and `session.organize` after a restart or a relay change. Existing
-records without a manual choice use the value from the model, or `false` when there is no result.
+`follow_up` value is returned in `item`, `list` and `session.organize` after a restart or a relay change. Model-generated
+follow-up is off by default (`auto_follow_up: false`), so existing records without a manual choice report `follow_up: false`
+until `auto_follow_up` is enabled in `settings`.
 
 ```json
 {"id":"...","verb":"edit","tool":"codex",
  "session":"11111111-2222-3333-4444-555555555555","follow_up":false}
+{"id":"...","verb":"edit","scope":"all","follow_up":false}
 ```
 
 An organization item has the stable identity fields `id`, `tool`, `dir` and `folder`, display fields

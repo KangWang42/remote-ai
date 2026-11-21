@@ -706,8 +706,13 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert "执行成员 1 · Claude Code" in roster_detail_txt and "Claude Opus 4.6" in roster_detail_txt, roster_detail_txt
         assert "执行成员 2 · Claude Code" in roster_detail_txt and "Claude Sonnet 4.6" in roster_detail_txt, roster_detail_txt
         assert "末轮" in value("document.getElementById('team-round-steps').innerText") and "领队验收" in roster_detail_txt, roster_detail_txt
-        # Target by role (member-2)
-        value("(s => { s.value = 'member-2'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.getElementById('team-say-target'))")
+        # Target by role (member-2) via the inline recipient chip tray (no native <select>)
+        assert value("document.getElementById('team-say-target').tagName") == 'BUTTON'
+        assert value("document.querySelectorAll('#team-say-form select').length") == 0
+        value("document.getElementById('team-say-target').click()")
+        until("!document.getElementById('team-target-tray').hidden", 'inline target tray opened')
+        value("document.querySelector('#team-target-tray .team-target-chip[data-value=\"member-2\"]').click()")
+        until("document.getElementById('team-target-tray').hidden && document.getElementById('team-say-target').dataset.value === 'member-2'", 'member-2 target picked and tray closed')
         typed('team-say-input', '请补充边界测试')
         value("document.getElementById('team-say-send').click()")
         until("document.querySelector('dialog.rs[open] .team-stream').innerText.includes('请补充边界测试')", 'targeted roster say sent')
@@ -910,18 +915,30 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert track["heroDot"] is False and track["badgeBefore"] == "none", track
         # stage 0 (done) -> stage 1 (done) is green; stage 1 (done) -> stage 2 (active) stays neutral (same as stage 2 -> stage 3)
         assert track["segs"][0][1] == track["segs"][1][0] and track["segs"][1][1] == track["segs"][2][0] == track["segs"][2][1] and track["segs"][0][1] != track["segs"][2][0], track
-        # the foot is one line to write in: whom to, the words and send; what is done seldom is in the menu
+        # the foot is a spacious two-row card: full-width input above, recipient pill + send below; no native <select>
         foot = value("""(() => {
           const foot = document.querySelector('dialog.rs.rs-full[open] .rs-foot');
           const shown = n => !n.hidden && getComputedStyle(n).display !== 'none';
           const form = document.getElementById('team-say-form');
-          const controls = [...form.children].filter(shown);
-          return {children: [...foot.children].filter(shown).map(n => n.id || n.className), controls: controls.map(n => n.id),
-            bottoms: [...new Set(controls.map(n => Math.round(n.getBoundingClientRect().bottom)))], height: Math.round(foot.getBoundingClientRect().height),
-            actions: !!foot.querySelector('#team-swap, #team-stop, #team-remove, .team-act-bar')};
+          const input = document.getElementById('team-say-input');
+          const bar = form.querySelector('.team-composer-bar');
+          const barItems = [...bar.querySelectorAll('button')].filter(shown);
+          return {
+            children: [...foot.children].filter(shown).map(n => n.id || n.className),
+            hasSelect: !!form.querySelector('select'),
+            inputWidth: Math.round(input.getBoundingClientRect().width),
+            formWidth: Math.round(form.getBoundingClientRect().width),
+            barButtons: barItems.map(n => n.id || n.className),
+            barBottoms: [...new Set(barItems.map(n => Math.round(n.getBoundingClientRect().bottom)))],
+            inputAboveBar: input.getBoundingClientRect().bottom <= bar.getBoundingClientRect().top + 1,
+            height: Math.round(foot.getBoundingClientRect().height),
+            actions: !!foot.querySelector('#team-swap, #team-stop, #team-remove, .team-act-bar')
+          };
         })()""")
-        assert foot["children"] == ["team-say-form"] and foot["controls"] == ["team-say-target", "team-say-input", "team-say-send"], foot
-        assert len(foot["bottoms"]) == 1 and foot["height"] <= 72 and not foot["actions"], foot
+        assert foot["children"] == ["team-say-form"] and not foot["hasSelect"] and foot["inputAboveBar"], foot
+        assert foot["inputWidth"] >= foot["formWidth"] - 24 and foot["inputWidth"] >= 320, foot
+        assert foot["barButtons"] == ["team-say-target", "team-say-send"] and len(foot["barBottoms"]) == 1, foot
+        assert foot["height"] <= 120 and not foot["actions"], foot
         # cards that open a conversation end with a chevron; one that cannot be opened has none
         chev = value("[...document.querySelectorAll('.team-chip')].map(c => [c.id, !c.disabled, !!c.querySelector('.member-chev')])")
         assert chev and all(openable == has for _, openable, has in chev), chev
@@ -1075,10 +1092,19 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert pause_stage["hasPauseIcon"] and pause_stage["seg01After"] == pause_stage["seg01Before"] == pause_stage["seg12After"], pause_stage
         time.sleep(.2)
         browser.picture(out / 'team-detail-paused-light-390.png')
-        # paused: 继续 stands where send is, in the same one line, until something is written
+        # paused: 继续 stands in the bottom-right action spot until something is written; full-width input stays spacious
         paused_foot = value("""(() => { const shown = n => !n.hidden && getComputedStyle(n).display !== 'none';
-          return [...document.getElementById('team-say-form').children].filter(shown).map(n => n.id); })()""")
-        assert paused_foot == ["team-say-target", "team-say-input", "team-resume"], paused_foot
+          return {
+            bar: [...document.querySelectorAll('#team-say-form .team-composer-bar button')].filter(shown).map(n => n.id),
+            inputWidth: Math.round(document.getElementById('team-say-input').getBoundingClientRect().width)
+          }; })()""")
+        assert paused_foot["bar"] == ["team-say-target", "team-resume"] and paused_foot["inputWidth"] >= 320, paused_foot
+        # opening the inline target tray shows recipient chips inside the composer without closing on Escape
+        value("document.getElementById('team-say-target').click()")
+        until("!document.getElementById('team-target-tray').hidden", 'paused detail inline target tray opened')
+        browser.picture(out / 'team-detail-target-tray-390.png')
+        value("document.getElementById('team-say-target').click()")
+        until("document.getElementById('team-target-tray').hidden", 'paused detail inline target tray closed')
         typed('team-say-input', '先补测试')
         until("document.getElementById('team-resume').hidden && !document.getElementById('team-say-send').hidden", 'writing turns 继续 into 发送')
         typed('team-say-input', '')
@@ -1203,9 +1229,10 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert value(pick % json.dumps(["#ea8c00"])) == 2
         typed('team-say-input', '按截图调整成员卡片')
         foot_line = value("""(() => { const shown = n => !n.hidden && getComputedStyle(n).display !== 'none';
-          const kids = [...document.getElementById('team-say-form').children].filter(shown);
-          return {kids: kids.map(n => n.id || n.className), bottoms: [...new Set(kids.map(n => Math.round(n.getBoundingClientRect().bottom)))]}; })()""")
-        assert foot_line["kids"] == ["team-say-target", "attach-pick", "team-say-input", "team-say-send"] and len(foot_line["bottoms"]) == 1, foot_line
+          const bar = document.querySelector('#team-say-form .team-composer-bar');
+          const kids = [...bar.querySelectorAll('button')].filter(shown);
+          return {kids: kids.map(n => n.id || n.className), inputWidth: Math.round(document.getElementById('team-say-input').getBoundingClientRect().width)}; })()""")
+        assert foot_line["kids"] == ["attach-pick", "team-say-target", "team-say-send"] and foot_line["inputWidth"] >= 320, foot_line
         time.sleep(.2)
         browser.picture(out / 'team-tray-light-390.png')
         # a failed upload keeps the words and the pictures, and says why

@@ -886,9 +886,10 @@ final class Workbench {
         if (mark.equals(filtersMark)) return;
         filtersMark = mark;
         filters.removeAllViews();
-        if (tools.isEmpty() && sources.isEmpty() && !organizes && !followOnly) return;
+        boolean showFollow = (organizes && followCount > 0) || followOnly;
+        if (tools.isEmpty() && sources.isEmpty() && !showFollow) return;
         filters.addView(filterChip("全部", "", tool.isEmpty() && source.isEmpty() && !followOnly, () -> { tool = ""; source = ""; followOnly = false; foundShown = FOUND; draw(); }));
-        if (organizes || followOnly) filters.addView(filterChip(followCount > 0 ? "待跟进 · " + followCount : "待跟进", "", followOnly, () -> { followOnly = !followOnly; foundShown = FOUND; draw(); }));
+        if (showFollow) filters.addView(filterChip(followCount > 0 ? "待跟进 · " + followCount : "待跟进", "", followOnly, () -> { followOnly = !followOnly; foundShown = FOUND; draw(); }));
         for (final String one : tools) filters.addView(filterChip(AggregateSessions.toolName(one), one, one.equals(tool), () -> { tool = one.equals(tool) ? "" : one; draw(); }));
         if (!tools.isEmpty() && !sources.isEmpty()) {
             View between = new View(activity);

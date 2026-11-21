@@ -16,6 +16,7 @@ class OrganizerComputer(pictures.Played):
         self.info["workspaces"].append("网络工具")
         self.model = "gpt-6-luna"
         self.auto = False
+        self.auto_follow_up = False
         self.source, self.source_tool, self.api_url, self.api_key_set, self.calls = "off", "", "", False, 0
         self.turn = 0
         self.items = []
@@ -56,6 +57,7 @@ class OrganizerComputer(pictures.Played):
             self.source_tool = op.get("source_tool", self.source_tool or "codex") if self.source == "tool" else ""
             self.model = op.get("model", self.model)
             self.auto = op.get("auto", self.auto)
+            self.auto_follow_up = op.get("auto_follow_up", self.auto_follow_up)
             self.api_url = op.get("api_url", self.api_url)
             if "api_key" in op:
                 self.api_key_set = bool(op["api_key"])
@@ -75,13 +77,23 @@ class OrganizerComputer(pictures.Played):
             listed = ([{"id": "gpt-6-luna", "label": "GPT-6 Luna"}, {"id": "alternate", "label": "备用模型"}] if self.source == "tool"
                       else [{"id": self.model, "label": self.model}] if on else [])
             return dict(counts, **usage, source=self.source, source_tool=self.source_tool, api_url=self.api_url,
-                        api_key_set=self.api_key_set, auto=self.auto,
+                        api_key_set=self.api_key_set, auto=self.auto, auto_follow_up=self.auto_follow_up,
                         tools=[{"id": "codex", "label": "Codex"}, {"id": "claude", "label": "Claude Code"}],
                         model=self.model if on else "", default_model="gpt-6-luna" if on else "", model_available=on, models=listed)
         if verb == "list":
             first, limit = op["offset"], op["limit"]
             return {"items": items[first:first + limit], "more": first + limit < len(items), "total": len(items)}
         if verb == "edit":
+            if op.get("scope") == "all" and op.get("follow_up") is False:
+                cleared = 0
+                for row in self.items:
+                    if row.get("follow_up"):
+                        row["follow_up"] = False
+                        cleared += 1
+                for session in self.sessions:
+                    if session.get("organize"):
+                        session["organize"]["follow_up"] = False
+                return {"cleared": cleared}
             if "title" in op:
                 items[0]["title"] = op["title"]
                 items[0]["manual_title"] = op["title"]
@@ -247,6 +259,11 @@ def run(browser, computer, evidence):
     click("dialog[open] #organize-settings")
     until("document.querySelector('dialog[open] #organize-model')?.value === 'gpt-6-luna'", "默认 Luna")
     assert value("document.querySelector('dialog[open] #organize-auto').getAttribute('aria-checked')") == "false"
+    assert value("document.querySelector('dialog[open] #organize-auto-follow-up').getAttribute('aria-checked')") == "false"
+    click("dialog[open] #organize-auto-follow-up")
+    until("document.querySelector('dialog[open] #organize-auto-follow-up')?.getAttribute('aria-checked') === 'true'", "可开启自动标记待跟进")
+    click("dialog[open] #organize-auto-follow-up")
+    until("document.querySelector('dialog[open] #organize-auto-follow-up')?.getAttribute('aria-checked') === 'false'", "默认关闭自动标记待跟进")
     until("Math.abs((document.querySelector('dialog[open] .rs-page')?.getBoundingClientRect().left || 99) - 16) <= 4", "设置页滑入完成")
     if evidence:
         browser.picture(evidence / "organize-settings-390.png")
@@ -290,10 +307,19 @@ def run(browser, computer, evidence):
     shown("全部可读对话已处理")
     button("整理全部")
     shown("没有需要整理的对话")
+    # Batch clear all follow-up flags -> hides 待跟进 filter chip when zero
+    click("dialog[open] #organize-clear-follow")
+    shown("清空全部待跟进")
+    click("dialog[open] #organize-clear-follow-confirm")
+    shown("已清空 2 条待跟进")
+    assert not value("!!document.querySelector('dialog[open] #organize-clear-follow')")
     for width in (320, 390, 430):
         check_width(width, check_pane=True)
         if evidence:
             browser.picture(evidence / f"organize-done-{width}.png")
+    click("dialog[open] .rs-close")
+    until("!document.querySelector('dialog[open]')", "关闭整理面板")
+    until("!document.querySelector('#follow-filter')", "无待跟进时任务筛选不显示待跟进")
     assert value("window.__errors") == []
 
     # Project history default of 16: first open, load more to reveal 17th, re-enter project resets to 16

@@ -633,13 +633,25 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-msg .more-btn { justify-self: start; padding: 3px 0; border: 0; background: none; color: var(--accent-ink, var(--accent)); font-size: .8rem; font-weight: 600; }
 dialog.rs.rs-full .rs-bar .team-menu { color: var(--ink); }
 dialog.rs.rs-full .rs-bar .team-menu[hidden] { display: none; }
-.team-composer { display: flex; align-items: flex-end; gap: 6px; padding: 5px; border: 1px solid var(--chat-composer-border, var(--card-border, var(--line))); border-radius: 24px; background: var(--chat-composer-bg, var(--panel)); transition: border-color .15s, box-shadow .15s; }
+.team-composer { display: grid; gap: 4px; padding: 6px 8px 8px; border: 1px solid var(--chat-composer-border, var(--card-border, var(--line))); border-radius: 20px; background: var(--chat-composer-bg, var(--panel)); transition: border-color .15s, box-shadow .15s; }
 .team-composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
-.team-target { flex: none; align-self: flex-end; max-width: 7.5em; height: 38px; padding: 0 8px 0 12px; border: 0; border-radius: 19px; background: var(--raised); color: var(--ink); font-size: .8rem; font-weight: 600; text-overflow: ellipsis; }
-.team-composer textarea { flex: 1; min-width: 0; min-height: 38px; max-height: 120px; padding: 8px 4px; border: 0; background: transparent; color: var(--ink); caret-color: var(--accent); font: inherit; font-size: .92rem; line-height: 1.4; resize: none; }
+.team-composer textarea { width: 100%; min-width: 0; min-height: 38px; max-height: 140px; padding: 6px 6px 2px; border: 0; background: transparent; color: var(--ink); caret-color: var(--accent); font: inherit; font-size: .94rem; line-height: 1.45; resize: none; }
 .team-composer textarea:focus, .team-composer textarea:focus-visible { outline: none; }
-.team-composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.team-send, .team-resume { flex: none; min-height: 38px; padding: 0 16px; border: 0; border-radius: 19px; background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: .88rem; }
+.team-target-tray { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 4px 4px; border-top: 1px solid var(--divider, var(--line)); }
+.team-target-tray[hidden] { display: none; }
+.team-target-chip { min-height: 32px; padding: 0 12px; border: 1px solid var(--card-border, var(--line)); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: .78rem; font-weight: 550; white-space: nowrap; transition: background-color .14s, color .14s, border-color .14s, transform .1s; }
+.team-target-chip:active { transform: scale(.96); }
+.team-target-chip.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 34%, var(--card-border, var(--line))); color: var(--accent-ink, var(--accent)); font-weight: 650; }
+.team-composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding-top: 2px; }
+.team-composer-tools { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.team-composer-tools .attach-pick { width: 36px; height: 36px; align-self: center; }
+.team-target { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; height: 36px; padding: 0 11px 0 12px; border: 1px solid transparent; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: .8rem; font-weight: 600; transition: background-color .14s, color .14s, border-color .14s, transform .1s; }
+.team-target:active { transform: scale(.97); }
+.team-target.pinned { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--accent-ink, var(--accent)); }
+.team-target-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-target-chev { display: grid; flex: none; opacity: .7; transition: transform .16s ease; }
+.team-target[aria-expanded="true"] .team-target-chev { transform: rotate(180deg); }
+.team-send, .team-resume { flex: none; min-height: 36px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: .86rem; }
 .team-send[hidden], .team-resume[hidden] { display: none; }
 .team-send:disabled { opacity: .55; }
 .team-send:active, .team-resume:active { transform: scale(.96); }

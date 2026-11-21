@@ -73,7 +73,8 @@
         if (verb === 'start' || verb === 'retry') message = answer.queued ? `已排队 ${answer.queued} 段` + (answer.skipped ? ` · 跳过 ${answer.skipped} 段` : '') : '内容没有变化，无需整理';
         if (verb === 'settings') message = '已保存设置';
         if (verb === 'edit') {
-          if ('follow_up' in fields && !('title' in fields)) message = fields.follow_up ? '已加入待跟进' : '已移出待跟进';
+          if (fields.scope === 'all') message = answer.cleared ? `已清空 ${answer.cleared} 条待跟进` : '当前没有待跟进';
+          else if ('follow_up' in fields && !('title' in fields)) message = fields.follow_up ? '已加入待跟进' : '已移出待跟进';
           else message = '已保存名称';
         }
         await load();
@@ -224,9 +225,16 @@
       const toggle = ui.toggle(status.auto && !off, auto => change('settings', { auto }), '自动整理');
       toggle.id = 'organize-auto';
       toggle.disabled = busy || off || (!status.auto && !status.model_available);
-      parts.push(ui.section('自动整理', ui.group(
+      const autoRows = [
         ui.row({ label: '自动整理', detail: '对话停下 10 分钟后，整理内容有变化的', wrap: true, end: toggle })
-      )));
+      ];
+      if ('auto_follow_up' in status) {
+        const followToggle = ui.toggle(!!status.auto_follow_up, auto_follow_up => change('settings', { auto_follow_up }), '自动标记待跟进');
+        followToggle.id = 'organize-auto-follow-up';
+        followToggle.disabled = busy;
+        autoRows.push(ui.row({ label: '自动标记待跟进', detail: '默认只保留手动标记的待跟进；开启后由整理模型判断未完成事项', wrap: true, end: followToggle }));
+      }
+      parts.push(ui.section('自动整理', ui.group(...autoRows)));
       if (!off && status.calls_today !== undefined) {
         parts.push(ui.section('今天', ui.group(
           ui.row({ label: '调用', value: `${status.calls_today || 0} 次` }),
@@ -254,6 +262,43 @@
           page.refresh();
           p.sheet.goBack();
         }, { busy: '正在保存…' }).nodes);
+      } });
+    }
+
+    function confirmClearFollow(followItems) {
+      view.sheet.push({ title: '清空全部待跟进', build(p) {
+        p.body.append(ui.note(computer), ui.summary(`移出当前全部待跟进标记（当前列表可见 ${followItems.length} 条）。对话内容和整理标题均保留。`, '', 'spark'));
+        p.foot.append(...ui.go('清空待跟进', async () => {
+          clearTimeout(timer);
+          busy = true; error = ''; message = ''; paintAll();
+          try {
+            const answer = await request('edit', { scope: 'all', follow_up: false });
+            message = answer.cleared ? `已清空 ${answer.cleared} 条待跟进` : '当前没有待跟进';
+            scopeFilter = 'all';
+            await load();
+            page.refresh();
+            p.sheet.goBack();
+          } catch (firstErr) {
+            // Older relays/computers only accept per-item edit: fall back gracefully.
+            let cleared = 0;
+            for (const item of followItems) {
+              try { await request('edit', { ...targetOf(item), follow_up: false }); cleared++; }
+              catch (itemErr) { error = itemErr.message; }
+            }
+            if (cleared > 0) {
+              message = `已清空 ${cleared} 条待跟进`;
+              scopeFilter = 'all';
+              await load();
+              page.refresh();
+              p.sheet.goBack();
+            } else {
+              error = firstErr.message;
+              busy = false;
+              paintAll();
+              throw firstErr;
+            }
+          }
+        }, { busy: '正在清空…', id: 'organize-clear-follow-confirm' }).nodes);
       } });
     }
 
@@ -376,6 +421,10 @@
       }
       const headCard = el('div', { className: 'organize-head' }, ...headChildren);
 
+      const followItems = items.filter(item => item.follow_up);
+      const pendingItems = items.filter(item => item.state === 'pending' || item.state === 'queued' || item.state === 'running');
+      const failedItems = items.filter(item => item.state === 'failed');
+
       const batchBar = el('div', { className: 'organize-actions' });
       if (!selected && !off) {
         if (filtered.length) {
@@ -405,10 +454,12 @@
           }));
         }
       }
+      if (!selected && followItems.length > 0) {
+        const clearBtn = actionBtn('清空待跟进', () => confirmClearFollow(followItems));
+        clearBtn.id = 'organize-clear-follow';
+        batchBar.append(clearBtn);
+      }
 
-      const followItems = items.filter(item => item.follow_up);
-      const pendingItems = items.filter(item => item.state === 'pending' || item.state === 'queued' || item.state === 'running');
-      const failedItems = items.filter(item => item.state === 'failed');
       if (scopeFilter === 'follow' && !followItems.length) scopeFilter = 'all';
       if (scopeFilter === 'pending' && !pendingItems.length) scopeFilter = 'all';
       if (scopeFilter === 'failed' && !failedItems.length) scopeFilter = 'all';

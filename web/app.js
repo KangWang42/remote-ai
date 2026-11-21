@@ -1171,8 +1171,9 @@
     const tools = Object.keys(TOOLS).filter(tool => tool === filter.tool || all.some(x => hasTool(x, tool)) || folders.some(f => (f.tools || []).includes(tool)));
     const sources = Object.keys(SOURCE).filter(source => source === filter.source || all.some(x => x.source === source) || folders.some(f => (f.kinds || []).some(kind => sourceOfKind(kind) === source)));
     const offered = (tools.length > 1 ? tools : filter.tool ? [filter.tool] : []), places = (sources.length > 1 ? sources : filter.source ? [filter.source] : []);
-    const showFollow = tab === 'tasks' && (pageHost.has('organize') || filter.follow);
-    const followCount = showFollow ? all.filter(x => !x.twice && !x.hidden && pass(x) && !!x.organize?.follow_up).length : 0;
+    const canOrganize = tab === 'tasks' && (pageHost.has('organize') || filter.follow);
+    const followCount = canOrganize ? all.filter(x => !x.twice && !x.hidden && pass(x) && !!x.organize?.follow_up).length : 0;
+    const showFollow = canOrganize && (followCount > 0 || filter.follow);
     const box = $('filters'), signature = JSON.stringify([offered, places, filter, TOOLS.shell, showFollow, followCount]);
     box.hidden = !offered.length && !places.length && !showFollow;
     if (box.dataset.signature === signature) return;

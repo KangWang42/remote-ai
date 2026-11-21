@@ -1239,6 +1239,10 @@ class Relay:
                 if type(payload.get("auto")) is not bool:
                     raise RemoteError("自动整理设置无效")
                 question["auto"] = payload["auto"]
+            if "auto_follow_up" in payload:
+                if type(payload.get("auto_follow_up")) is not bool:
+                    raise RemoteError("自动待跟进设置无效")
+                question["auto_follow_up"] = payload["auto_follow_up"]
             if "source" in payload:
                 if payload["source"] not in ORGANIZE_SOURCES:
                     raise RemoteError("整理来源无效")
@@ -1275,17 +1279,23 @@ class Relay:
             if scope:
                 question["scope"] = scope
         elif verb == "edit":
-            if not has_tool or ("title" not in payload and "follow_up" not in payload):
-                raise RemoteError("请选择对话，并填写名称或设置待跟进标记")
-            if "title" in payload:
-                title = payload["title"]
-                if not isinstance(title, str) or not title.strip() or len(title) > 80 or any(ord(c) < 32 for c in title):
-                    raise RemoteError("整理名称无效")
-                question["title"] = title.strip()
-            if "follow_up" in payload:
-                if type(payload["follow_up"]) is not bool:
-                    raise RemoteError("待跟进标记无效")
-                question["follow_up"] = payload["follow_up"]
+            scope = payload.get("scope", "")
+            if scope == "all":
+                if has_tool or "title" in payload or payload.get("follow_up") is not False:
+                    raise RemoteError("批量清除待跟进参数无效")
+                question.update(scope="all", follow_up=False)
+            else:
+                if scope or not has_tool or ("title" not in payload and "follow_up" not in payload):
+                    raise RemoteError("请选择对话，并填写名称或设置待跟进标记")
+                if "title" in payload:
+                    title = payload["title"]
+                    if not isinstance(title, str) or not title.strip() or len(title) > 80 or any(ord(c) < 32 for c in title):
+                        raise RemoteError("整理名称无效")
+                    question["title"] = title.strip()
+                if "follow_up" in payload:
+                    if type(payload["follow_up"]) is not bool:
+                        raise RemoteError("待跟进标记无效")
+                    question["follow_up"] = payload["follow_up"]
         with self._changed:
             self._expire(now)
             if op_id in self._pending:
@@ -1295,7 +1305,11 @@ class Relay:
             if "organize" not in self._device.get("features", []):
                 raise RemoteError("电脑端版本不支持对话整理，请更新电脑端")
             answer = self._held(question, now, wait)
-            if verb == "edit" and isinstance(answer.get("item"), dict):
+            if verb == "edit" and question.get("scope") == "all":
+                for saved in self._sessions:
+                    if isinstance(saved.get("organize"), dict):
+                        saved["organize"]["follow_up"] = False
+            elif verb == "edit" and isinstance(answer.get("item"), dict):
                 saved = next((item for item in self._sessions if item["id"] == question.get("session") and item["tool"] == question.get("tool")), None)
                 organized = _organize(answer["item"])
                 if saved is not None and organized is not None:

@@ -160,6 +160,36 @@ class OrganizeRelayTests(unittest.TestCase):
             with self.subTest(fields=fields), self.assertRaises(relay.RemoteError):
                 self.relay.organize(dict(request, **fields), now=1001)
 
+    def test_auto_follow_up_setting_and_batch_clear_follow_up(self):
+        sid = session_id(12)
+        self.relay.agent({"info": self.info, "sessions": [
+            {"id": sid, "tool": "codex", "dir": "demo", "title": "旧对话", "updated": 100,
+             "organize": {"title": "旧对话", "follow_up": True, "state": "done"}},
+        ]}, now=1001)
+        operation, result = self.answer(
+            {"id": "4" * 32, "verb": "settings", "auto_follow_up": False},
+            {"auto_follow_up": False},
+        )
+        self.assertEqual((operation["verb"], operation["auto_follow_up"]), ("settings", False))
+        self.assertEqual(result, {"auto_follow_up": False})
+        with self.assertRaises(relay.RemoteError):
+            self.relay.organize({"id": "5" * 32, "verb": "settings", "auto_follow_up": "no"}, now=1001)
+        operation, result = self.answer(
+            {"id": "6" * 32, "verb": "edit", "scope": "all", "follow_up": False},
+            {"cleared": 1},
+        )
+        self.assertEqual((operation["verb"], operation["scope"], operation["follow_up"]), ("edit", "all", False))
+        self.assertEqual(result, {"cleared": 1})
+        self.assertIs(self.relay.overview(now=1002)["sessions"][0]["organize"]["follow_up"], False)
+        for bad in (
+            {"scope": "all", "follow_up": True},
+            {"scope": "all", "follow_up": False, "tool": "codex", "session": sid},
+            {"scope": "all", "follow_up": False, "title": "不能带标题"},
+            {"scope": "one", "follow_up": False},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(relay.RemoteError):
+                self.relay.organize(dict({"id": "7" * 32, "verb": "edit"}, **bad), now=1001)
+
     def test_invalid_pages_scopes_and_identity_are_refused(self):
         base = {"id": "e" * 32, "verb": "list"}
         for change in (
