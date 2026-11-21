@@ -5,20 +5,23 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace RemoteCli {
 /// How much of each tool's usage limits the owner's account has used, as the tools themselves tell it; only the
-/// share used of each window and when it starts anew leave the computer, never anything of the account.
-/// - Claude Code tells it with every turn: in its stream-json (`rate_limit_event`, `unifiedWindows` with
+/// usage windows and billing summary leave the computer. Account identities and credentials stay local.
+/// - Claude Code is asked with `claude -p /usage --output-format json`. It returns the subscription windows
+///   displayed by `/usage` without running a model turn. When this reading is unavailable Claude Code also
+///   tells it in its stream-json (`rate_limit_event`, `unifiedWindows` with
 ///   `utilization` 0..1 and `resetsAt`; seen on 2.1.322), so a conversation the phone runs gives it (ClaudeChat); and to
 ///   its status line (`rate_limits.five_hour` and `seven_day` with `used_percentage` and `resets_at`, per its docs), so
 ///   every conversation open in a terminal or an editor gives it through this program's status line (`StatusLine`).
 ///   Only an account with a subscription is told it, and only once it has been answered once.
-/// - Codex is asked (`account/rateLimits/read` of `codex app-server`): only an account signed in with ChatGPT has it;
-///   `primary` and `secondary`, each with `usedPercent`, `windowDurationMins` and `resetsAt`.
+/// - Codex app-server reports its login type (`account/read`), selected provider (`config/read`), and the ChatGPT
+///   windows and credits (`account/rateLimits/read`).
 /// - Antigravity CLI is asked (`agy -p /usage --output-format json`): returns model groups (`groups`) and quota buckets
 ///   (`remaining_fraction`, `reset_time`); the primary Gemini/Neon group is reported without `group` and secondary model
 ///   pools carry their `group` label so the phone can keep them collapsed behind a toggle.
@@ -32,10 +35,15 @@ public sealed class Quotas {
         public string Group = "";       // empty for the primary pool; short pool name for secondary pools (e.g. agy)
     }
     static readonly JavaScriptSerializer json = new JavaScriptSerializer();
+    static readonly Regex ClaudeUsageRow = new Regex(
+        @"^(?<window>Current session|Current week(?: \(all models\))?):\s*(?<used>\d+(?:\.\d+)?)%\s+used\s*·\s*resets\s+(?<reset>[^(\r\n]+)", RegexOptions.Multiline);
+    static readonly string[] ClaudeResetFormats = { "MMM d, h:mmtt yyyy", "MMM d, htt yyyy" };
+    static readonly DateTimeOffset Epoch = new DateTimeOffset(1970, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    const string ClaudeUsageKey = "claude-usage";
     readonly string folder;
     readonly object gate = new object();
-    DateTime nextCodex = DateTime.MinValue, nextAgy = DateTime.MinValue;
-    bool askingCodex, askingAgy;
+    DateTime nextClaude = DateTime.MinValue, nextCodex = DateTime.MinValue, nextAgy = DateTime.MinValue;
+    bool askingClaude, askingCodex, askingAgy;
 
     public Quotas(string dataFolder) { folder = Path.Combine(dataFolder, "quotas"); }
     string FileOf(string tool) { return Path.Combine(folder, tool + ".json"); }
@@ -44,7 +52,7 @@ public sealed class Quotas {
     public void Note(string tool, IList<Window> windows) { if (windows != null && windows.Count > 0) Write(tool, windows, ""); }
     /// That a tool's limits cannot be known here, in words.
     public void Unknown(string tool, string why) { Write(tool, new Window[0], why); }
-    void Write(string tool, IList<Window> windows, string why) {
+    void Write(string tool, IList<Window> windows, string why, Dictionary<string, object> billing = null) {
         var kept = new Dictionary<string, object> {
             { "tool", tool }, { "at", Milliseconds(DateTime.UtcNow) }, { "why", why ?? "" },
             { "windows", windows.Select(w => {
@@ -52,6 +60,7 @@ public sealed class Quotas {
                 if (!String.IsNullOrEmpty(w.Group)) row["group"] = w.Group;
                 return row;
             }).ToArray() } };
+        if (billing != null && billing.Count > 0) kept["billing"] = billing;
         try {
             Directory.CreateDirectory(folder);
             string fresh = FileOf(tool) + "." + Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -64,34 +73,71 @@ public sealed class Quotas {
     public object[] Report() {
         var all = new List<object>();
         foreach (string tool in new[] { "claude", "codex", "agy" }) {
-            object at, why; var windows = Kept(tool, out at, out why);
-            if (windows != null) all.Add(new Dictionary<string, object> { { "tool", tool }, { "at", at }, { "why", why }, { "windows", windows } });
+            var reading = Kept(tool);
+            if (reading != null) all.Add(reading);
         }
         return all.ToArray();
     }
     /// A tool's main windows that are still running (an Antigravity CLI pool of other models left out), for what the
     /// program itself weighs; none where nothing is known.
     public Window[] Of(string tool) {
-        object at, why; var windows = Kept(tool, out at, out why);
+        var windows = At(Kept(tool), "windows") as Dictionary<string, object>[];
         if (windows == null) return new Window[0];
         return windows.Where(w => !w.ContainsKey("group")).Select(w => new Window { Name = Convert.ToString(w["name"]), Used = Convert.ToDouble(w["used"], CultureInfo.InvariantCulture), Resets = Convert.ToInt64(w["resets"]) }).ToArray();
     }
     // what was last written of a tool, its windows whose time is not over; null where nothing can be read
-    Dictionary<string, object>[] Kept(string tool, out object at, out object why) {
-        at = why = null;
+    Dictionary<string, object> Kept(string tool) {
+        if (tool == "claude") {
+            var subscription = ReadKept(ClaudeUsageKey);
+            var windows = At(subscription, "windows") as Dictionary<string, object>[];
+            long captured;
+            if (windows != null && windows.Length > 0 &&
+                Int64.TryParse(Convert.ToString(At(subscription, "at")), out captured) &&
+                captured >= Milliseconds(DateTime.UtcNow.AddMinutes(-15))) {
+                subscription["tool"] = tool;
+                return subscription;
+            }
+        }
+        return ReadKept(tool);
+    }
+    Dictionary<string, object> ReadKept(string tool) {
         try {
             if (!File.Exists(FileOf(tool))) return null;
             var kept = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(FileOf(tool), Encoding.UTF8));
             long now = Milliseconds(DateTime.UtcNow) / 1000;
             object raw; kept.TryGetValue("windows", out raw);
-            at = kept["at"]; why = kept["why"];
-            return (raw as System.Collections.IEnumerable ?? new object[0]).Cast<object>().OfType<Dictionary<string, object>>()
+            var windows = (raw as System.Collections.IEnumerable ?? new object[0]).Cast<object>().OfType<Dictionary<string, object>>()
                 .Where(w => { long resets = Convert.ToInt64(w["resets"]); return resets == 0 || resets > now; }).ToArray();
+            var reading = new Dictionary<string, object> { { "tool", tool }, { "at", kept["at"] }, { "why", kept["why"] }, { "windows", windows } };
+            var billing = At(kept, "billing") as Dictionary<string, object>;
+            if (tool == "codex" && billing != null) reading["billing"] = billing;
+            return reading;
         } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { } catch (InvalidOperationException) { } catch (KeyNotFoundException) { } catch (FormatException) { } catch (InvalidCastException) { }
         return null;
     }
 
     // ---- what the tools say, read
+    public static List<Window> FromClaudeUsage(object reply, DateTimeOffset now, TimeZoneInfo zone) {
+        var windows = new List<Window>();
+        if (Convert.ToString(At(reply, "local_command")) != "usage" || Object.Equals(At(reply, "is_error"), true)) return windows;
+        DateTime local = TimeZoneInfo.ConvertTime(now, zone).DateTime;
+        foreach (Match match in ClaudeUsageRow.Matches(Convert.ToString(At(reply, "result")) ?? "")) {
+            double used;
+            if (!Number(match.Groups["used"].Value, out used) || used < 0 || used > 100) continue;
+            bool session = match.Groups["window"].Value == "Current session";
+            string reset = match.Groups["reset"].Value.Trim();
+            DateTime date;
+            if (!DateTime.TryParseExact(reset + " " + local.Year, ClaudeResetFormats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out date)) continue;
+            // On December 31 a reset date in January belongs to the next year.
+            if (date < local.AddMonths(-6)) date = date.AddYears(1);
+            if (zone.IsInvalidTime(date)) continue;
+            var instant = new DateTimeOffset(date, zone.GetUtcOffset(date));
+            if (instant <= now || instant > now.AddDays(session ? 1 : 8)) continue;
+            windows.Add(new Window { Name = session ? "five_hour" : "seven_day", Used = used, Resets = (long)(instant - Epoch).TotalSeconds });
+        }
+        return windows;
+    }
+
     /// Claude Code's `rate_limit_info` of a `rate_limit_event` in its stream-json.
     public static List<Window> FromClaudeEvent(object info) {
         var windows = new List<Window>();
@@ -124,6 +170,33 @@ public sealed class Quotas {
             windows.Add(new Window { Name = minutes == 300 ? "five_hour" : minutes == 10080 ? "seven_day" : minutes > 0 ? ((long)minutes) + "m" : key, Used = used, Resets = Seconds(At(one, "resetsAt")) });
         }
         return windows;
+    }
+
+    public void NoteCodex(object limits, string login = "", Dictionary<string, object> apiBalance = null) {
+        if (login == "apiKey") {
+            Write("codex", new Window[0], "", apiBalance ?? new Dictionary<string, object> { { "type", "api" } });
+            return;
+        }
+        if (limits == null) {
+            Unknown("codex", login == "chatgpt" ? "暂时无法读取账号限额" : "登录 Codex 后可查看限额或计费信息");
+            return;
+        }
+        var windows = FromCodex(limits);
+        var credits = At(limits, "credits");
+        var billing = new Dictionary<string, object>();
+        if (Object.Equals(At(credits, "unlimited"), true)) {
+            billing["type"] = "credits";
+            billing["unlimited"] = true;
+        } else {
+            string balance = At(credits, "balance") as string;
+            decimal amount;
+            if (balance != null && balance.Length <= 24 &&
+                Decimal.TryParse(balance, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out amount) && amount >= 0) {
+                billing["type"] = "credits";
+                billing["balance"] = amount.ToString(CultureInfo.InvariantCulture);
+            }
+        }
+        Write("codex", windows, windows.Count == 0 && billing.Count == 0 ? "Codex 没有给出账号限额" : "", billing);
     }
     /// Antigravity CLI's `agy -p /usage --output-format json`: model groups (`groups`) and their quota buckets.
     /// The primary Gemini/Neon pool is reported without a `Group` so the phone shows it directly; secondary model
@@ -214,7 +287,50 @@ public sealed class Quotas {
         return sb.ToString().Trim('_');
     }
 
-    // ---- Codex and Antigravity CLI are asked, now and then, beside the report: at most once in ten minutes each
+    // ---- Account usage is refreshed beside the report without running a model.
+    public void AskClaude(string launcher) {
+        if (String.IsNullOrEmpty(launcher)) return;
+        lock (gate) {
+            if (askingClaude || DateTime.UtcNow < nextClaude) return;
+            askingClaude = true;
+            nextClaude = DateTime.UtcNow.AddMinutes(5);
+        }
+        Task.Run(() => {
+            try { AskClaudeNow(launcher); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            catch (InvalidOperationException) { }
+            finally { lock (gate) askingClaude = false; }
+        });
+    }
+    public void AskClaudeNow(string launcher) {
+        const string usage = "--print --output-format json --no-session-persistence --setting-sources user --strict-mcp-config /usage";
+        Directory.CreateDirectory(folder);
+        var info = new ProcessStartInfo {
+            FileName = launcher, Arguments = usage, WorkingDirectory = folder,
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false)
+        };
+        if (launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || launcher.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)) {
+            info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+            info.Arguments = "/d /s /c \"\"" + launcher + "\" " + usage + "\"";
+        }
+        foreach (string key in new[] { "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT" }) info.EnvironmentVariables.Remove(key);
+        using (var program = Process.Start(info)) {
+            try {
+                program.StandardInput.Close();
+                program.ErrorDataReceived += (sender, args) => { };
+                program.BeginErrorReadLine();
+                var output = program.StandardOutput.ReadToEndAsync();
+                if (!program.WaitForExit(20000) || program.ExitCode != 0 || !output.Wait(2000)) return;
+                var windows = FromClaudeUsage(ParseJsonPayload(output.Result), DateTimeOffset.UtcNow, TimeZoneInfo.Local);
+                if (windows.Count > 0) Note(ClaudeUsageKey, windows);
+            } finally {
+                if (!program.HasExited) try { program.Kill(); } catch (InvalidOperationException) { }
+            }
+        }
+    }
     public void AskCodex(string launcher) {
         if (String.IsNullOrEmpty(launcher)) return;
         lock (gate) { if (askingCodex || DateTime.UtcNow < nextCodex) return; askingCodex = true; nextCodex = DateTime.UtcNow.AddMinutes(10); }
@@ -279,7 +395,7 @@ public sealed class Quotas {
         }
         return null;
     }
-    void AskCodexNow(string launcher) {
+    internal void AskCodexNow(string launcher) {
         var info = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = new UTF8Encoding(false) };
         if (launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)) { info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"); info.Arguments = "/d /s /c \"\"" + launcher + "\" app-server\""; }
         else { info.FileName = launcher; info.Arguments = "app-server"; }
@@ -290,21 +406,51 @@ public sealed class Quotas {
                 Action<string> send = line => { byte[] bytes = new UTF8Encoding(false).GetBytes(line + "\n"); program.StandardInput.BaseStream.Write(bytes, 0, bytes.Length); program.StandardInput.BaseStream.Flush(); };
                 send("{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"remote-ai\",\"title\":\"Remote AI\",\"version\":\"1\"}}}");
                 send("{\"method\":\"initialized\",\"params\":{}}");
-                send("{\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
+                send("{\"id\":2,\"method\":\"account/read\",\"params\":{\"refreshToken\":false}}");
+                send("{\"id\":3,\"method\":\"account/rateLimits/read\",\"params\":{}}");
                 var read = program.StandardOutput.ReadLineAsync();
                 var until = DateTime.UtcNow.AddSeconds(20);
+                bool accountRead = false, limitsRead = false, providerRead = true, externalProvider = false;
+                string login = "";
+                object limits = null;
+                CodexApiBalance balanceQuery = null;
                 while (DateTime.UtcNow < until) {
                     if (!read.Wait(until - DateTime.UtcNow)) break;
                     string line = read.Result; if (line == null) break;
                     Dictionary<string, object> m = null;
                     try { m = json.Deserialize<Dictionary<string, object>>(line); } catch (ArgumentException) { } catch (InvalidOperationException) { }
-                    if (m != null && Convert.ToString(At(m, "id")) == "2") {
-                        if (At(m, "error") != null) Unknown("codex", Convert.ToString(At(At(m, "error"), "message")).IndexOf("chatgpt", StringComparison.OrdinalIgnoreCase) >= 0 ? "Codex 用 ChatGPT 账号登录后才能读取额度" : "Codex 没有给出额度");
-                        else { var windows = FromCodex(At(At(m, "result"), "rateLimits")); if (windows.Count > 0) Note("codex", windows); else Unknown("codex", "Codex 没有给出额度"); }
-                        break;
+                    object result = At(m, "result");
+                    switch (Convert.ToString(At(m, "id"))) {
+                        case "2":
+                            accountRead = true;
+                            login = Convert.ToString(At(At(result, "account"), "type"));
+                            if (login == "apiKey" || (login.Length == 0 && Object.Equals(At(result, "requiresOpenaiAuth"), false))) {
+                                providerRead = false;
+                                send("{\"id\":4,\"method\":\"config/read\",\"params\":{\"includeLayers\":false}}");
+                            }
+                            break;
+                        case "3": limitsRead = true; limits = At(result, "rateLimits"); break;
+                        case "4":
+                            providerRead = true;
+                            var config = At(result, "config");
+                            string provider = Convert.ToString(At(config, "model_provider"));
+                            var providerConfig = At(At(config, "model_providers"), provider);
+                            Uri endpoint;
+                            externalProvider = Uri.TryCreate(Convert.ToString(At(providerConfig, "base_url")), UriKind.Absolute, out endpoint)
+                                && (endpoint.Scheme == Uri.UriSchemeHttps || endpoint.Scheme == Uri.UriSchemeHttp) && !endpoint.IsLoopback;
+                            if (externalProvider && provider != "openai") {
+                                string keyName = At(providerConfig, "env_key") as string;
+                                string key = String.IsNullOrEmpty(keyName) ? null : Environment.GetEnvironmentVariable(keyName);
+                                if (String.IsNullOrWhiteSpace(key)) key = At(providerConfig, "experimental_bearer_token") as string;
+                                balanceQuery = new CodexApiBalance(endpoint, key);
+                            }
+                            break;
                     }
+                    if (accountRead && limitsRead && providerRead) break;
                     read = program.StandardOutput.ReadLineAsync();
                 }
+                if (login.Length == 0 && externalProvider) login = "apiKey";
+                if (accountRead || limitsRead) NoteCodex(limits, login, login == "apiKey" && balanceQuery != null ? balanceQuery.Read() : null);
             } finally { try { if (!program.HasExited) program.Kill(); } catch { } }
         }
     }

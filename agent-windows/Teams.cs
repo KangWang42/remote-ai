@@ -19,6 +19,9 @@ namespace RemoteCli {
 ///   and answers REVIEW: PASS or REVIEW: CHANGES, looping until pass or rounds spent.
 /// - lead (领队): optional read-only discussion (`discuss`) where members propose plans before the leader synthesizes
 ///   and assigns (`ASSIGN <member>: <task>` / `DONE: <summary>`), weighing each tool's remaining quota (`Quotas.cs`).
+///   A DONE is not taken at its word: it opens a turn of acceptance (phase `verify`) in which the leader inspects the
+///   changes and runs the checks itself, or has another member check or fix; only `VERIFIED: <evidence>` with `DONE`
+///   in that turn ends the task as done. Rounds running out end it `stopped`, never `done`.
 /// - compare (并行比稿): 2–3 distinct AIs work in parallel inside isolated Git worktrees (`Worktrees.cs`); once done,
 ///   the task enters `choose` so the owner can compare diffs, ask for refinements (`Say`), and pick one to apply (`Pick`)
 ///   or discard all, cleaning up temporary worktrees automatically.
@@ -30,6 +33,9 @@ public sealed class Teams {
         public string Id = "", Dir = "", Mode = "", Goal = "", Rules = "", State = "running", Note = "", Phase = "", Picked = "";
         public bool Discuss;
         public string[] Tools = new string[0];          // review: writer, reviewer; lead: leader + members; compare: candidates
+        public RosterMember[] Roster = new RosterMember[0];
+        public bool AutoRoster;
+        public string LeaderInput = "";
         public int Rounds = 3, Round = 1;
         public long Created;
         public List<Step> Log = new List<Step>();
@@ -38,6 +44,7 @@ public sealed class Teams {
         /// Whose turn is awaited (roles), and what those who answered said in this round (lead / discuss).
         public List<string> Awaited = new List<string>();
         public Dictionary<string, string> Answers = new Dictionary<string, string>();
+        internal readonly HashSet<string> Finishing = new HashSet<string>();
         /// Compare mode: per-tool worktree path, base commit SHA, summary, stat line, and diff text.
         public Dictionary<string, string> Worktrees = new Dictionary<string, string>();
         public Dictionary<string, string> BaseCommits = new Dictionary<string, string>();
@@ -48,22 +55,52 @@ public sealed class Teams {
         public Dictionary<string, string> Failed = new Dictionary<string, string>();
         public Dictionary<string, string> Pending = new Dictionary<string, string>();
         public bool Reminded;
+        /// Lead: the rounds are spent and the leader's acceptance under way is the last one (no more tasks go out).
+        public bool Last;
+        /// The model each tool's members are begun with (tool -> the tool's name of it); a tool not named uses its default.
+        public Dictionary<string, string> Models = new Dictionary<string, string>();
+        /// The reasoning effort each tool's members are begun with (tool -> CLI effort tier); a tool not named uses its default.
+        public Dictionary<string, string> Efforts = new Dictionary<string, string>();
+        /// Each role's conversation in its tool, once known (role -> Seat): it outlives the terminal, for the history.
+        public Dictionary<string, Seat> Sessions = new Dictionary<string, Seat>();
+        /// Every conversation that was ever a member, replaced ones too: they are listed under the task.
+        public List<Seat> Past = new List<Seat>();
         internal Team Copy() {
             var copy = (Team)MemberwiseClone();
             copy.Log = Log.ToList(); copy.Members = new Dictionary<string, string>(Members); copy.Awaited = Awaited.ToList();
-            copy.Answers = new Dictionary<string, string>(Answers); copy.Tools = Tools.ToArray();
+            copy.Answers = new Dictionary<string, string>(Answers); copy.Tools = Tools.ToArray(); copy.Roster = Roster.ToArray();
             copy.Worktrees = new Dictionary<string, string>(Worktrees); copy.BaseCommits = new Dictionary<string, string>(BaseCommits);
             copy.Summaries = new Dictionary<string, string>(Summaries); copy.Stats = new Dictionary<string, string>(Stats);
             copy.Diffs = new Dictionary<string, string>(Diffs);
             copy.Failed = new Dictionary<string, string>(Failed); copy.Pending = new Dictionary<string, string>(Pending);
+            copy.Models = new Dictionary<string, string>(Models); copy.Efforts = new Dictionary<string, string>(Efforts);
+            copy.Sessions = new Dictionary<string, Seat>(Sessions); copy.Past = Past.ToList();
             return copy;
         }
+        /// When anything last happened in it, in Unix seconds.
+        public long Updated { get { return (Log.Count > 0 ? Log[Log.Count - 1].At : Created) / 1000; } }
     }
-    /// What the program does for a team: begin a member's conversation (optionally in a worktree folder), tell it
-    /// something, stop one, read project changes, read quota limits, list available chat tools, and manage Git worktrees for `compare`.
+    /// A member's conversation in its tool.
+    public sealed class Seat { public string Tool = "", Id = ""; }
+    public sealed class RosterMember {
+        public readonly string Role, Tool, Model, Effort;
+        public RosterMember(string role, string tool, string model, string effort = "") {
+            Role = role; Tool = tool; Model = model ?? ""; Effort = effort ?? "";
+        }
+        public Dictionary<string, string> Shown() {
+            var shown = new Dictionary<string, string> { { "role", Role }, { "tool", Tool }, { "model", Model } };
+            if (Effort.Length > 0) shown["effort"] = Effort;
+            return shown;
+        }
+    }
+    static readonly string[] MemberRoles = { "member-1", "member-2", "member-3" };
+    /// A member's conversation to begin: its tool, the project, the first words, read only or not, the folder where it
+    /// is not the project's own (a worktree, `compare`), the model and reasoning effort ("" for the tool's default).
+    public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = "", Effort = ""; public bool Read; }
+    /// What the program does for a team: begin a member's conversation, tell it something, stop one, read project
+    /// changes, read quota limits, list available chat tools, and manage Git worktrees for `compare`.
     public sealed class Hands {
-        public Func<string, string, string, bool, string> Begin;                 // tool, project, first words, read only -> terminal
-        public Func<string, string, string, bool, string, string> BeginIn;       // tool, project, first words, read only, folderOverride -> terminal
+        public Func<Opening, string> Begin;                                      // -> terminal
         public Action<string, string> Say;                                       // terminal, words
         public Action<string> Stop;                                              // terminal
         public Func<string, string> Changes;                                     // project -> what changed, in words
@@ -108,13 +145,23 @@ public sealed class Teams {
             Id = word("id"), Dir = word("dir"), Mode = word("mode"), Goal = word("goal"), Rules = word("rules"),
             State = word("state"), Note = word("note"), Phase = word("phase"), Picked = word("picked"),
             Discuss = String.Equals(word("discuss"), "True", StringComparison.OrdinalIgnoreCase),
+            AutoRoster = String.Equals(word("auto_roster"), "True", StringComparison.OrdinalIgnoreCase),
+            LeaderInput = word("leader_input"),
             Reminded = String.Equals(word("reminded"), "True", StringComparison.OrdinalIgnoreCase),
+            Last = String.Equals(word("last"), "True", StringComparison.OrdinalIgnoreCase),
             Tools = many("tools").Select(Convert.ToString).ToArray(),
             Members = map("members"), Answers = map("answers"), Awaited = many("awaited").Select(Convert.ToString).ToList(),
             Worktrees = map("worktrees"), BaseCommits = map("base_commits"),
             Summaries = map("summaries"), Stats = map("stats"), Diffs = map("diffs"),
-            Failed = map("failed"), Pending = map("pending")
+            Failed = map("failed"), Pending = map("pending"),
+            Models = map("models").Where(p => RemoteCli.Models.Valid(p.Value)).ToDictionary(p => p.Key, p => p.Value),
+            Efforts = map("efforts").Select(p => new KeyValuePair<string, string>(p.Key, RemoteCli.Models.CleanEffort(p.Value))).Where(p => p.Value.Length > 0).ToDictionary(p => p.Key, p => p.Value),
+            Past = many("past").Select(Convert.ToString).Select(SeatOf).Where(s => s != null).ToList()
         };
+        object roster;
+        if (kept.TryGetValue("roster", out roster) && roster != null)
+            team.Roster = ReadRoster(roster, team.AutoRoster, true);
+        foreach (var pair in map("sessions")) { var seat = SeatOf(pair.Value); if (seat != null) team.Sessions[pair.Key] = seat; }
         team.Rounds = Int32.TryParse(word("rounds"), out number) ? number : 3; team.Round = Int32.TryParse(word("round"), out number) ? number : 1;
         long created; team.Created = Int64.TryParse(word("created"), out created) ? created : 0;
         foreach (var step in many("log").OfType<Dictionary<string, object>>()) { long at; Int64.TryParse(Convert.ToString(step["at"]), out at); team.Log.Add(new Step { At = at, Who = Convert.ToString(step["who"]), Text = Convert.ToString(step["text"]) }); }
@@ -125,12 +172,15 @@ public sealed class Teams {
         var all = items.Select(t => new Dictionary<string, object> {
             { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "rules", t.Rules },
             { "state", t.State }, { "note", t.Note }, { "phase", t.Phase }, { "picked", t.Picked },
-            { "discuss", t.Discuss }, { "reminded", t.Reminded },
+            { "discuss", t.Discuss }, { "reminded", t.Reminded }, { "last", t.Last },
             { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created },
+            { "roster", t.Roster.Length == 0 ? null : t.Roster.Select(member => member.Shown()).ToArray() }, { "auto_roster", t.AutoRoster },
+            { "leader_input", t.LeaderInput },
             { "members", t.Members }, { "awaited", t.Awaited }, { "answers", t.Answers },
             { "worktrees", t.Worktrees }, { "base_commits", t.BaseCommits },
             { "summaries", t.Summaries }, { "stats", t.Stats }, { "diffs", t.Diffs },
-            { "failed", t.Failed }, { "pending", t.Pending },
+            { "failed", t.Failed }, { "pending", t.Pending }, { "models", t.Models }, { "efforts", t.Efforts },
+            { "sessions", t.Sessions.ToDictionary(p => p.Key, p => p.Value.Tool + ":" + p.Value.Id) }, { "past", t.Past.Select(s => s.Tool + ":" + s.Id).ToArray() },
             { "log", t.Log.Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         }).ToArray();
         try {
@@ -141,6 +191,12 @@ public sealed class Teams {
         } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
     void Tell() { var told = Changed; if (told != null) try { told(); } catch (Exception) { } }
+    static Seat SeatOf(string kept) {
+        int cut = (kept ?? "").IndexOf(':');
+        if (cut <= 0) return null;
+        var seat = new Seat { Tool = kept.Substring(0, cut), Id = kept.Substring(cut + 1) };
+        return RemoteCli.Tool.Of(seat.Tool) != null && Regex.IsMatch(seat.Id, @"\A[A-Za-z0-9_-]{8,64}\z") ? seat : null;
+    }
 
     public Team[] All() { lock (gate) return items.Select(t => t.Copy()).ToArray(); }
     /// As the phone is shown it.
@@ -148,10 +204,16 @@ public sealed class Teams {
         var shown = new Dictionary<string, object> {
             { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "rules", t.Rules },
             { "state", t.State }, { "note", t.Note }, { "phase", t.Phase }, { "discuss", t.Discuss }, { "picked", t.Picked },
-            { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created },
+            { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created }, { "models", t.Models },
             { "members", t.Members }, { "awaited", t.Awaited.ToArray() }, { "failed", t.Failed },
+            { "member_sessions", t.Sessions.ToDictionary(p => p.Key, p => (object)new Dictionary<string, object> { { "id", p.Value.Id }, { "tool", p.Value.Tool } }) },
             { "log", t.Log.Skip(Math.Max(0, t.Log.Count - 80)).Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         };
+        if (t.Efforts.Count > 0) shown["efforts"] = new Dictionary<string, string>(t.Efforts);
+        if (t.Roster.Length > 0) {
+            shown["roster"] = t.Roster.Select(member => member.Shown()).ToArray();
+            shown["auto_roster"] = t.AutoRoster;
+        }
         if (t.Mode == "compare") {
             shown["candidates"] = t.Tools.Select(tool => new Dictionary<string, object> {
                 { "tool", tool },
@@ -163,13 +225,64 @@ public sealed class Teams {
         }
         return shown;
     }
+    /// The tasks in short, for the lists (`team_cards`): newest first; `confirm` where a member whose turn is awaited
+    /// waits for a confirmation (`asking`: terminal -> whether it does).
+    public Dictionary<string, object>[] Cards(Func<string, bool> asking) {
+        var cards = new List<KeyValuePair<Dictionary<string, object>, string[]>>();     // each card, and the terminals it waits for
+        lock (gate) {
+            foreach (var t in items.OrderByDescending(t => t.Updated)) {
+                var card = new Dictionary<string, object> {
+                    { "id", t.Id }, { "dir", t.Dir }, { "goal", Short(t.Goal, 200) }, { "mode", t.Mode }, { "state", t.State }, { "phase", t.Phase },
+                    { "note", Short(t.Note, 200) }, { "updated", t.Updated }, { "awaited", t.Awaited.ToArray() }, { "tools", t.Tools.ToArray() },
+                    { "models", new Dictionary<string, string>(t.Models) } };
+                if (t.Efforts.Count > 0) card["efforts"] = new Dictionary<string, string>(t.Efforts);
+                if (t.Roster.Length > 0) {
+                    card["roster"] = t.Roster.Select(member => member.Shown()).ToArray();
+                    card["auto_roster"] = t.AutoRoster;
+                }
+                cards.Add(new KeyValuePair<Dictionary<string, object>, string[]>(card,
+                    t.State == "running" ? t.Awaited.Where(t.Members.ContainsKey).Select(role => t.Members[role]).ToArray() : new string[0]));
+            }
+        }
+        foreach (var card in cards) if (asking != null && card.Value.Any(asking)) card.Key["confirm"] = true;
+        return cards.Select(card => card.Key).ToArray();
+    }
+    /// The task a terminal is a member of, else the one its conversation is or was a member of; "" for none.
+    public string TeamOf(string terminal, string tool, string session) {
+        lock (gate) { var team = items.FirstOrDefault(t => t.Members.ContainsValue(terminal)); if (team != null) return team.Id; }
+        return String.IsNullOrEmpty(session) ? "" : TeamOf(tool, session);
+    }
+    /// The task a conversation is or was a member of, "" for none: listed under it while the task is kept.
+    public string TeamOf(string tool, string session) {
+        lock (gate) {
+            var team = items.FirstOrDefault(t => t.Past.Any(s => s.Tool == tool && String.Equals(s.Id, session, StringComparison.OrdinalIgnoreCase)));
+            return team == null ? "" : team.Id;
+        }
+    }
+    /// A member's terminal says which conversation of its tool it runs: kept with the task, also once the member is
+    /// replaced or its terminal is gone (tasks kept from before this was known learn it from terminals still listed).
+    public void Learn(string terminal, string tool, string session) {
+        if (String.IsNullOrEmpty(session) || SeatOf(tool + ":" + session) == null) return;
+        lock (gate) {
+            var team = items.FirstOrDefault(t => t.Members.ContainsValue(terminal));
+            if (team == null) return;
+            string role = team.Members.First(p => p.Value == terminal).Key;
+            Seat had;
+            if (team.Sessions.TryGetValue(role, out had) && had.Tool == tool && had.Id == session) return;
+            var seat = new Seat { Tool = tool, Id = session };
+            team.Sessions[role] = seat;
+            if (!team.Past.Any(s => s.Tool == tool && s.Id == session)) team.Past.Add(seat);
+            if (team.Past.Count > 60) team.Past.RemoveRange(0, team.Past.Count - 60);
+            Save();
+        }
+    }
 
     // ---- what the members are told (read by the models: changed only together with runs on the real tools)
     public static string Label(string tool) { return RemoteCli.Tool.LabelOf(tool); }
     static readonly Dictionary<string, string> Strengths = new Dictionary<string, string> {
-        { "codex", "擅长决策拍板、任务拆解、精准改代码与修测试（优先负责决策，纯检查不必浪费其额度）" },
-        { "claude", "擅长主力写作（代码实现、重构与文档撰写）以及深度交叉审查" },
-        { "agy", "Gemini 模型，擅长 UI 与前端界面设计、长上下文检索，也可兼顾写作与交叉检查" } };
+        { "codex", "Sol 适合日常实现与任务组织，Astra 适合复杂排查和深度验收，Terra 适合范围清楚的快改与测试" },
+        { "claude", "Sonnet 适合常规实现、重构与写作，Opus 适合复杂设计和审查，Haiku 适合快速整理与提取" },
+        { "agy", "若使用 Gemini，Neon 和 Carbon 适合复杂代码、界面和多份材料，Argon 兼顾推理与速度，Hydrogen 适合日常实现和检查" } };
     /// Whether any main quota window has reached 100%.
     public static bool IsExhausted(Quotas.Window[] windows) { return windows != null && windows.Any(w => Math.Round(w.Used) >= 100); }
     static readonly Regex QuotaErrorPattern = new Regex(@"(hit your limit|rate[\s_-]*limit|usage[\s_-]*limit|quota|out of credits|credit balance|too many requests|\b429\b|overloaded|额度|限额|已达上限|额度用尽|额度已用完|额度用完)", RegexOptions.IgnoreCase);
@@ -196,7 +309,8 @@ public sealed class Teams {
         Dictionary<string, string> failed;
         string[] list;
         lock (gate) { failed = new Dictionary<string, string>(t.Failed); list = t.Tools.Distinct().ToArray(); }
-        if (hands.Limits == null && failed.Count == 0) return rooms;
+        if (t.AutoRoster && hands.Available != null) list = list.Union(hands.Available() ?? new string[0]).ToArray();
+        if (hands.Limits == null && failed.Count == 0 && !t.AutoRoster) return rooms;
         foreach (string tool in list) {
             string why;
             bool isFailed = failed.TryGetValue(tool, out why);
@@ -205,7 +319,7 @@ public sealed class Teams {
                 rooms[tool] = isFailed ? room + "；当前不可用（" + why + "，请勿再派工）" : room;
             } else if (isFailed) {
                 rooms[tool] = "不可用（" + why + "，请勿再派工）";
-            }
+            } else if (t.AutoRoster) rooms[tool] = "额度未知";
         }
         return rooms;
     }
@@ -256,30 +370,66 @@ public sealed class Teams {
     }
     public static string LeaderFirst(Team t, IDictionary<string, string> rooms, string discussion = "") {
         Func<string, string> room = tool => rooms.ContainsKey(tool) ? "；" + rooms[tool] : "";
-        var members = t.Tools.Skip(1).Select(tool => "- " + tool + "：" + Label(tool) + (Strengths.ContainsKey(tool) ? "，" + Strengths[tool] : "") + room(tool)).ToArray();
+        var members = LeadMembers(t).Select(role => {
+            string tool = ToolOf(t, role);
+            var seat = RosterOf(t, role);
+            string model = seat != null ? seat.Model : t.Models.ContainsKey(tool) ? t.Models[tool] : "";
+            return "- " + role + "：" + Label(tool) + "（" + (model.Length > 0 ? model : "工具默认模型")
+                + (seat != null && seat.Effort.Length > 0 ? " · " + seat.Effort : "") + "）" + room(tool);
+        }).ToArray();
+        var tools = t.Tools.Concat(t.AutoRoster ? rooms.Keys.AsEnumerable() : Enumerable.Empty<string>()).Distinct();
+        string modelGuide = "\n\n## 派工参考\n" + String.Join("\n", tools.Where(Strengths.ContainsKey).Select(tool => "- " + Label(tool) + "：" + Strengths[tool]))
+            + "\n按实际配置的模型和任务难度派工。普通任务可用中等思考深度，复杂排查或验收才考虑更高档位。";
+        string rosterGuide = t.Roster.Length > 0 ? "\n同一工具的各成员是独立对话，共用该工具的账号额度。" : "";
+        if (t.AutoRoster) rosterGuide += "\n你可以自行决定派给谁和派几个。已安装的工具：" + String.Join("、", rooms.Keys)
+            + "。同批可使用 member-1、member-2、member-3。示例（工具名须从上面选）：\n"
+            + "ASSIGN member-1 codex: 实现输入校验并运行相关测试\nASSIGN member-2 codex: 独立检查错误信息\n"
+            + "已有成员可用 ASSIGN member-1: 任务内容 继续，或加工具名切换。";
         return "【协作任务 · 领队】目标：" + t.Goal + ExtraRules(t)
             + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 成员前期方案讨论（只读）\n" + Cut(discussion, 12000))
             + "\n\n你负责决策、按任务特点高效干净地分工、验收结果并在达标时结束。成员都在同一个项目文件夹中工作：\n" + String.Join("\n", members)
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
-            + "\n\n分工原则：\n1. 按具体任务按需派工，不必每次把所有成员都派满；不需要的成员可以不派。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要核验时采用交叉检查（谁写不由谁审），优先让 Claude Code 或 Antigravity CLI 交叉检查，不必把纯检查浪费在 Codex 上。\n4. 结果达标后立刻结束，不要为了凑轮次空转。"
+            + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "") + modelGuide
+            + "\n如果目标写明由成员执行或要求组队，请把对应工作写成 ASSIGN 行。只有回复中的 ASSIGN 行才会交给成员执行。"
+            + "\n\n分工原则：\n1. 按具体任务按需派工。\n2. 并行分派时写清各自负责的文件和验收标准，避免多人改同一批文件。\n3. 需要独立核验时，交给熟悉这类任务的其他成员。\n4. 结果达标后结束。"
             + (rooms.Count > 0 ? "\n5. 按额度分配工作量：额度已用尽或不可用的成员不要再派工；额度紧张（任一窗口已用 80% 以上）的成员少派或不派，只给小而必要的任务，工作多交给额度充足的成员；你自己的额度紧张时，回答保持简短，把实现和检查交给成员。额度未知的成员按正常对待。" : "")
-            + "\n\n分派时，在回答的最后每行写一条（成员名用上面的英文名）：\nASSIGN 成员名: 任务内容\n全部完成时，回答的最后单独一行写：\nDONE: 总结\n分派出去的工作不要自己动手做。";
+            + "\n\n分派时，在回答的最后每行写一条（用上面的成员编号或英文名）：\nASSIGN 成员名: 任务内容\n若已自行完成任务，回答的最后写：\nDONE: 总结\n成员执行完或你自行完成后，会进入当轮验收。请亲自查看结果，运行相关检查，确认无误后结束。\n分派出去的工作不要自己动手做。";
     }
+    /// The leader's turn of acceptance: it inspects what changed and runs the checks itself (or has another member
+    /// check or fix); `last` where no more rounds may be given out.
+    public static string VerifyAsk(Team t, string changes, IDictionary<string, string> rooms, bool last) {
+        return "【协作任务 · 领队验收" + (last ? " · 最后一轮" : "") + "】"
+            + "第 " + t.Round + " 轮。"
+            + (last ? "已到设定的 " + t.Rounds + " 轮上限，请做最后一次验收。" : "请汇总本轮结果并单独验收。")
+            + "\n\n整体目标：" + Cut(t.Goal, 2000)
+            + (changes.Length > 0 ? "\n\n## 文件夹中的当前改动\n" + Cut(changes, 20000) : "")
+            + RoomsBlock(t, rooms)
+            + "\n\n验收要求：\n1. 亲自查看项目里的实际改动，确认它们达到目标。\n2. 运行与这次改动相关的检查，例如构建、测试、lint，或实际运行一遍关键功能。"
+            + (last ? "" : "\n3. 如果验收发现问题，请给出可执行的修改意见，派工后才进入下一轮。")
+            + "\n\n验收通过时，在回答的最后写两行：\nVERIFIED: 你实际做了哪些检查、看到了什么结果（写明命令或查看的文件）\nDONE: 总结"
+            + (last ? "\n没有通过时，直接说明还差什么，不要再写 ASSIGN。" : "\n发现问题时，用 ASSIGN 成员名: 修改内容 把修复派给成员，完成后会请你再次验收。");
+    }
+    const string VerifyRemind = "【协作任务 · 领队验收】这次回答里没有找到验收证据。请在回答的最后写：\nVERIFIED: 你实际运行的检查和看到的结果\nDONE: 总结\n还有问题时，用 ASSIGN 成员名: 修改内容 安排修复。";
     public static string MemberTask(Team t, string task) {
-        return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task + "\n\n整体目标：" + t.Goal + "\n\n完成后简要说明你做了什么、改了哪些文件。";
+        return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task
+            + "\n\n项目目标供参考：" + t.Goal + "\n\n请只执行领队分派给你的任务。组队和分派由领队负责。完成后简要说明结果及改动。";
     }
     public static string CompareFirst(Team t, string tool) {
         return "【协作任务 · 并行比稿】目标：" + t.Goal + ExtraRules(t)
             + "\n\n你正在该项目的独立 Git worktree 副本中工作，不会与其他候选 AI 冲突。请直接完成你的最佳实现并验证关键路径，完成后简明说明你的方案思路、改了哪些文件以及取舍理由。用户会对比各候选方案并选择一个合并。";
     }
     public static string Results(Team t, Dictionary<string, string> answers, string changes, IDictionary<string, string> rooms) {
-        return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + Label(p.Key) + "\n" + Cut(p.Value, 8000)))
+        return Answers(t, answers)
             + (changes.Length > 0 ? "\n\n## 文件夹中的改动\n" + Cut(changes, 20000) : "")
             + RoomsBlock(t, rooms)
             + "\n\n请检查结果，再分派下一步（ASSIGN 成员名: 任务）或结束（DONE: 总结）。";
     }
+    static string Answers(Team t, Dictionary<string, string> answers) {
+        return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + RoleLabel(t, p.Key) + "\n" + Cut(p.Value, 8000)));
+    }
     const string Remind = "【协作任务】没有在你的回答里找到分派或结束。请在回答的最后按格式写：\nASSIGN 成员名: 任务内容（可以多行）\n或单独一行：\nDONE: 总结";
     static string Cut(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "\n…（后面省略）" : text; }
+    static string Short(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "…" : text; }
 
     // ---- what the members say, read
     /// A review's verdict from its first line that says one: true pass, false changes, null none.
@@ -291,23 +441,64 @@ public sealed class Teams {
         }
         return null;
     }
-    static readonly Regex Assign = new Regex(@"^[\s>*\-_`]*ASSIGN[*_`]*\s+[*_`]*(claude|codex|agy)[*_`]*\s*[:：]\s*(.+?)\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+    static readonly Regex Assign = new Regex(@"^[\s>*\-_`]*ASSIGN[*_`]*[ \t]+[*_`]*(claude|codex|agy|member-[123])(?:[ \t]+(claude|codex|agy))?[*_`]*[ \t]*[:：][ \t]*(.+?)[ \t]*\r?$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
     static readonly Regex Done = new Regex(@"^[\s>*\-_`]*DONE[*_`]*\s*[:：]\s*(.*)$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
     /// The leader's tasks for its members (one line each; a member named twice is given both), of the members it has.
     public static Dictionary<string, string> Assigned(string said, IEnumerable<string> members) {
         var tasks = new Dictionary<string, string>();
         var known = new HashSet<string>(members);
         foreach (Match m in Assign.Matches(said ?? "")) {
-            string tool = m.Groups[1].Value.ToLowerInvariant(), task = m.Groups[2].Value.Trim();
-            if (!known.Contains(tool) || task.Length == 0) continue;
+            string tool = m.Groups[1].Value.ToLowerInvariant(), task = m.Groups[3].Value.Trim();
+            if (!known.Contains(tool) || m.Groups[2].Success || task.Length == 0) continue;
             tasks[tool] = tasks.ContainsKey(tool) ? tasks[tool] + "\n" + task : task;
         }
         return tasks;
     }
     /// The leader's summary where it says the work is done; null where it does not.
     public static string Finished(string said) { var m = Done.Match(said ?? ""); return m.Success ? m.Groups[1].Value.Trim() : null; }
+    static readonly Regex Checked = new Regex(@"^[\s>*\-_`]*VERIFIED[*_`]*\s*[:：]\s*(.*)$", RegexOptions.IgnoreCase);
+    /// What the leader says it checked (`VERIFIED: …`, with the lines under it up to DONE or ASSIGN); null where it
+    /// says nothing that could be checks and their results.
+    public static string Verified(string said) {
+        var lines = (said ?? "").Replace("\r\n", "\n").Split('\n');
+        for (int i = 0; i < lines.Length; i++) {
+            var m = Checked.Match(lines[i]);
+            if (!m.Success) continue;
+            var evidence = new List<string> { m.Groups[1].Value.Trim().Trim('*', '_', '`').Trim() };
+            for (int j = i + 1; j < lines.Length && evidence.Count < 12 && !Done.IsMatch(lines[j]) && !Assign.IsMatch(lines[j]) && !Checked.IsMatch(lines[j]); j++)
+                if (lines[j].Trim().Length > 0) evidence.Add(lines[j].Trim());
+            string text = String.Join("\n", evidence.Where(x => x.Length > 0)).Trim();
+            if (Regex.Replace(text, @"[\s*_`>#\-.。,，:：;；!！?？()（）]", "").Length >= 6) return text;
+        }
+        return null;
+    }
 
     // ---- what the owner does
+    static RosterMember[] ReadRoster(object raw, bool auto, bool stored) {
+        var rows = raw as IList;
+        if (rows == null || rows.Count < (auto ? 1 : 2) || rows.Count > (auto && !stored ? 1 : 4))
+            throw new ArgumentException("请选择一位领队和 1 至 3 位执行成员，或让领队自动组队");
+        var members = new List<RosterMember>();
+        foreach (object row in rows) {
+            var fields = row as Dictionary<string, object>;
+            if (fields == null) throw new ArgumentException("协作成员无效");
+            object role, tool, model, effort;
+            fields.TryGetValue("role", out role);
+            fields.TryGetValue("tool", out tool);
+            fields.TryGetValue("model", out model);
+            fields.TryGetValue("effort", out effort);
+            string roleName = role as string, toolName = tool as string, modelName = (model as string ?? "").Trim();
+            string rawEffort = effort as string ?? "", effortName = rawEffort.Trim().ToLowerInvariant();
+            if ((members.Count == 0 ? roleName != "leader" : !MemberRoles.Contains(roleName)) ||
+                members.Any(m => m.Role == roleName) || !RemoteCli.Models.Tools.Contains(toolName) ||
+                (model != null && !(model is string)) || (modelName.Length > 0 && !RemoteCli.Models.Valid(modelName)) ||
+                (effort != null && !(effort is string)) || (effortName.Length > 0 && !RemoteCli.Models.ValidEffort(effortName)))
+                throw new ArgumentException(effort != null && (!(effort is string) || (effortName.Length > 0 && !RemoteCli.Models.ValidEffort(effortName))) ? "思考深度无效" : "协作成员无效");
+            members.Add(new RosterMember(roleName, toolName, modelName, effortName));
+        }
+        return members.ToArray();
+    }
+
     public Team Start(Dictionary<string, object> given) {
         Func<string, string> word = name => { object value; return given.TryGetValue(name, out value) && value != null ? Convert.ToString(value) : ""; };
         object raw; given.TryGetValue("tools", out raw);
@@ -317,16 +508,31 @@ public sealed class Teams {
         if (rules.Length > 1000) throw new ArgumentException("分工偏好不能超过 1000 字");
         string mode = word("mode");
         bool discuss = (mode == "review" || mode == "lead") && String.Equals(word("discuss"), "True", StringComparison.OrdinalIgnoreCase);
+        object automatic;
+        bool auto = given.TryGetValue("auto_roster", out automatic) && Object.Equals(automatic, true);
+        if (automatic != null && !(automatic is bool)) throw new ArgumentException("自动组队选项无效");
+        object rosterValue;
+        given.TryGetValue("roster", out rosterValue);
+        if ((rosterValue != null && mode != "lead") || (auto && rosterValue == null))
+            throw new ArgumentException("仅分工协作支持按成员安排");
+        var roster = rosterValue == null ? new RosterMember[0] : ReadRoster(rosterValue, auto, false);
+        if (roster.Length > 0) {
+            tools = roster.Select(member => member.Tool).ToArray();
+            if (hands.Available != null && tools.Except(hands.Available() ?? new string[0]).Any())
+                throw new ArgumentException("这台电脑不能让这个工具参与协作");
+        }
+        object models; given.TryGetValue("models", out models);
+        object efforts; given.TryGetValue("efforts", out efforts);
         var team = new Team {
             Id = word("id"), Dir = word("dir"), Mode = mode, Goal = word("goal").Trim(), Rules = rules,
-            Discuss = discuss, Tools = tools,
+            Discuss = discuss, Tools = tools, Models = RemoteCli.Models.Chosen(models, tools), Efforts = RemoteCli.Models.ChosenEfforts(efforts, tools), Roster = roster, AutoRoster = auto,
             Rounds = Math.Max(1, Math.Min(MostRounds, rounds == 0 ? (mode == "compare" ? 1 : 3) : rounds)),
             Created = Now()
         };
         if (!Regex.IsMatch(team.Id, @"\A[a-f0-9]{16,32}\z") || Array.IndexOf(Modes, team.Mode) < 0) throw new ArgumentException("协作任务无效");
         if (team.Goal.Length == 0 || team.Goal.Length > 4000) throw new ArgumentException("目标需为 1 至 4000 字");
         if (team.Mode == "review" && tools.Length != 2) throw new ArgumentException("写审需要一个写的 AI 和一个审查的 AI");
-        if (team.Mode == "lead" && (tools.Length < 2 || tools.Length > 4 || tools.Skip(1).Distinct().Count() != tools.Length - 1 || tools.Skip(1).Contains(tools[0])))
+        if (team.Mode == "lead" && roster.Length == 0 && (tools.Length < 2 || tools.Length > 4 || tools.Distinct().Count() != tools.Length))
             throw new ArgumentException("领队需要一个领队和 1 至 3 个不同的成员");
         if (team.Mode == "compare" && (tools.Length < 2 || tools.Length > 3 || tools.Distinct().Count() != tools.Length))
             throw new ArgumentException("并行比稿需要 2 至 3 个不同的 AI");
@@ -361,14 +567,17 @@ public sealed class Teams {
         }
 
         Log(team, "目标", team.Goal);
-        if (team.Discuss) {
-            string[] discussants = team.Mode == "lead" ? team.Tools.Skip(1).Distinct().ToArray() : team.Tools.Distinct().ToArray();
+        if (team.Discuss && !team.AutoRoster) {
+            string[] discussants = team.Mode == "lead" ? LeadMembers(team) : team.Tools.Distinct().ToArray();
             lock (gate) {
                 team.Phase = "discuss";
-                foreach (string tool in discussants) team.Awaited.Add("discuss:" + tool);
+                foreach (string roleName in discussants) team.Awaited.Add("discuss:" + roleName);
                 Save();
             }
-            foreach (string tool in discussants) Open(team, "discuss:" + tool, tool, DiscussFirst(team, tool), true, null);
+            foreach (string roleName in discussants) {
+                string tool = ToolOf(team, roleName);
+                Open(team, "discuss:" + roleName, tool, DiscussFirst(team, tool), true, null);
+            }
             return Of(team.Id);
         }
 
@@ -398,7 +607,7 @@ public sealed class Teams {
             if (team == null) throw new ArgumentException("没有找到这个协作任务");
             if (team.State != "paused") throw new InvalidOperationException("这个协作任务没有暂停");
             team.State = "running"; team.Note = "";
-            again = team.Awaited.Where(role => team.Members.ContainsKey(role)).Select(role => new KeyValuePair<string, string>(role, team.Members[role])).ToList();
+            again = team.Awaited.Select(role => new KeyValuePair<string, string>(role, team.Members.ContainsKey(role) ? team.Members[role] : null)).ToList();
             Save();
         }
         foreach (var one in again) DeliverOrReopen(team, one.Key, one.Value, "继续完成上面的任务。");
@@ -432,7 +641,7 @@ public sealed class Teams {
                     if (state == "paused") team.Awaited.Clear();
                     if (!team.Awaited.Contains(resolved)) team.Awaited.Add(resolved);
                 } else {
-                    if (state == "paused" && mode == "lead" && team.Awaited.Count > 0 && team.Awaited.All(r => r != "leader" && team.Failed.ContainsKey(ToolOf(team, r)))) {
+                    if (state == "paused" && mode == "lead" && team.Awaited.Count > 0 && team.Awaited.All(r => r != "leader" && FailedRole(team, r))) {
                         team.Awaited.Clear();
                         team.Awaited.Add("leader");
                     }
@@ -440,6 +649,10 @@ public sealed class Teams {
                     foreach (string r in targets) if (!team.Awaited.Contains(r)) team.Awaited.Add(r);
                 }
                 if (state == "paused") { team.State = "running"; team.Note = ""; }
+                if (state == "running" && mode == "lead" && targets.Remove("leader")) {
+                    team.LeaderInput = Cut(team.LeaderInput.Length == 0 ? text : team.LeaderInput + "\n" + text, 12000);
+                    if (MembersWorking(team)) team.Awaited.Remove("leader");
+                }
                 Save();
             } else if (mode == "compare" && (state == "choose" || state == "stopped")) {
                 if (target.Length > 0) {
@@ -458,13 +671,13 @@ public sealed class Teams {
                 // `done` or `stopped` for `review` / `lead`: begin another round with the owner's follow-up
                 team.Round++;
                 if (team.Round > team.Rounds) team.Rounds = Math.Min(MaxTotalRounds, team.Round + 2);
-                team.State = "running"; team.Note = ""; team.Phase = ""; team.Reminded = false;
+                team.State = "running"; team.Note = ""; team.Phase = ""; team.Reminded = false; team.Last = false;
                 team.Awaited.Clear(); team.Answers.Clear();
                 Save();
             }
         }
 
-        Log(team, "user", (target.Length > 0 ? "@" + Label(ToolOf(team, ResolveRole(team, target) ?? target)) + " " : "") + text);
+        Log(team, "user", (target.Length > 0 ? "@" + RoleLabel(team, ResolveRole(team, target) ?? target) + " " : "") + text);
 
         if (state == "running" || state == "paused") {
             string prefix = state == "running" ? "【用户插话】\n" : "【用户补充】\n";
@@ -528,13 +741,18 @@ public sealed class Teams {
         return Of(id);
     }
 
-    /// Explicitly swaps a role's AI (or reassigns a member's task to another AI) mid-run or while paused.
-    public Team Swap(string id, string role, string newTool, string note = "") {
+    /// Explicitly swaps a role's AI (or reassigns a member's task to another AI) mid-run or while paused; `model` and
+    /// `effort`, where given, are what that role/AI is begun with from now on (none: as before for it, else its default).
+    public Team Swap(string id, string role, string newTool, string note = "", string model = null, string effort = null) {
         role = (role ?? "").Trim();
         newTool = (newTool ?? "").Trim().ToLowerInvariant();
         note = (note ?? "").Trim();
+        if (model != null) model = model.Trim();
+        if (effort != null) effort = effort.Trim().ToLowerInvariant();
         if (note.Length > 1000) throw new ArgumentException("补充说明不能超过 1000 字");
         if (newTool != "claude" && newTool != "codex" && newTool != "agy") throw new ArgumentException("接手 AI 无效");
+        if (!String.IsNullOrEmpty(model) && !RemoteCli.Models.Valid(model)) throw new ArgumentException("模型名称无效");
+        if (!String.IsNullOrEmpty(effort) && !RemoteCli.Models.ValidEffort(effort)) throw new ArgumentException("思考深度无效");
         Team team; string resolved, oldTool, oldTerminal = null, pending = "", mode, phase, prevState;
         bool launchNow = false;
         lock (gate) {
@@ -546,13 +764,39 @@ public sealed class Teams {
             resolved = role.Length > 0 ? ResolveRole(team, role) : DefaultSwapRole(team);
             if (resolved == null) throw new ArgumentException("没有找到这个角色");
             oldTool = ToolOf(team, resolved);
-            if (oldTool == newTool) throw new ArgumentException("这个角色当前已经是 " + Label(newTool));
+            var rosterMember = RosterOf(team, resolved);
+            if (oldTool == newTool && (rosterMember == null || ((model == null || model == rosterMember.Model) && (effort == null || effort == rosterMember.Effort))))
+                throw new ArgumentException("这个角色当前使用相同的工具、模型和思考深度");
             team.Members.TryGetValue(resolved, out oldTerminal);
             team.Pending.TryGetValue(resolved, out pending);
             team.Failed.Remove(newTool);
+            team.Failed.Remove(resolved);
+            if (rosterMember == null) {
+                if (!String.IsNullOrEmpty(model)) team.Models[newTool] = model;
+                if (effort != null) {
+                    if (effort.Length > 0) team.Efforts[newTool] = effort; else team.Efforts.Remove(newTool);
+                }
+            }
 
             bool wasActive = team.Awaited.Contains(resolved) || prevState != "running";
-            if (mode == "review") {
+            if (rosterMember != null) {
+                if (phase == "discuss" && resolved != "leader") {
+                    resolved = "discuss:" + rosterMember.Role;
+                    team.Members.TryGetValue(resolved, out oldTerminal);
+                    team.Pending.TryGetValue(resolved, out pending);
+                    wasActive = team.Awaited.Contains(resolved) || prevState != "running";
+                }
+                string nextModel = model ?? (oldTool == newTool ? rosterMember.Model : "");
+                string nextEffort = effort ?? (oldTool == newTool && nextModel == rosterMember.Model ? rosterMember.Effort : "");
+                SetRosterMember(team, rosterMember.Role, newTool, nextModel, nextEffort);
+                team.Members.Remove(resolved);
+                team.Sessions.Remove(resolved);
+                if (wasActive) {
+                    team.State = "running"; team.Note = "";
+                    if (!team.Awaited.Contains(resolved)) team.Awaited.Add(resolved);
+                    launchNow = true;
+                }
+            } else if (mode == "review") {
                 int idx = resolved == "writer" ? 0 : 1;
                 team.Tools[idx] = newTool;
                 team.Members.Remove(resolved);
@@ -600,6 +844,8 @@ public sealed class Teams {
             ? "已将" + (resolved == "reviewer" ? "审查" : "写手") + "从 " + Label(oldTool) + " 切换为 " + Label(newTool)
             : resolved == "leader" ? "已将领队从 " + Label(oldTool) + " 切换为 " + Label(newTool)
             : "已将 " + Label(oldTool) + " 的任务转交给 " + Label(newTool);
+        if (!String.IsNullOrEmpty(model)) summary += "，模型 " + model;
+        if (!String.IsNullOrEmpty(effort)) summary += "，思考深度 " + effort;
         if (note.Length > 0) summary += "（" + Cut(note, 120) + "）";
         Log(team, "切换", summary);
         if (!launchNow) return Of(id);
@@ -614,13 +860,14 @@ public sealed class Teams {
     }
 
     static string DefaultSwapRole(Team team) {
-        string failedAwaited = team.Awaited.FirstOrDefault(r => team.Failed.ContainsKey(ToolOf(team, r)));
+        string failedAwaited = team.Awaited.FirstOrDefault(r => team.Failed.ContainsKey(r) || team.Failed.ContainsKey(ToolOf(team, r)));
         if (failedAwaited != null) return failedAwaited;
         if (team.Awaited.Count > 0) return team.Awaited[0];
         if (team.Mode == "review") return "writer";
-        return team.Tools.Length > 1 ? team.Tools[1] : "leader";
+        return LeadMembers(team).FirstOrDefault() ?? "leader";
     }
     static void PromoteLeader(Team team, string newLeader) {
+        if (team.Roster.Length > 0) { SetRosterMember(team, "leader", newLeader, ""); return; }
         var next = new List<string> { newLeader };
         foreach (string t in team.Tools) if (t != newLeader && !next.Contains(t)) next.Add(t);
         team.Tools = next.ToArray();
@@ -643,9 +890,10 @@ public sealed class Teams {
         if (team.Mode == "lead" && role == "leader") {
             string recent;
             lock (gate) recent = String.Join("\n\n", team.Log.Skip(Math.Max(0, team.Log.Count - 10)).Select(s => "[" + s.Who + "] " + Cut(s.Text, 800)));
+            bool verifying; lock (gate) verifying = team.Phase == "verify";
             return LeaderFirst(team, Rooms(team))
                 + (recent.Length > 0 ? "\n\n## 此前协作进展\n" + Cut(recent, 8000) : "")
-                + (changes.Length > 0 ? "\n\n## 当前工作区改动\n" + Cut(changes, 16000) : "")
+                + (verifying ? "\n\n" + VerifyAsk(team, changes, new Dictionary<string, string>(), team.Last) : changes.Length > 0 ? "\n\n## 当前工作区改动\n" + Cut(changes, 16000) : "")
                 + extra;
         }
         return "【协作任务 · 接手成员任务】\n整体目标：" + team.Goal + ExtraRules(team)
@@ -673,6 +921,7 @@ public sealed class Teams {
         if (String.IsNullOrEmpty(wanted)) return null;
         if (team.Members.ContainsKey(wanted)) return wanted;
         if (team.Phase == "discuss" && team.Members.ContainsKey("discuss:" + wanted)) return "discuss:" + wanted;
+        if (team.Roster.Length > 0) return RosterOf(team, wanted) == null ? null : wanted;
         if (team.Mode == "review") {
             if (wanted == team.Tools[0]) return "writer";
             if (wanted == team.Tools[1]) return "reviewer";
@@ -699,19 +948,42 @@ public sealed class Teams {
             string changes = "";
             try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
             prompt = ReviewerAsk(team, "（重新接续审查）" + (words == "继续完成上面的任务。" ? "" : "\n" + words), changes);
-        } else if (team.Mode == "lead" && role == "leader") prompt = LeaderFirst(team, Rooms(team)) + (words == "继续完成上面的任务。" ? "" : "\n\n" + words);
-        else prompt = "【协作任务】继续完成这项工作：" + team.Goal + "\n\n" + words;
+        } else if (team.Mode == "lead" && role == "leader") {
+            // a new conversation of the leader's: told where the task stands, its acceptance too where that is under way
+            string verify = "";
+            if (team.Phase == "verify") {
+                string changes = "";
+                try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
+                verify = "\n\n" + VerifyAsk(team, changes, Rooms(team), team.Last);
+            }
+            prompt = LeaderFirst(team, Rooms(team)) + verify + (words == "继续完成上面的任务。" ? "" : "\n\n" + words);
+        }
+        else {
+            string pending;
+            lock (gate) team.Pending.TryGetValue(role, out pending);
+            prompt = (pending ?? MemberTask(team, team.Goal)) + "\n\n" + words;
+        }
         Open(team, role, tool, prompt, read, wt);
     }
 
     // ---- the members' turns
     void Open(Team team, string role, string tool, string words, bool read, string folderOverride) {
-        lock (gate) { opening++; team.Pending[role] = Cut(words, 6000); }
+        string model, effort;
+        lock (gate) {
+            opening++;
+            team.Pending[role] = Cut(words, 6000);
+            var member = RosterOf(team, role);
+            model = member != null ? member.Model : team.Models.ContainsKey(tool) ? team.Models[tool] : "";
+            effort = member != null ? member.Effort : team.Efforts.ContainsKey(tool) ? team.Efforts[tool] : "";
+        }
         try {
-            string terminal = hands.BeginIn != null
-                ? hands.BeginIn(tool, team.Dir, words, read, folderOverride)
-                : hands.Begin(tool, team.Dir, words, read);
-            lock (gate) { team.Members[role] = terminal; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); opening--; Save(); Monitor.PulseAll(gate); }
+            string terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "" });
+            lock (gate) {
+                team.Members[role] = terminal;
+                team.Sessions.Remove(role);
+                if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
+                opening--; Save(); Monitor.PulseAll(gate);
+            }
             Log(team, role, "开始：" + Cut(words, 240));
         } catch (Exception problem) {
             lock (gate) {
@@ -726,7 +998,16 @@ public sealed class Teams {
     }
     void Ask(Team team, string role, string tool, string words, bool read, string folderOverride = null) {
         string terminal;
-        lock (gate) { team.Members.TryGetValue(role, out terminal); team.Pending[role] = Cut(words, 6000); if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
+        lock (gate) {
+            team.Members.TryGetValue(role, out terminal);
+            if (role == "leader" && team.LeaderInput.Length > 0) {
+                words += "\n\n【用户补充要求】\n" + team.LeaderInput;
+                team.LeaderInput = "";
+            }
+            team.Pending[role] = Cut(words, 6000);
+            if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
+            Save();
+        }
         if (terminal != null) {
             try { hands.Say(terminal, words); Log(team, role, "收到：" + Cut(words, 240)); return; }
             catch (Exception) { }       // its conversation was closed: begun anew
@@ -759,12 +1040,15 @@ public sealed class Teams {
             role = team.Members.First(p => p.Value == terminal).Key;
             if (!team.Awaited.Contains(role)) return;      // (a turn of its own owner's, from the phone)
             team.Awaited.Remove(role);
+            if (team.Mode == "lead" && team.Phase != "discuss" && role != "leader" && how != "stopped") team.Finishing.Add(role);
             Save();
         }
         Log(team, role, Cut(said, 4000));
         if (team.Mode == "compare") { Compared(team, role, how, said); return; }
         if (how == "done") {
-            lock (gate) { if (team.Failed.Remove(ToolOf(team, role))) Save(); }
+            lock (gate) {
+                if (team.Failed.Remove(team.Roster.Length > 0 ? role : ToolOf(team, role))) Save();
+            }
         } else if (how == "stopped") {
             lock (gate) { team.State = "paused"; team.Note = Label(ToolOf(team, role)) + " 这一轮被停止：点“继续”接着做，或点“换 AI 接手”"; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
             Tell();
@@ -790,7 +1074,8 @@ public sealed class Teams {
         string reason = FailureReason(said);
         string pending = "";
         lock (gate) {
-            team.Failed[failedTool] = reason;
+            string failedKey = team.Roster.Length > 0 && reason != "额度已用尽" ? role : failedTool;
+            team.Failed[failedKey] = reason;
             team.Pending.TryGetValue(role, out pending);
             Save();
         }
@@ -813,12 +1098,13 @@ public sealed class Teams {
             bool pauseNoMember = false;
             lock (gate) {
                 team.Answers[role] = report;
-                if (team.Awaited.Any(r => r != "leader")) { Save(); }
+                team.Finishing.Remove(role);
+                if (MembersWorking(team)) { Save(); }
                 else {
                     answers = new Dictionary<string, string>(team.Answers);
                     team.Answers.Clear();
-                    bool hasLiveMember = team.Tools.Skip(1).Any(t => !team.Failed.ContainsKey(t) && !IsExhausted(SafeLimits(t)));
-                    if (!hasLiveMember) {
+                    bool hasLiveMember = LeadMembers(team).Any(r => !FailedRole(team, r) && !IsExhausted(SafeLimits(ToolOf(team, r))));
+                    if (!hasLiveMember && team.Roster.Length == 0) {
                         addedBackup = FallbackTool(team, failedTool, team.Tools[0]);
                         if (addedBackup != null) {
                             if (!team.Tools.Contains(addedBackup)) team.Tools = team.Tools.Concat(new[] { addedBackup }).ToArray();
@@ -837,16 +1123,9 @@ public sealed class Teams {
                 ? Label(failedTool) + " 失败（" + reason + "），已自动加入 " + Label(addedBackup) + " 并回报领队改派"
                 : Label(failedTool) + " 失败（" + reason + "），已回报领队改派给其他可用成员");
             if (answers == null || pauseNoMember) { Tell(); return; }
+            // a round where every member failed is not counted: the leader gives the work out again
             bool anyOk = answers.Values.Any(v => !v.StartsWith("【执行失败】", StringComparison.Ordinal));
-            if (anyOk) {
-                if (team.Round >= team.Rounds) { End(team, "done", "已到 " + team.Rounds + " 轮，成员最后的结果没有交给领队检查"); return; }
-                lock (gate) { team.Round++; Save(); }
-            }
-            string changes = "";
-            try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
-            string body = Results(team, answers, changes, Rooms(team));
-            if (addedBackup != null) body += "\n\n【自动补充成员】已将 " + Label(addedBackup) + "（" + addedBackup + "）加入协作队伍，可直接用 ASSIGN " + addedBackup + ": 任务内容 改派。";
-            Ask(team, "leader", team.Tools[0], body, false);
+            Collected(team, answers, anyOk, addedBackup != null ? "\n\n【自动补充成员】已将 " + Label(addedBackup) + "（" + addedBackup + "）加入协作队伍，可直接用 ASSIGN " + addedBackup + ": 任务内容 改派。" : "");
             return;
         }
 
@@ -901,8 +1180,32 @@ public sealed class Teams {
     }
 
     static string ToolOf(Team team, string role) {
+        var member = RosterOf(team, role);
+        if (member != null) return member.Tool;
         if (role.StartsWith("discuss:", StringComparison.Ordinal)) return role.Substring(8);
         return role == "writer" || role == "leader" ? team.Tools[0] : role == "reviewer" ? team.Tools[1] : role;
+    }
+    static string[] LeadMembers(Team team) {
+        return team.Roster.Length == 0 ? team.Tools.Skip(1).ToArray() : team.Roster.Skip(1).Select(member => member.Role).ToArray();
+    }
+    static RosterMember RosterOf(Team team, string role) {
+        string original = role.StartsWith("discuss:", StringComparison.Ordinal) ? role.Substring(8) : role;
+        return team.Roster.FirstOrDefault(member => member.Role == original);
+    }
+    static void SetRosterMember(Team team, string role, string tool, string model, string effort = "") {
+        team.Roster = team.Roster.Where(member => member.Role != role).Concat(new[] { new RosterMember(role, tool, model, effort) })
+            .OrderBy(member => member.Role == "leader" ? -1 : Array.IndexOf(MemberRoles, member.Role)).ToArray();
+        team.Tools = team.Roster.Select(member => member.Tool).ToArray();
+    }
+    static bool FailedRole(Team team, string role) {
+        return team.Failed.ContainsKey(role) || team.Failed.ContainsKey(ToolOf(team, role));
+    }
+    static bool MembersWorking(Team team) {
+        return team.Finishing.Count > 0 || team.Awaited.Any(role => role != "leader");
+    }
+    static string RoleLabel(Team team, string role) {
+        var member = RosterOf(team, role);
+        return member == null ? Label(ToolOf(team, role)) : member.Role + " · " + Label(member.Tool);
     }
 
     void Discussed(Team team, string role, string said) {
@@ -915,7 +1218,7 @@ public sealed class Teams {
             team.Phase = "";
             Save();
         }
-        string discussion = String.Join("\n\n", collected.Select(p => "### " + Label(ToolOf(team, p.Key)) + "\n" + Cut(p.Value, 5000)));
+        string discussion = String.Join("\n\n", collected.Select(p => "### " + RoleLabel(team, p.Key) + "\n" + Cut(p.Value, 5000)));
         if (team.Mode == "review") {
             string writerTool = team.Tools[0];
             bool writerFailed; lock (gate) writerFailed = team.Failed.ContainsKey(writerTool);
@@ -977,40 +1280,119 @@ public sealed class Teams {
         }
         bool? verdict = Verdict(said);
         if (verdict == true) { End(team, "done", "审查通过（第 " + team.Round + " 轮）"); return; }
-        if (team.Round >= team.Rounds) { End(team, "done", "已到 " + team.Rounds + " 轮，最后一轮的审查意见没有处理"); return; }
+        // (rounds running out is no pass: it stops, and the owner can go on with it)
+        if (team.Round >= team.Rounds) { End(team, "stopped", "已到 " + team.Rounds + " 轮，最后一轮的审查意见没有处理，审查未通过"); return; }
         lock (gate) { team.Round++; Save(); }
         Ask(team, "writer", team.Tools[0], WriterAgain(team, said), false);
     }
     void Led(Team team, string role, string said) {
         if (role == "leader") {
             string summary = Finished(said);
-            var tasks = Assigned(said, team.Tools.Skip(1));
-            if (tasks.Count == 0 && summary != null) { End(team, "done", "领队确认完成：" + Cut(summary, 600)); return; }
-            if (tasks.Count == 0) {
-                bool reminded; lock (gate) { reminded = team.Reminded; team.Reminded = true; Save(); }
-                if (reminded) { lock (gate) { team.State = "paused"; team.Note = "领队没有分派任务，也没有结束：点“继续”再问它一次"; team.Awaited.Clear(); team.Awaited.Add("leader"); Save(); } Tell(); return; }
-                Ask(team, "leader", team.Tools[0], Remind, false);
+            bool verifying, last, hasInput;
+            lock (gate) { verifying = team.Phase == "verify"; last = team.Last; hasInput = team.LeaderInput.Length > 0; }
+            if (hasInput) {
+                Ask(team, "leader", team.Tools[0], verifying ? VerifyAsk(team, Changes(team), Rooms(team), last)
+                    : "【协作任务】收到用户补充要求，请据此继续当前任务，必要时重新分派。", false);
                 return;
             }
-            lock (gate) {
-                team.Reminded = false; team.Answers.Clear(); team.Awaited.Clear();
-                foreach (string member in tasks.Keys) if (!team.Awaited.Contains(member)) team.Awaited.Add(member);
-                Save();
+            var tasks = team.Roster.Length == 0 ? Assigned(said, LeadMembers(team)) : AssignRoster(team, said, !last);
+            if (tasks.Count > 0) {
+                if (verifying && last) { End(team, "stopped", "已到 " + team.Rounds + " 轮，领队验收时仍要求修改，任务没有通过验收"); return; }
+                lock (gate) {
+                    if (verifying) team.Round++;
+                    team.Phase = "";
+                    team.Reminded = false; team.Answers.Clear(); team.Awaited.Clear();
+                    foreach (string member in tasks.Keys) if (!team.Awaited.Contains(member)) team.Awaited.Add(member);
+                    Save();
+                }
+                foreach (var task in tasks) Ask(team, task.Key, ToolOf(team, task.Key), MemberTask(team, task.Value), false);
+                return;
             }
-            foreach (var task in tasks) Ask(team, task.Key, task.Key, MemberTask(team, task.Value), false);
+            // a DONE outside the acceptance turn opens it; within it, only with what was checked
+            if (summary != null && !verifying) { Verify(team); return; }
+            string evidence = summary != null ? Verified(said) : null;
+            if (evidence != null) {
+                Log(team, "验收", evidence);
+                End(team, "done", "领队验收通过：" + Cut(summary, 600));
+                return;
+            }
+            bool reminded; lock (gate) { reminded = team.Reminded; team.Reminded = true; Save(); }
+            if (reminded) {
+                if (verifying && last) { End(team, "stopped", "已到 " + team.Rounds + " 轮，领队没有给出验收证据，任务没有通过验收"); return; }
+                lock (gate) { team.State = "paused"; team.Note = verifying ? "领队没有给出验收证据：点“继续”再问它一次" : "领队没有分派任务，也没有结束：点“继续”再问它一次"; team.Awaited.Clear(); team.Awaited.Add("leader"); Save(); }
+                Tell();
+                return;
+            }
+            Ask(team, "leader", team.Tools[0], verifying ? VerifyRemind : Remind, false);
             return;
         }
         Dictionary<string, string> answers = null;
         lock (gate) {
             team.Answers[role] = said;
-            if (team.Awaited.Any(r => r != "leader")) { Save(); return; }      // the others are still at it
+            team.Finishing.Remove(role);
+            if (MembersWorking(team)) { Save(); return; }
             answers = new Dictionary<string, string>(team.Answers); team.Answers.Clear(); Save();
         }
-        if (team.Round >= team.Rounds) { End(team, "done", "已到 " + team.Rounds + " 轮，成员最后的结果没有交给领队检查"); return; }
-        lock (gate) { team.Round++; Save(); }
-        string changes = "";
-        try { changes = hands.Changes(team.Dir) ?? ""; } catch (Exception) { }
-        Ask(team, "leader", team.Tools[0], Results(team, answers, changes, Rooms(team)), false);
+        Collected(team, answers, true, "");
+    }
+    Dictionary<string, string> AssignRoster(Team team, string said, bool canAssign) {
+        var tasks = new Dictionary<string, string>();
+        var retired = new List<string>();
+        var available = hands.Available == null ? team.Tools : hands.Available() ?? new string[0];
+        lock (gate) {
+            foreach (Match match in Assign.Matches(said ?? "")) {
+                string role = match.Groups[1].Value.ToLowerInvariant();
+                if (!MemberRoles.Contains(role)) continue;
+                var member = RosterOf(team, role);
+                string requested = match.Groups[2].Value.ToLowerInvariant();
+                string tool = requested.Length > 0 ? requested : member == null ? "" : member.Tool;
+                string task = match.Groups[3].Value.Trim();
+                if (task.Length == 0 || (requested.Length > 0 && !team.AutoRoster) || !available.Contains(tool) ||
+                    team.Failed.ContainsKey(tool) || IsExhausted(SafeLimits(tool)) ||
+                    (team.Failed.ContainsKey(role) && member != null && member.Tool == tool))
+                    continue;
+                if (canAssign && (member == null || member.Tool != tool)) {
+                    if (tasks.ContainsKey(role)) continue;
+                    string old;
+                    if (team.Members.TryGetValue(role, out old)) retired.Add(old);
+                    team.Members.Remove(role);
+                    team.Sessions.Remove(role);
+                    team.Failed.Remove(role);
+                    SetRosterMember(team, role, tool, "");
+                }
+                tasks[role] = tasks.ContainsKey(role) ? tasks[role] + "\n" + task : task;
+            }
+        }
+        foreach (string terminal in retired) try { hands.Stop(terminal); } catch (Exception) { }
+        return tasks;
+    }
+    /// The last member to finish hands every result back for verification within the current round.
+    /// Legacy teams can retry a batch in the same round when every member failed to start the work.
+    void Collected(Team team, Dictionary<string, string> answers, bool counted, string added) {
+        bool verifying, last;
+        lock (gate) {
+            if (counted || team.Roster.Length > 0) {
+                team.Phase = "verify";
+                team.Last = team.Round >= team.Rounds;
+                team.Reminded = false;
+            }
+            verifying = team.Phase == "verify"; last = team.Last;
+            Save();
+        }
+        string changes = Changes(team);
+        var rooms = Rooms(team);
+        string body = verifying ? Answers(team, answers) + "\n\n" + VerifyAsk(team, changes, rooms, last) : Results(team, answers, changes, rooms);
+        Ask(team, "leader", team.Tools[0], body + added, false);
+    }
+    /// The leader said the work is done: a turn of its own to accept it, with what changed in front of it.
+    void Verify(Team team) {
+        lock (gate) { team.Phase = "verify"; team.Last = team.Round >= team.Rounds; team.Reminded = false; Save(); }
+        Log(team, "验收", "领队表示已完成，开始单独验收");
+        Ask(team, "leader", team.Tools[0], VerifyAsk(team, Changes(team), Rooms(team), team.Last), false);
+    }
+    string Changes(Team team) {
+        try { return hands.Changes(team.Dir) ?? ""; }
+        catch (Exception) { return ""; }
     }
     static long Now() { return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds; }
 }

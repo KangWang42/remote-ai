@@ -215,7 +215,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         # agy shows only its primary Gemini/Neon pool by default and expands secondary pools on click
         soon = int(time.time()) + 2 * 3600
         played.info["quotas"] = [{"tool": "claude", "at": int(time.time() * 1000), "why": "", "windows": [{"name": "five_hour", "used": 38, "resets": soon}, {"name": "seven_day", "used": 93.4, "resets": soon + 5 * 86400}]},
-                                 {"tool": "codex", "at": int(time.time() * 1000), "why": "Codex 用 ChatGPT 账号登录后才能读取额度", "windows": []},
+                                 {"tool": "codex", "at": int(time.time() * 1000), "billing": {"type": "api", "balance": "0", "unit": "USD"}, "windows": []},
                                  {"tool": "agy", "at": int(time.time() * 1000), "why": "", "windows": [
                                      {"name": "five_hour", "used": 2, "resets": soon},
                                      {"name": "seven_day", "used": 1, "resets": soon + 5 * 86400},
@@ -225,7 +225,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         browser.open(played.origin + "/?tab=me", "!!document.querySelector('#quotas li')", "the limits on 我的", **phone(390))
         lines = value("Array.from(document.querySelectorAll('#quotas > ul > li')).map(li => li.innerText.replace(/\\s+/g, ' ').trim())")
         assert lines[0].startswith("Claude Code · 5 小时") and "38%" in lines[0] and "2 小时后重置" in lines[0], lines
-        assert "本周" in lines[1] and "93%" in lines[1] and lines[2] == "Codex Codex 用 ChatGPT 账号登录后才能读取额度", lines
+        assert "本周" in lines[1] and "93%" in lines[1] and lines[2] == "Codex · API 余额 0 USD", lines
         assert lines[3].startswith("Antigravity CLI · 5 小时") and "2%" in lines[3] and lines[4].startswith("Antigravity CLI · 本周"), lines
         assert "其他 2 个池子" in lines[5] and "展开" in lines[5], lines
         assert value("document.querySelectorAll('#quotas .quota-extra li').length") == 0, "secondary pools start collapsed"

@@ -64,7 +64,9 @@ final class AppPages {
         head.addView(kit.semibold("额度", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
         quotaCard.addView(head);
         for (QuotaLines.Reading one : shown) {
-            if (one.windows.isEmpty()) { quotaLine(quotaCard, QuotaLines.tool(one.tool), one.why, kit.MUTED, -1); continue; }
+            if ("api".equals(one.billingType)) quotaLine(quotaCard, "Codex · API 余额", one.balance.isEmpty() ? "暂未读到余额" : one.balance, kit.MUTED, -1);
+            if ("credits".equals(one.billingType)) quotaLine(quotaCard, "Codex · 额外额度", one.balance, kit.MUTED, -1);
+            if (one.windows.isEmpty() && !one.why.isEmpty()) quotaLine(quotaCard, QuotaLines.tool(one.tool), one.why, kit.MUTED, -1);
             for (QuotaLines.Window w : QuotaLines.primary(one)) {
                 quotaLine(quotaCard, QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used);
             }
@@ -280,7 +282,7 @@ final class AppPages {
         card.addView(pipe);
 
         card.addView(kit.semibold("协作任务", 19, kit.heroFg()), kit.below(16));
-        card.addView(kit.text("写审循环或领队分工，让多个 AI 配合完成一件事", 13.5f, kit.heroMuted()), kit.below(4));
+        card.addView(kit.text("写审循环或分工协作，让多个 AI 配合完成一件事", 13.5f, kit.heroMuted()), kit.below(4));
 
         TextView cta = kit.semibold("＋ 新建协作任务", 14, kit.onSolidInk());
         cta.setGravity(Gravity.CENTER);
@@ -479,14 +481,19 @@ final class AppPages {
         for (int i = 0; i < items.length(); i++) {
             JSONObject item = items.optJSONObject(i); if (item == null) continue;
             String rawMode = item.optString("mode");
-            String mode = "lead".equals(rawMode) ? "领队" : "compare".equals(rawMode) ? "比稿" : "写审";
+            String mode = "lead".equals(rawMode) ? "分工协作" : "compare".equals(rawMode) ? "比稿" : "写审";
             String rawState = item.optString("state");
-            String state = "running".equals(rawState) ? "进行中" : "choose".equals(rawState) ? "待选方案" : "paused".equals(rawState) ? "已暂停" : "done".equals(rawState) ? "已完成" : "stopped".equals(rawState) ? "已停止" : "没有开始";
+            String phase = item.optString("phase");
+            boolean confirm = item.optBoolean("confirm");
+            String state = confirm ? "等你确认"
+                : "running".equals(rawState) ? ("verify".equals(phase) ? "领队验收" : "discuss".equals(phase) ? "讨论方案" : "进行中")
+                : "choose".equals(rawState) ? "待选方案" : "paused".equals(rawState) ? "已暂停"
+                : "done".equals(rawState) ? "已完成" : "stopped".equals(rawState) ? "已停止" : "没有开始";
             String desc = state + " · " + mode + ("compare".equals(rawMode) ? "" : " · 第 " + item.optInt("round", 1) + " / " + item.optInt("rounds", 3) + " 轮");
             String note = item.optString("note");
             if (!note.isEmpty()) desc += " · " + note;
             kit.setting(body, R.drawable.ic_tab_together, TINT_AGY, item.optString("goal", "协作任务"), desc, "",
-                "running".equals(rawState) ? kit.goodInk() : ("paused".equals(rawState) || "choose".equals(rawState)) ? TINT_WARN : kit.MUTED,
+                confirm ? kit.BAD : "running".equals(rawState) ? ("verify".equals(phase) ? TINT_WARN : kit.goodInk()) : ("paused".equals(rawState) || "choose".equals(rawState)) ? TINT_WARN : kit.MUTED,
                 () -> activity.together(url, "team", item.optString("id")));
         }
     }

@@ -25,9 +25,14 @@
     else if (message) ui().inputError(message, state === 'retrying' ? '' : op.data || '', op);
   }
   const home = () => { location.replace('../'); };      // the list is one step back, not one more page
-  // Opened from the app's workbench, the back arrow leads there again rather than to this computer's list.
-  const fromBench = new URLSearchParams(location.search).get('from') === 'bench';
-  const leave = () => { if (fromBench && native && native.home) native.home(); else home(); };
+  // Opened from a collaboration task's member chip, back leads to that team; from the app's workbench, back there.
+  const searchParams = new URLSearchParams(location.search);
+  const fromBench = searchParams.get('from') === 'bench';
+  const fromTeam = /^[a-f0-9]{16,32}$/.test(searchParams.get('team') || '') ? searchParams.get('team') : '';
+  const leave = () => {
+    if (fromTeam) { location.replace('../?tab=together&do=team&item=' + encodeURIComponent(fromTeam)); return; }
+    if (fromBench && native && native.home) native.home(); else home();
+  };
   // Quick tunnels buffer SSE; a held JSON response is delivered without that delay.
   let after = 0, terminal = null, loaded = false, streamed = !location.hostname.endsWith('.trycloudflare.com'), failures = 0, reader = null, run = 0, fetching = false, gone = false;
   let socketMode = typeof WebSocket === 'function', everSocket = false, socket = null, socketTimer = null;

@@ -131,19 +131,40 @@
   }
 
   // ---- sheets from the bottom
-  // `window`: it fills the screen and is left by its own way back (a conversation), instead of rising from the bottom.
+  // `fullWindow`: it fills the screen and is left by its own way back (a conversation), instead of rising from the bottom.
   // A sheet is told that it was closed a moment after it is closed. One that is opened in that moment waits for it:
   // else it would take the word meant for the one before, and answer "nothing chosen" while it is still on the screen.
-  let sheetGone = Promise.resolve();
-  function openSheet(build, window) {
+  let sheetGone = Promise.resolve(), backFromReader = null;
+  window.addEventListener('popstate', event => {
+    if (!backFromReader) return;
+    event.stopImmediatePropagation();
+    backFromReader();
+  });
+  function openSheet(build, fullWindow) {
     return sheetGone.then(() => new Promise(done => {
       const form = $('sheet-form'), sheet = $('sheet');
+      const nestedReader = fullWindow && window.RemoteSheet.current;
       form.textContent = '';
-      sheet.classList.toggle('window', !!window);
+      sheet.classList.toggle('window', !!fullWindow);
       let answer = null;
       build(form, value => { answer = value; sheet.close(); });
-      if (!window) form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
-      sheetGone = new Promise(gone => { sheet.onclose = () => { gone(); done(answer); }; });
+      if (!fullWindow) form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
+      sheetGone = new Promise(gone => {
+        const finish = () => {
+          backFromReader = null;
+          gone();
+          done(answer);
+        };
+        if (nestedReader) {
+          history.pushState({ ...history.state, conversationReader: true }, '');
+          // The full-screen reader is on top of a collaboration sheet whose Back must wait.
+          backFromReader = () => { if (sheet.open) sheet.close(); else finish(); };
+        }
+        sheet.onclose = () => {
+          if (nestedReader && history.state?.conversationReader) history.back();
+          else finish();
+        };
+      });
       sheet.onclick = event => { if (event.target === sheet) sheet.close(); };       // a tap beside the sheet
       sheet.showModal();
     }));
@@ -301,7 +322,11 @@
   // the computer is asked at once, and the terminal that follows leads back to the workbench.
   let take = new URLSearchParams(location.search).get('take') || '', anew = new URLSearchParams(location.search).get('new') === '1', fromBench = !!take || anew;
   // A terminal's page; for one that runs a conversation through its tool's structured mode, the conversation's (chat/).
-  function open(terminal, form) { location.href = (form === 'chat' ? 'chat/' : 'terminal/') + '?id=' + encodeURIComponent(terminal) + (fromBench ? '&from=bench' : ''); }
+  function open(terminal, form, extra) {
+    let url = (form === 'chat' ? 'chat/' : 'terminal/') + '?id=' + encodeURIComponent(terminal) + (fromBench ? '&from=bench' : '');
+    if (extra && extra.team) url += '&team=' + encodeURIComponent(extra.team);
+    location.href = url;
+  }
   // What the app's own lists opened this page for (a new conversation, one conversation's window) leads back to
   // them when it is left without going on to a terminal's page.
   const leave = left => { if (!left && fromBench && native && native.home) native.home(); };
@@ -888,19 +913,88 @@
   // and one that a program has open by what the computer says uses it (a command line inside an editor's terminal
   // is a terminal's); a computer of an earlier version says only where the program runs
   const sourceOf = s => !s.live || s.kind ? sourceOfKind(s.kind) : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'term';
+  const TEAM_MODES = { review: '写审', lead: '分工协作', compare: '比稿' };
+  const teamUpdatedMs = value => { const n = Number(value) || 0; return n > 0 && n < 10000000000 ? n * 1000 : n; };
+  const summarizeTeamTools = list => {
+    const counts = new Map();
+    list.forEach(t => counts.set(t, (counts.get(t) || 0) + 1));
+    return [...counts.entries()].map(([t, n]) => (TOOLS[t] || t) + (n > 1 ? ' ×' + n : '')).join('、');
+  };
+  const teamWho = card => {
+    const roster = Array.isArray(card.roster) ? card.roster.filter(r => r && r.tool) : [];
+    if (card.mode === 'lead' && roster.length) {
+      const leader = roster.find(r => r.role === 'leader') || roster[0];
+      const rest = roster.filter(r => r !== leader).map(r => r.tool);
+      const leadName = TOOLS[leader.tool] || leader.tool || '';
+      return rest.length ? leadName + ' 带 ' + summarizeTeamTools(rest) : leadName + (card.auto_roster ? ' 自动组队' : '');
+    }
+    const list = Array.isArray(card.tools) ? card.tools : [];
+    if (card.mode === 'review') return (TOOLS[list[0]] || list[0] || '') + ' 写 · ' + (TOOLS[list[1]] || list[1] || '') + ' 审';
+    if (card.mode === 'compare') return list.map(t => TOOLS[t] || t).join(' vs ');
+    return (TOOLS[list[0]] || list[0] || '') + (list.length > 1 ? ' 带 ' + summarizeTeamTools(list.slice(1)) : card.auto_roster ? ' 自动组队' : '');
+  };
+  const teamStatusOf = x => {
+    const c = x.team;
+    if (x.teamConfirm) return ['confirm', '等你确认'];
+    if (c.state === 'choose') return ['confirm', '待选方案'];
+    if (c.state === 'running') return ['busy', c.phase === 'verify' ? '领队验收' : c.phase === 'discuss' ? '讨论方案' : '进行中'];
+    if (c.state === 'paused') return ['waiting', '已暂停'];
+    if (c.state === 'done') return ['ended', '已完成'];
+    if (c.state === 'stopped') return ['ended', c.mode === 'lead' && (c.phase === 'verify' || c.last) ? '未完成' : '已停止'];
+    if (c.state === 'failed') return ['failed', '没有开始'];
+    return ['ended', c.state || '已结束'];
+  };
   function things() {
     const sessions = data.sessions || [], saved = {};
     sessions.forEach(s => { saved[s.tool + ':' + s.id] = s; });
-    const out = (data.terminals || []).map(t => {
-      const s = t.session ? saved[t.tool + ':' + t.session] || null : null, phase = phaseOf(t), live = running(t), tool = isAgyShell(t) ? 'agy' : t.tool;
+    const rawCards = Array.isArray(data.device && data.device.team_cards) ? data.device.team_cards : [];
+    const teamCards = [], teamIds = new Set();
+    rawCards.forEach(c => { if (c && c.id && !teamIds.has(c.id)) { teamIds.add(c.id); teamCards.push(c); } });
+    const sessionTeam = new Map();
+    sessions.forEach(s => { if (s.team && teamIds.has(s.team)) sessionTeam.set(s.tool + ':' + s.id, s.team); });
+    const teamChildConfirm = new Map();
+    (data.terminals || []).forEach(t => {
+      const tid = (t.team && teamIds.has(t.team)) ? t.team : (t.session ? sessionTeam.get(t.tool + ':' + t.session) : '');
+      if (tid && running(t) && phaseOf(t) === 'confirm') {
+        teamChildConfirm.set(tid, (t.asks && t.asks.join('\n')) || t.ask || '成员正在等你确认');
+      }
+    });
+    sessions.forEach(s => {
+      if (s.team && teamIds.has(s.team) && s.live && reachPhase(s) === 'confirm') {
+        teamChildConfirm.set(s.team, (s.ask && s.ask.text) || '成员正在等你确认');
+      }
+    });
+    const out = [];
+    (data.terminals || []).forEach(t => {
+      const s = t.session ? saved[t.tool + ':' + t.session] || null : null;
+      const belongs = (t.team && teamIds.has(t.team)) || (s && s.team && teamIds.has(s.team));
+      if (belongs) return;
+      const phase = phaseOf(t), live = running(t), tool = isAgyShell(t) ? 'agy' : t.tool;
       // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
-      return { t, s, tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
-        source: t.form === 'chat' ? 'app' : 'term', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal };
+      out.push({ t, s, tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,
+        source: t.form === 'chat' ? 'app' : 'term', pinned: !!(s && s.pinned), hidden: false, state: live ? 'active' : 'ended', twice: !live && !!s && !s.terminal });
     });
     sessions.filter(s => !s.terminal).forEach(s => {
+      if (s.team && teamIds.has(s.team)) return;
       const phase = !s.live || s.now === false ? '' : reachPhase(s) || (sessionHost(s) === 'cli' ? (s.status === 'busy' ? 'busy' : s.status === 'confirm' ? 'confirm' : s.status === 'waiting' ? 'waiting' : 'idle') : '');
       out.push({ s, tool: s.tool, title: s.title, place: s.dir || base(s.folder), project: s.dir, apart: !s.dir, live: !!s.live, phase, rank: phase ? PHASE[phase][1] : 6, at: s.updated,
         source: sourceOf(s), pinned: !!s.pinned, hidden: !!s.hidden && !s.live, state: sessionActivity(s) });
+    });
+    teamCards.forEach(c => {
+      const rosterTools = Array.isArray(c.roster) ? c.roster.filter(r => r && r.tool).map(r => r.tool) : [];
+      const tools = [...new Set(rosterTools.length ? rosterTools : (Array.isArray(c.tools) ? c.tools : []))];
+      const confirmRaw = c.confirm;
+      const teamConfirm = !!confirmRaw || teamChildConfirm.has(c.id);
+      const confirmText = typeof confirmRaw === 'string' ? confirmRaw : (confirmRaw && typeof confirmRaw === 'object' ? (confirmRaw.text || confirmRaw.ask || '') : '') || teamChildConfirm.get(c.id) || '';
+      const isChoose = c.state === 'choose', isRunning = c.state === 'running', isPaused = c.state === 'paused';
+      const live = teamConfirm || isChoose || isRunning || isPaused;
+      const phase = teamConfirm || isChoose ? 'confirm' : isRunning ? 'busy' : isPaused ? 'waiting' : (c.state === 'failed' ? 'failed' : 'ended');
+      out.push({
+        team: c, teamTools: tools, teamConfirm, teamConfirmText: confirmText,
+        tool: tools[0] || '', title: c.goal || '协作任务', place: c.dir || '', project: c.dir || '', apart: !c.dir,
+        live, phase, rank: PHASE[phase] ? PHASE[phase][1] : 6, at: teamUpdatedMs(c.updated),
+        source: 'app', pinned: false, hidden: false, state: live ? 'active' : 'history'
+      });
     });
     return out;
   }
@@ -914,6 +1008,7 @@
   // that a program has open, that program (a desktop app by its own name, which names the tool too; a command
   // line; an editor, and whether it is the editor's terminal); for one that is only saved, by what it was started.
   const whereOf = x => {
+    if (x.team) return '协作 · ' + (TEAM_MODES[x.team.mode] || x.team.mode || '协作') + ' · ' + teamWho(x.team);
     const tool = TOOLS[x.tool];
     if (x.t) return tool + (x.live ? ' · ' + (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '');
     const kind = x.s.kind || '';
@@ -922,18 +1017,27 @@
     return !origin ? tool : /桌面版|后台服务/.test(origin) ? origin : tool + ' · ' + origin + (kind === '终端' && origin !== '命令行' ? ' 的终端' : '');
   };
   // what a search looks through
-  const wordsOf = x => [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
+  const wordsOf = x => {
+    if (x.team) {
+      const c = x.team, [, label] = teamStatusOf(x), models = c.models && typeof c.models === 'object' ? Object.values(c.models).join('\n') : '';
+      const rosterModels = Array.isArray(c.roster) ? c.roster.map(r => [r && r.model, r && r.effort].filter(Boolean).join('\n')).filter(Boolean).join('\n') : '';
+      return [x.title, x.place, '协作任务', TEAM_MODES[c.mode] || c.mode || '', c.auto_roster ? '自动组队' : '', label, c.note || '', x.teamConfirmText || '', (x.teamTools || []).map(t => TOOLS[t] || t).join('\n'), models, rosterModels, SOURCE.app].join('\n').toLowerCase();
+    }
+    return [x.title, x.place, TOOLS[x.tool], SOURCE[x.source] || '', x.t && x.live ? (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '', x.s && x.s.origin || '', x.s && x.s.kind || '', x.apart ? '未加入项目' : '', x.pinned ? '置顶' : '', x.hidden ? '已隐藏' : ''].join('\n').toLowerCase();
+  };
   // what a card shows: it is built again when any of this changes
-  const signed = x => x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned, x.place, x.apart]
+  const signed = x => x.team ? ['team', x.team.id, x.team.state, x.team.phase, !!x.team.last, x.team.goal, x.team.dir, x.team.note, x.team.updated, x.teamConfirm, x.teamConfirmText, x.teamTools, x.team.models || null, x.team.roster || null, !!x.team.auto_roster, x.team.awaited || null]
+    : x.t ? [x.t.id, x.phase, x.title, x.t.phase_at, x.pinned, x.place, x.apart]
     : [x.s.id, x.phase, x.s.now, x.s.status, x.title, x.s.host, x.s.origin, (x.s.reach || ['-']).join(), canEnd(x.s), endingSessions.has(x.s.id), x.s.ask || null, x.s.last || '', x.pinned, x.hidden, x.place, !!x.apart, x.state, x.source];
 
   // ---- the filters: by tool, and by where a thing runs. They last as long as the page is kept open.
   let filter = { tool: '', source: '' }, resultsShown = 30, recentShown = 2, hiddenShown = false;
   try { filter = Object.assign(filter, JSON.parse(sessionStorage.getItem('rcli-filter') || '{}')); } catch (error) { /* no storage */ }
   if (!SOURCE[filter.source]) filter.source = '';
-  const pass = x => (!filter.tool || x.tool === filter.tool) && (!filter.source || x.source === filter.source);
+  const hasTool = (x, tool) => x.team ? (x.teamTools || []).includes(tool) : x.tool === tool;
+  const pass = x => (!filter.tool || hasTool(x, filter.tool)) && (!filter.source || x.source === filter.source);
   // a project is one of a tool or of a kind by what its folder is used for, or by what is in it now
-  const passProject = (folder, inside) => (!filter.tool || (folder.tools || []).includes(filter.tool) || inside.some(x => x.tool === filter.tool))
+  const passProject = (folder, inside) => (!filter.tool || (folder.tools || []).includes(filter.tool) || inside.some(x => hasTool(x, filter.tool)))
     && (!filter.source || (folder.kinds || []).some(kind => sourceOfKind(kind) === filter.source) || inside.some(x => x.source === filter.source));
   function choose(change) {
     filter = Object.assign({}, filter, change);
@@ -943,7 +1047,7 @@
   function drawFilters(all) {
     // a row is offered only where it tells something apart, or to take back what was chosen
     const folders = data.device.projects || [];
-    const tools = Object.keys(TOOLS).filter(tool => tool === filter.tool || all.some(x => x.tool === tool) || folders.some(f => (f.tools || []).includes(tool)));
+    const tools = Object.keys(TOOLS).filter(tool => tool === filter.tool || all.some(x => hasTool(x, tool)) || folders.some(f => (f.tools || []).includes(tool)));
     const sources = Object.keys(SOURCE).filter(source => source === filter.source || all.some(x => x.source === source) || folders.some(f => (f.kinds || []).some(kind => sourceOfKind(kind) === source)));
     const offered = (tools.length > 1 ? tools : filter.tool ? [filter.tool] : []), places = (sources.length > 1 ? sources : filter.source ? [filter.source] : []);
     const box = $('filters'), signature = JSON.stringify([offered, places, filter, TOOLS.shell]);
@@ -1057,10 +1161,29 @@
     if (x.apart) meta.append(el('span', { textContent: '未加入项目' }));
   }
   const card = x => {
+    if (x.team) return teamCard(x);
     const made = x.t ? terminalCard(x) : sessionCard(x);
     if (!x.t && canEnd(x.s)) made.insertBefore(el('button', { type: 'button', className: 'side end-session', ariaLabel: '结束电脑上的这段对话', title: '结束对话', html: ICON.stop, disabled: !usable() || endingSessions.has(x.s.id), onclick: () => endConversation(x.s) }), made.querySelector('.ask'));
     return held(made, () => manage(x));
   };
+  function teamCard(x) {
+    const c = x.team, [kind, label] = teamStatusOf(x);
+    const meta = el('span', { className: 'meta' }, pill(kind, label));
+    placed(meta, x);
+    meta.append(el('span', { textContent: whereOf(x) + (x.at ? ' · ' + ago(x.at) : '') }));
+    const peekText = x.teamConfirmText || c.note || (c.state === 'running' && c.phase === 'verify' ? '领队正在验收执行成员改动与结果' : '');
+    const iconHtml = (window.RemoteTeams && window.RemoteTeams.TEAM) || ICON.together;
+    const openTeam = () => {
+      if (!usable()) return toast('电脑离线，暂时无法打开');
+      if (window.RemoteTeams && window.RemoteTeams.open) window.RemoteTeams.open(c.id, c);
+      else go('together', true);
+    };
+    return el('li', { className: 'card team-card ' + (x.live ? (kind === 'waiting' ? 'done' : kind) : 'ended'), 'data-team': c.id },
+      el('button', { type: 'button', className: 'open', onclick: openTeam },
+        el('span', { className: 'tool team', html: iconHtml }),
+        el('span', { className: 'text' }, named(x), meta, peekText ? el('span', { className: 'peek', textContent: peekText }) : ''),
+        el('span', { className: 'chev', html: ICON.chev })));
+  }
   // A terminal opened from the phone.
   function terminalCard(x) {
     const t = x.t, phase = x.phase, meta = el('span', { className: 'meta' }, pill(phase, PHASE[phase][0]));
