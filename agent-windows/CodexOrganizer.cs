@@ -132,7 +132,7 @@ internal sealed class CodexOrganizer : IOrganizeSource {
         void Fail(string message) { answer.TrySetException(new InvalidOperationException(message)); }
         protected override void Requested(object id, string method, object p) { Refuse(id, "整理进程不接受工具调用或权限请求"); }
         protected override void OnEnded() { base.OnEnded(); Fail("Codex 整理进程已退出"); }
-        public override void Say(string text, string id) { throw new NotSupportedException(); }
+        public override void Say(string text, string id, IList<Attachment> attachments = null) { throw new NotSupportedException(); }
         public override void Stop() { Dispose(); }
         protected override void Reply(Asked asked, string decision) { throw new NotSupportedException(); }
     }

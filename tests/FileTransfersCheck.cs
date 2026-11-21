@@ -11,6 +11,10 @@ public static class FileTransfersCheck {
         return new Dictionary<string, object> { { "action", "file_upload_" + action }, { "path", path }, { "upload", id }, { "size", size }, { "offset", offset }, { "data", data } };
     }
     public static void Main(string[] args) {
+        try { Run(args); }
+        catch (Exception error) { Console.WriteLine(error.GetType().FullName + ": " + error.Message); throw; }
+    }
+    static void Run(string[] args) {
         string root = args[0]; Directory.CreateDirectory(root); Directory.CreateDirectory(Path.Combine(root, "子目录"));
         using (var files = new FileTransfers()) {
             string target = "子目录/手机文件.bin", path = Path.Combine(root, target);
@@ -50,6 +54,27 @@ public static class FileTransfersCheck {
             for (int i = 0; i < 4; i++) files.Run(root, Op("start", "pending" + i, 0, 0, "", i.ToString("x32")));
             Refused(() => files.Run(root, Op("start", "fifth")));
             using (var independent = new FileTransfers()) { independent.Run(root, Op("start", "independent")); independent.Run(root, Op("finish", "independent")); }
+            for (int i = 0; i < 4; i++) files.Run(root, Op("cancel", "pending" + i, 0, 0, "", i.ToString("x32")));
+            string screenshot = ".remote-ai/attachments/20261121-123456-a1b2c3.png";
+            files.Run(root, Op("start", screenshot, 3, 0, "", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+            files.Run(root, Op("chunk", screenshot, 3, 0, "YWJj", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+            files.Run(root, Op("finish", screenshot, 3, 3, "", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+            Require(File.Exists(Path.Combine(root, screenshot.Replace('/', Path.DirectorySeparatorChar))), "attachment upload missing");
+            Require(File.ReadAllText(Path.Combine(root, ".remote-ai", ".gitignore")) == "*", "attachment gitignore");
+            var images = Attachments.Read(root, new object[] { screenshot });
+            Require(images.Count == 1 && images[0].Data.SequenceEqual(new byte[] { 97, 98, 99 }), "attachment read");
+            Require(Attachments.WithText("hello", images).Contains("\u9644\u56fe\uff1a" + images[0].AbsolutePath), "attachment text");
+            Require(Attachments.ClaudeContent("hello", images).Count == 2, "claude image block");
+            Require(Attachments.WithText("hello", images).Contains(images[0].AbsolutePath), "codex text fallback");
+            Require(Convert.ToString(((Dictionary<string, object>)Attachments.AcpContent("hello", images)[1])["type"]) == "image", "acp image block");
+            foreach (string bad in new[] {
+                ".remote-ai/attachments/20261121-123456-a1b2c3.txt",
+                ".remote-ai/attachments/20261121-123456-A1b2c3.png",
+                ".remote-ai/attachments/20261121-123456-a1b2c3.png/extra",
+                "../.remote-ai/attachments/20261121-123456-a1b2c3.png",
+                ".remote-ai/attachments/missing.png"
+            }) Refused(() => Attachments.Read(root, new object[] { bad }));
+            Refused(() => Attachments.Read(root, new object[] { screenshot, screenshot, screenshot, screenshot, screenshot }));
         }
         Require(!Directory.GetFiles(root, ".remoteai-upload-*", SearchOption.AllDirectories).Any(), "temporary files leaked");
         Console.WriteLine("Windows uploads: bytes, paths, names, partial writes, collisions, parent locks and cleanup passed");

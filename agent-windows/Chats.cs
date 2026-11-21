@@ -157,7 +157,7 @@ public abstract class Chat : IRunning {
     protected abstract void Begin(string launcher, string session, bool resume, string mode);
     /// Hands what was written on the phone to the conversation: at once when it waits, else as soon as the tool takes
     /// it while it works. `id` is the phone's number for it, given back with the message once the tool has it.
-    public abstract void Say(string text, string id);
+    public abstract void Say(string text, string id, IList<Attachment> attachments = null);
     /// Stops what it is at now. The conversation stays, and is told the next thing as before.
     public abstract void Stop();
     /// Answers what it asks: allow, always (allow, and from now on the same without asking), deny; or, where it
@@ -421,9 +421,11 @@ public sealed class ClaudeChat : Chat {
         Send(new Dictionary<string, object> { { "type", "control_request" }, { "request_id", "init-" + (++requests) }, { "request", new Dictionary<string, object> { { "subtype", "initialize" } } } });
         lock (gate) State("idle");
     }
-    public override void Say(string text, string id) {
-        lock (gate) { said.Enqueue(new KeyValuePair<string, string>(text, id ?? "")); if (Status != "confirm") State("busy"); }
-        Send(new Dictionary<string, object> { { "type", "user" }, { "message", new Dictionary<string, object> { { "role", "user" }, { "content", text } } } });
+    public override void Say(string text, string id, IList<Attachment> attachments = null) {
+        string shown = Attachments.WithText(text, attachments);
+        lock (gate) { said.Enqueue(new KeyValuePair<string, string>(shown, id ?? "")); if (Status != "confirm") State("busy"); }
+        object content = attachments != null && attachments.Count > 0 ? (object)Attachments.ClaudeContent(shown, attachments) : shown;
+        Send(new Dictionary<string, object> { { "type", "user" }, { "message", new Dictionary<string, object> { { "role", "user" }, { "content", content } } } });
     }
     public override void Stop() {
         lock (gate) { if (Status != "busy" && Status != "confirm") throw new InvalidOperationException("它现在没有在执行"); stopping = true; }
@@ -679,7 +681,11 @@ public sealed class CodexChat : JsonRpcChat {
     public CodexChat(string folder, Action<string> emit) : base("codex", folder, emit) { }
     string turn = "";
     string mode = "";
-    readonly List<KeyValuePair<string, string>> early = new List<KeyValuePair<string, string>>();     // said before the conversation was there
+    sealed class Early {
+        public string Text, Id;
+        public IList<Attachment> Attachments;
+    }
+    readonly List<Early> early = new List<Early>();     // said before the conversation was there
 
     static string TomlString(string value) {
         value = value ?? "";
@@ -726,29 +732,34 @@ public sealed class CodexChat : JsonRpcChat {
                 if (thread.Length == 0) { Unopened("Codex 没有打开这段对话：" + Text(At(answer, "error"), "message"), early.Count > 0); early.Clear(); return; }
                 Known(thread);
                 State(Status == "busy" ? "busy" : "idle");
-                foreach (var one in early.ToArray()) Start(one.Key, one.Value);
+                foreach (var one in early.ToArray()) Start(one.Text, one.Id, one.Attachments);
                 early.Clear();
             });
         });
     }
-    static List<object> Words(string text) { return new List<object> { new Dictionary<string, object> { { "type", "text" }, { "text", text }, { "text_elements", new object[0] } } }; }
-    public override void Say(string text, string id) {
+    // The local Codex app-server probe could not complete a turn/start request on this machine.
+    // Per the protocol contract, keep the absolute-path text and omit native image blocks until verified.
+    static List<object> Words(string text, IList<Attachment> attachments = null) {
+        string shown = Attachments.WithText(text, attachments);
+        return new List<object> { new Dictionary<string, object> { { "type", "text" }, { "text", shown }, { "text_elements", new object[0] } } };
+    }
+    public override void Say(string text, string id, IList<Attachment> attachments = null) {
         lock (gate) {
-            if (Session.Length == 0) { early.Add(new KeyValuePair<string, string>(text, id ?? "")); State("busy"); return; }
+            if (Session.Length == 0) { early.Add(new Early { Text = text, Id = id ?? "", Attachments = attachments }); State("busy"); return; }
             if (turn.Length > 0) {
                 // it is at work: the words join the turn, as its own window's box does
-                Call("turn/steer", new Dictionary<string, object> { { "threadId", Session }, { "expectedTurnId", turn }, { "input", Words(text) }, { "clientUserMessageId", Client(id) } }, answer => {
-                    if (At(answer, "error") != null) Start(text, id);       // the turn had just ended: a new one
+                Call("turn/steer", new Dictionary<string, object> { { "threadId", Session }, { "expectedTurnId", turn }, { "input", Words(text, attachments) }, { "clientUserMessageId", Client(id) } }, answer => {
+                    if (At(answer, "error") != null) Start(text, id, attachments);       // the turn had just ended: a new one
                 });
                 return;
             }
-            Start(text, id);
+            Start(text, id, attachments);
         }
     }
     static string Client(string id) { return String.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N") : id; }
-    void Start(string text, string id) {
+    void Start(string text, string id, IList<Attachment> attachments = null) {
         State("busy");
-        var turnParams = new Dictionary<string, object> { { "threadId", Session }, { "input", Words(text) }, { "clientUserMessageId", Client(id) } };
+        var turnParams = new Dictionary<string, object> { { "threadId", Session }, { "input", Words(text, attachments) }, { "clientUserMessageId", Client(id) } };
         if (model.Length > 0) turnParams["model"] = model;
         if (effort.Length > 0) turnParams["effort"] = effort;
         Call("turn/start", turnParams, answer => {

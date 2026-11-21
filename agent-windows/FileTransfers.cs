@@ -50,6 +50,7 @@ public sealed class FileTransfers : IDisposable {
                 if (pending.Count >= 4) throw new ArgumentException("同时上传的文件过多，请稍后重试");
                 long size = Number(op, "size");
                 if (size < 0 || size > Limit) throw new ArgumentException("单个文件上传上限为 300 MB");
+                Attachments.PrepareUpload(root, relative, size);
                 string[] parts = relative.Split('/');
                 if (parts.Length == 0 || parts.Any(p => String.IsNullOrWhiteSpace(p) || p == "." || p == ".." || p.EndsWith(".") || p.EndsWith(" ") || p.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0 || Regex.IsMatch(p, @"\A(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(?:\.|\z)", RegexOptions.IgnoreCase)))
                     throw new ArgumentException("文件名或路径无效，请重命名后再上传");

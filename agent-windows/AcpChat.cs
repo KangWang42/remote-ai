@@ -24,8 +24,13 @@ namespace RemoteCli {
 /// in a terminal. ACP has no way to add words to a turn that runs: what is said meanwhile waits for its end.
 public class AcpChat : JsonRpcChat {
     readonly string args;
-    readonly Queue<KeyValuePair<string, string>> queued = new Queue<KeyValuePair<string, string>>();     // said while a turn runs, or before the conversation was there
+    sealed class Queued {
+        public string Text, Id;
+        public IList<Attachment> Attachments;
+    }
+    readonly Queue<Queued> queued = new Queue<Queued>();     // said while a turn runs, or before the conversation was there
     bool working, loading;
+    bool nativeImages;
     // the text and the thought being written now: a new one begins where anything else came between
     string writing = "", thinking = "";
     readonly HashSet<string> steps = new HashSet<string>();
@@ -48,6 +53,7 @@ public class AcpChat : JsonRpcChat {
             { "clientCapabilities", new Dictionary<string, object> { { "fs", new Dictionary<string, object> { { "readTextFile", false }, { "writeTextFile", false } } }, { "terminal", false } } },
             { "clientInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "title", "Remote AI" }, { "version", "1" } } } }, initAnswer => {
             if (At(initAnswer, "error") != null) { Unopened(Label + " 初始化失败：" + Text(At(initAnswer, "error"), "message"), queued.Count > 0); queued.Clear(); return; }
+            nativeImages = true.Equals(At(At(At(At(initAnswer, "result"), "agentCapabilities"), "promptCapabilities"), "image"));
             if (session.Length > 0) loading = true;
             Call(session.Length > 0 ? "session/load" : "session/new", given, answer => {
                 loading = false;
@@ -121,22 +127,26 @@ public class AcpChat : JsonRpcChat {
         else Call("session/set_model", new Dictionary<string, object> { { "sessionId", Session }, { "modelId", model } }, answered);
     }
 
-    public override void Say(string text, string id) {
+    public override void Say(string text, string id, IList<Attachment> attachments = null) {
         lock (gate) {
             if (refused != null) throw new InvalidOperationException(refused);
-            queued.Enqueue(new KeyValuePair<string, string>(text, id ?? ""));
+            queued.Enqueue(new Queued { Text = text, Id = id ?? "", Attachments = attachments });
             if (Session.Length == 0) { State("busy"); return; }
             if (!working) Prompt();
-            else Note("消息将在这一轮结束后发出");
+            else Note("\u6d88\u606f\u5c06\u5728\u8fd9\u4e00\u8f6e\u7ed3\u675f\u540e\u53d1\u51fa");
         }
     }
     // The next thing said goes as a turn of its own; what waits goes after it, one by one.
     void Prompt() {
         var said = queued.Dequeue();
         working = true; writing = thinking = "";
-        Item("u" + Guid.NewGuid().ToString("N").Substring(0, 12), "user", said.Key, said.Value.Length > 0 ? new Dictionary<string, object> { { "op", said.Value } } : null);
+        string shown = Attachments.WithText(said.Text, said.Attachments);
+        Item("u" + Guid.NewGuid().ToString("N").Substring(0, 12), "user", shown, said.Id.Length > 0 ? new Dictionary<string, object> { { "op", said.Id } } : null);
         State("busy");
-        Call("session/prompt", new Dictionary<string, object> { { "sessionId", Session }, { "prompt", new object[] { new Dictionary<string, object> { { "type", "text" }, { "text", said.Key } } } } }, answer => {
+        object prompt = nativeImages && said.Attachments != null && said.Attachments.Count > 0
+            ? (object)Attachments.AcpContent(shown, said.Attachments)
+            : new object[] { new Dictionary<string, object> { { "type", "text" }, { "text", shown } } };
+        Call("session/prompt", new Dictionary<string, object> { { "sessionId", Session }, { "prompt", prompt } }, answer => {
             working = false; writing = thinking = "";
             var error = At(answer, "error");
             string reason = Text(At(answer, "result"), "stopReason");

@@ -430,6 +430,19 @@ CHAT_TOOLS = ("claude", "codex", "agy")
 CHAT_FEATURES = {"agy": "chat-agy"}
 CHAT_ACTIONS = ("say", "stop", "answer", "close", "rename")
 CHAT_DECISIONS = re.compile(r"^(allow|always|deny|choice:[0-9]{1,2})$")
+ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
+
+
+def _attachments(payload):
+    """Checks the reserved screenshot paths before handing a chat request to a computer."""
+    if "attachments" not in payload:
+        return None
+    attachments = payload.get("attachments")
+    if not isinstance(attachments, list) or not 1 <= len(attachments) <= 4:
+        raise RemoteError("\u9644\u56fe\u6700\u591a 4 \u5f20")
+    if any(not isinstance(path, str) or not ATTACHMENT_PATH.fullmatch(path) for path in attachments):
+        raise RemoteError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+    return attachments
 # Conversation organization is a computer-side queue. The relay validates the
 # request and keeps the result only while the held request is waiting.
 ORGANIZE_VERBS = ("status", "settings", "list", "count", "start", "retry", "edit")
@@ -956,7 +969,12 @@ class Relay:
                         text = _words(payload.get("text"))
                         if text is None:
                             raise RemoteError("内容为空、超过 8000 字或含有控制字符")
+                        attachments = _attachments(payload)
+                        if attachments is not None and "attachments" not in self._device.get("features", []):
+                            raise RemoteError("\u8bf7\u5148\u66f4\u65b0\u7535\u8111\u7aef")
                         asked, payload = payload, {"id": op_id, "action": "say", "terminal": terminal, "text": text}
+                        if attachments is not None:
+                            payload["attachments"] = attachments
                     elif action == "stop" and term.get("phase") not in ("busy", "confirm"):
                         raise RemoteError("它现在没有在执行")
                     elif action == "answer":
@@ -1488,8 +1506,13 @@ class Relay:
                     raise RemoteError("消息需为 1 至 4000 字")
                 if not isinstance(target, str) or len(target.strip()) > 32 or "\0" in target:
                     raise RemoteError("发送对象无效")
+                attachments = _attachments(payload)
+                if attachments is not None and "attachments" not in self._device.get("features", []):
+                    raise RemoteError("\u8bf7\u5148\u66f4\u65b0\u7535\u8111\u7aef")
                 question["team"] = payload["team"]
                 question["text"] = text.strip()
+                if attachments is not None:
+                    question["attachments"] = attachments
                 if target.strip():
                     question["target"] = target.strip()
             elif action == "team_pick":
@@ -1616,7 +1639,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

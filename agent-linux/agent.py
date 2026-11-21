@@ -186,7 +186,9 @@ UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish"
 FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "file-upload", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days"]
+FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days"]
+ATTACHMENT_LIMIT = 20 * 1024 * 1024
+ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
 # What the phone asks about the owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
 # ("chains") is seen by watching the conversation's record grow and then go quiet — the tools' own hooks, which
 # tell the Windows program of it at once, are not there on Linux.
@@ -609,6 +611,60 @@ def publish_upload(tmp, name, fd):
         raise
 
 
+def attachment_media(path):
+    return {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp", ".gif": "image/gif"
+    }.get(os.path.splitext(path)[1].lower(), "")
+
+
+def read_attachments(root, value):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+    if len(value) > 4:
+        raise OpError("\u9644\u56fe\u6700\u591a 4 \u5f20")
+    result = []
+    root = os.path.realpath(root)
+    for relative in value:
+        if not isinstance(relative, str) or not ATTACHMENT_PATH.fullmatch(relative):
+            raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+        absolute = os.path.normpath(os.path.join(root, relative))
+        real = os.path.realpath(absolute)
+        if absolute != os.path.join(root, relative) or not absolute.startswith(root.rstrip("/") + "/") \
+                or real != absolute or not real.startswith(root.rstrip("/") + "/"):
+            raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+        try:
+            info = os.stat(absolute, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > ATTACHMENT_LIMIT:
+                raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+            with open(absolute, "rb") as stream:
+                data = stream.read()
+        except (FileNotFoundError, PermissionError, OSError):
+            raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+        result.append({"relative": relative, "absolute": absolute, "media": attachment_media(absolute), "data": data})
+    return result
+
+
+def attachment_text(text, attachments):
+    return text if not attachments else text + "\n\n" + "\n".join("\u9644\u56fe\uff1a" + one["absolute"] for one in attachments)
+
+
+def claude_content(text, attachments):
+    return [{"type": "text", "text": text}] + [
+        {"type": "image", "source": {"type": "base64", "media_type": one["media"],
+                                     "data": base64.b64encode(one["data"]).decode("ascii")}}
+        for one in attachments
+    ]
+
+
+def codex_content(text, attachments):
+    return [{"type": "text", "text": text, "text_elements": []}] + [
+        {"type": "localImage", "path": one["absolute"]} for one in attachments
+    ]
+
+
 class Uploads:
     """Bounded uploads owned by this agent (docs/PROTOCOL.md, "Uploads"). A destination is
     published only after all bytes arrive, and an existing file or folder is never replaced.
@@ -705,6 +761,23 @@ class Uploads:
         if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= self.LIMIT:
             raise OpError("单个文件上传上限为 300 MB")
         relative = str(op.get("path") or "")
+        if ATTACHMENT_PATH.fullmatch(relative):
+            if size > ATTACHMENT_LIMIT:
+                raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+            remote = os.path.join(os.path.normpath(root), ".remote-ai")
+            attachments = os.path.join(remote, "attachments")
+            for directory in (remote, attachments):
+                if os.path.lexists(directory) and (os.path.islink(directory) or not os.path.isdir(directory)):
+                    raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+                os.makedirs(directory, mode=0o700, exist_ok=True)
+            ignore = os.path.join(remote, ".gitignore")
+            if not os.path.exists(ignore):
+                try:
+                    fd_ignore = os.open(ignore, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd_ignore, "w", encoding="utf-8", newline="") as stream:
+                        stream.write("*")
+                except FileExistsError:
+                    pass
         parts = self._parts(relative)
         root = os.path.normpath(root)
         full = os.path.normpath(os.path.join(root, *parts))
@@ -2466,12 +2539,15 @@ class ClaudeChat(Chat):
         with self.gate:
             self.state("idle")
 
-    def say(self, text, op_id=""):
+    def say(self, text, op_id="", attachments=None):
+        attachments = attachments or []
+        shown = attachment_text(text, attachments)
         with self.gate:
-            self.said_here.append((text.strip(), op_id or ""))
+            self.said_here.append((shown.strip(), op_id or ""))
             if self.status != "confirm":
                 self.state("busy")
-        self.send({"type": "user", "message": {"role": "user", "content": text}})
+        content = claude_content(shown, attachments) if attachments else shown
+        self.send({"type": "user", "message": {"role": "user", "content": content}})
 
     def stop_turn(self):
         with self.gate:
@@ -2636,8 +2712,8 @@ class CodexChat(Chat):
                 return self.state("ended")
             self.known(thread)
             self.state("busy" if self.status == "busy" else "idle")
-            for text, op_id in self.early:
-                self.begin_turn(text, op_id)
+            for text, op_id, attachments in self.early:
+                self.begin_turn(text, op_id, attachments)
             self.early = []
         self.call("thread/resume" if resume else "thread/start", given, opened)
 
@@ -2649,24 +2725,27 @@ class CodexChat(Chat):
         self.send({"id": number, "method": method, "params": given})
 
     @staticmethod
-    def words(text):
+    def words(text, attachments=None):
         return [{"type": "text", "text": text, "text_elements": []}]
 
-    def say(self, text, op_id=""):
+    def say(self, text, op_id="", attachments=None):
+        attachments = attachments or []
+        shown = attachment_text(text, attachments)
         with self.gate:
             if not self.session:
-                self.early.append((text, op_id))
+                self.early.append((text, op_id, attachments))
                 return self.state("busy")
             if self.turn:
                 # at work: the words join the turn, as its own window's box does
                 def steered(answer):
                     if answer.get("error") is not None:
-                        self.begin_turn(text, op_id)      # the turn had just ended: a new one
-                return self.call("turn/steer", {"threadId": self.session, "expectedTurnId": self.turn, "input": self.words(text), "clientUserMessageId": op_id or secrets.token_hex(16)}, steered)
-            self.begin_turn(text, op_id)
+                        self.begin_turn(text, op_id, attachments)      # the turn had just ended: a new one
+                return self.call("turn/steer", {"threadId": self.session, "expectedTurnId": self.turn, "input": self.words(shown), "clientUserMessageId": op_id or secrets.token_hex(16)}, steered)
+            self.begin_turn(text, op_id, attachments)
 
-    def begin_turn(self, text, op_id):
+    def begin_turn(self, text, op_id, attachments=None):
         self.state("busy")
+        shown = attachment_text(text, attachments or [])
 
         def started(answer):
             if answer.get("error") is not None:
@@ -2675,7 +2754,7 @@ class CodexChat(Chat):
             begun = ((answer.get("result") or {}).get("turn") or {}).get("id") or ""
             if begun and not self.turn:
                 self.turn = begun
-        self.call("turn/start", {"threadId": self.session, "input": self.words(text), "clientUserMessageId": op_id or secrets.token_hex(16)}, started)
+        self.call("turn/start", {"threadId": self.session, "input": self.words(shown), "clientUserMessageId": op_id or secrets.token_hex(16)}, started)
 
     def stop_turn(self):
         with self.gate:
@@ -3723,8 +3802,9 @@ class Agent:
                     if action == "say":
                         text = str(op.get("text") or "").strip()
                         if not text or len(text) > 8000:
-                            raise OpError("消息需为 1 至 8000 字")
-                        live.say(text, op_id)
+                            raise OpError("\u6d88\u606f\u9700\u4e3a 1 \u81f3 8000 \u5b57")
+                        attachments = read_attachments(live.dir, op.get("attachments"))
+                        live.say(text, op_id, attachments)
                     elif action == "stop":
                         live.stop_turn()
                     elif action == "answer":

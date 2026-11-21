@@ -132,6 +132,30 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual(self.relay.overview(now=1005)["terminals"][0]["form"], "chat")
         self.assertTrue(terminal)
 
+    def test_chat_attachments_are_checked_and_forwarded(self):
+        self.info["features"] = ["chat", "attachments"]
+        self.relay.agent({"info": self.info}, now=1001)
+        start = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": False, "form": "chat", "text": "开始"}
+        terminal = self.relay.command(start, now=1002)["terminal"]
+        self.relay.agent({"info": self.info, "terminals": [{"id": terminal, "state": "running", "form": "chat"}]}, now=1003)
+        path = ".remote-ai/attachments/20261121-123456-a1b2c3.png"
+        request = {"action": "say", "id": "b" * 32, "terminal": terminal, "text": "看图", "attachments": [path]}
+        self.relay.command(request, now=1004)
+        operation = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]
+        self.assertEqual(operation["attachments"], [path])
+        for bad in (
+            {"attachments": []},
+            {"attachments": [path] * 5},
+            {"attachments": [".remote-ai/attachments/bad.png"]},
+            {"attachments": ["../" + path]},
+        ):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(request, id="c" * 32, **bad), now=1005)
+        self.info["features"] = ["chat"]
+        self.relay.agent({"info": self.info}, now=1006)
+        with self.assertRaisesRegex(RemoteError, "请先更新电脑端"):
+            self.relay.command(dict(request, id="d" * 32), now=1007)
+
     def test_quotas_are_kept_as_shares_and_times_only(self):
         self.info["quotas"] = [
             {"tool": "claude", "at": 1700000000000, "why": "", "windows": [{"name": "five_hour", "used": 38.0, "resets": 1795126800}, {"name": "seven_day", "used": 9, "resets": 1795665600, "token": "x"}]},

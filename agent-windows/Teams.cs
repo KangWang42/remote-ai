@@ -722,10 +722,12 @@ public sealed class Teams {
     /// - while paused: resumes and delivers the guidance;
     /// - while waiting to choose in `compare`: asks one or all candidates to refine in their worktrees;
     /// - after `done` or `stopped` (`review` / `lead`): starts a new follow-up round.
-    public Team Say(string id, string text, string target = "") {
+    public Team Say(string id, string text, string target = "") { return Say(id, text, target, null); }
+    public Team Say(string id, string text, string target, IList<Attachment> attachments) {
         text = (text ?? "").Trim();
         target = (target ?? "").Trim();
-        if (text.Length == 0 || text.Length > 4000) throw new ArgumentException("消息需为 1 至 4000 字");
+        if (text.Length == 0 || text.Length > 4000) throw new ArgumentException("\u6d88\u606f\u9700\u4e3a 1 \u81f3 4000 \u5b57");
+        text = Attachments.WithText(text, attachments);
         Team team; string state, phase, mode; List<string> targets = new List<string>();
         lock (gate) {
             team = items.FirstOrDefault(t => t.Id == id);
@@ -812,6 +814,13 @@ public sealed class Teams {
             Ask(team, "leader", team.Tools[0], prompt, false, null);
         }
         return Of(id);
+    }
+    public string DirectoryOf(string id) {
+        lock (gate) {
+            Team team = items.FirstOrDefault(one => one.Id == id);
+            if (team == null) throw new ArgumentException("没有找到这个协作任务");
+            return team.Dir;
+        }
     }
 
     /// Picks a winning candidate in `compare` mode and applies its worktree patch to the project folder, or discards

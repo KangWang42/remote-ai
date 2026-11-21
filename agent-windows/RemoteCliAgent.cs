@@ -639,7 +639,13 @@ public sealed class TerminalAgent {
         }
         if (action == "work_team_stop") { Teams.Stop(Get(op, "team")); return new Dictionary<string, object>(); }
         if (action == "work_team_resume") { Teams.Resume(Get(op, "team")); return new Dictionary<string, object>(); }
-        if (action == "work_team_say") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Say(Get(op, "team"), Get(op, "text"), Get(op, "target"))) } }; }
+        if (action == "work_team_say") {
+            string teamId = Get(op, "team");
+            string dirName = Teams.DirectoryOf(teamId), folder;
+            if (!AllDirs(prefs).TryGetValue(dirName, out folder)) throw new ArgumentException("\u76ee\u5f55\u672a\u88ab\u5141\u8bb8");
+            var attachments = Attachments.Read(folder, op.ContainsKey("attachments") ? op["attachments"] : null);
+            return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Say(teamId, Get(op, "text"), Get(op, "target"), attachments)) } };
+        }
         if (action == "work_team_pick") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Pick(Get(op, "team"), Get(op, "tool"))) } }; }
         if (action == "work_team_swap") { return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Swap(Get(op, "team"), Get(op, "role"), Get(op, "tool"), Get(op, "note"), op.ContainsKey("model") ? Get(op, "model") : null, op.ContainsKey("effort") ? Get(op, "effort") : null)) } }; }
         if (action == "work_team_remove") { if (!Teams.Remove(Get(op, "team"))) throw new ArgumentException("没有找到这个协作任务"); return new Dictionary<string, object>(); }
@@ -1734,7 +1740,14 @@ public sealed class TerminalAgent {
                 if (live.Chat != null) {
                     // a conversation: told something, stopped, answered, or ended; it has no screen to type into
                     lastInput = DateTime.UtcNow;
-                    if (action == "say") { string text = Get(op, "text").Trim(); if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("消息需为 1 至 8000 字"); live.Chat.Say(text, id); }
+                    if (action == "say") {
+                        string text = Get(op, "text").Trim();
+                        if (text.Length == 0 || text.Length > 8000) throw new ArgumentException("\u6d88\u606f\u9700\u4e3a 1 \u81f3 8000 \u5b57");
+                        string folder;
+                        if (!AllDirs(prefs).TryGetValue(live.Dir, out folder)) throw new ArgumentException("\u76ee\u5f55\u672a\u88ab\u5141\u8bb8");
+                        var attachments = Attachments.Read(folder, op.ContainsKey("attachments") ? op["attachments"] : null);
+                        live.Chat.Say(text, id, attachments);
+                    }
                     else if (action == "stop") live.Chat.Stop();
                     else if (action == "answer") live.Chat.Answer(Get(op, "ask"), Get(op, "decision"));
                     else if (action == "close") live.Pty.Dispose();
@@ -1802,7 +1815,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0],
