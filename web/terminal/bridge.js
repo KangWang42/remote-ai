@@ -29,8 +29,24 @@
   const searchParams = new URLSearchParams(location.search);
   const fromBench = searchParams.get('from') === 'bench';
   const fromTeam = /^[a-f0-9]{16,32}$/.test(searchParams.get('team') || '') ? searchParams.get('team') : '';
+  const returnTab = ['tasks', 'projects', 'together', 'me'].includes(searchParams.get('returnTab') || '') ? searchParams.get('returnTab') : '';
+  const rawReturnProject = (searchParams.get('returnProject') || '').trim();
+  const returnProject = rawReturnProject && rawReturnProject.length <= 120 ? rawReturnProject : '';
+  const teamQuery = () => {
+    let tail = fromBench ? '&from=bench' : '';
+    if (fromTeam) tail += '&team=' + encodeURIComponent(fromTeam);
+    if (returnProject) tail += '&returnProject=' + encodeURIComponent(returnProject);
+    else if (returnTab) tail += '&returnTab=' + encodeURIComponent(returnTab);
+    return tail;
+  };
   const leave = () => {
-    if (fromTeam) { location.replace('../?tab=together&do=team&item=' + encodeURIComponent(fromTeam)); return; }
+    if (fromTeam) {
+      let target = '../?' + (returnProject ? 'project=' + encodeURIComponent(returnProject) : 'tab=' + (returnTab || 'together'))
+        + '&do=team&item=' + encodeURIComponent(fromTeam);
+      if (fromBench) target += '&from=bench';
+      location.replace(target);
+      return;
+    }
     if (fromBench && native && native.home) native.home(); else home();
   };
   // Quick tunnels buffer SSE; a held JSON response is delivered without that delay.
@@ -301,7 +317,7 @@
     try {
       const { status, body } = await post(start);
       if (status !== 200) throw new Error(body.error || '没有打开');
-      location.replace('?id=' + body.terminal);
+      location.replace('?id=' + body.terminal + teamQuery());
     } catch (error) { ui().error(error.message); }
   }
   // The files of the project this terminal works in. The terminal goes on running on the computer; the back arrow
@@ -428,6 +444,7 @@
     menu,
     files,
     again,
+    teamQuery,
     fontSize: () => Number(store.get('font', '13')),
     saveFontSize(size) { if (size >= 9 && size <= 20) store.set('font', String(size)); }
   };

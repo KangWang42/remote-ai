@@ -3,36 +3,36 @@
    editorial reader, rounded tool-operation cards, cobalt connection banner, and pill composer. */
 
 /* ---- Shared Markdown typography ---- */
-:is(#said, #sheet-form .said) .md { overflow-wrap: anywhere; min-width: 0; }
-:is(#said, #sheet-form .said) .md > :first-child { margin-top: 0; }
-:is(#said, #sheet-form .said) .md > :last-child { margin-bottom: 0; }
-:is(#said, #sheet-form .said) .md p,
-:is(#said, #sheet-form .said) .md ul,
-:is(#said, #sheet-form .said) .md ol,
-:is(#said, #sheet-form .said) .md pre,
-:is(#said, #sheet-form .said) .md blockquote,
-:is(#said, #sheet-form .said) .md .wide { margin: 0 0 .65em; }
-:is(#said, #sheet-form .said) .md h1,
-:is(#said, #sheet-form .said) .md h2,
-:is(#said, #sheet-form .said) .md h3,
-:is(#said, #sheet-form .said) .md h4 { margin: .95em 0 .35em; font-size: 1em; font-weight: 700; line-height: 1.4; }
-:is(#said, #sheet-form .said) .md h1,
-:is(#said, #sheet-form .said) .md h2 { font-size: 1.06em; }
-:is(#said, #sheet-form .said) .md ul,
-:is(#said, #sheet-form .said) .md ol { padding-left: 1.35em; }
-:is(#said, #sheet-form .said) .md li { margin: .18em 0; }
-:is(#said, #sheet-form .said) .md li > p { margin: 0; }
-:is(#said, #sheet-form .said) .md code { font-family: var(--mono, ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK SC", monospace); font-size: .85em; padding: .12em .4em; border-radius: 6px; background: var(--raised); }
-:is(#said, #sheet-form .said) .md pre { padding: 12px 14px; border-radius: 14px; border: 1px solid var(--card-border, var(--line)); background: var(--surface-sub, var(--bg)); overflow-x: auto; line-height: 1.55; }
-:is(#said, #sheet-form .said) .md pre code { padding: 0; background: none; font-size: .82em; white-space: pre; }
-:is(#said, #sheet-form .said) .md blockquote { padding-left: 12px; border-left: 2.5px solid color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--muted); }
-:is(#said, #sheet-form .said) .md hr { border: 0; border-top: 1px solid var(--divider, var(--line)); margin: .9em 0; }
-:is(#said, #sheet-form .said) .md .wide { overflow-x: auto; }
-:is(#said, #sheet-form .said) .md table { border-collapse: collapse; font-size: .88em; white-space: nowrap; }
-:is(#said, #sheet-form .said) .md th,
-:is(#said, #sheet-form .said) .md td { padding: 6px 10px; border: 1px solid var(--divider, var(--line)); text-align: left; }
-:is(#said, #sheet-form .said) .md th { background: var(--surface-sub, var(--raised)); font-weight: 600; }
-:is(#said, #sheet-form .said) .md strong { font-weight: 700; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md { overflow-wrap: anywhere; min-width: 0; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md > :first-child { margin-top: 0; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md > :last-child { margin-bottom: 0; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md p,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md ul,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md ol,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md pre,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md blockquote,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md .wide { margin: 0 0 .65em; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md h1,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md h2,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md h3,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md h4 { margin: .95em 0 .35em; font-size: 1em; font-weight: 700; line-height: 1.4; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md h1,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md h2 { font-size: 1.06em; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md ul,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md ol { padding-left: 1.35em; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md li { margin: .18em 0; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md li > p { margin: 0; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md code { font-family: var(--mono, ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK SC", monospace); font-size: .85em; padding: .12em .4em; border-radius: 6px; background: var(--raised); }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md pre { padding: 12px 14px; border-radius: 14px; border: 1px solid var(--card-border, var(--line)); background: var(--surface-sub, var(--bg)); overflow-x: auto; line-height: 1.55; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md pre code { padding: 0; background: none; font-size: .82em; white-space: pre; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md blockquote { padding-left: 12px; border-left: 2.5px solid color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--muted); }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md hr { border: 0; border-top: 1px solid var(--divider, var(--line)); margin: .9em 0; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md .wide { overflow-x: auto; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md table { border-collapse: collapse; font-size: .88em; white-space: nowrap; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md th,
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md td { padding: 6px 10px; border: 1px solid var(--divider, var(--line)); text-align: left; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md th { background: var(--surface-sub, var(--raised)); font-weight: 600; }
+:is(#said, #sheet-form .said, .team-stream, .team-compare-card) .md strong { font-weight: 700; }
 
 /* ---- Unified floating "back to latest" pill ---- */
 #latest,

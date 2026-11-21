@@ -371,7 +371,8 @@
     try {
       const { status, body } = await bridge().post({ action: 'start', id: newId(), tool, dir, session, history: false });
       if (status !== 200) throw new Error(body.error || '没有打开');
-      location.replace('../terminal/?id=' + body.terminal + (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : ''));
+      const tail = bridge().teamQuery ? bridge().teamQuery() : (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : '');
+      location.replace('../terminal/?id=' + body.terminal + tail);
     } catch (error) { toast(error.message); }
   }
   // ---- the menu: what the conversation is, what is done with it (handed to another AI, asked at a time), its

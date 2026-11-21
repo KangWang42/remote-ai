@@ -152,6 +152,10 @@
     const deviceRows = [];
     if (native && native.reminders) deviceRows.push(row('bell', 't-warn', '提醒与权限', '通知、电池与后台联网', native.reminderStatus ? native.reminderStatus() : '', () => native.reminders()));
     deviceRows.push(row('look', 't-look', '外观与文字', '主题、字号与终端阅读方式', '', () => { location.href = 'computer/#part-look'; }));
+    if (page.has('teams-models') || page.has('teams')) {
+      const defSummary = window.RemoteTeamDefaults ? window.RemoteTeamDefaults.summary((page.data && page.data.device && page.data.device.tools) || []) : '';
+      deviceRows.push(row('computer', 't-agy', '协作默认模型', defSummary || 'Opus 5.5 · Astra 6.2 · Neon · 思考高', '', () => { location.href = 'computer/#part-team-defaults'; }));
+    }
     deviceRows.push(row('computer', 't-accent', '电脑设置', '连接线路、远程访问与工具', page.usable() ? '在线' : '离线', () => { location.href = 'computer/'; }, page.usable() ? 'on' : ''));
     const dataRows = [row('chart', 't-agy', '工作统计', '提问、对话与工作时长', expanded ? '收起' : '查看', () => { expanded = !expanded; draw(); })];
     if (native && native.update) dataRows.push(row('update', 't-muted', '检查更新', 'Remote AI 手机端', native.version ? 'v' + native.version() : '', () => native.update()));

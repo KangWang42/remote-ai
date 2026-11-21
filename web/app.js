@@ -150,7 +150,11 @@
       build(form, value => { answer = value; sheet.close(); });
       if (!fullWindow) form.append(el('button', { type: 'button', className: 'cancel', textContent: '取消', onclick: () => sheet.close() }));
       sheetGone = new Promise(gone => {
+        let finished = false, backTimer = 0;
         const finish = () => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(backTimer);
           backFromReader = null;
           gone();
           done(answer);
@@ -161,8 +165,10 @@
           backFromReader = () => { if (sheet.open) sheet.close(); else finish(); };
         }
         sheet.onclose = () => {
-          if (nestedReader && history.state?.conversationReader) history.back();
-          else finish();
+          if (nestedReader && history.state?.conversationReader) {
+            backTimer = setTimeout(finish, 400);
+            history.back();
+          } else finish();
         };
       });
       sheet.onclick = event => { if (event.target === sheet) sheet.close(); };       // a tap beside the sheet
@@ -320,23 +326,29 @@
   }
   // ?take=<conversation> comes from the app's workbench: the question about taking over a conversation that runs on
   // the computer is asked at once, and the terminal that follows leads back to the workbench.
-  let take = new URLSearchParams(location.search).get('take') || '', anew = new URLSearchParams(location.search).get('new') === '1', fromBench = !!take || anew;
+  const startParams = new URLSearchParams(location.search);
+  let take = startParams.get('take') || '', anew = startParams.get('new') === '1', fromBench = !!take || anew || startParams.get('from') === 'bench';
+  let wantedTeam = startParams.get('do') === 'team' && /^[a-f0-9]{16,32}$/.test(startParams.get('item') || '') ? startParams.get('item') : '';
   // A terminal's page; for one that runs a conversation through its tool's structured mode, the conversation's (chat/).
   function open(terminal, form, extra) {
     let url = (form === 'chat' ? 'chat/' : 'terminal/') + '?id=' + encodeURIComponent(terminal) + (fromBench ? '&from=bench' : '');
-    if (extra && extra.team) url += '&team=' + encodeURIComponent(extra.team);
+    if (extra && extra.team) {
+      url += '&team=' + encodeURIComponent(extra.team);
+      if (project) url += '&returnProject=' + encodeURIComponent(project);
+      else if (tab && tab !== 'together') url += '&returnTab=' + encodeURIComponent(tab);
+    }
     location.href = url;
   }
   // What the app's own lists opened this page for (a new conversation, one conversation's window) leads back to
   // them when it is left without going on to a terminal's page.
   const leave = left => { if (!left && fromBench && native && native.home) native.home(); };
   // Resolves with whether the page is left for the terminal that was started.
-  async function start(tool, dir, session, takeover, fork) {
+  async function start(tool, dir, session, takeover, fork, extra) {
     const payload = { action: 'start', tool, dir, history: false };
     if (session) Object.assign(payload, { session, takeover: !!takeover });
     if (fork) payload.fork = true;
     const result = await run(payload, '正在电脑上启动 ' + TOOLS[tool] + '…');
-    if (result) open(result.terminal);
+    if (result) open(result.terminal, 'terminal', extra);
     return !!result;
   }
   const agyShellTitle = dir => 'Antigravity CLI' + (dir ? ' · ' + dir : '');
@@ -365,11 +377,11 @@
   // the tools the computer runs as a conversation, and what it says of itself where it does (Antigravity CLI: by ACP)
   const CHAT_TOOLS = { claude: 'chat', codex: 'chat', agy: 'chat-agy' };
   const chatOk = tool => !!data && (data.device.features || []).includes('chat') && !!CHAT_TOOLS[tool] && (data.device.features || []).includes(CHAT_TOOLS[tool]) && (data.device.tools || []).includes(tool);
-  async function chat(tool, dir, session, takeover) {
+  async function chat(tool, dir, session, takeover, extra) {
     const payload = { action: 'start', tool, dir, history: false, form: 'chat' };
     if (session) Object.assign(payload, { session, takeover: !!takeover });
     const result = await run(payload, '正在电脑上启动 ' + TOOLS[tool] + '…');
-    if (result) open(result.terminal, 'chat');
+    if (result) open(result.terminal, 'chat', extra);
     return !!result;
   }
   // A saved conversation is gone on with the way its owner begins conversations (begin.js): as a conversation, or in
@@ -465,20 +477,34 @@
     const script = el('script', { src: 'files/vendor/' + name, onload: done, onerror: failed });
     document.head.append(script);
   }));
+  let markdownReady = null;
+  function loadMarkdown() {
+    if (window.marked && window.DOMPurify) return Promise.resolve(true);
+    if (!markdownReady) {
+      markdownReady = Promise.all([need('marked.min.js'), need('purify.min.js')])
+        .then(() => !!(window.marked && window.DOMPurify), () => false);
+    }
+    return markdownReady;
+  }
+  function markdownNode(text, cache) {
+    const raw = String(text || '');
+    const rich = !!(window.marked && window.DOMPurify);
+    if (rich && cache && cache.has(raw)) return cache.get(raw).cloneNode(true);
+    if (!rich) return el('div', { className: 'plain', textContent: raw });
+    // nothing that could act or load: no links to follow, no pictures, no forms, no styles of its own
+    const html = DOMPurify.sanitize(marked.parse(raw, { gfm: true, breaks: true }),
+      { FORBID_TAGS: ['style', 'form', 'button', 'textarea', 'select', 'input', 'img', 'a', 'iframe', 'video', 'audio'], FORBID_ATTR: ['style', 'href', 'src'] });
+    const body = el('div', { className: 'md', html });
+    body.querySelectorAll('table').forEach(table => { const wrap = el('div', { className: 'wide' }); table.replaceWith(wrap); wrap.append(table); });
+    if (cache) {
+      cache.set(raw, body.cloneNode(true));
+      if (cache.size > 160) cache.delete(cache.keys().next().value);
+    }
+    return body;
+  }
   async function writeSaid(box, messages, toolName, phoneTexts, cache) {
-    let rich = false;
-    try { await Promise.all([need('marked.min.js'), need('purify.min.js')]); rich = !!(window.marked && window.DOMPurify); } catch (error) { /* plain text then */ }
-    const set = text => {
-      if (cache.has(text)) return cache.get(text).cloneNode(true);
-      if (!rich) return el('div', { className: 'plain', textContent: text });
-      // nothing that could act or load: no links to follow, no pictures, no forms, no styles of its own
-      const html = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }),
-        { FORBID_TAGS: ['style', 'form', 'button', 'textarea', 'select', 'input', 'img', 'a', 'iframe', 'video', 'audio'], FORBID_ATTR: ['style', 'href', 'src'] });
-      const body = el('div', { className: 'md', html });
-      body.querySelectorAll('table').forEach(table => { const wrap = el('div', { className: 'wide' }); table.replaceWith(wrap); wrap.append(table); });
-      cache.set(text, body.cloneNode(true));
-      return body;
-    };
+    await loadMarkdown();
+    const set = text => markdownNode(text, cache);
     let run = null, last = '';
     const keyed = (node, value) => { node.readKey = JSON.stringify(value); return node; };
     messages.forEach(m => {
@@ -526,7 +552,7 @@
   // conversation stays in the program that has it and is used there as before; this works beside it. It follows what
   // is said there while it is open, what the conversation asks is answered here, and what is written here is handed to
   // it where it is. (Taking it into a terminal is another thing: see ways.)
-  async function takeOver(session) {
+  async function takeOver(session, extra) {
     if (!usable()) return false;
     const canPeek = (data.device.features || []).includes('peek');
     let watch = 0, readingView;
@@ -737,7 +763,11 @@
       }
       async function follow(current) {
         const listed = [current.updated, current.status, current.last || ''].join('\n');
-        if (!canPeek || reading || (read && stamp === null && listed === seen)) return;
+        if (!canPeek) {
+          if (!read) { read = true; said.replaceChildren(el('p', { className: 'quiet', textContent: '当前电脑端版本不支持直接查看历史对话' })); }
+          return;
+        }
+        if (reading || (read && stamp === null && listed === seen)) return;
         reading = true;
         const startedAt = stateKey(current);
         try {
@@ -852,13 +882,13 @@
     clearInterval(watch);
     if (readingView) readingView.dispose();
     if (choice && choice.handoff) { await views.together.handoff(choice.handoff); return false; }
-    return choice ? into(choice.session, choice.value) : false;
+    return choice ? into(choice.session, choice.value, extra) : false;
   }
   // Into a terminal of the phone's: by taking the conversation from the program that has it, by a copy, or, for one
   // that nothing has open, simply by going on with it.
-  function into(session, how) {
-    if (how === 'chat' || how === 'chat-close') return chat(session.tool, session.dir, session.id, how === 'chat-close');
-    return start(session.tool, session.dir, session.id, how === 'close', how === 'copy');
+  function into(session, how, extra) {
+    if (how === 'chat' || how === 'chat-close') return chat(session.tool, session.dir, session.id, how === 'chat-close', extra);
+    return start(session.tool, session.dir, session.id, how === 'close', how === 'copy', extra);
   }
   // A new conversation is begun by begin.js: for one project on its page, for any of them from 任务 and from the
   // app's own lists (?new=1).
@@ -1490,6 +1520,15 @@
       if (data.device.shell) TOOLS.shell = data.device.shell;
       if (first && views[tab] && views[tab].open) views[tab].open();
       draw(); peeks();
+      if (window.RemoteTeams && window.RemoteTeams.sync) window.RemoteTeams.sync();
+      if (wantedTeam && tab !== 'together') {
+        const id = wantedTeam;
+        wantedTeam = '';
+        if (usable() && window.RemoteTeams && window.RemoteTeams.open) {
+          const card = ((data.device && data.device.team_cards) || []).find(c => c && c.id === id);
+          window.RemoteTeams.open(id, card || undefined);
+        }
+      }
       if (anew) {
         anew = false; history.replaceState(history.state, '', location.pathname + (project ? '?project=' + encodeURIComponent(project) : ''));
         beginAnywhere().then(leave);
@@ -1509,10 +1548,11 @@
   // What the views of their own work with: the page's helpers, what the computer last said, and the ways into a
   // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
   window.RemoteCliPage = {
-    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep,
+    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep, loadMarkdown, markdownNode,
     get data() { return data; },
     get relayVersion() { return relayVersion; }, startAgyShell,
     get tab() { return tab; },
+    get project() { return project; },
     has: feature => !!data && (data.device.features || []).includes(feature),
     refresh: () => refresh(),
     view(name, made) { views[name] = made; if (data) { if (tab === name && made.open) made.open(); draw(); } }

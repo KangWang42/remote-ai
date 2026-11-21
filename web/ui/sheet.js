@@ -69,15 +69,20 @@
     });
   }
   class Sheet {
-    constructor(label) {
+    constructor(label, options) {
       this.stack = [];
+      this.full = !!(options && options.full);
       this.result = new Promise(done => { this.answer = done; });
       this.entries = 0; this.ignoring = 0; this.gone = false;
-      this.dialog = el('dialog', { className: 'rs', ariaLabel: label || '' });
+      this.dialog = el('dialog', { className: 'rs' + (this.full ? ' rs-full' : ''), ariaLabel: label || '' });
       this.titleNode = el('h2', { id: 'rs-title-' + Math.random().toString(36).slice(2) });
+      this.subtitleNode = el('span', { className: 'rs-sub', hidden: true });
+      this.badgeNode = el('span', { className: 'rs-badge', hidden: true });
+      this.titleWrap = el('div', { className: 'rs-title-wrap' }, this.titleNode, this.subtitleNode);
       this.backButton = el('button', { type: 'button', className: 'rs-icon rs-back', ariaLabel: '返回', html: icon('back', 22), onclick: () => this.goBack() });
+      this.closeButton = el('button', { type: 'button', className: 'rs-icon rs-close', ariaLabel: '关闭', html: icon('close', 18), onclick: () => this.close(null) });
       this.top = el('div', { className: 'rs-top' }, el('span', { className: 'rs-grab', ariaHidden: 'true' }),
-        el('div', { className: 'rs-bar' }, this.backButton, this.titleNode, el('button', { type: 'button', className: 'rs-icon rs-close', ariaLabel: '关闭', html: icon('close', 18), onclick: () => this.close(null) })));
+        el('div', { className: 'rs-bar' }, this.backButton, this.full ? this.titleWrap : this.titleNode, this.full ? this.badgeNode : '', this.closeButton));
       this.body = el('div', { className: 'rs-body' });
       this.foot = el('div', { className: 'rs-foot' });
       this.card = el('div', { className: 'rs-card' }, this.top, this.body, this.foot);
@@ -92,7 +97,7 @@
         if (this.entries > 0) this.entries--;
         if (this.stack.length > 1) this.pop(); else this.finish(null, false);
       };
-      this.drag();
+      if (!this.full) this.drag();
     }
     // a pull down on the top bar takes the sheet away, as on the phone's own sheets
     drag() {
@@ -119,6 +124,23 @@
       this.top.addEventListener('pointercancel', end);
     }
     get page() { return this.stack[this.stack.length - 1] || null; }
+    setHeader({ title, subtitle, badge, tone } = {}) {
+      if (title !== undefined) {
+        if (this.page) this.page.title = title;
+        this.titleNode.textContent = title || '';
+      }
+      if (this.full) {
+        if (subtitle !== undefined) {
+          this.subtitleNode.textContent = subtitle || '';
+          this.subtitleNode.hidden = !subtitle;
+        }
+        if (badge !== undefined) {
+          this.badgeNode.textContent = badge || '';
+          this.badgeNode.className = 'rs-badge' + (tone ? ' ' + tone : '');
+          this.badgeNode.hidden = !badge || this.stack.length > 1;
+        }
+      }
+    }
     show(direction) {
       const page = this.page;
       if (!page) return;
@@ -128,13 +150,29 @@
       const p = {
         sheet: this, body: view, foot: this.foot,
         set title(text) { page.title = text; },
+        setHeader: info => { if (this.page === page) this.setHeader(info); },
         refresh: () => { if (this.page === page) { page.scroll = this.body.scrollTop; this.show('same'); } }
       };
+      this.titleNode.textContent = page.title || '';
+      if (this.full) {
+        const rootPage = this.stack.length < 2;
+        this.backButton.hidden = rootPage;
+        this.closeButton.classList.toggle('rs-close-back', rootPage);
+        this.closeButton.innerHTML = icon(rootPage ? 'back' : 'close', rootPage ? 22 : 18);
+        this.closeButton.setAttribute('aria-label', rootPage ? '返回' : '关闭');
+        if (!rootPage) {
+          this.subtitleNode.textContent = '';
+          this.subtitleNode.hidden = true;
+          this.badgeNode.textContent = '';
+          this.badgeNode.hidden = true;
+        }
+      } else {
+        this.backButton.hidden = this.stack.length < 2;
+      }
       try { page.build(p); }
       catch (error) { view.append(el('p', { className: 'rs-note bad', textContent: error.message || '没有显示出来' })); console.error(error); }
       if (direction === 'same') view.style.animation = 'none';
       this.titleNode.textContent = page.title || '';
-      this.backButton.hidden = this.stack.length < 2;
       this.body.append(view);
       this.body.scrollTop = direction === 'same' || direction === 'back' ? keep : 0;
     }
@@ -358,5 +396,5 @@
     return done;
   }
   ui.confirm = confirm;
-  window.RemoteSheet = { open: (page, label) => new Sheet(label || page.title).open(page), ui, copy, confirm: options => new Sheet(options.title).open(confirm(options)), get current() { return current; } };
+  window.RemoteSheet = { open: (page, label, options) => new Sheet(label || page.title, options || (page && page.full ? { full: true } : null)).open(page), ui, copy, confirm: options => new Sheet(options.title).open(confirm(options)), get current() { return current; } };
 })();
