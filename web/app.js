@@ -256,9 +256,12 @@
   // `ways`): its application's own channel, its tool's hooks, its tool's own way to one that sits idle. '' where
   // there is none, and then the computer's words why. (A relay of an earlier version passes neither on: the one
   // way it names for the conversation is taken then.)
-  const APP = 'codex-desktop';
+  const NATIVE_APPS = ['codex-desktop', 'agy-desktop'];
+  const isNativeApp = way => NATIVE_APPS.includes(way);
+  const needsTurnForStop = way => way === 'codex-desktop';
   const wayOf = (s, thing) => !s || !s.live ? '' : s.ways ? s.ways[thing] || ''
-    : thing === 'end' ? (s.can_takeover === true ? 'process' : '') : !can(s, thing) ? '' : thing !== 'answer' && s.transport === APP ? APP : 'hook';
+    : thing === 'end' ? (s.can_takeover === true ? 'process' : '') : !can(s, thing) ? ''
+    : isNativeApp(s.transport) && (thing !== 'answer' || s.transport === 'agy-desktop') ? s.transport : 'hook';
   const whyNot = (s, thing, usual) => (s && s.why && s.why[thing]) || usual;
   const running = t => t.state === 'running' || t.state === 'starting';
   const usable = () => data && data.device.online && data.device.enabled;
@@ -267,7 +270,7 @@
   // Reading a transcript alone does not imply that the original application accepts remote input.
   const controlMode = session => {
     if (!session || !session.live) return 'saved';
-    return session.transport === APP || can(session, 'say') || can(session, 'answer') || can(session, 'stop') ? 'shared' : 'read';
+    return isNativeApp(session.transport) || can(session, 'say') || can(session, 'answer') || can(session, 'stop') ? 'shared' : 'read';
   };
   const controlCopy = {
     shared: '连接电脑上的原对话 · 返回不结束任务',
@@ -286,7 +289,7 @@
       if (!Array.isArray(raw)) return [];
       const now = Date.now();
       const restored = raw.filter(p => p && p.payload && /^[a-f0-9]{16,32}$/.test(p.payload.id) && p.payload.session === session.id &&
-        p.payload.action === 'say' && p.payload.transport === APP && p.payload.text === p.text &&
+        p.payload.action === 'say' && isNativeApp(p.payload.transport) && p.payload.text === p.text &&
         typeof p.text === 'string' && p.text.length > 0 && p.text.length <= 8000 && Number.isFinite(p.before) && p.before >= 0 &&
         Number.isFinite(p.createdAt) && now >= p.createdAt && now - p.createdAt < 24 * 60 * 60 * 1000).map(p => {
           // A tab may have disappeared between dispatch and its response. Treat such a row as
@@ -300,7 +303,7 @@
   }
   function saveDesktopPending(key, pending) {
     try {
-      const nativePending = pending.filter(p => p.payload.transport === APP);
+      const nativePending = pending.filter(p => isNativeApp(p.payload.transport));
       if (nativePending.length) sessionStorage.setItem(key, JSON.stringify(nativePending));
       else sessionStorage.removeItem(key);
     } catch (error) { /* private browsing or a full storage quota */ }
@@ -398,12 +401,13 @@
   const asChat = s => chatOk(s.tool) && saved('newkind', '') !== 'term';
   const goOn = (s, extra) => asChat(s) ? chat(s.tool, s.dir, s.id, false, extra) : start(s.tool, s.dir, s.id, false, false, extra);
 
+  const speakerOf = s => s && (/Antigravity 桌面版/.test(s.origin || s.kind || '') || s.transport === 'agy-desktop') ? 'Antigravity' : TOOLS[s.tool];
   async function readHistory(session) {
     if (!usable()) { toast('电脑离线，暂时无法打开'); return false; }
     if (!pageHost.has('peek')) return goOn(session);
     const key = fromBench ? '' : saveListPosition();
     const ui = window.RemoteSheet.ui;
-    const title = session.organize?.title || session.title || TOOLS[session.tool];
+    const title = session.organize?.title || session.title || speakerOf(session);
     const sheet = window.RemoteSheet.open({ full: true, title, build(p) {
       const record = el('div', { className: 'said saved-reader', ariaLabel: '对话记录' });
       const load = async () => {
@@ -413,7 +417,7 @@
           const content = el('div');
           if (reply.more) content.append(ui.note('更早的内容在电脑上'));
           if (!reply.messages?.length) content.append(ui.empty('这段对话暂无可读内容'));
-          await writeSaid(content, reply.messages || [], TOOLS[session.tool], new Set(), new Map());
+          await writeSaid(content, reply.messages || [], speakerOf(session), new Set(), new Map());
           record.replaceChildren(content);
         } catch (error) {
           record.replaceChildren(ui.note(error.message, 'bad'), ui.row({ label: '重试读取', act: load }));
@@ -443,11 +447,11 @@
   // The same for a conversation that is open on the computer: this is shared collaboration. The message is delivered
   // to the program that owns the conversation and the window stays there; it is never presented as a hand-off.
   async function tell(s) {
-    if (s.transport === APP) return takeOver(s);
+    if (isNativeApp(s.transport)) return takeOver(s);
     if (!usable()) return toast('电脑离线，暂时不能发送');
     const text = await openSheet((form, finish) => {
       const box = el('textarea', { rows: 3, maxLength: 8000, placeholder: '发送消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
-      form.append(el('h3', { textContent: s.title }), el('p', { textContent: s.last || TOOLS[s.tool] + ' · ' + (s.dir || base(s.folder)) }),
+      form.append(el('h3', { textContent: s.title }), el('p', { textContent: s.last || speakerOf(s) + ' · ' + (s.dir || base(s.folder)) }),
         el('div', { className: 'control-mode shared', role: 'status', textContent: '共享协作：消息会交给电脑上的原对话，电脑窗口继续保持打开' }), box,
         el('button', { type: 'button', className: 'choice solid', onclick: () => { if (box.value.trim()) finish(box.value); else box.focus(); } }, el('span', { textContent: '发送' })));
       setTimeout(() => box.focus(), 80);
@@ -459,31 +463,56 @@
     refresh();
   }
   const answering = new Set();
-  async function answerAsk(s, allow, scope = 'once') {
-    const id = s.ask.id;
-    if (answering.has(id)) return;
+  async function answerAsk(s, allow, scope = 'once', choice = '') {
+    const id = s.ask && s.ask.id;
+    if (!id || answering.has(id)) return false;
     answering.add(id);
     document.querySelectorAll('[data-approval="' + id + '"] button').forEach(b => b.disabled = true);
-    try { await api('api/conversation', { id: newId(), session: s.id, action: 'answer', ask: id, allow, scope }); toast(allow ? '已向电脑提交授权' : '已向电脑提交拒绝'); }
-    catch (error) { toast(error.message); }
+    let ok = false;
+    try {
+      const payload = { id: newId(), session: s.id, action: 'answer', ask: id, allow, scope };
+      if (choice) payload.choice = choice;
+      const answerWay = wayOf(s, 'answer') || (isNativeApp(s.transport) ? s.transport : '');
+      if (isNativeApp(answerWay)) payload.transport = answerWay;
+      await api('api/conversation', payload);
+      toast(choice ? '已提交选择' : allow ? '已向电脑提交授权' : '已向电脑提交拒绝');
+      ok = true;
+    } catch (error) { toast(error.message); }
     finally { answering.delete(id); }
     await refresh();
     document.querySelectorAll('[data-approval="' + id + '"] button').forEach(b => b.disabled = false);
+    return ok;
   }
   function approvalActions(s, after = () => {}) {
-    const answers = el('div', { className: 'answers' });
+    const options = s.ask.options && s.ask.options.length ? s.ask.options : [{ id: 'once', label: '允许一次', detail: '只允许这一次操作' }];
+    const hasChoice = options.some(o => /^choice:\d+$/.test(o.id || ''));
+    const hasDeny = options.some(o => o.id === 'deny');
+    const answers = el('div', { className: 'answers' + (hasChoice ? ' choices' : '') });
     answers.dataset.approval = s.ask.id;
-    if (can(s, 'answer')) {
-      const options = s.ask.options && s.ask.options.length ? s.ask.options : [{ id: 'once', label: '允许一次', detail: '只允许这一次操作' }];
-      options.forEach(o => answers.append(el('button', { type: 'button', className: o.id === 'once' ? 'yes' : 'see', textContent: o.label, title: o.detail, disabled: answering.has(s.ask.id), onclick: () => {
-        if (o.id === 'once') { answerAsk(s, true, o.id).then(after); return; }
-        if (answers.querySelector('.approval-rule')) return;
-        const rule = el('div', { className: 'approval-rule' }, el('p', { textContent: o.detail }),
-          el('button', { type: 'button', className: 'yes', textContent: '确认保存并允许', onclick: () => answerAsk(s, true, o.id).then(after) }),
-          el('button', { type: 'button', className: 'see', textContent: '取消', onclick: () => rule.remove() }));
-        answers.append(rule);
-      } })));
-      answers.append(el('button', { type: 'button', className: 'no', textContent: '拒绝', disabled: answering.has(s.ask.id), onclick: () => answerAsk(s, false).then(after) }));
+    if (can(s, 'answer') || !!wayOf(s, 'answer')) {
+      options.forEach(o => {
+        if (o.id === 'deny') {
+          answers.append(el('button', { type: 'button', className: 'no', textContent: o.label || '拒绝', title: o.detail || '', disabled: answering.has(s.ask.id), onclick: () => answerAsk(s, false, 'once').then(after) }));
+          return;
+        }
+        if (/^choice:\d+$/.test(o.id || '')) {
+          const detail = o.detail && o.detail !== o.label ? el('small', { textContent: o.detail }) : '';
+          answers.append(el('button', { type: 'button', className: 'yes choice-opt', title: o.detail || o.label || '', disabled: answering.has(s.ask.id), onclick: () => answerAsk(s, true, 'once', o.id).then(after) },
+            el('span', { textContent: o.label || o.id }), detail));
+          return;
+        }
+        answers.append(el('button', { type: 'button', className: o.id === 'once' ? 'yes' : 'see', textContent: o.label, title: o.detail || '', disabled: answering.has(s.ask.id), onclick: () => {
+          if (o.id === 'once') { answerAsk(s, true, o.id).then(after); return; }
+          if (answers.querySelector('.approval-rule')) return;
+          const rule = el('div', { className: 'approval-rule' }, el('p', { textContent: o.detail || '将在本机保存此允许规则' }),
+            el('button', { type: 'button', className: 'yes', textContent: '确认保存并允许', onclick: () => answerAsk(s, true, o.id).then(after) }),
+            el('button', { type: 'button', className: 'see', textContent: '取消', onclick: () => rule.remove() }));
+          answers.append(rule);
+        } }));
+      });
+      if (!hasDeny) {
+        answers.append(el('button', { type: 'button', className: 'no', textContent: hasChoice ? '取消' : '拒绝', disabled: answering.has(s.ask.id), onclick: () => answerAsk(s, false, 'once').then(after) }));
+      }
     } else answers.append(el('span', { className: 'there', textContent: '请在电脑或原终端中选择授权范围' }));
     return answers;
   }
@@ -619,9 +648,9 @@
         stopping.textContent = stopAttempt ? '正在查询…' : '正在停止…';
         stopSays(stopAttempt ? '正在查询上次停止请求的结果…' : '正在请求停止回答…');
         try {
-          let current = now(), way = stopAttempt ? APP : wayOf(current, 'stop');
+          let current = now(), way = stopAttempt ? stopAttempt.transport : wayOf(current, 'stop');
           // A just-started turn may not yet be present in the overview. Refresh before deciding it cannot stop.
-          if (!stopAttempt && (!way || (way === APP && !current.turn))) {
+          if (!stopAttempt && (!way || (needsTurnForStop(way) && !current.turn))) {
             await refresh();
             current = now(); way = wayOf(current, 'stop');
           }
@@ -630,13 +659,16 @@
             stopSays(why);
             return;
           }
-          if (way === APP && !stopAttempt && !current.turn) {
+          if (needsTurnForStop(way) && !stopAttempt && !current.turn) {
             stopSays('尚未取得当前执行轮次，停止请求未发送。请稍后重试，或在电脑上停止');
             return;
           }
-          const query = !!stopAttempt;
-          if (way === APP && !stopAttempt) stopAttempt = { id: newId(), session: current.id, action: 'stop', turn: current.turn, transport: APP };
-          const result = await api('api/conversation', way === APP ? { ...stopAttempt, receipt: query } : { id: newId(), session: current.id, action: 'stop', transport: way });
+          const query = !!stopAttempt, nativeStop = isNativeApp(way);
+          if (nativeStop && !stopAttempt) {
+            stopAttempt = { id: newId(), session: current.id, action: 'stop', transport: way };
+            if (needsTurnForStop(way)) stopAttempt.turn = current.turn;
+          }
+          const result = await api('api/conversation', nativeStop ? { ...stopAttempt, receipt: query } : { id: newId(), session: current.id, action: 'stop', transport: way });
           if (result.status === 'confirmed') { stopSays(result.goal_pause_error ? '本次回答已停止，但目标未暂停，请在电脑上检查' : '已停止本次回答，可以继续对话'); stopAttempt = null; }
           else if (result.status === 'asked') stopSays('已请求停止，将在下一次工具操作前停下；当前输出可能仍会继续');
           else stopSays('停止结果尚未确认，请查询停止结果或检查电脑上的原对话');
@@ -722,7 +754,7 @@
       state.before(syncNote);
       state.after(stopNote);
       const stateKey = current => JSON.stringify([current.updated, current.status, current.last, current.turn]);
-      let stamp = '', seen = '', read = false, reading = false, sending = false, stands = null, standsAt = '', readError = '', quick = 0, asked = 0, changed = 0, sawBusy = 0;
+      let stamp = '', seen = '', read = false, reading = false, sending = false, stands = null, standsAt = '', liveAsk = null, liveAskAt = '', readError = '', quick = 0, asked = 0, changed = 0, sawBusy = 0, lastKind = '';
       const pendingScope = pendingKey(session);
       const pending = desktopPending.get(pendingScope) || loadDesktopPending(pendingScope, session);
       desktopPending.set(pendingScope, pending);
@@ -730,6 +762,20 @@
       const savePending = () => saveDesktopPending(pendingScope, pending);
       const same = (messages, text) => messages.filter(m => m.role === 'user' && String(m.text || '').trim() === text).length;
       let record = [];
+      function mergeCurrent(listed) {
+        const key = stateKey(listed), freshRead = standsAt === key, freshAsk = liveAskAt === key;
+        let out = listed;
+        if (freshRead && stands !== null && !listed.ask && listed.transport !== 'codex-desktop') {
+          if (stands !== 'confirm' || (freshAsk && liveAsk)) out = Object.assign({}, out, { status: stands });
+        }
+        if (freshAsk && liveAsk && !out.ask) {
+          const reach = Array.isArray(out.reach) ? (out.reach.includes('answer') ? out.reach : out.reach.concat('answer')) : ['answer'];
+          const answerWay = wayOf(out, 'answer') || (isNativeApp(out.transport) ? out.transport : '');
+          const ways = out.ways ? Object.assign({}, out.ways, { answer: out.ways.answer || answerWay }) : out.ways;
+          out = Object.assign({}, out, { status: 'confirm', ask: liveAsk, reach, ways });
+        }
+        return out;
+      }
       // What the phone said and the conversation has not taken yet stands under what was said, message by message,
       // as the computer keeps it (`queued`): waiting, or held since the conversation was told to stop. Each can be
       // taken back; what is held can be sent after all. What this page sent itself is shown with its whole words;
@@ -775,7 +821,7 @@
           if (kept.some(item => item.id === p.payload.id)) p.waited = true;
           // (one that waited and waits no more has been handed to the conversation: its record says so soon)
           const row = line(p.text, p.payload.id, p.waited ? '已交给对话' : p.delivery || '手机消息 · 正在送达', !(p.sent || p.uncertain));
-          if (p.payload.transport === APP && p.uncertain) row.append(el('button', { type: 'button', textContent: '查询发送结果', onclick: async event => {
+          if (isNativeApp(p.payload.transport) && p.uncertain) row.append(el('button', { type: 'button', textContent: '查询发送结果', onclick: async event => {
             event.currentTarget.disabled = true;
             try { await deliver(p, true); } finally { waiting(); refresh(); }
           } }));
@@ -789,7 +835,7 @@
       // it now or takes it when it has done what it is at. The application's channel keeps a receipt that can be
       // asked for again when the answer was lost; by any other way a refusal is final. False: it was not sent.
       async function deliver(mine, query = false) {
-        const receipt = mine.payload.transport === APP;
+        const receipt = isNativeApp(mine.payload.transport);
         try {
           const result = await api('api/conversation', receipt ? { ...mine.payload, receipt: query } : mine.payload);
           mine.uncertain = result.status !== 'accepted' || result.sent !== true; mine.sent = !mine.uncertain;
@@ -810,24 +856,35 @@
         if (reading || (read && stamp === null && listed === seen)) return;
         reading = true;
         const startedAt = stateKey(current);
+        let stateChanged = false;
         try {
           const got = await api('api/conversation', Object.assign({ id: newId(), session: session.id }, stamp ? { since: stamp } : {}));
           readError = '';
-          if (typeof got.status === 'string') { stands = got.status; standsAt = startedAt; }
+          if (typeof got.status === 'string') {
+            if (stands !== got.status || standsAt !== startedAt) stateChanged = true;
+            stands = got.status; standsAt = startedAt;
+          }
+          if (Object.prototype.hasOwnProperty.call(got, 'ask')) {
+            const nextAsk = got.ask && typeof got.ask === 'object' && got.ask.id ? got.ask : null;
+            if (JSON.stringify(liveAsk) !== JSON.stringify(nextAsk) || liveAskAt !== startedAt) stateChanged = true;
+            if (nextAsk && (!current.ask || current.ask.id !== nextAsk.id)) refresh();
+            liveAsk = nextAsk; liveAskAt = startedAt;
+          }
           if (!got.same) {
             record = got.messages || [];
             if (typeof got.asked === 'number') asked = got.asked;
             if (typeof got.updated === 'number') changed = got.updated;
             const fresh = el('div');
             if (got.more) fresh.append(el('p', { className: 'earlier', textContent: '更早的内容在电脑上' }));
-            await writeSaid(fresh, record, TOOLS[session.tool], phoneTexts, textCache);
+            await writeSaid(fresh, record, speakerOf(current), phoneTexts, textCache);
             if (!said.isConnected) return;
             const initial = !read;
             reader.paint(said, () => reader.change(() => { reader.replace(fresh); waiting(); latest.hidden = atEnd(); }, initial));
           }
           stamp = typeof got.stamp === 'string' ? got.stamp : null; seen = listed; read = true;
-        } catch (error) { stands = null; readError = '对话同步中断，正在重试：' + error.message; if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
+        } catch (error) { stands = null; liveAsk = null; readError = '对话同步中断，正在重试：' + error.message; if (!read) said.replaceChildren(el('p', { className: 'quiet', textContent: error.message })); }
         reading = false;
+        if (stateChanged && said.isConnected && $('sheet').open) show();
       }
       // ---- how it stands, what it asks, and the box
       const box = el('textarea', { rows: 1, maxLength: 8000, placeholder: '发消息', autocapitalize: 'off', spellcheck: false, ariaLabel: '消息' });
@@ -841,12 +898,14 @@
       });
       const send = el('button', { type: 'button', className: 'solid', textContent: '发送', onclick: async () => {
         const original = box.value, text = original.trim();
-        if (send.disabled || !usable() || !can(now(), 'say') || now().ask) return;
+        const active = mergeCurrent(now());
+        if (send.disabled || !usable() || !can(active, 'say') || active.ask) return;
         if (!text) return box.focus();
         stopSays('');
         // what is written stands in the window at once, as what the user said, while it is on its way
         const mine = { text, before: same(record, text) + pending.filter(p => p.text === text).length, sent: false, createdAt: Date.now(), payload: { id: newId(), session: session.id, action: 'say', text } };
-        if (wayOf(now(), 'say') === APP) mine.payload.transport = APP;
+        const sayWay = wayOf(active, 'say');
+        if (isNativeApp(sayWay)) mine.payload.transport = sayWay;
         pending.push(mine); savePending(); draft.set(original);
         phoneTexts.add(text);
         waiting(); said.scrollTop = said.scrollHeight;
@@ -863,7 +922,7 @@
       let shown = '';
       function show() {
         // how it stands is what the computer said of it last: with the conversation itself, or in the lists
-        const listed = now(), current = stands === null || standsAt !== stateKey(listed) || stands === 'confirm' || listed.ask || listed.transport === APP ? listed : Object.assign({}, listed, { status: stands }), phase = current.live ? reachPhase(current) : '';
+        const listed = now(), current = mergeCurrent(listed), phase = current.live ? reachPhase(current) : '';
         syncNote.textContent = readError || (String(current.last || '').startsWith('Claude Code 本次执行失败：') ? current.last : '');
         syncNote.hidden = !syncNote.textContent;
         const mode = controlMode(current);
@@ -874,6 +933,7 @@
         follow(listed);
         // the line of how it stands: its clock goes on between the computer's words
         const kind = !current.live ? 'stopped' : phase || 'stopped';
+        lastKind = kind;
         // at work since its user spoke, as its record says; where the record does not say, since this window saw it at work
         sawBusy = kind !== 'busy' ? 0 : sawBusy || Date.now();
         const from = kind === 'busy' ? (asked && asked <= Date.now() ? asked : sawBusy) : kind === 'stopped' || kind === 'waiting' ? changed || current.updated : 0;
@@ -883,7 +943,8 @@
         clock.textContent = !from ? '' : kind === 'busy' ? lasted(Date.now() - from) : ago(from);
         ending.hidden = !canEnd(current);
         // A running CLI is not necessarily interruptible. Never present ending its process as stopping one turn.
-        const stoppable = !!wayOf(current, 'stop') && (wayOf(current, 'stop') !== APP || !!current.turn);
+        const stopWay = wayOf(current, 'stop');
+        const stoppable = !!stopWay && (!needsTurnForStop(stopWay) || !!current.turn);
         stopping.hidden = !stopAttempt && !stoppable;
         if (kind === 'busy' && !stoppable && !stopAttempt && !stopping.disabled) {
           stopSays(whyNot(current, 'stop', '当前对话不支持从手机单独中断本轮回答，请在电脑上停止'));
@@ -897,12 +958,13 @@
         asks.textContent = '';
         asks.hidden = !current.ask;
         if (current.ask) {
-          const answers = approvalActions(current, show);
+          const askId = current.ask.id;
+          const answers = approvalActions(current, ok => { if (ok && liveAsk && liveAsk.id === askId) liveAsk = null; shown = ''; show(); });
           asks.append(el('div', { className: 'card asking' }, el('div', { className: 'ask' }, el('pre', { textContent: current.ask.text }), answers)));
         }
         // The box stands wherever something can be said, and also where it will be once the conversation has done
         // what it is at (its application takes nothing meanwhile): the next thing can be written there already.
-        const sayable = can(current, 'say') && !current.ask, later = !sayable && !current.ask && current.live && current.transport === APP;
+        const sayable = can(current, 'say') && !current.ask, later = !sayable && !current.ask && current.live && isNativeApp(current.transport);
         write.hidden = !sayable && !later;
         send.disabled = sending || !sayable; box.placeholder = sayable ? '发消息' : '先写草稿，稍后发送';
         below.textContent = '';
@@ -915,9 +977,14 @@
         }
       }
       show();
-      // every second; for a while after something was written here, twice as often
+      // ~600ms while busy/confirm or in the quick window after sending; ~1200ms while idle
       let ticks = 0;
-      watch = setInterval(() => { if ($('sheet').open && (++ticks % 2 === 0 || Date.now() < quick)) show(); }, 500);
+      watch = setInterval(() => {
+        if (!$('sheet').open) return;
+        ticks++;
+        const fast = lastKind === 'busy' || lastKind === 'confirm' || Date.now() < quick;
+        if (fast ? ticks % 2 === 0 : ticks % 4 === 0) show();
+      }, 300);
     }, true);
     clearInterval(watch);
     if (readingView) readingView.dispose();
@@ -982,7 +1049,7 @@
   // (one that no program has open is told by what started it)
   // and one that a program has open by what the computer says uses it (a command line inside an editor's terminal
   // is a terminal's); a computer of an earlier version says only where the program runs
-  const sourceOf = s => !s.live || s.kind ? sourceOfKind(s.kind) : /桌面版|后台服务/.test(s.origin || '') || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'term';
+  const sourceOf = s => !s.live || s.kind ? sourceOfKind(s.kind) : /桌面版|后台服务/.test(s.origin || '') || isNativeApp(s.transport) || sessionHost(s) === 'shared' || (s.origin && s.origin !== '命令行' && s.origin !== '电脑独立终端') ? 'app' : 'term';
   const TEAM_MODES = { review: '写审', lead: '分工协作', compare: '比稿' };
   const teamUpdatedMs = value => { const n = Number(value) || 0; return n > 0 && n < 10000000000 ? n * 1000 : n; };
   const summarizeTeamTools = list => {
@@ -1089,7 +1156,7 @@
     if (x.t) return tool + (x.live ? ' · ' + (x.t.form === 'chat' ? PHONE_CHAT : PHONE) : '');
     const kind = x.s.kind || '';
     if (!x.live) return !kind ? tool : /桌面版/.test(kind) ? kind : tool + ' · ' + kind;
-    const origin = x.s.origin && x.s.origin !== '电脑独立终端' ? x.s.origin : '';
+    const origin = x.s.origin && x.s.origin !== '电脑独立终端' ? x.s.origin : (x.s.transport === 'agy-desktop' ? 'Antigravity 桌面版' : x.s.transport === 'codex-desktop' ? 'Codex 桌面版' : '');
     return !origin ? tool : /桌面版|后台服务/.test(origin) ? origin : tool + ' · ' + origin + (kind === '终端' && origin !== '命令行' ? ' 的终端' : '');
   };
   // what a search looks through

@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / 'relay'))
 from relay import Relay
 from ws_client import Socket
 
-CLAUDE, CLI, APP, OUTSIDE = ('11111111-2222-3333-4444-55555555555%d' % n for n in range(1, 5))
+CLAUDE, CLI, APP, OUTSIDE, AGY = ('11111111-2222-3333-4444-55555555555%d' % n for n in range(1, 6))
 PROJECT = '中文项目'
 
 
@@ -47,6 +47,7 @@ def main():
                  ways={'say': '', 'stop': '', 'answer': '', 'end': ''}, why={'say': '暂时无法连接 Codex 原对话：应用连接尚未就绪、工作目录无法确认，或此版本尚未适配。请在电脑上打开这段对话后刷新；无需先添加项目', 'end': '这段对话由电脑上的应用管理，请在那里关闭它'}),
         ]
         asked, forwarded, opened, events, refuse = [], [], [], [], [False]
+        agy_live_ask = [None]
         board_mode = [False]
         read_failure = [False]
         board_terminals = []
@@ -85,6 +86,13 @@ def main():
                     if payload.get('action', 'read') == 'read':
                         one = next(s for s in sessions if s['id'] == payload['session'])
                         if read_failure[0]: return self.reply({'error': '测试：读取暂时中断'}, 503)
+                        reply = {'messages': transcript, 'status': one['status'], 'stamp': str(len(transcript))}
+                        if one['id'] == AGY:
+                            reply['status'] = 'confirm' if agy_live_ask[0] else one['status']
+                            reply['ask'] = agy_live_ask[0]
+                        return self.reply(reply)
+                        one = next(s for s in sessions if s['id'] == payload['session'])
+                        if read_failure[0]: return self.reply({'error': '测试：读取暂时中断'}, 503)
                         return self.reply({'messages': transcript, 'status': one['status'], 'stamp': str(len(transcript))})
                     asked.append(payload)
                     answers = {}
@@ -111,8 +119,10 @@ def main():
                             ack = {'id': op['id'], 'result': {}}
                         elif op['action'] == 'session_answer':
                             one = next(s for s in sessions if s['id'] == payload['session'])
+                            if one['id'] == AGY:
+                                agy_live_ask[0] = None
                             one.update(status='busy', ask=None, reach=['say', 'stop'])
-                            one['ways']['answer'] = ''
+                            if one.get('ways'): one['ways']['answer'] = ''
                             report()
                             ack = {'id': op['id'], 'result': {'status': 'accepted'}}
                         elif op['action'] in ('session_withdraw', 'session_release'):
@@ -141,10 +151,18 @@ def main():
         pipe = None
         try:
             active = Path(temporary) / 'browser/DevToolsActivePort'
+            debug = 0
             for _ in range(100):
-                if active.exists(): break
+                if active.exists():
+                    try:
+                        lines = active.read_text().splitlines()
+                        if lines:
+                            debug = int(lines[0])
+                            break
+                    except PermissionError:
+                        pass
                 time.sleep(.1)
-            debug = int(active.read_text().splitlines()[0])
+            assert debug, 'DevToolsActivePort did not become readable'
             conn = http.client.HTTPConnection('127.0.0.1', debug)
             conn.request('PUT', '/json/new?about:blank')
             page = json.loads(conn.getresponse().read()); conn.close()
@@ -465,8 +483,76 @@ def main():
             picture('claude-failed.png')
             sessions[0].update(status='busy', last='')
             until("document.querySelector('.sync-note')?.hidden && document.querySelector('#sheet .state').classList.contains('busy')")
+
+            # ---- Antigravity Desktop: real Relay + live got.ask card, askQuestion multi-choice, deny deduplication, and 3-way project switcher
+            info['tools'] = ['claude', 'codex', 'agy']
+            info['features'] = ['peek', 'reach', 'chat', 'chat-agy', 'codex-desktop-open', 'claude-desktop-open', 'agy-desktop-open', 'agy-desktop-control']
+            sessions.append(dict(
+                dir=PROJECT, updated=now, live=True, now=True, host='shared', id=AGY, tool='agy',
+                title='Antigravity 桌面版里的对话', origin='Antigravity 桌面版', kind='Antigravity 桌面版',
+                status='busy', ask=None, reach=['say', 'stop', 'answer'], transport='agy-desktop', can_takeover=False,
+                ways={'say': 'agy-desktop', 'stop': 'agy-desktop', 'answer': 'agy-desktop', 'end': ''}, why={}
+            ))
+            report()
+            agy_live_ask[0] = {
+                'id': 'abcdef123458', 'kind': 'question', 'text': '请选择本次发布渠道',
+                'options': [
+                    {'id': 'choice:0', 'label': '预发布版', 'detail': '先发布预发布版本并验收'},
+                    {'id': 'choice:1', 'label': '正式版', 'detail': '直接向正式渠道推送'},
+                    {'id': 'deny', 'label': '暂不发布'}
+                ]
+            }
+            for width in (320, 390):
+                ask('Emulation.setDeviceMetricsOverride', width=width, height=900, deviceScaleFactor=1, mobile=True)
+                window(AGY)
+                until("document.querySelector('#sheet .answers.choices .choice-opt') !== null", 'got.ask renders multi-choice immediately')
+                assert value("document.querySelector('#sheet .stands-text').textContent.includes('Antigravity 桌面版')")
+                assert value("Array.from(document.querySelectorAll('#sheet .said .turn.assistant > b')).every(b => b.textContent === 'Antigravity')")
+                assert value("document.querySelectorAll('#sheet .answers.choices .choice-opt').length") == 2
+                assert value("document.querySelectorAll('#sheet .answers.choices .no').length") == 1, 'built-in deny must not duplicate reject button'
+                assert value("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+                picture('agy-choice-%d.png' % width)
+            # Agent heartbeat reports the same ask to Relay before the phone submits its choice.
+            sessions[-1].update(status='confirm', ask=agy_live_ask[0], reach=['say', 'stop', 'answer'],
+                                ways={'say': 'agy-desktop', 'stop': 'agy-desktop', 'answer': 'agy-desktop', 'end': ''})
+            report()
+            value("document.querySelector('#sheet .answers.choices .choice-opt').click()")
+            until("!document.querySelector('#sheet .ask')", 'submitting choice retires card')
+            assert asked[-1]['choice'] == 'choice:0' and asked[-1]['allow'] is True and asked[-1]['transport'] == 'agy-desktop', asked[-1]
+            assert forwarded[-1]['action'] == 'session_answer' and forwarded[-1]['choice'] == 'choice:0' and forwarded[-1]['transport'] == 'agy-desktop', forwarded[-1]
+
+            # Command approval with once / always / deny does not render a second deny button.
+            agy_live_ask[0] = {
+                'id': 'abcdef123459', 'kind': 'command', 'text': '运行命令：npm test',
+                'options': [
+                    {'id': 'once', 'label': '允许一次', 'detail': '仅执行这一次'},
+                    {'id': 'always', 'label': '始终允许', 'detail': '记住此命令'},
+                    {'id': 'deny', 'label': '拒绝执行'}
+                ]
+            }
+            sessions[-1].update(status='confirm', ask=agy_live_ask[0], reach=['say', 'stop', 'answer'],
+                                ways={'say': 'agy-desktop', 'stop': 'agy-desktop', 'answer': 'agy-desktop', 'end': ''})
+            report()
+            window(AGY)
+            until("document.querySelector('#sheet .answers .no')?.textContent === '拒绝执行'")
+            assert value("document.querySelectorAll('#sheet .answers .no').length") == 1
+            value("document.querySelector('#sheet .answers .no').click()")
+            until("!document.querySelector('#sheet .ask')")
+            assert asked[-1]['allow'] is False and asked[-1]['transport'] == 'agy-desktop' and 'choice' not in asked[-1], asked[-1]
+            assert forwarded[-1]['action'] == 'session_answer' and forwarded[-1]['allow'] is False and forwarded[-1]['transport'] == 'agy-desktop', forwarded[-1]
+
+            # Project page 3-way switcher at 320px width
+            ask('Emulation.setDeviceMetricsOverride', width=320, height=900, deviceScaleFactor=1, mobile=True)
+            ask('Page.navigate', url='http://127.0.0.1:%d/?project=%s' % (port, PROJECT))
+            until("document.querySelectorAll('#begin .seg button').length === 3")
+            assert texts('#begin .seg button') == ['应用', '桌面', '终端']
+            value("Array.from(document.querySelectorAll('#begin .seg button')).find(b => b.textContent === '桌面').click()")
+            until("Array.from(document.querySelectorAll('#launch button')).map(b => b.textContent).join(',') === 'Antigravity,Claude,Codex'")
+            assert value("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+            picture('project-desktop-tab-320.png')
+
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
-            print('ways UI: Claude Code and Codex are told, stopped and ended by the same controls, each by its own way; reasons shown; a desktop app opened for either')
+            print('ways UI: Claude Code, Codex and Antigravity are told, stopped, answered (multi-choice & approval) and opened by the same controls; reasons shown; 3-way switcher verified')
         finally:
             if pipe: pipe.close()
             browser.terminate(); browser.wait(timeout=10)

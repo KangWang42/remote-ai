@@ -30,8 +30,14 @@ def main():
         fail_once = [True]
         mode = ['handed_off']
         sid = '11111111-2222-3333-4444-555555555555'
+        agy_sid = '22222222-3333-4444-5555-666666666666'
         sessions = []
         native_requests = []
+        agy_open_requests = []
+        agy_conv_requests = []
+        agy_open_fail_once = [True]
+        agy_send_fail_once = [True]
+        agy_transcript = [{'role': 'user', 'text': '直接帮我核对配置'}, {'role': 'assistant', 'text': '正在核对配置文件。'}]
         lost_send = [True]
         echo_send = [False]
         transcript = [{'role': 'user', 'text': '电脑上的第一句'}, {'role': 'assistant', 'text': '电脑回答，手机可以接着提问。'}]
@@ -64,6 +70,37 @@ def main():
             def do_POST(self):
                 if self.path == '/api/conversation':
                     payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                    if payload.get('session') == agy_sid:
+                        agy_one = next((s for s in sessions if s['id'] == agy_sid), {'status': 'waiting'})
+                        if payload.get('action', 'read') == 'read':
+                            if payload.get('since') == str(len(agy_transcript)):
+                                return self.reply({'same': True, 'status': agy_one['status'], 'stamp': str(len(agy_transcript))})
+                            return self.reply({'messages': agy_transcript, 'status': agy_one['status'], 'stamp': str(len(agy_transcript))})
+                        agy_conv_requests.append(payload)
+                        answers = {}
+                        def handle_agy():
+                            try: answers['value'] = relay.conversation(payload, wait=5)
+                            except Exception as error: answers['error'] = str(error)
+                        worker = threading.Thread(target=handle_agy); worker.start()
+                        operations = relay.pull({'instance': info['instance'], 'wait': 2})['operations']
+                        if operations:
+                            op = operations[0]
+                            result = {'status': 'accepted', 'sent': True, 'now': True, 'transport': 'agy-desktop'} if payload['action'] == 'say' else {'status': 'confirmed', 'session': agy_sid, 'transport': 'agy-desktop'}
+                            relay.agent({'info': info, 'acks': [{'id': op['id'], 'result': result}]})
+                        worker.join(6)
+                        if 'error' in answers: return self.reply({'error': answers['error']}, 400)
+                        if payload['action'] == 'say' and not payload.get('receipt'):
+                            agy_one.update(status='busy', reach=['stop'], turn='',
+                                           ways={'say': '', 'stop': 'agy-desktop', 'answer': '', 'end': ''})
+                            report()
+                            if agy_send_fail_once[0]:
+                                agy_send_fail_once[0] = False
+                                return self.reply({'error': '模拟 agy 发送回执丢失'}, 503)
+                        elif payload['action'] == 'stop':
+                            agy_one.update(status='waiting', reach=['say'], turn='',
+                                           ways={'say': 'agy-desktop', 'stop': '', 'answer': '', 'end': ''})
+                            report()
+                        return self.reply(answers['value'])
                     if payload.get('action', 'read') == 'read':
                         if payload.get('since') == str(len(transcript)):
                             return self.reply({'same': True, 'status': sessions[0]['status'], 'stamp': str(len(transcript))})
@@ -96,6 +133,26 @@ def main():
                     return self.reply(answers['value'])
                 assert self.path == '/api/terminal', self.path
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if payload.get('action') == 'app_open' and payload.get('tool') == 'agy':
+                    agy_open_requests.append(payload)
+                    answer = relay.command(payload)
+                    if not any(s['id'] == agy_sid for s in sessions):
+                        sessions.append(dict(
+                            id=agy_sid, tool='agy', dir=payload.get('dir', ''), title=payload.get('draft', '')[:60] or 'Antigravity 新对话',
+                            updated=int(time.time() * 1000), live=True, now=True, host='shared',
+                            origin='Antigravity 桌面版', kind='Antigravity 桌面版', status='waiting',
+                            reach=['say', 'stop'], transport='agy-desktop', turn='', can_takeover=False,
+                            ways={'say': 'agy-desktop', 'stop': 'agy-desktop', 'answer': '', 'end': ''}, why={}
+                        ))
+                    relay.agent({'info': info, 'sessions': sessions, 'acks': [{'id': payload['id'], 'result': {
+                        'status': 'created', 'tool': 'agy', 'session': agy_sid,
+                        'sent': bool(payload.get('draft', '').strip()),
+                        'message': '已在 Antigravity 中新建并发送'
+                    }}]})
+                    if agy_open_fail_once[0]:
+                        agy_open_fail_once[0] = False
+                        return self.reply({'error': '模拟 agy 创建响应丢失，请查询本次操作'}, 503)
+                    return self.reply(answer)
                 requests.append(payload)
                 answer = relay.command(payload)
                 relay.agent({'info': info, 'acks': [{'id': payload['id'], 'result': {
@@ -116,10 +173,18 @@ def main():
         pipe = None
         try:
             active = Path(temporary) / 'browser/DevToolsActivePort'
+            debug = 0
             for _ in range(100):
-                if active.exists(): break
+                if active.exists():
+                    try:
+                        lines = active.read_text().splitlines()
+                        if lines:
+                            debug = int(lines[0])
+                            break
+                    except PermissionError:
+                        pass
                 time.sleep(.1)
-            debug = int(active.read_text().splitlines()[0])
+            assert debug, 'DevToolsActivePort did not become readable'
             conn = http.client.HTTPConnection('127.0.0.1', debug)
             conn.request('PUT', '/json/new?about:blank')
             page = json.loads(conn.getresponse().read()); conn.close()
@@ -321,12 +386,60 @@ def main():
                     value("document.querySelector('#sheet .confirm button.see').click()")
                 assert len(native_requests) == before_stop, 'opening or cancelling end confirmation must not stop a process'
                 picture('positron-codex-%s.png' % ('owned' if can_end else 'unowned'))
+
+            # ---- Three-way switcher (应用 / 桌面 / 终端) + Antigravity direct create + agy-desktop send & stop without turn
+            info['tools'] = ['codex', 'claude', 'agy', 'shell']
+            info['features'] = ['peek', 'reach', 'end', 'chat', 'chat-agy', 'codex-desktop-open', 'claude-desktop-open', 'agy-desktop-open', 'codex-desktop-control', 'agy-desktop-control']
+            for width in [320, 390]:
+                ask('Emulation.setDeviceMetricsOverride', width=width, height=900, deviceScaleFactor=1, mobile=True)
+                navigate()
+                assert value("Array.from(document.querySelectorAll('#sheet .seg button')).map(b => b.textContent)") == ['应用', '桌面', '终端']
+                shape = value("({width:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth})")
+                assert shape['width'] == width and shape['scroll'] <= width and shape['body'] <= width, shape
+            value("Array.from(document.querySelectorAll('#sheet .seg button')).find(b => b.textContent === '桌面').click()")
+            until("Array.from(document.querySelectorAll('#sheet .tools button')).map(b => b.textContent).join(',') === 'Antigravity,Claude,Codex'")
+            picture('desktop-tab-390.png')
+            # Claude draft sheet offers the secondary fallback to phone chat when chat is enabled.
+            value("Array.from(document.querySelectorAll('#sheet .tools button')).find(b => b.textContent === 'Claude').click()")
+            value("document.querySelector('#sheet .anywhere button.choice').click()")
+            until("document.querySelector('#desktop-draft') !== null")
+            assert value("document.querySelector('#sheet .desktop-fallback')?.textContent") == '改为在手机直接新建（同步历史）'
+            # Antigravity direct create & send: idempotent receipt retry on 503, then directly enters live reader.
+            navigate()
+            assert value("Array.from(document.querySelectorAll('#sheet .seg button[aria-pressed=\"true\"]')).map(b => b.textContent)") == ['桌面']
+            value("Array.from(document.querySelectorAll('#sheet .tools button')).find(b => b.textContent === 'Antigravity').click()")
+            value("document.querySelector('#sheet .anywhere button.choice').click()")
+            until("document.querySelector('#desktop-draft') !== null")
+            assert value("document.getElementById('desktop-draft').maxLength") == 8000
+            assert value("document.querySelector('#sheet button.solid').textContent") == '在 Antigravity 中新建'
+            value("(() => { const d = document.getElementById('desktop-draft'); d.value = '直接帮我核对配置'; d.dispatchEvent(new Event('input')); })()")
+            assert value("document.querySelector('#sheet button.solid').textContent") == '在 Antigravity 中新建并发送'
+            value("document.querySelector('#sheet button.solid').click()")
+            until("document.querySelector('#sheet button.solid').textContent === '查询本次操作结果'")
+            assert len(agy_open_requests) == 1
+            value("document.querySelector('#sheet button.solid').click()")
+            until("document.querySelector('#sheet .stands-text')?.textContent.includes('Antigravity 桌面版') && document.querySelector('#sheet .said')?.textContent.includes('正在核对配置文件')")
+            assert len(agy_open_requests) == 2 and agy_open_requests[0]['id'] == agy_open_requests[1]['id'], agy_open_requests
+            picture('agy-created-reader-390.png')
+            # agy-desktop native send with 503 receipt recovery + stop without turn
+            value("document.querySelector('#sheet .write textarea').value = '继续检查第二项'; document.querySelector('#sheet .write button.solid').click()")
+            until("document.querySelector('#sheet .said').textContent.includes('查询发送结果')")
+            assert agy_conv_requests[-1]['transport'] == 'agy-desktop' and agy_conv_requests[-1]['action'] == 'say'
+            value("Array.from(document.querySelectorAll('#sheet .said button')).find(b => b.textContent === '查询发送结果').click()")
+            until("document.querySelector('#sheet .said').textContent.includes('工具已接收')")
+            assert len(agy_conv_requests) == 2 and agy_conv_requests[0]['id'] == agy_conv_requests[1]['id'] and agy_conv_requests[1]['receipt'] is True
+            until("document.querySelector('#sheet .halt') && !document.querySelector('#sheet .halt').hidden")
+            value("document.querySelector('#sheet .halt').click()")
+            until("document.querySelector('#sheet .stop-note')?.textContent === '已停止本次回答，可以继续对话'")
+            assert agy_conv_requests[-1]['action'] == 'stop' and agy_conv_requests[-1]['transport'] == 'agy-desktop' and 'turn' not in agy_conv_requests[-1], agy_conv_requests[-1]
+            picture('agy-stopped-390.png')
+
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
-            # The single injected 503 is intentional; no other error-level log is acceptable.
+            # The injected 503s (2 Codex + 2 Antigravity) are intentional; no other error-level log is acceptable.
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']
-            assert len(errors) <= 2 and all('503' in e['params']['entry']['text'] for e in errors), errors
-            (out / 'report.json').write_text(json.dumps({'layouts': shapes, 'requests': len(requests), 'uniqueOperations': len({r['id'] for r in requests}), 'injected503': len(errors)}, ensure_ascii=False, indent=2), encoding='utf-8')
-            print('desktop UI: 320/390/430/1440 layouts, keyboard, native send/stop, receipt-only retry, busy draft, transcript refresh and legacy handoff passed')
+            assert len(errors) <= 4 and all('503' in e['params']['entry']['text'] for e in errors), errors
+            (out / 'report.json').write_text(json.dumps({'layouts': shapes, 'requests': len(requests), 'uniqueOperations': len({r['id'] for r in requests}), 'agyOpenRequests': len(agy_open_requests), 'agyConvRequests': len(agy_conv_requests), 'injected503': len(errors)}, ensure_ascii=False, indent=2), encoding='utf-8')
+            print('desktop UI: 320/390/430/1440 layouts, keyboard, 3-way desktop switcher, Antigravity direct create & native send/stop, Codex native send/stop, receipt-only retry, busy draft, transcript refresh and legacy handoff passed')
         finally:
             if pipe: pipe.close()
             browser.terminate(); browser.wait(timeout=10)

@@ -257,11 +257,11 @@ dialog.window .state .end.halt:not([hidden]) + .end { margin-left: 8px; }
 @media (prefers-reduced-motion: reduce) { dialog.window .state.busy .dot, dialog.window .bar .head-dot.busy { animation: none; } }
 #sheet-form .said .earlier { margin: 0 0 4px; text-align: center; color: var(--muted); font-size: .8rem; }
 dialog.window .write .go[hidden] { display: none; }
-dialog.window .confirm { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--card-border, var(--line)); border-radius: 16px; background: var(--panel); font-size: .9rem; }
-dialog.window .confirm p { margin: 0; }
-dialog.window .confirm .answers { display: flex; gap: 8px; }
-dialog.window .confirm .answers button { flex: 1; min-height: 42px; border-radius: 12px; font-weight: 600; border: 1px solid var(--card-border, var(--line)); background: var(--raised); }
-dialog.window .confirm .answers .no { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+dialog.window .confirm:not(.state):not(.head-dot) { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--card-border, var(--line)); border-radius: 16px; background: var(--panel); font-size: .9rem; }
+dialog.window .confirm:not(.state):not(.head-dot) p { margin: 0; }
+dialog.window .confirm:not(.state):not(.head-dot) .answers { display: flex; gap: 8px; }
+dialog.window .confirm:not(.state):not(.head-dot) .answers button { flex: 1; min-height: 42px; border-radius: 12px; font-weight: 600; border: 1px solid var(--card-border, var(--line)); background: var(--raised); }
+dialog.window .confirm:not(.state):not(.head-dot) .answers .no { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
 #sheet-form .said { display: flex; flex-direction: column; gap: 14px; max-height: 52vh; overflow-y: auto; padding: 14px 16px 18px; border: 1px solid var(--card-border, var(--line)); border-radius: 18px; background: var(--reader-bg, var(--bg)); overscroll-behavior: contain; font-family: var(--read-font, inherit); font-size: var(--read-size, .94rem); line-height: var(--read-line, 1.65); }
 #sheet-form .said .turn { display: grid; gap: 4px; min-width: 0; flex-shrink: 0; }
 #sheet-form .said .turn > b { font-size: .74rem; font-weight: 600; letter-spacing: .02em; color: var(--muted); }
@@ -292,7 +292,7 @@ dialog.window .confirm .answers .no { color: var(--bad); background: var(--bad-s
 
 /* ---- approvals & new-task sheet */
 .card .ask { flex: 0 0 100%; min-width: 0; display: grid; gap: 8px; padding: 0 14px 14px; }
-.card .ask pre { margin: 0; padding: 10px 12px; max-height: 190px; overflow: auto; border-radius: 12px; background: var(--surface-sub, var(--bg)); border: 1px solid var(--card-border, var(--line)); font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; }
+.card .ask pre { margin: 0; padding: 10px 12px; max-width: 100%; max-height: 190px; overflow: auto; border-radius: 12px; background: var(--surface-sub, var(--bg)); border: 1px solid var(--card-border, var(--line)); font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; }
 .card .ask .answers { display: flex; gap: 8px; }
 .card .ask .answers button { flex: 1; min-height: 44px; border-radius: 14px; font-weight: 600; border: 1px solid var(--card-border, var(--line)); background: var(--raised); }
 .card .ask .answers .yes { background: var(--ink-solid, var(--accent)); border-color: transparent; color: var(--on-ink-solid, var(--on-accent)); }
@@ -302,6 +302,14 @@ dialog.window .confirm .answers .no { color: var(--bad); background: var(--bad-s
 .card.asking { flex-wrap: wrap; }
 .card.asking > .open { flex: 1 1 0; min-width: 0; }
 .card .ask .answers button { white-space: nowrap; }
+.card .ask .answers.choices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.card .ask .answers button.choice-opt { display: grid; gap: 2px; justify-items: start; width: 100%; min-height: 46px; padding: 10px 14px; background: var(--panel); border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--card-border, var(--line))); color: var(--ink); text-align: left; white-space: normal; overflow-wrap: anywhere; line-height: 1.38; }
+.card .ask .answers button.choice-opt:active { background: var(--accent-soft); }
+.card .ask .answers button.choice-opt > span { color: var(--accent-ink, var(--accent)); font-weight: 650; }
+.card .ask .answers button.choice-opt small { font-size: .78rem; font-weight: 400; color: var(--muted); line-height: 1.35; }
+.card .ask .answers.choices .no { width: 100%; }
+#sheet-form button.choice.desktop-fallback { justify-content: center; background: var(--panel); color: var(--accent-ink, var(--accent)); font-size: .88rem; font-weight: 600; min-height: 46px; }
+@media (max-width: 360px) { .seg button { min-width: 36px; padding: 0 8px; font-size: .82rem; } }
 #sheet-form .anywhere { display: grid; gap: 6px; max-height: 56vh; overflow-y: auto; }
 #sheet-form .anywhere.folders { gap: 0; max-height: 38vh; grid-auto-rows: max-content; border-radius: 20px; background: var(--panel); border: 1px solid var(--card-border, var(--line)); overflow-x: hidden; }
 #sheet-form .anywhere.folders button.choice { height: auto; border: 0; border-radius: 0; background: transparent; min-height: 52px; }

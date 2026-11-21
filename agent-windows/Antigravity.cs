@@ -117,7 +117,7 @@ public static class Antigravity {
         return text.Trim();
     }
 
-    static string CleanTitle(string text) {
+    internal static string CleanTitle(string text) {
         if (String.IsNullOrWhiteSpace(text)) return "";
         text = Regex.Replace(text, @"\s+", " ").Trim();
         return text.Length > 72 ? text.Substring(0, 71) + "…" : text;
@@ -173,9 +173,9 @@ public static class Antigravity {
         return map;
     }
 
-    static long Milliseconds(DateTime utc) { return (long)(utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
+    internal static long Milliseconds(DateTime utc) { return (long)(utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
 
-    static DateTime ParseTimestamp(string raw, DateTime fallback) {
+    internal static DateTime ParseTimestamp(string raw, DateTime fallback) {
         DateTime dt;
         if (!String.IsNullOrWhiteSpace(raw) && DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out dt)) return dt;
         return fallback;
@@ -219,50 +219,75 @@ public static class Antigravity {
         return Encoding.UTF8.GetString(buf);
     }
 
+    static bool TableHasColumn(IntPtr db, string column) {
+        IntPtr stmt = IntPtr.Zero;
+        try {
+            if (sqlite3_prepare_v2(db, Utf8Z("PRAGMA table_info(conversation_summaries)"), -1, out stmt, IntPtr.Zero) == 0 && stmt != IntPtr.Zero) {
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    if (String.Equals(ColumnText(stmt, 1), column, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+        } finally {
+            if (stmt != IntPtr.Zero) try { sqlite3_finalize(stmt); } catch { }
+        }
+        return false;
+    }
+
+    /// Reads conversation summaries from conversation_summaries.db with optional CLI/desktop source filtering.
+    internal static Dictionary<string, Summary> ReadSummariesDb(string home, bool excludeDesktop, bool excludeCli, bool all) {
+        var map = new Dictionary<string, Summary>(StringComparer.OrdinalIgnoreCase);
+        string dbPath = Path.Combine(home, "conversation_summaries.db");
+        if (!File.Exists(dbPath)) return map;
+        IntPtr db = IntPtr.Zero, stmt = IntPtr.Zero;
+        try {
+            if (sqlite3_open_v2(Utf8Z(dbPath), out db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, IntPtr.Zero) == 0 && db != IntPtr.Zero) {
+                sqlite3_busy_timeout(db, 400);
+                var where = new List<string> { "parent_conversation_id = ''", "killed = 0" };
+                if (excludeDesktop && TableHasColumn(db, "app_data_dir")) where.Add("app_data_dir != 'antigravity'");
+                if (excludeCli) {
+                    if (TableHasColumn(db, "source")) where.Add("source != 'CORTEX_TRAJECTORY_SOURCE_CLI'");
+                    if (TableHasColumn(db, "app_data_dir")) where.Add("app_data_dir != 'antigravity-cli'");
+                }
+                string sql = "SELECT conversation_id, title, preview, last_modified_time, workspace_uris, status, not_fully_idle "
+                    + "FROM conversation_summaries WHERE " + String.Join(" AND ", where.ToArray())
+                    + " ORDER BY last_modified_time DESC" + (all ? "" : " LIMIT 200");
+                if (sqlite3_prepare_v2(db, Utf8Z(sql), -1, out stmt, IntPtr.Zero) == 0 && stmt != IntPtr.Zero) {
+                    while (sqlite3_step(stmt) == SQLITE_ROW) {
+                        string id = ColumnText(stmt, 0).Trim();
+                        if (!Uuid.IsMatch(id)) continue;
+                        string title = CleanTitle(ColumnText(stmt, 1));
+                        string preview = CleanTitle(ColumnText(stmt, 2));
+                        DateTime modified = ParseTimestamp(ColumnText(stmt, 3), DateTime.UtcNow);
+                        string folder = WorkspacePath(ColumnText(stmt, 4));
+                        string status = MapStatus(ColumnText(stmt, 5), sqlite3_column_int(stmt, 6) != 0);
+                        if (title.Length == 0) title = AnnotationTitle(home, id);
+                        bool named = title.Length > 0;
+                        if (title.Length == 0) title = preview;
+                        if (title.Length == 0) title = TranscriptTitle(home, id);
+                        map[id] = new Summary {
+                            Id = id,
+                            Title = title,
+                            Named = named,
+                            Folder = folder,
+                            Status = status,
+                            Updated = Milliseconds(modified),
+                            Created = modified
+                        };
+                    }
+                }
+            }
+        } catch (DllNotFoundException) { } catch (EntryPointNotFoundException) { } catch (BadImageFormatException) { } catch (IOException) { }
+        finally {
+            if (stmt != IntPtr.Zero) try { sqlite3_finalize(stmt); } catch { }
+            if (db != IntPtr.Zero) try { sqlite3_close_v2(db); } catch { }
+        }
+        return map;
+    }
+
     /// Reads recent Antigravity CLI conversations from conversation_summaries.db and supplements with live lock files.
     public static List<Summary> Summaries(string homeOverride = null, IEnumerable<string> liveIds = null, bool all = false) {
         string home = String.IsNullOrWhiteSpace(homeOverride) ? Home : homeOverride;
-        var map = new Dictionary<string, Summary>(StringComparer.OrdinalIgnoreCase);
-        string dbPath = Path.Combine(home, "conversation_summaries.db");
-        if (File.Exists(dbPath)) {
-            IntPtr db = IntPtr.Zero, stmt = IntPtr.Zero;
-            try {
-                if (sqlite3_open_v2(Utf8Z(dbPath), out db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, IntPtr.Zero) == 0 && db != IntPtr.Zero) {
-                    sqlite3_busy_timeout(db, 400);
-                    string sql = "SELECT conversation_id, title, preview, last_modified_time, workspace_uris, status, not_fully_idle "
-                        + "FROM conversation_summaries WHERE parent_conversation_id = '' AND killed = 0 "
-                        + "ORDER BY last_modified_time DESC" + (all ? "" : " LIMIT 200");
-                    if (sqlite3_prepare_v2(db, Utf8Z(sql), -1, out stmt, IntPtr.Zero) == 0 && stmt != IntPtr.Zero) {
-                        while (sqlite3_step(stmt) == SQLITE_ROW) {
-                            string id = ColumnText(stmt, 0).Trim();
-                            if (!Uuid.IsMatch(id)) continue;
-                            string title = CleanTitle(ColumnText(stmt, 1));
-                            string preview = CleanTitle(ColumnText(stmt, 2));
-                            DateTime modified = ParseTimestamp(ColumnText(stmt, 3), DateTime.UtcNow);
-                            string folder = WorkspacePath(ColumnText(stmt, 4));
-                            string status = MapStatus(ColumnText(stmt, 5), sqlite3_column_int(stmt, 6) != 0);
-                            if (title.Length == 0) title = AnnotationTitle(home, id);
-                            bool named = title.Length > 0;
-                            if (title.Length == 0) title = preview;
-                            if (title.Length == 0) title = TranscriptTitle(home, id);
-                            map[id] = new Summary {
-                                Id = id,
-                                Title = title,
-                                Named = named,
-                                Folder = folder,
-                                Status = status,
-                                Updated = Milliseconds(modified),
-                                Created = modified
-                            };
-                        }
-                    }
-                }
-            } catch (DllNotFoundException) { } catch (EntryPointNotFoundException) { } catch (BadImageFormatException) { } catch (IOException) { }
-            finally {
-                if (stmt != IntPtr.Zero) try { sqlite3_finalize(stmt); } catch { }
-                if (db != IntPtr.Zero) try { sqlite3_close_v2(db); } catch { }
-            }
-        }
+        var map = ReadSummariesDb(home, true, false, all);
         // Supplement missing folders or brand-new live conversations that have not flushed to conversation_summaries.db yet.
         var history = (liveIds != null && liveIds.Any(id => !map.ContainsKey(id))) || map.Values.Any(s => s.Folder.Length == 0)
             ? HistoryWorkspaces(home) : null;

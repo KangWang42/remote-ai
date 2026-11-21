@@ -19,6 +19,12 @@ public interface IDesktopAdapter {
     Dictionary<string, object> Open(string folder, string draft);
 }
 
+/// A desktop application that can create a conversation directly (optionally sending the first message with an
+/// idempotent operation ID) and return the new conversation ID immediately.
+public interface IDirectDesktopAdapter : IDesktopAdapter {
+    Dictionary<string, object> Open(string id, string folder, string draft);
+}
+
 /// An application that opens a project with a new conversation, and a draft in its box, by a link of its own
 /// scheme: the entry it has for that itself. Nothing is typed into it, nothing is sent, no second backend is
 /// started. One class for each application says where it is installed, what its link is and how the link is given.
@@ -184,12 +190,22 @@ public sealed class DesktopOperations {
     public Dictionary<string, object> Open(string id, string tool, string folder, string draft) {
         IDesktopAdapter adapter;
         if (!adapters.TryGetValue(tool ?? "", out adapter)) throw new InvalidOperationException("这个桌面应用暂不支持从手机打开项目和草稿");
+        var direct = adapter as IDirectDesktopAdapter;
+        bool sendsDirectly = direct != null && !String.IsNullOrWhiteSpace(draft);
         return Run(id, new[] { tool, folder, draft ?? "" }, () => {
             if (!adapter.Available) throw new InvalidOperationException("桌面应用入口不可用，请在电脑上安装或更新应用后重启 Remote AI");
-            var opened = adapter.Open(folder, draft);
-            lock (openings) openings.Add(new Opening { Id = id, Tool = tool, Folder = Plain(folder), At = DateTime.UtcNow });
+            var opened = direct != null ? direct.Open(id, folder, draft) : adapter.Open(folder, draft);
+            string createdSession = "";
+            object rawSession;
+            if (opened != null && opened.TryGetValue("session", out rawSession) && rawSession != null) {
+                createdSession = Convert.ToString(rawSession).Trim();
+            }
+            lock (openings) {
+                openings.Add(new Opening { Id = id, Tool = tool, Folder = Plain(folder), Session = createdSession, At = DateTime.UtcNow });
+                if (openings.Count > 60) openings.RemoveRange(0, openings.Count - 60);
+            }
             return opened;
-        }, false);
+        }, sendsDirectly);
     }
     public Dictionary<string, object> Run(string id, string[] identity, Func<Dictionary<string, object>> action, bool control = true, bool queryOnly = false) {
         if (!Regex.IsMatch(id ?? "", @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");

@@ -9,9 +9,11 @@
 (() => {
   'use strict';
   const page = window.RemoteCliPage, { $, el, ICON, TOOLS, api, newId, toast, openSheet } = page;
-  const KINDS = { app: '应用', term: '终端' }, APPS = { codex: 'Codex', claude: 'Claude' };
-  // what the computer offers of each kind: the tools it runs conversations of (else the desktop apps it opens one in),
-  // and the tools it has
+  const KINDS = { app: '应用', desktop: '桌面', term: '终端' };
+  const APPS = { codex: 'Codex', claude: 'Claude', agy: 'Antigravity' };
+  const DESKTOP_ORDER = ['agy', 'claude', 'codex'];
+  // what the computer offers of each kind: structured conversations (应用), desktop apps on the computer (桌面),
+  // and terminals (终端). When the computer offers no structured chat, 应用 falls back to desktop apps directly.
   const desktop = tool => page.has(tool + '-desktop-open');
   const viaShell = 'agy-shell';
   function offered() {
@@ -23,34 +25,41 @@
     if (oldRelay && device.shell === 'PowerShell' && term.includes('shell') && !term.includes('agy')) {
       term.splice(term.indexOf('shell'), 0, viaShell);
     }
-    // (Antigravity CLI has no desktop app: it is offered as a conversation where the computer runs it so)
-    return { app: Object.keys(APPS).filter(tool => page.chatOk(tool) || desktop(tool)).concat(page.chatOk('agy') ? ['agy'] : []), term };
+    const chatApps = ['codex', 'claude', 'agy'].filter(tool => page.chatOk(tool));
+    const desktopApps = DESKTOP_ORDER.filter(tool => desktop(tool));
+    if (chatApps.length && desktopApps.length) return { app: chatApps, desktop: desktopApps, term };
+    if (desktopApps.length) return { app: Object.keys(APPS).filter(tool => desktop(tool)), desktop: [], term };
+    return { app: chatApps, desktop: [], term };
   }
   function named(kind, tool) {
-    if (tool === 'agy' || tool === viaShell) return 'agy';
+    if (kind === 'desktop') return APPS[tool] || tool;
+    if (tool === 'agy' || tool === viaShell) return kind === 'app' && !page.chatOk('agy') && desktop('agy') ? APPS.agy : 'agy';
     return kind === 'app' ? APPS[tool] : TOOLS[tool];
   }
   // The kind that stands open: the one chosen last. Before any choice: a terminal for a project whose folder has
   // only been used in terminals, an application for any other.
   function kindOf(project, has) {
+    const available = Object.keys(KINDS).filter(k => has[k] && has[k].length);
     const kept = page.saved('newkind', '');
-    if (has[kept] && has[kept].length) return kept;
-    if (!has.app.length || !has.term.length) return has.app.length ? 'app' : 'term';
+    if (kept && has[kept] && has[kept].length) return kept;
+    if (available.length <= 1) return available[0] || 'term';
     const folder = (page.data.device.projects || []).find(p => p.name === project), kinds = folder && folder.kinds || [];
-    return kinds.length && kinds.every(kind => kind === '终端') ? 'term' : 'app';
+    if (has.term.length && kinds.length && kinds.every(kind => kind === '终端')) return 'term';
+    return has.app.length ? 'app' : available[0];
   }
-  // the two kinds side by side, where the computer offers both
+  // the offered kinds side by side, where the computer offers more than one
   function switcher(kind, has, changed) {
-    if (!has.app.length || !has.term.length) return '';
+    const keys = Object.keys(KINDS).filter(k => has[k] && has[k].length);
+    if (keys.length < 2) return '';
     const group = el('span', { className: 'seg', role: 'group', ariaLabel: '对话开在哪里' });
-    Object.keys(KINDS).forEach(key => group.append(el('button', { type: 'button', textContent: KINDS[key], ariaPressed: String(key === kind), onclick: () => {
+    keys.forEach(key => group.append(el('button', { type: 'button', textContent: KINDS[key], ariaPressed: String(key === kind), onclick: () => {
       page.keep('newkind', key);
       group.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.textContent === KINDS[key])));
       changed(key);
     } })));
     return group;
   }
-  // (the tile of a tool of 应用 opens its desktop app on the computer at a held press, where both are there)
+  // (the tile of a tool of 应用 still opens its desktop app on a held press, where both are offered)
   const tile = (kind, tool, props, project) => {
     const icon = tool === viaShell ? 'agy' : tool;
     const made = el('button', Object.assign({ type: 'button' }, props), el('span', { className: 'tool ' + icon, html: ICON[icon] }), el('span', { textContent: named(kind, tool) }));
@@ -62,16 +71,23 @@
     if (tool === viaShell) {
       return page.startAgyShell(project);
     }
+    if (kind === 'desktop') return inApp(tool, project);
     return kind !== 'app' ? page.start(tool, project) : page.chatOk(tool) ? page.chat(tool, project) : inApp(tool, project);
   }
 
   // Keep the terminal entry visible on the default 应用 tab as well.
   function choices(kind, has) {
+    if (kind === 'desktop') return has.desktop;
     if (kind === 'app') return has.app.concat(has.term.filter(tool => (tool === 'agy' || tool === viaShell) && !has.app.includes(tool)));
     return has.term;
   }
-  // agy under 应用 is a conversation where the computer runs it as one, else its terminal
-  const kindFor = (kind, tool) => tool === viaShell || (tool === 'agy' && !(kind === 'app' && page.chatOk('agy'))) ? 'term' : kind;
+  // agy under 应用 is a conversation or desktop app where offered, else its terminal
+  const kindFor = (kind, tool) => {
+    if (kind === 'desktop') return 'desktop';
+    if (tool === viaShell) return 'term';
+    if (tool === 'agy' && kind === 'app' && !page.chatOk('agy') && !desktop('agy')) return 'term';
+    return kind;
+  };
 
   // ---- on a project's page: the kinds, and a button for each tool of the one that stands open
   function draw(project) {
@@ -91,7 +107,7 @@
     const data = page.data, has = offered();
     const latest = name => Math.max(0, ...(data.terminals || []).filter(t => t.dir === name).map(t => t.created || 0), ...(data.sessions || []).filter(s => s.dir === name).map(s => s.updated || 0));
     const names = (data.device.workspaces || []).slice().sort((a, b) => latest(b) - latest(a));
-    if (!has.app.length && !has.term.length) { toast('电脑上没有可用的工具'); return false; }
+    if (!has.app.length && !has.desktop.length && !has.term.length) { toast('电脑上没有可用的工具'); return false; }
     // a conversation begins in a project: without one, the page of projects is shown, where one is added
     if (!names.length) { toast('请先添加一个项目'); page.go('projects', true); return true; }
     const picked = await openSheet((form, finish) => {
@@ -116,21 +132,26 @@
   }
 
   // ---- in an application
-  // Its desktop app opens the project with a new conversation, and what is written here stands in its box. Neither
-  // application sends that by itself: the conversation begins when it is sent on the computer. The computer then
-  // says which conversation came of this (`opened`), and the phone goes into it. An answer that was lost is asked
-  // for again under the same number: the application is not opened twice.
+  // Direct desktop apps (Antigravity) create a live conversation and optionally send the first words right away;
+  // draft-handoff apps (Codex, Claude) open the project with the draft in their box and enter once sent on the computer.
+  // An answer that was lost is asked for again under the same operation id so the application is not opened twice.
   async function inApp(tool, project) {
-    const app = APPS[tool];
+    const app = APPS[tool] || tool;
+    const direct = tool === 'agy';
     const entered = await openSheet((form, finish) => {
-      const draft = el('textarea', { id: 'desktop-draft', rows: 4, maxLength: 1000, placeholder: '第一句话', ariaLabel: '第一句话', autocapitalize: 'off', spellcheck: false });
+      const draft = el('textarea', {
+        id: 'desktop-draft', rows: 4, maxLength: direct ? 8000 : 1000,
+        placeholder: direct ? '输入第一句话（可留空仅新建）' : '第一句话',
+        ariaLabel: '第一句话', autocapitalize: 'off', spellcheck: false
+      });
       const status = el('p', { role: 'status', 'aria-live': 'polite', className: 'quiet' });
       let operation = null;
-      const button = el('button', { type: 'button', className: 'choice solid', textContent: '在 ' + app + ' 中打开', onclick: async () => {
+      const labelOf = () => direct ? (draft.value.trim() ? '在 ' + app + ' 中新建并发送' : '在 ' + app + ' 中新建') : '在 ' + app + ' 中打开';
+      const button = el('button', { type: 'button', className: 'choice solid', textContent: labelOf(), onclick: async () => {
         if (button.disabled) return;
         if (!operation) operation = { id: newId(), action: 'app_open', tool, dir: project, draft: draft.value };
         button.disabled = true; draft.readOnly = true;
-        status.textContent = '正在交给电脑上的 ' + app + '…';
+        status.textContent = direct ? '正在 ' + app + ' 中创建对话…' : '正在交给电脑上的 ' + app + '…';
         try {
           let answer = await api('api/terminal', operation);
           for (let n = 0; n < 60 && answer.state === 'queued' && status.isConnected && $('sheet').open; n++) {
@@ -140,7 +161,29 @@
           if (answer.state === 'queued') throw new Error('暂未收到结果，请查询同一次操作，或先检查电脑上的应用。');
           if (answer.error) { status.textContent = answer.error; button.textContent = '操作未确认'; return; }
           const result = answer.result || {};
-          if (!['handed_off', 'unknown'].includes(result.status) || result.sent !== false) throw new Error('未收到可确认的桌面操作结果，请查询同一次操作。');
+          if (direct && result.status === 'created' && result.session) {
+            status.textContent = result.message || (result.sent ? '已在 ' + app + ' 中新建并发送，正在进入对话…' : '已在 ' + app + ' 中新建，正在进入对话…');
+            button.textContent = '正在进入对话…';
+            try { await page.refresh(); } catch (error) { /* synthetic session still opens */ }
+            if (!status.isConnected || !$('sheet').open) return;
+            const found = (page.data && page.data.sessions || []).find(s => s.id === result.session && s.tool === tool);
+            const sent = result.sent === true, text = draft.value.trim();
+            const synthetic = {
+              id: result.session, tool, dir: project, folder: '',
+              title: text ? text.slice(0, 60) : app + ' · ' + project,
+              updated: Date.now(), live: true, now: true, host: 'shared',
+              origin: app + ' 桌面版', kind: app + ' 桌面版',
+              status: sent ? 'busy' : 'waiting',
+              reach: sent ? ['say', 'stop', 'answer'] : ['say'],
+              transport: tool + '-desktop',
+              ways: { say: tool + '-desktop', stop: sent ? tool + '-desktop' : '', answer: tool + '-desktop', end: '' },
+              why: {}, can_takeover: false
+            };
+            finish({ session: found || synthetic });
+            return;
+          }
+          const validUnknown = result.status === 'unknown' && (result.sent === false || (direct && result.sent === null));
+          if (!(result.status === 'handed_off' && result.sent === false) && !validUnknown) throw new Error('未收到可确认的桌面操作结果，请查询同一次操作。');
           status.textContent = result.message || '请在电脑上检查 ' + app + '，内容尚未发送。';
           button.textContent = result.status === 'handed_off' ? '在电脑上发送后开始' : '结果未知，请检查电脑';
           if (result.status !== 'handed_off') return;
@@ -149,18 +192,24 @@
             const came = (page.data.sessions || []).find(s => s.opened === operation.id);
             if (!came) return;
             clearInterval(watch);
-            finish(came);
+            finish({ session: came });
           }, 1000);
         } catch (error) {
           status.textContent = error.message;
           button.textContent = '查询本次操作结果'; button.disabled = false;
         }
       } });
-      form.append(el('h3', { textContent: app + ' · ' + project }), draft, button, status);
+      draft.addEventListener('input', () => { if (!operation) button.textContent = labelOf(); });
+      draft.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); button.click(); } });
+      const fallback = !direct && page.chatOk(tool)
+        ? el('button', { type: 'button', className: 'choice desktop-fallback', textContent: '改为在手机直接新建（同步历史）', onclick: () => finish({ fallbackChat: true }) })
+        : '';
+      form.append(el('h3', { textContent: app + ' · ' + project }), draft, button, status, fallback);
       // Leaving the sheet does not take back what was handed to the computer.
       setTimeout(() => { const cancel = form.querySelector('.cancel'); if (cancel) cancel.textContent = '返回'; }, 0);
     });
-    return entered ? page.takeOver(entered) : false;
+    if (entered && entered.fallbackChat) return page.chat(tool, project);
+    return entered && entered.session ? page.takeOver(entered.session) : false;
   }
 
   page.begin = { draw, anywhere };
