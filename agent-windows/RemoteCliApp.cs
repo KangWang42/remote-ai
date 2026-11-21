@@ -231,13 +231,25 @@ public sealed partial class App : Form {
         for (int n = 0; n < 40 && !Listening(port); n++) { await Task.Delay(250); if (process.HasExited) break; }
         return Listening(port);
     }
-    // A tunnel to the program's own relay. `address` comes to the address it was given, or to nothing when it ended
-    // or gave none in forty seconds.
+    // cloudflared announces the URL before it connects to the edge. Both are needed to hand the line to a phone.
     Process StartTunnel(int port, out Task<string> address) {
         var found = new TaskCompletionSource<string>();
         var run = new ProcessStartInfo(TunnelFile, "tunnel --no-autoupdate" + (Convert.ToString(config["TunnelProtocol"]) == "http2" ? " --protocol http2" : "") + " --url http://127.0.0.1:" + port) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = dataDir };
         var process = new Process { StartInfo = run, EnableRaisingEvents = true };
-        DataReceivedEventHandler look = (s, e) => { if (e.Data == null) return; var m = Regex.Match(e.Data, @"https://[a-z0-9-]+\.trycloudflare\.com"); if (m.Success) found.TrySetResult(m.Value); };
+        string url = "";
+        bool registered = false;
+        var gate = new object();
+        DataReceivedEventHandler look = (s, e) => {
+            if (e.Data == null || found.Task.IsCompleted) return;
+            lock (gate) {
+                if (url.Length == 0) {
+                    var match = Regex.Match(e.Data, @"https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com\b");
+                    if (match.Success) url = match.Value;
+                }
+                if (e.Data.Contains("Registered tunnel connection")) registered = true;
+                if (registered && url.Length > 0) found.TrySetResult(url);
+            }
+        };
         process.ErrorDataReceived += look; process.OutputDataReceived += look;
         process.Exited += (s, e) => found.TrySetResult("");
         process.Start(); process.BeginErrorReadLine(); process.BeginOutputReadLine();

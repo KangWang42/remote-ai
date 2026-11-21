@@ -73,7 +73,7 @@ def operation(terminal, action, **fields):
     return dict(fields, id=secrets.token_hex(16), terminal=terminal, action=action)
 
 
-def await_ready(check, description, seconds=45):
+def await_ready(check, description, seconds=45, interval=0.2):
     deadline = time.monotonic() + seconds
     last = None
     while time.monotonic() < deadline:
@@ -83,7 +83,7 @@ def await_ready(check, description, seconds=45):
                 return result
         except (OSError, http.client.HTTPException, RuntimeError) as error:
             last = type(error).__name__
-        time.sleep(0.2)
+        time.sleep(interval)
     raise TimeoutError("%s not ready%s" % (description, " (%s)" % last if last else ""))
 
 
@@ -295,25 +295,35 @@ def main():
                 tunnel = subprocess.Popen([args.cloudflared, "tunnel", "--no-autoupdate"] + extra + ["--url", origin],
                                           stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", **hidden)
                 processes.append(tunnel)
-                ready = threading.Event()
+                got_url = threading.Event()
+                registered = threading.Event()
 
                 def watch():
                     for line in tunnel.stderr:
-                        match = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+                        match = re.search(r"https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com\b", line)
                         if match:
                             found.setdefault("url", match.group(0))
-                            ready.set()
+                            got_url.set()
                         match = re.search(r"location=(\w+).*protocol=(\w+)", line)
                         if match:
                             found["edge"] = " ".join(match.groups())
+                        if "Registered tunnel connection" in line:
+                            found["registered"] = True
+                            registered.set()
+                    got_url.set()
+                    registered.set()
 
                 watcher = threading.Thread(target=watch, daemon=True)
                 watcher.start()
-                if not ready.wait(60):
-                    raise TimeoutError("no quick tunnel address")
+                if not got_url.wait(60) or "url" not in found:
+                    raise TimeoutError("no quick tunnel address (cloudflared exit code: %s)" % tunnel.poll())
+                if not registered.wait(60) or not found.get("registered") or tunnel.poll() is not None:
+                    raise TimeoutError("quick tunnel did not register an edge connection (cloudflared exit code: %s)" % tunnel.poll())
+                # Give the newly announced hostname a moment before the first external lookup.
+                time.sleep(5)
                 origin = found["url"]
             client = Client(origin, timeout=args.timeout)
-            await_ready(lambda: client.call("/api/login", {"password": password}), "viewer", seconds=60)
+            await_ready(lambda: client.call("/api/login", {"password": password}), "viewer", seconds=60, interval=1.0 if not args.local else 0.2)
             terminal = client.call("/api/terminal", {"action": "start", "id": secrets.token_hex(16), "tool": "shell", "dir": "demo"})["terminal"]
             await_ready(lambda: client.call("/api/terminal?terminal=%s&after=0" % terminal)["terminal"]["state"] == "running", "terminal")
             began = time.perf_counter()
@@ -324,7 +334,7 @@ def main():
             report["websocket"] = measure_socket(client, terminal, args.samples, args.timeout, args.interval)
             report["stream"] = probe_stream(client, terminal, min(args.timeout, 5))
             print(json.dumps(report, ensure_ascii=False))
-            good_socket = report["websocket"].get("status") != 101 or report["websocket"]["successful"] == args.samples
+            good_socket = report["websocket"].get("status") == 101 and report["websocket"]["successful"] == args.samples
             return 0 if report["held_requests"]["successful"] == args.samples and good_socket else 1
         finally:
             if terminal and local:

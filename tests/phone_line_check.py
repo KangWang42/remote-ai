@@ -351,6 +351,13 @@ def main():
 
             # ---- to the tunnel: the program's own relay and the tunnel are started beside the relay in use
             assert not listening(local_port)
+            marker = data / "exit-before-registration"
+            marker.touch()
+            second.ask("line_switch", to="cloud")
+            failed = until(lambda: (lambda said: isinstance(said, dict) and said["change"]["state"] == "failed" and said)(second.ask("settings_read")), "the unregistered tunnel to fail")
+            assert "公网隧道没有建立成功" in failed["change"]["note"] and second.online()
+            until(lambda: not listening(local_port), "the failed tunnel's relay to exit")
+            marker.unlink()
             handed = turn(second, "cloud", STANDIN)
             local = Phone(origin(local_port))
             assert local.sign_in(ticket=handed["ticket"]) and isinstance(local.about(), dict)
