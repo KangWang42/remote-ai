@@ -82,6 +82,7 @@ public sealed partial class App : Form {
     readonly NotifyIcon tray = new NotifyIcon();
     bool quitting, hinted, updating;
     ReleaseUpdate availableUpdate;
+    readonly UpdateChecks updateChecks = new UpdateChecks(channel => AutoUpdater.CheckAsync(Version, channel));
 
     string ConfigFile { get { return Path.Combine(dataDir, "config.json"); } }
     string PasswordFile { get { return Path.Combine(dataDir, "password.dpapi"); } }
@@ -1047,8 +1048,13 @@ public sealed partial class App : Form {
             Keep("UpdateCheckUtc", DateTime.UtcNow.ToString("o"));
         }
         updateButton.Enabled = false; if (manual) Toast("正在检查 GitHub 最新版本…");
+        UpdateChecks.Answer answer = null;
         try {
-            ReleaseUpdate found = await AutoUpdater.CheckAsync(Version, Convert.ToString(config["UpdateChannel"])); availableUpdate = found;
+            answer = await updateChecks.Run(Convert.ToString(config["UpdateChannel"]));
+            // of the channel before: nothing is said of it, and the one chosen now is looked at instead (it could not be while this was under way)
+            if (!updateChecks.Holds(answer)) return;
+            if (answer.Error != null) { updateButton.Text = "检查更新"; if (manual) Toast("检查更新失败：" + answer.Error.Message); return; }
+            ReleaseUpdate found = answer.Update; availableUpdate = found;
             if (agent != null) agent.Newer = found == null ? "" : found.Version;
             if (found == null) { updateButton.Text = "已是最新版"; updateButton.Glyph = Theme.IconCheck; if (manual) Toast("已是最新版"); return; }
             updateButton.Text = "更新到 v" + found.Version; updateButton.Kind = ButtonKind.Primary; updateButton.Glyph = Theme.IconDownload; nav[3].SetBadge("新");
@@ -1056,7 +1062,8 @@ public sealed partial class App : Form {
             else if (step == "ask") {
                 // a terminal that is at work is said: the restart cuts into what it is doing, and it goes on with its conversation afterwards
                 bool working = agent != null && !agent.Quiet(20);
-                if (Confirm("发现新版本 v" + found.Version, (working ? "有终端正在工作，更新会打断它手上的这一步。" : "") + "现在下载并重启更新吗？手机会断开几秒，终端随后接回原对话，公网隧道的地址不变。", "下载并更新", false)) { waitingUpdate = null; updateButton.Enabled = true; await InstallUpdate(found); }
+                bool agreed = Confirm("发现新版本 v" + found.Version, (working ? "有终端正在工作，更新会打断它手上的这一步。" : "") + "现在下载并重启更新吗？手机会断开几秒，终端随后接回原对话，公网隧道的地址不变。", "下载并更新", false);
+                if (agreed && updateChecks.Holds(answer)) { waitingUpdate = null; updateButton.Enabled = true; await InstallUpdate(found); }     // (another channel may be chosen from the phone while the question is open)
             }
             // found by itself: said once for a version, in the window and at the tray; nothing is installed until someone asks
             else if (toldUpdate != found.Version) {
@@ -1065,8 +1072,10 @@ public sealed partial class App : Form {
                 if (!Visible) try { tray.ShowBalloonTip(6000, "Remote AI 有新版本 v" + found.Version, "打开窗口，在“设置”里更新。", ToolTipIcon.Info); } catch (InvalidOperationException) { }
             }
             ShowUpdate();
-        } catch (Exception error) { updateButton.Text = "检查更新"; if (manual) Toast("检查更新失败：" + error.Message); }
-        finally { updateButton.Enabled = true; }
+        } finally {
+            updateButton.Enabled = true;
+            if (answer != null && !updateChecks.Holds(answer)) CheckForUpdate(false);
+        }
     }
     const string UpdateAbout = "从 GitHub 检查并安装；手机上也可发起";
     // What the row of the version says: that there is a newer one, or that one waits for the phone to finish changing the line.

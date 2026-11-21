@@ -12,6 +12,26 @@ public sealed class ReleaseUpdate {
     public string Version, Url, Sha256;
 }
 
+/// The checks for a newer version, each of the channel chosen when it began. Another channel chosen while one is
+/// under way (or while its finding waits for an answer) makes that finding beside the point: it is not shown and not
+/// installed.
+public sealed class UpdateChecks {
+    /// What one check found (`Update`, null where nothing newer), or what went wrong (`Error`).
+    public sealed class Answer { public ReleaseUpdate Update; public Exception Error; internal int Round; }
+    readonly Func<string, Task<ReleaseUpdate>> look;
+    int round;
+    public UpdateChecks(Func<string, Task<ReleaseUpdate>> look) { this.look = look; }
+    /// Another channel was chosen.
+    public void Changed() { round++; }
+    /// Whether what was found still counts: no other channel was chosen since its check began.
+    public bool Holds(Answer answer) { return answer != null && answer.Round == round; }
+    public async Task<Answer> Run(string channel) {
+        var answer = new Answer { Round = round };
+        try { answer.Update = await look(channel); } catch (Exception error) { answer.Error = error; }
+        return answer;
+    }
+}
+
 /// GitHub Releases updater. It accepts only the repository's HTTPS release asset and checks its digest.
 public static class AutoUpdater {
     /// The repository on GitHub, under the name it is to have and the one it had: it is renamed with the product,

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
+using System.Threading.Tasks;
 using RemoteCli;
 
 /// Which of the conversations a program holds are in use now, and what a newer version that was found leads to.
@@ -55,6 +57,20 @@ public static class InUseCheck {
         bool noInstaller = false;
         try { AutoUpdater.Pick(new object[] { release("v1.12.0", false, false, false) }, "1.11.1", false, true); } catch (InvalidDataException) { noInstaller = true; }
         Require(noInstaller && AutoUpdater.Pick(new object[] { release("v1.11.1", false, false, true) }, "1.11.1", false, true) == null, "the latest release without the installer is an error, the same version is nothing to do");
+        // a check under way when another channel is chosen: what it finds, or how it fails, does not count; one of the
+        // channel chosen now does, and one that held stops holding where the channel changes while its question is open
+        var replies = new Queue<TaskCompletionSource<ReleaseUpdate>>(); var channels = new List<string>();
+        var checks = new UpdateChecks(channel => { channels.Add(channel); var reply = new TaskCompletionSource<ReleaseUpdate>(); replies.Enqueue(reply); return reply.Task; });
+        var older = checks.Run("release"); checks.Changed();
+        replies.Dequeue().SetResult(new ReleaseUpdate { Version = "1.12.0" });
+        Require(older.IsCompleted && !checks.Holds(older.Result) && older.Result.Update.Version == "1.12.0", "a check of the channel before is told apart");
+        var failed = checks.Run("pre"); var failing = checks.Run("pre"); checks.Changed();
+        replies.Dequeue().SetResult(new ReleaseUpdate { Version = "1.12.1" }); replies.Dequeue().SetException(new WebException("offline"));
+        Require(!checks.Holds(failed.Result) && !checks.Holds(failing.Result) && failing.Result.Error is WebException, "a failure of a check that no longer counts is caught and does not count either");
+        var current = checks.Run("pre"); replies.Dequeue().SetResult(new ReleaseUpdate { Version = "1.12.1" });
+        Require(checks.Holds(current.Result) && current.Result.Update.Version == "1.12.1" && String.Join(",", channels) == "release,pre,pre,pre", "the check of the channel chosen now counts");
+        checks.Changed();
+        Require(!checks.Holds(current.Result) && !checks.Holds(null), "chosen anew while the question was open: no longer counts");
         // earlier installers go once a newer one is downloaded
         string updates = Path.Combine(Path.GetTempPath(), "remote-ai-updates-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(updates);

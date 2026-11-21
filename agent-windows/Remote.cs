@@ -160,9 +160,10 @@ public sealed partial class App {
         if (InvokeRequired) BeginInvoke(new Action(() => Applied(name))); else Applied(name);
     }
     void Applied(string name) {
-        // Another channel makes what was found before beside the point: it is looked for anew, at once where that is switched on.
+        // Another channel makes what was found before beside the point, and a check under way, and an installation that
+        // waits for the phone to finish changing the line: it is looked for anew, at once where that is switched on.
         if (name == "channel") {
-            availableUpdate = null; if (agent != null) agent.Newer = "";
+            updateChecks.Changed(); availableUpdate = null; waitingUpdate = null; if (agent != null) agent.Newer = "";
             updateButton.Kind = ButtonKind.Normal; updateButton.Glyph = Theme.IconRefresh; updateButton.Text = "检查更新"; nav[3].SetBadge("");
             Keep("UpdateCheckUtc", ""); ShowUpdate();
         }
