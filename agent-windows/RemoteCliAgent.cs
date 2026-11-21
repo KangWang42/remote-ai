@@ -138,7 +138,7 @@ public sealed class TerminalAgent {
             return Chat.ListModels(tool, launcher, scratch, ms);
         });
         Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands {
-            Begin = BeginMember, Say = SayToMember, Stop = StopMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
+            Begin = BeginMember, Say = SayToMember, Stop = StopMember, Close = CloseMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
             MakeWorktree = MakeTeamWorktree, WorktreeDiff = Worktrees.Diff, WorktreeStat = Worktrees.Stat, ApplyWorktree = ApplyTeamWorktree, CleanWorktrees = CleanTeamWorktrees });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
@@ -431,6 +431,15 @@ public sealed class TerminalAgent {
     }
     void SayToMember(string terminal, string words) { Member(terminal).Say(words, null); }
     void StopMember(string terminal) { try { Member(terminal).Stop(); } catch (InvalidOperationException) { } }
+    /// Closes a member's terminal as the phone's "close" does; one already closed is left as it is.
+    void CloseMember(string terminal) {
+        lock (work) {
+            LiveTerminal live;
+            if (!terminals.TryGetValue(terminal, out live) || live.Pty.Closed) return;
+            live.Pty.Dispose();
+            soon = true; nextScan = DateTime.UtcNow.AddSeconds(1.5);
+        }
+    }
     /// What changed in a project's folder, as git says it: the files, and the changes themselves (a folder that is
     /// no repository says nothing).
     string ChangesIn(string dir) {

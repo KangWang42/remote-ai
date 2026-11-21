@@ -175,6 +175,12 @@
       sheet.showModal();
     }));
   }
+  function closeReader() {
+    const reader = $('sheet');
+    if (!reader || !reader.open) return false;
+    reader.close();
+    return true;
+  }
   // A question with a few answers, optionally with fields to fill in; resolves with the answer, or null when dismissed.
   // It rises as the sheet of ui/sheet.js: a single answer that ends or saves something is its one button at the foot;
   // several are rows with a mark for what each does, those that end or delete something apart at the end.
@@ -1548,7 +1554,7 @@
   // What the views of their own work with: the page's helpers, what the computer last said, and the ways into a
   // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
   window.RemoteCliPage = {
-    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep, loadMarkdown, markdownNode,
+    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, closeReader, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep, loadMarkdown, markdownNode,
     get data() { return data; },
     get relayVersion() { return relayVersion; }, startAgyShell,
     get tab() { return tab; },

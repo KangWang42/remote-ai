@@ -5,6 +5,8 @@ Verifies:
 - `team_models` returns Codex `model/list` (`efforts`, `default_effort`, `is_default`, hidden filtered) and Claude `supportedEffortLevels`
 - `team_start` (manual preset members and `auto_roster: true`) passes leader `model` & `effort` into Codex `thread/start` (`config.model_reasoning_effort`) and every `turn/start` (initial dispatch, verification turn, follow-up round)
 - Restarting the agent restores persisted `roster[0].model` and `roster[0].effort` from `teams.dat` and reuses them on reopened rounds
+- `team_remove` closes every terminal the task began (leader and members), their conversations stay in the history
+  listed by themselves, and a conversation of the phone's own goes on running
 
     python tests/teams_e2e_check.py [<folder with RemoteCliAgent.exe>]
 """
@@ -82,6 +84,16 @@ def main():
 
         def work(action, expect=200, **more):
             return call("/api/work", dict({"id": secrets.token_hex(16), "action": action}, **more), expect)
+
+        def op(**payload):
+            payload.setdefault("id", secrets.token_hex(16))
+            for _ in range(200):
+                answer = call("/api/terminal", payload)
+                if answer.get("state") != "queued":
+                    break
+                time.sleep(0.1)
+            assert not answer.get("error"), (payload["action"], answer)
+            return answer
 
         def wait_online():
             for _ in range(80):
@@ -195,7 +207,55 @@ def main():
         after_restart = read_codex_log()
         assert any(e["event"] == "thread/start" and e["model"] == "gpt-6.2-sol" and e["config_effort"] == "high" for e in after_restart), after_restart
         assert any(e["event"] == "turn/start" and e["model"] == "gpt-6.2-sol" and e["effort"] == "high" for e in after_restart), after_restart
-        print("teams e2e: CLI model/effort catalog, manual & auto-roster leader effort across rounds, and restart recovery passed")
+
+        # 6) Removing the task closes the conversations it began; the history keeps them, other conversations go on
+        own = op(action="start", tool="claude", dir="web-shop", form="chat", text="不属于协作的对话")["terminal"]
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            listed = call("/api/terminal")
+            members = [t for t in listed["terminals"] if t["team"] == manual_id and t["state"] == "running"]
+            mine = next((t for t in listed["terminals"] if t["id"] == own), None)
+            if {t["tool"] for t in members} >= {"codex", "claude"} and all(t["session"] for t in members) and mine and mine["session"]:
+                break
+            time.sleep(0.3)
+        assert {t["tool"] for t in members} >= {"codex", "claude"} and all(t["session"] for t in members), members
+        assert mine and mine["state"] == "running" and mine["team"] == "", mine
+        # the stand-ins keep no records: each member's conversation is saved as its tool would save it
+        for member in members:
+            save = homes.claude_saved if member["tool"] == "claude" else homes.codex_saved
+            save(shop, member["session"], "协作成员 " + member["tool"], 0)
+
+        def history():
+            return {(s["tool"], s["id"]): s for s in call("/api/terminal")["sessions"]}
+
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            kept = history()
+            if all(kept.get((m["tool"], m["session"]), {}).get("team") == manual_id for m in members):
+                break
+            time.sleep(0.5)
+        assert all(kept.get((m["tool"], m["session"]), {}).get("team") == manual_id for m in members), [kept.get((m["tool"], m["session"])) for m in members]
+        work("team_remove", team=manual_id)
+        assert all(t["id"] != manual_id for t in work("teams")["teams"])
+        gone = {t["id"] for t in members}
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            listed = call("/api/terminal")
+            still = [t for t in listed["terminals"] if t["id"] in gone and t["state"] == "running"]
+            if not still:
+                break
+            time.sleep(0.3)
+        assert not still, still
+        mine = next(t for t in listed["terminals"] if t["id"] == own)
+        assert mine["state"] == "running", mine
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            seats = [history().get((m["tool"], m["session"])) for m in members]
+            if all(seat and not seat.get("team") and not seat.get("live") for seat in seats):
+                break
+            time.sleep(0.5)
+        assert all(seat and not seat.get("team") and not seat.get("live") for seat in seats), seats
+        print("teams e2e: CLI model/effort catalog, manual & auto-roster leader effort across rounds, restart recovery, and removal closing its conversations passed")
     finally:
         agent.kill()
         relay.kill()

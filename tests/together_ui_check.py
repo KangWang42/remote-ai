@@ -392,6 +392,21 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-collaboration-", ignore_clean
         assert '做一个登录页' in value("document.querySelector('dialog.rs[open]').innerText")
         value("document.querySelector('dialog.rs:not(.closing) .rs-close').click()")
         until(closed, 'closed')
+        # a task list that cannot be read is no removal: its detail stays open and offers to read again; a task
+        # removed elsewhere closes its detail
+        live = next(i for i, t in enumerate(played.teams) if t['state'] in ('running', 'paused', 'choose'))
+        kept_team = played.teams[live]
+        played.failed = 'work_teams'
+        browser.open(played.origin + '/?tab=tasks&do=team&item=' + kept_team['id'], "document.querySelector('dialog.rs[open] .team-models-error')?.innerText.includes('测试连接中断')", 'team-unread', **phone(390))
+        time.sleep(8)       # two rounds of the detail's reading (every 3.5 s), both failing
+        assert value("!!document.querySelector('dialog.rs[open]:not(.closing) .team-models-error')"), 'a failed reading must not close the task as removed'
+        assert '协作任务已删除' not in value("document.getElementById('toast').textContent")
+        played.failed = ''
+        value("document.querySelector('dialog.rs[open] .team-models-retry').click()")
+        until("!!document.querySelector('dialog.rs[open]:not(.closing)') && !document.querySelector('dialog.rs[open] .team-models-error') && document.querySelector('dialog.rs[open]').innerText.includes(%s)" % json.dumps(kept_team['goal']), 'read again after the failure')
+        played.teams.remove(kept_team)
+        until(closed + " && document.getElementById('toast').textContent.includes('协作任务已删除')", 'a task removed elsewhere closes its detail')
+        played.teams.insert(live, kept_team)
 
         # ---- 协作模型选择 (teams-models): error/retry, recommended defaults (Opus 5.5 / Astra 6.2 / Neon), role/mode preservation, swap model, detail display
         played.info["features"] = played.info["features"] + ["teams-models"]

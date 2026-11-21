@@ -534,7 +534,7 @@ on as the operation `work_<action>` and keeps nothing.
 | `team_swap` | `team`: its `id`, optional `role` (role or tool name, max 32 chars), `tool`: replacement chat-capable tool, optional `note` (max 1,000 chars), optional `model` (that role/tool's model from now on; needs `teams-models`), optional `effort` (that role/tool's reasoning effort tier, `""` to reset to tool default; non-empty needs `teams-effort`); needs `teams-v2` | `{"team": {...}}`: swaps a role's AI, model or reasoning effort, or reassigns an execution member's task to another installed AI mid-run or while paused |
 | `team_stop` | `team`: its `id` | `{}` |
 | `team_resume` | `team`: its `id` (must be `paused`) | `{}` |
-| `team_remove` | `team`: its `id` (must not be `running`) | `{}` |
+| `team_remove` | `team`: its `id` (must not be `running`) | `{}`: every terminal the task began (its leader's, members', and those it replaced) is closed; their conversations stay in the tools' history, listed by themselves |
 
 The tool of each conversation named is the one the computer listed it with, whatever the phone says. A conversation
 counts as open when a program on the computer has it (`live`) or one of the phone's own terminals runs it.

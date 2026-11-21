@@ -14,7 +14,7 @@
   const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', user: '你' };
   const defaults = window.RemoteTeamDefaults;
   const EFFORT_LABELS = (defaults && defaults.EFFORT_LABELS) || { none: '无（none）', minimal: '极低（minimal）', low: '低（low）', medium: '中（medium）', high: '高（high）', xhigh: '极高（xhigh）', max: '最高（max）', ultra: '极致（ultra）' };
-  let teams = null, failure = '', loading = false, activeSync = null;
+  let teams = null, failure = '', loading = null, activeSync = null, loadEpoch = 0;
   let modelCatalog = null, modelError = '', modelLoading = false, modelPromise = null;
   const mdCache = new Map();
   const isRichReady = () => !!(window.marked && window.DOMPurify);
@@ -221,12 +221,28 @@
     return out;
   }
 
-  async function load() {
-    if (loading || !page.has('teams') || !page.usable()) return;
-    loading = true;
-    try { teams = (await work('teams')).teams || []; failure = ''; }
-    catch (error) { failure = error.message; }
-    loading = false;
+  // A removed task leaves the list at once; a reading begun before it was removed is not taken.
+  function forgetTeam(id) {
+    loadEpoch++;
+    if (Array.isArray(teams)) teams = teams.filter(team => team && team.id !== id);
+  }
+  // Resolves true only when the computer's list was read and taken: a task missing from it is gone. A reading that
+  // failed, was not possible, or was overtaken by a removal leaves the list as it was and says nothing about any task.
+  function load() {
+    if (!page.has('teams') || !page.usable()) return Promise.resolve(false);
+    if (!loading) loading = read().finally(() => { loading = null; });
+    return loading;
+  }
+  async function read() {
+    const epoch = loadEpoch;
+    try {
+      const latest = (await work('teams')).teams || [];
+      failure = '';
+      if (epoch !== loadEpoch) return false;
+      teams = latest;
+      return true;
+    }
+    catch (error) { failure = error.message; return false; }
   }
 
   const used = tool => {
@@ -774,6 +790,17 @@
     const expanded = new Set();
     let streamBox = null, overviewBox = null, compareBox = null, activityBox = null, activityHead = null, streamList = null, jumpBtn = null;
     let footBox = null, bodyScroll = null, activeSheet = null, activePage = null, lastKey = '', lastLogCount = (currentTeam.log || []).length, lastLogTail = '', unreadLogs = 0;
+    let removed = false;
+
+    function closeRemoved(notify) {
+      if (removed) return;
+      removed = true;
+      forgetTeam(known.id);
+      if (page.closeReader) page.closeReader();
+      if (activeSheet && !activeSheet.gone) activeSheet.close('removed');
+      if (notify) toast('协作任务已删除');
+      page.refresh();
+    }
 
     function inspectMember(team, role, terminals) {
       const tid = (team.members || {})[role] || '';
@@ -841,7 +868,7 @@
 
     async function hydrate() {
       if (!page.usable() || !page.has('teams')) return;
-      await load();
+      const fresh = await load();
       if (!activeSheet || activeSheet.gone) return;
       const latest = (teams || []).find(t => t.id === known.id);
       if (latest) {
@@ -852,10 +879,12 @@
         renderStream(wasLoading && atTop ? 'top' : 'preserve');
         renderFoot();
       } else if (currentTeam._loading) {
-        currentTeam = Object.assign({}, currentTeam, { _loading: false, _error: failure || '这个协作任务已不存在，请刷新列表' });
+        currentTeam = Object.assign({}, currentTeam, { _loading: false, _error: fresh ? '这个协作任务已不存在' : failure || '没有读到协作任务，请重试' });
         lastKey = keyOf(currentTeam);
         renderStream('preserve');
         renderFoot();
+      } else if (fresh) {
+        closeRemoved(true);
       }
     }
 
@@ -1481,7 +1510,13 @@
             if (busyAct) return;
             if (!confirmRemove) { confirmRemove = true; delBtn.textContent = '再按一次删除'; setTimeout(() => { confirmRemove = false; if (delBtn.isConnected) delBtn.textContent = '删除'; }, 4000); return; }
             busyAct = true;
-            try { await work('team_remove', { team: team.id }); await load(); if (activeSheet) activeSheet.close('removed'); page.refresh(); toast('已删除'); }
+            try {
+              await work('team_remove', { team: team.id });
+              closeRemoved(false);
+              await load();
+              page.refresh();
+              toast('已删除');
+            }
             catch (err) { toast(err.message); } finally { busyAct = false; }
           }
         });
@@ -1604,10 +1639,13 @@
         syncLocal();
         return;
       }
-      await load();
+      const fresh = await load();
       if (sheet.gone) return;
       const latest = (teams || []).find(t => t.id === known.id);
-      if (!latest) return;
+      if (!latest) {
+        if (fresh && !currentTeam._loading) closeRemoved(true);
+        return;
+      }
       const key = keyOf(latest);
       if (key !== lastKey) {
         currentTeam = latest;

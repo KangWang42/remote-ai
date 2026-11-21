@@ -78,6 +78,8 @@ public sealed class Teams {
         public Dictionary<string, Seat> Sessions = new Dictionary<string, Seat>();
         /// Every conversation that was ever a member, replaced ones too: they are listed under the task.
         public List<Seat> Past = new List<Seat>();
+        /// Every terminal this task began, replaced members' too: all of them are closed when the task is removed.
+        public List<string> Opened = new List<string>();
         internal Team Copy() {
             var copy = (Team)MemberwiseClone();
             copy.Log = Log.ToList(); copy.Members = new Dictionary<string, string>(Members); copy.Awaited = Awaited.ToList();
@@ -87,7 +89,7 @@ public sealed class Teams {
             copy.Diffs = new Dictionary<string, string>(Diffs);
             copy.Failed = new Dictionary<string, string>(Failed); copy.Pending = new Dictionary<string, string>(Pending); copy.Held = new Dictionary<string, string>(Held);
             copy.Models = new Dictionary<string, string>(Models); copy.Efforts = new Dictionary<string, string>(Efforts);
-            copy.Sessions = new Dictionary<string, Seat>(Sessions); copy.Past = Past.ToList();
+            copy.Sessions = new Dictionary<string, Seat>(Sessions); copy.Past = Past.ToList(); copy.Opened = Opened.ToList();
             return copy;
         }
         /// When anything last happened in it, in Unix seconds.
@@ -110,12 +112,13 @@ public sealed class Teams {
     /// A member's conversation to begin: its tool, the project, the first words, read only or not, the folder where it
     /// is not the project's own (a worktree, `compare`), the model and reasoning effort ("" for the tool's default).
     public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = "", Effort = ""; public bool Read; }
-    /// What the program does for a team: begin a member's conversation, tell it something, stop one, read project
+    /// What the program does for a team: begin a member's conversation, tell it something, stop or close one, read project
     /// changes, read quota limits, list available chat tools, and manage Git worktrees for `compare`.
     public sealed class Hands {
         public Func<Opening, string> Begin;                                      // -> terminal
         public Action<string, string> Say;                                       // terminal, words
         public Action<string> Stop;                                              // terminal
+        public Action<string> Close;                                             // terminal: ends it; its conversation stays in the tool's history
         public Func<string, string> Changes;                                     // project -> what changed, in words
         public Func<string, Quotas.Window[]> Limits;                             // tool -> its main windows still running
         public Func<string[]> Available;                                         // chat-capable tools installed on this computer
@@ -172,6 +175,9 @@ public sealed class Teams {
             Efforts = map("efforts").Select(p => new KeyValuePair<string, string>(p.Key, RemoteCli.Models.CleanEffort(p.Value))).Where(p => p.Value.Length > 0).ToDictionary(p => p.Key, p => p.Value),
             Past = many("past").Select(Convert.ToString).Select(SeatOf).Where(s => s != null).ToList()
         };
+        // Retain the known terminals of older saved tasks even if those members are replaced after upgrading.
+        team.Opened = many("opened").Select(Convert.ToString).Concat(team.Members.Values)
+            .Where(t => !String.IsNullOrEmpty(t)).Distinct().ToList();
         object roster;
         if (kept.TryGetValue("roster", out roster) && roster != null)
             team.Roster = ReadRoster(roster, team.AutoRoster, true);
@@ -194,7 +200,7 @@ public sealed class Teams {
             { "worktrees", t.Worktrees }, { "base_commits", t.BaseCommits },
             { "summaries", t.Summaries }, { "stats", t.Stats }, { "diffs", t.Diffs },
             { "failed", t.Failed }, { "pending", t.Pending }, { "models", t.Models }, { "efforts", t.Efforts },
-            { "sessions", t.Sessions.ToDictionary(p => p.Key, p => p.Value.Tool + ":" + p.Value.Id) }, { "past", t.Past.Select(s => s.Tool + ":" + s.Id).ToArray() },
+            { "sessions", t.Sessions.ToDictionary(p => p.Key, p => p.Value.Tool + ":" + p.Value.Id) }, { "past", t.Past.Select(s => s.Tool + ":" + s.Id).ToArray() }, { "opened", t.Opened },
             { "log", t.Log.Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         }).ToArray();
         try {
@@ -960,15 +966,19 @@ public sealed class Teams {
             + extra + "\n\n请基于当前进展继续完成该任务，完成后简要说明你做了什么、改了哪些文件。";
     }
 
+    /// Removes a task that is not at work, closing every terminal it began (its conversations stay in the tools'
+    /// history, listed by themselves again) and its worktrees.
     public bool Remove(string id) {
-        Team team; string dir = null; bool hasWorktrees = false;
+        Team team; string dir = null; bool hasWorktrees = false; string[] opened;
         lock (gate) {
             team = items.FirstOrDefault(t => t.Id == id);
             if (team == null) return false;
             if (team.State == "running") throw new InvalidOperationException("这个协作任务还在进行，请先停止");
             dir = team.Dir; hasWorktrees = team.Worktrees.Count > 0;
+            opened = team.Opened.ToArray();
             items.Remove(team); Save();
         }
+        if (hands.Close != null) foreach (string terminal in opened) try { hands.Close(terminal); } catch (Exception) { }
         if (hasWorktrees && hands.CleanWorktrees != null) try { hands.CleanWorktrees(dir, id); } catch (Exception) { }
         Tell();
         return true;
@@ -1038,6 +1048,7 @@ public sealed class Teams {
             string terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "" });
             lock (gate) {
                 team.Members[role] = terminal;
+                if (!team.Opened.Contains(terminal)) team.Opened.Add(terminal);
                 team.Sessions.Remove(role);
                 if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
                 opening--; Save(); Monitor.PulseAll(gate);

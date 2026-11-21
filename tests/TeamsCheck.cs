@@ -11,6 +11,7 @@ public static class TeamsCheck {
     static readonly List<string[]> told = new List<string[]>();         // [terminal, tool or "", words]
     static readonly Dictionary<string, string> tools = new Dictionary<string, string>();
     static readonly List<string> stopped = new List<string>();
+    static readonly List<string> closed = new List<string>();
     static string changes = "";
     static int made;
     static Teams.Hands Hands() {
@@ -19,6 +20,7 @@ public static class TeamsCheck {
             Begin = one => { string t = "t" + (++made); tools[t] = one.Tool + (one.Read ? ":read" : "") + (one.Folder.Length > 0 ? "@" + one.Folder : "") + (one.Model.Length > 0 ? "#" + one.Model : "") + (one.Effort.Length > 0 ? "~" + one.Effort : ""); told.Add(new[] { t, one.Tool, one.Words }); return t; },
             Say = (terminal, words) => { if (terminal == "gone") throw new InvalidOperationException("这个成员的对话已经结束"); told.Add(new[] { terminal, "", words }); },
             Stop = terminal => stopped.Add(terminal),
+            Close = terminal => closed.Add(terminal),
             Changes = dir => changes };
     }
     static string Last(string terminal) { return told.Last(x => x[0] == terminal)[2]; }
@@ -357,7 +359,7 @@ public static class TeamsCheck {
     }
 
     /// A team's members' conversations: known by the terminals that run them, kept when they are replaced, listed
-    /// under the task until it is removed; the tasks in short for the lists.
+    /// under the task until it is removed, when every terminal it began is closed; the tasks in short for the lists.
     static void Grouping(string file) {
         string kept = Path.Combine(Path.GetDirectoryName(file), "grouping.dat");
         var teams = new Teams(kept, Hands());
@@ -383,11 +385,20 @@ public static class TeamsCheck {
         Require(new[] { "id", "dir", "goal", "mode", "state", "phase", "note", "updated", "awaited", "tools", "models", "confirm" }.All(card.ContainsKey) && Math.Abs((long)card["updated"] - now) < 60
             && (bool)card["confirm"] && (string)card["goal"] == "改主题", "a card says what the lists need, its time in seconds");
         Require(!teams.Cards(terminal => false).Single(c => (string)c["id"] == id).ContainsKey("confirm"), "confirm only where one asks");
+        string other = "4242424242424242";
+        teams.Start(new Dictionary<string, object> { { "id", other }, { "mode", "review" }, { "dir", "web-shop" }, { "goal", "别的任务" }, { "tools", new object[] { "codex", "claude" } } });
+        string otherWriter = Team(teams, other).Members["writer"];
         // kept, and gone with the task: the conversations are history of their own again
         var reread = new Teams(kept, Hands());
         Require(reread.TeamOf("claude", first) == id && reread.All().Single(t => t.Id == id).Sessions["writer"].Id == second, "kept across a restart");
         reread.Stop(id);
-        Require(reread.Remove(id) && reread.TeamOf("claude", first) == "" && reread.TeamOf("agy", second) == "" && reread.Cards(t => false).Length == 0, "after the task is removed its conversations are listed by themselves");
+        closed.Clear();
+        Require(reread.Remove(id) && reread.TeamOf("claude", first) == "" && reread.TeamOf("agy", second) == "" && reread.Cards(t => false).All(c => (string)c["id"] != id), "after the task is removed its conversations are listed by themselves");
+        Require(closed.Count == 2 && closed.Contains(writer) && closed.Contains(swapped.Members["writer"]), "its terminals are closed, the replaced one too, across a restart");
+        Require(!closed.Contains(otherWriter) && Team(reread, other).State == "paused" && Team(reread, other).Members["writer"] == otherWriter, "another task's terminal is left open");
+        closed.Clear();
+        reread.Stop(other);
+        Require(reread.Remove(other) && closed.SequenceEqual(new[] { otherWriter }), "removing the other task closes only its own terminal");
     }
 
     public static int Main() {
