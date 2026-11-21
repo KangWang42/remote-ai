@@ -1229,6 +1229,59 @@ class TerminalRelayTests(unittest.TestCase):
         with self.assertRaises(RemoteError):
             self.relay.conversation(dict(stop, receipt=True), now=1004, wait=0)
 
+    def test_agy_desktop_open_draft_limits(self):
+        op = dict(id="a" * 32, tool="agy", action="app_open", dir="demo")
+        info = dict(self.info, features=["agy-desktop-open", "claude-desktop-open"])
+        self.relay.agent({"info": info}, now=1001)
+        for tool, text in (("agy", "😀" * 4001), ("claude", "😀" * 501)):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(op, tool=tool, draft=text), now=1002)
+        self.relay.command(dict(op, draft="😀" * 4000), now=1002)
+        sent = self.relay.pull({"instance": info["instance"], "wait": 0})["operations"]
+        self.assertEqual(sent[0]["draft"], "😀" * 4000)
+
+    def test_agy_desktop_read_choice_routing_and_receipts(self):
+        from concurrent.futures import ThreadPoolExecutor
+        sid = "11111111-2222-3333-4444-555555555555"
+        info = dict(self.info, features=["reach", "peek", "agy-desktop-control"])
+        ask = dict(id="abcdef12", kind="question", text="选择一个项目",
+                   options=[dict(id=f"choice:{i}", label=str(i), detail="") for i in range(7)])
+        session = dict(id=sid, tool="agy", dir="demo", title="示例", updated=1, live=True,
+                       status="confirm", reach=["answer"], transport="agy-desktop", ask=ask)
+        def report():
+            self.relay.agent({"info": info, "sessions": [session]}, now=1001)
+
+        def exchange(request, result):
+            with ThreadPoolExecutor(1) as pool:
+                answer = pool.submit(self.relay.conversation, request, now=1002, wait=4)
+                op, = self.relay.pull({"instance": info["instance"], "wait": 2})["operations"]
+                self.relay.agent({"info": info, "acks": [{"id": request["id"], "result": result}]}, now=1003)
+                self.assertEqual(answer.result(), result)
+                return op
+
+        report()
+        self.assertEqual(self.relay.overview(now=1001)["sessions"][0]["ask"], ask)
+        exchange(dict(id="a" * 32, session=sid, action="read"), {"same": True, "ask": ask})
+        request = dict(id="b" * 32, session=sid, action="answer", ask=ask["id"], allow=True, choice="choice:6")
+        for change in (dict(choice="choice:7"), dict(choice="choice:01"), dict(choice=[]), dict(allow=False),
+                       dict(scope="always"), dict(ask="bbbbbbbb"), dict(receipt="true"), dict(transport="hook")):
+            with self.assertRaises(RemoteError):
+                self.relay.conversation(dict(request, **change), now=1002, wait=0)
+        op = exchange(request, {"status": "accepted"})
+        self.assertEqual((op["transport"], op["choice"], op["receipt"]), ("agy-desktop", "choice:6", False))
+        op = exchange(dict(request, id="c" * 32, allow=False, choice="deny"), {"status": "accepted"})
+        self.assertFalse(op["allow"])
+        session.update(status="busy", ask=None, reach=["say", "stop"])
+        report()
+        self.assertTrue(exchange(dict(request, receipt=True), {"status": "accepted"})["receipt"])
+        for verb, fields in (("stop", {}), ("say", {"text": "继续"})):
+            op = exchange(dict(id="d" * 32, session=sid, action=verb, **fields), {"status": "accepted"})
+            self.assertEqual((op["transport"], op["action"]), ("agy-desktop", "session_" + verb))
+        info["features"].remove("agy-desktop-control")
+        report()
+        with self.assertRaises(RemoteError):
+            self.relay.conversation(dict(request, receipt=True), now=1002, wait=0)
+
     def test_native_stop_capability_requires_matching_application(self):
         from relay import _reached
         base = dict(live=True, tool="codex", reach=["stop"], transport="codex-desktop", turn="turn-1")

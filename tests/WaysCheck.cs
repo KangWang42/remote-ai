@@ -27,6 +27,18 @@ public static class WaysCheck {
     }
     public static void Main() {
         const string A = Ways.App, H = Ways.Hook, W = Ways.Wake, P = Ways.Process, D = Ways.CodexDesktop;
+        const string agyApp = Ways.AgyApp;
+        var appSession = In("agy", Ways.AgyDesktop, false, false);
+        var appState = new AntigravityDesktopClient.State();
+        var idle = Ways.Of(appSession, null, null, appState);
+        Is("agy desktop idle", idle, agyApp, "", "", "", "idle", "say", agyApp);
+        Require(!idle.Now, "idle desktop is outside the active count");
+        appState.Busy = true;
+        Is("agy desktop busy", Ways.Of(appSession, null, null, appState), agyApp, agyApp, "", "", "busy", "say,stop", agyApp);
+        appState.Waiting = true; appState.Busy = false; appState.AskId = "1234abcd";
+        var asking = Ways.Of(appSession, null, null, appState);
+        Is("agy desktop question", asking, "", "", agyApp, "", "confirm", "answer", agyApp);
+        Require(asking.Now && Ways.InApplication(Ways.AgyDesktop), "desktop question is active");
 
         // ---- Claude Code, wherever it runs (its desktop app, an editor, a command line): the same ways
         foreach (string origin in new[] { "Claude 桌面版", "Positron", "" }) {

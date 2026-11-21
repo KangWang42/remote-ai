@@ -21,9 +21,10 @@ namespace RemoteCli {
 /// A tool or a channel that is added gets its lines in `Of`; nothing else decides any of this.
 public sealed class Ways {
     public const string App = "codex-desktop", Hook = "hook", Wake = "wake", Process = "process";
+    public const string AgyApp = "agy-desktop", AgyDesktop = "Antigravity 桌面版";
     public const string CodexDesktop = "Codex 桌面版", ClaudeDesktop = "Claude 桌面版";      // by what a conversation of a desktop app is told (SessionInfo.Origin)
     /// Whether a conversation runs in a desktop application, as its origin says.
-    public static bool InApplication(string origin) { return origin == CodexDesktop || origin == ClaudeDesktop; }
+    public static bool InApplication(string origin) { return origin == CodexDesktop || origin == ClaudeDesktop || origin == AgyDesktop; }
     public static readonly string[] Things = { "say", "stop", "answer", "end" };
     /// Said of an Antigravity CLI conversation that its hooks have not told of: it was opened before they were put in
     /// (it reads them as it starts), or they are switched off.
@@ -38,7 +39,7 @@ public sealed class Ways {
     public bool Now;
     /// Whether its tool or its application tells of it at all: of one that neither does, the phone is told nothing.
     public bool Told;
-    bool channelled;
+    string channel = "";
 
     /// As the phone is told: what it can do, by name.
     public string[] Reach { get { return !Told ? null : new[] { Say.Length > 0 ? "say" : null, Stop.Length > 0 ? "stop" : null, Answer.Length > 0 ? "answer" : null }.Where(way => way != null).ToArray(); } }
@@ -46,20 +47,34 @@ public sealed class Ways {
     public Dictionary<string, object> Named { get { return new Dictionary<string, object> { { "say", Say }, { "stop", Stop }, { "answer", Answer }, { "end", End } }; } }
     /// For a relay or a page that knows one way for a conversation only: the application's channel where it has
     /// one, else the hooks where they stop it.
-    public string Transport { get { return channelled ? App : Stop == Hook ? Hook : ""; } }
+    public string Transport { get { return channel.Length > 0 ? channel : Stop == Hook ? Hook : ""; } }
     /// What is said is handed to it where it sits idle, and it is woken: that takes some seconds.
     public bool Woken { get { return Say == Wake; } }
 
-    public static Ways Of(TerminalAgent.SessionInfo s, Reach.Open known, CodexDesktopSessions.State channel) {
+    public static Ways Of(TerminalAgent.SessionInfo s, Reach.Open known, CodexDesktopSessions.State channel, AntigravityDesktopClient.State agyChannel = null) {
         var ways = new Ways { Status = TerminalAgent.ObservedStatus(s, known), Now = s.Now };
         if (!s.Live) { foreach (string thing in Things) ways.Why[thing] = "这段对话没有在电脑上开着"; return ways; }
+        if (agyChannel != null) {
+            ways.Told = true;
+            ways.channel = AgyApp;
+            ways.Now = agyChannel.Waiting || agyChannel.Busy;
+            ways.Status = agyChannel.Waiting ? "confirm" : agyChannel.Busy ? "busy" : "idle";
+            if (agyChannel.Waiting) ways.Why["say"] = "请先处理上方的确认或提问";
+            else ways.Say = AgyApp;
+            if (agyChannel.Busy) ways.Stop = AgyApp;
+            else ways.Why["stop"] = "这段对话现在没有在执行";
+            if (agyChannel.Waiting && !String.IsNullOrEmpty(agyChannel.AskId)) ways.Answer = AgyApp;
+            else ways.Why["answer"] = agyChannel.Waiting ? "请在电脑上处理这个问题" : "这段对话现在没有在等确认";
+            ways.Why["end"] = "请在 Antigravity 桌面版关闭这段对话";
+            return ways;
+        }
         bool claude = s.Tool == "claude", agy = s.Tool == "agy", desktop = s.Origin == CodexDesktop, asks = known != null && known.Status == "confirm";
         if (channel != null) {
             // The application says how it stands; a request that its tool's hook tells of stands before that.
             ways.Status = asks ? "confirm" : channel.Busy ? "busy" : channel.Ready ? "waiting" : "confirm";
             ways.Now = channel.Busy || ways.Status == "confirm";
             ways.Turn = channel.Turn ?? "";
-            ways.channelled = true;
+            ways.channel = App;
         }
         bool busy = ways.Status == "busy";
         ways.Told = known != null || channel != null || (s.Wakes && !desktop);
@@ -70,7 +85,7 @@ public sealed class Ways {
         // (never Codex's queue for its desktop app: the queue is another program's, which would write to a conversation the app has)
         else if (s.Wakes && !desktop && !asks) ways.Say = Wake;
         else ways.Why["say"] = channel != null ? "Codex 桌面版还没有就绪：等它当前的执行或电脑上的确认结束后再发"
-            : desktop ? "暂时无法连接 Codex 原对话：应用连接尚未就绪、工作目录无法确认，或此版本尚未适配。请在电脑上打开这段对话后刷新；无需先添加项目"
+            : desktop ? "暂时无法连接 Codex 原对话。可在电脑上发送，或开启「停下等待」后从手机发送。也可在手机上新开副本继续，无需先添加项目"
             : agy ? (known == null ? AgyBefore : "Antigravity CLI 停下后只能在电脑上输入；它执行时发的消息会在它下一次思考前交给它")
             : "电脑上的 " + (claude ? "Claude Code" : "Codex 命令行") + " 现在收不到手机的消息：它执行时发的消息会在它做完后收到";
 
@@ -80,7 +95,7 @@ public sealed class Ways {
         else ways.Why["stop"] = !busy ? "这段对话现在没有在执行"
             : channel != null ? "Codex 桌面版正在执行一个目标，或同时有几轮在进行：这种情况只能在电脑上停止"
             : claude ? "这段对话是在可以从手机停止之前打开的，在电脑上重新打开它之后才行"
-            : desktop ? "暂时无法连接 Codex 原对话的停止接口，请在电脑上停止；无需通过添加项目解锁"
+            : desktop ? "这段对话的桌面停止接口不可用，请在电脑上的 Codex 中停止本轮执行"
             : agy ? AgyBefore
             : "Codex 命令行的回答不能从外面单独停止";
 

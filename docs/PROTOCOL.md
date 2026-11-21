@@ -1032,8 +1032,9 @@ An agent advertises `<tool>-desktop-open` for each tool whose desktop applicatio
 - `claude-desktop-open` when it finds the installed `Claude` Windows x64 package (2.31226.1.0 or later), the
   package declares the `claude:` scheme as its own, and its owner has not given that scheme to another program.
 
-Installing/updating a desktop app requires restarting Remote AI to discover it.
-This capability means opening a project/composer, not RPC control of running turns.
+The Windows agent discovers these two link handlers at startup. It also advertises
+`agy-desktop-open` when the local Antigravity Desktop service answers its discovery probe.
+`agy-desktop-control` identifies support for controlling a listed desktop conversation.
 It does not depend on a CLI installation. Linux and older agents do not advertise it. The relay passes
 on the names it knows (`DESKTOP_TOOLS`) and refuses `app_open` for a tool the computer did not name.
 
@@ -1046,7 +1047,7 @@ Use the existing authenticated `POST /api/terminal` operation queue:
 Only these fields are allowed. `dir` is an existing Remote AI project name, not a caller-provided path.
 Both relay and computer validate it; the computer resolves its allowed absolute directory and verifies
 that it still exists. `draft` defaults to empty, accepts line breaks and tabs and is limited to 1000
-UTF-16 code units. Remote control must be enabled. No terminal is created (`terminal` is empty).
+UTF-16 code units for Codex and Claude, or 8000 for Antigravity. Remote control must be enabled. No terminal is created (`terminal` is empty).
 
 The queued operation eventually returns `state: "done"` with a `result`:
 
@@ -1065,7 +1066,7 @@ one it is: a live conversation carries `opened`, the `id` of the `app_open` oper
 the first that began in that folder, in that application, after the application was opened for it (looked
 for during 30 minutes; kept in memory only). The page that handed the draft over offers to enter it.
 
-Each application is opened by a link of its own scheme, the entry it has for that itself
+Codex and Claude are opened by a link of their own scheme
 (`LinkedDesktopApp` in `DesktopAdapters.cs`; one class per application says where it is installed, what its
 link is and how the link is given). Claude's is `claude://code/new?folder=...&q=...`: a new conversation of
 Claude Code in that folder with the draft standing in its box, the link the app's own `ccd <folder>` command
@@ -1233,6 +1234,44 @@ For `action: "stop"`, replace `text` with `turn` from the latest session report.
 filesystem path. Stop interrupts that turn, not the application process. Desktop goal tasks are excluded
 from stop because this interface's expected-turn variant does not pause the goal. Hooks that already
 provide a permission request continue to use `session_answer`; native approvals are not implemented.
+
+### Windows desktop conversation discovery and control
+
+On the Windows installation of Codex `26.1117.4957.0`, the legacy `codex-ipc` pipe was absent.
+The Windows agent checks the pipe before connecting. Opening the composer remains a separate
+capability. An available hook can accept a follow-up or hold a stopped conversation for input.
+Otherwise the phone shows how to continue on the computer or open a copy. `codex queue` is
+reserved for the command-line route.
+
+Claude Code can publish a live owner record before writing its first transcript. The Windows
+agent uses `ClaudeSessions.LiveSessions` for both registered projects and eligible external
+folders. It uses the owner record's `name` when the transcript has no title, then falls back
+to the session start time. Reading a verified live conversation with no transcript returns
+`messages: []`, `more: false` and `stamp: "0.0"` until the transcript appears.
+
+For Antigravity Desktop, the Windows adapter discovers a local Hub from
+`~/.gemini/antigravity/daemon/hub_*.json`. The record names `pid`, `httpPort`, `httpsPort`,
+`lsVersion` and `csrfToken`. The adapter checks the recorded language-server process and probes the
+loopback ConnectRPC service with `GetStatus`. Loopback requests carry the Hub's CSRF credential.
+The phone and relay receive neither the credential nor the Hub registry record.
+An authenticated phone receives conversation capabilities and operation results.
+
+| Phone operation | Desktop service operation and result |
+| --- | --- |
+| `app_open`, `tool: "agy"` | `StartCascade` in the registered workspace. A nonblank draft also calls `SendUserCascadeMessage`. A successful receipt carries `status: "created"`, `session`, and `sent`. |
+| List and `read` | `GetAllCascadeTrajectories`, `GetCascadeTrajectory` and `GetCascadeTrajectorySteps` supply summaries, state and messages. The response includes `stamp` and the current `ask`, including on an unchanged read. An offline desktop transcript can supply history. CLI records take precedence for duplicate IDs. |
+| `say` | `SendUserCascadeMessage` targets the listed conversation and carries the operation ID as `clientMessageId`. |
+| `stop` | `CancelCascadeInvocation` targets the busy conversation. The application stays open. |
+| `answer` | `HandleCascadeUserInteraction` targets the pending interaction. The agent checks the question and offered option again before dispatch. |
+
+`/api/conversation` uses `transport: "agy-desktop"` for these desktop writes. Omitting it
+uses the desktop route when the session advertises that transport. `ask` contains `id`,
+`kind`, `text` and `options`. A choice question takes one displayed option per answer,
+for example `{"action":"answer","ask":"aabbccdd","allow":true,"choice":"choice:1"}` plus
+the operation and session IDs. Indices start at zero. `allow: false` declines or cancels.
+Permission scope `always` requires that the current question offers it. A client querying
+an uncertain write repeats the original ID and arguments with `receipt: true`. The agent
+returns the saved result, or `unknown` if missing, without dispatching another operation.
 
 ### Remote approval scope (1.6.3)
 

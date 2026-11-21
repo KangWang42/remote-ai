@@ -78,7 +78,7 @@ _word = re.compile(r"^[a-z0-9_]{1,40}$")
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 DESKTOP_ACTIONS = ("app_open",)
 # the tools whose desktop application a computer can offer to open: it says so for each by "<tool>-desktop-open"
-DESKTOP_TOOLS = ("codex", "claude")
+DESKTOP_TOOLS = ("codex", "claude", "agy")
 UPDATE_ACTION = "update"      # the program on the computer looks for a newer version of itself and installs it
 MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 16, 12, 2_000_000, 300_000
 LABELS = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity CLI", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi", "shell": "PowerShell"}
@@ -452,7 +452,8 @@ ORGANIZE_SOURCES = ("off", "tool", "api")
 ORGANIZE_TOOLS = ("claude", "codex", "agy")
 # By which way the computer does each thing to a conversation that a program there has open (docs/PROTOCOL.md):
 # its application's own channel, its tool's hooks, its tool's own way to one that sits idle; ending closes its program.
-WAYS = {"say": ("codex-desktop", "hook", "wake"), "stop": ("codex-desktop", "hook"), "answer": ("hook",), "end": ("process",)}
+WAYS = {"say": ("codex-desktop", "agy-desktop", "hook", "wake"), "stop": ("codex-desktop", "agy-desktop", "hook"), "answer": ("hook", "agy-desktop"), "end": ("process",)}
+_choice = re.compile(r"choice:(?:0|[1-9][0-9]{0,2})")
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
 ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end", "session_organize") + COMPUTER_ACTIONS + DESKTOP_ACTIONS + tuple("work_" + name for name in WORK_ACTIONS)     # operations whose acknowledgment carries an answer
@@ -479,21 +480,26 @@ def _reached(session):
     if not isinstance(session.get("reach"), list):
         return {"reach": None, "ask": None, "last": "", "wake": False, "ways": ways and dict(ways, say="", stop="", answer=""), "why": why, "queued": _queued(session)}
     ask = session.get("ask")
+    agy = session.get("tool") == "agy" and session.get("transport") == "agy-desktop" and session.get("live") is True
+    kind = ask.get("kind") if agy and isinstance(ask, dict) else None
     options = ask.get("options") if isinstance(ask, dict) else None
     ask = {"id": ask["id"], "text": ask["text"][:600]} if (session.get("status") == "confirm" and isinstance(ask, dict) and isinstance(ask.get("id"), str)
                                                               and _ask.fullmatch(ask["id"]) and isinstance(ask.get("text"), str)) else None
+    if ask is not None and kind in ("question", "permission", "command", "file", "mcp", "approval"):
+        ask["kind"] = kind
     if ask is not None and isinstance(options, list):
         ask["options"] = [{"id": o["id"], "label": o["label"][:40], "detail": o.get("detail", "")[:600]}
-                          for o in options[:4] if isinstance(o, dict) and o.get("id") in ("once", "always")
+                          for o in options[:64 if agy else 4] if isinstance(o, dict) and isinstance(o.get("id"), str)
+                          and (o["id"] in ("once", "always") or agy and (o["id"] == "deny" or kind == "question" and _choice.fullmatch(o["id"])))
                           and isinstance(o.get("label"), str) and isinstance(o.get("detail", ""), str)]
     # wake: it sits idle, and a message is handed to it where it is (that takes some seconds), instead of being left for its next stop
     native = session.get("tool") == "codex" and session.get("transport") == "codex-desktop" and session.get("live") is True
     # told to stop through its tool's hooks, before its next step (Claude Code): no turn is named for that
     hook = session.get("transport") == "hook" and session.get("live") is True
     turn = session.get("turn") if isinstance(session.get("turn"), str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", session["turn"]) else ""
-    reach = [way for way in REACH if way in session["reach"] and (way != "answer" or ask) and (way != "stop" or (native and turn) or hook)]
+    reach = [way for way in REACH if way in session["reach"] and (way != "answer" or ask) and (way != "stop" or (native and turn) or hook or agy)]
     return {"reach": reach, "ask": ask, "last": str(session.get("last") or "")[:300],
-            "transport": "codex-desktop" if native else "hook" if hook else "", "turn": turn if native else "",
+            "transport": "codex-desktop" if native else "agy-desktop" if agy else "hook" if hook else "", "turn": turn if native else "",
             "wake": session.get("wake") is True and "say" in session["reach"],
             # (a way is said only for what the list above lets through)
             "ways": ways and {thing: way if thing not in REACH or thing in reach else "" for thing, way in ways.items()}, "why": why, "queued": _queued(session)}
@@ -864,8 +870,9 @@ class Relay:
                 if payload.get("dir") not in self._device["workspaces"]:
                     raise RemoteError("电脑没有报告这个项目")
                 draft = payload.get("draft", "")
-                if not isinstance(draft, str) or len(draft.encode("utf-16-le", errors="surrogatepass")) > 2000 or any(ord(c) < 32 and c not in "\n\r\t" for c in draft):
-                    raise RemoteError("草稿需在 1000 字以内，且不能含控制字符")
+                limit = 8000 if payload["tool"] == "agy" else 1000
+                if not isinstance(draft, str) or len(draft.encode("utf-16-le", errors="surrogatepass")) > 2 * limit or any(ord(c) < 32 and c not in "\n\r\t" for c in draft):
+                    raise RemoteError(f"草稿需在 {limit} 字以内，且不能含控制字符")
                 if set(payload) - {"id", "action", "tool", "dir", "draft"}:
                     raise RemoteError("桌面操作参数无效")
             elif action in PROJECT_ACTIONS:
@@ -1138,13 +1145,9 @@ class Relay:
                 more = {"since": payload["since"]}
         else:
             raise RemoteError("不支持此操作")
-        native = payload.get("transport") == "codex-desktop" and action in ("say", "stop")
+        transport = payload.get("transport")
         if "receipt" in payload and type(payload["receipt"]) is not bool:
             raise RemoteError("回执查询无效")
-        if action == "stop" and not native and payload.get("transport") != "hook":
-            raise RemoteError("此对话没有可用的停止接口")
-        if native:
-            more.update(transport="codex-desktop", receipt=payload.get("receipt") is True)
         with self._changed:
             self._expire(now)
             if op_id in self._pending:
@@ -1160,11 +1163,29 @@ class Relay:
             saved = next((s for s in self._sessions if s["id"] == session), None)
             if not saved:
                 raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
-            if native:
-                if saved["tool"] != "codex" or "codex-desktop-control" not in self._device.get("features", []):
-                    raise RemoteError("电脑端没有可用的 Codex 原应用控制接口")
-                if not more["receipt"] and saved.get("transport") != "codex-desktop":
+            if saved.get("transport") == "agy-desktop" and action in ("say", "stop", "answer"):
+                if transport not in (None, "agy-desktop"):
                     raise RemoteError("原应用连接已变化，请刷新后重试")
+                transport = "agy-desktop"
+            native = (transport == "codex-desktop" and action in ("say", "stop")
+                      or transport == "agy-desktop" and action in ("say", "stop", "answer"))
+            if (transport == "agy-desktop" or payload.get("receipt") is True) and not native:
+                raise RemoteError("此操作没有可用的桌面回执")
+            if action == "stop" and not native and transport != "hook":
+                raise RemoteError("此对话没有可用的停止接口")
+            if native:
+                more.update(transport=transport, receipt=payload.get("receipt") is True)
+                if saved["tool"] + "-desktop" != transport or transport + "-control" not in self._device.get("features", []):
+                    raise RemoteError("电脑端没有可用的原应用控制接口")
+                if not more["receipt"] and saved.get("transport") != transport:
+                    raise RemoteError("原应用连接已变化，请刷新后重试")
+            if "choice" in payload:
+                choice = payload["choice"]
+                if (action != "answer" or transport != "agy-desktop" or not isinstance(choice, str)
+                        or not (_choice.fullmatch(choice) or choice == "deny")
+                        or (choice == "deny") == more["allow"] or more.get("scope", "once") != "once"):
+                    raise RemoteError("回答选项无效")
+                more["choice"] = choice
             if action == "delete":
                 # A saved conversation is put away by the computer (nothing is destroyed: its tool's archive, or the
                 # recycle bin). Not one a program has open, nor one a terminal here runs. It leaves the list at once.
@@ -1200,8 +1221,15 @@ class Relay:
                     raise RemoteError("这个确认请求已经处理过了，或只能在电脑上回答" if action == "answer" else "这段对话现在没有在执行，请刷新后重试" if action == "stop" else "这段对话现在不能从手机发消息，请刷新后重试")
                 if action == "stop" and not native and saved.get("transport") != "hook":
                     raise RemoteError("这段对话的停止方式已变化，请刷新后重试")
-                if action == "answer" and saved["ask"]["id"] != more["ask"]:
-                    raise RemoteError("这个确认请求已经处理过了")
+                if action == "answer" and not more.get("receipt"):
+                    ask = saved.get("ask") or {}
+                    if ask.get("id") != more["ask"]:
+                        raise RemoteError("这个确认请求已经处理过了")
+                    if transport == "agy-desktop":
+                        options = {o["id"] for o in ask.get("options", [])}
+                        selected = more.get("choice") or (more.get("scope", "once") if more["allow"] else "deny")
+                        if selected not in options and not (selected == "deny" and ask.get("kind") == "question"):
+                            raise RemoteError("回答选项已变化，请刷新后重试")
                 if action == "say" and saved.get("wake") and wait == FILE_SECONDS:
                     wait = WAKE_SECONDS
             return self._held({"id": op_id, "action": "session_" + action, "session": session, "tool": saved["tool"], "dir": saved["dir"], **more}, now, wait)
@@ -1655,7 +1683,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

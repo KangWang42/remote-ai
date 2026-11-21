@@ -119,9 +119,12 @@ public sealed class PseudoTerminal : IRunning {
 public sealed class TerminalAgent {
     string Origin = "";
     readonly string dataDir;
-    public TerminalAgent(string dataFolder = null, Func<IDesktopConversation> desktopConversation = null) {
+    public TerminalAgent(string dataFolder = null, Func<IDesktopConversation> desktopConversation = null, AntigravityDesktopClient agyDesktopClient = null) {
         dataDir = dataFolder ?? DefaultData;
-        Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter(), new ClaudeDesktopAdapter());
+        AgyDesktopClient = agyDesktopClient ?? new AntigravityDesktopClient();
+        AgyDesktop = new AntigravityDesktopSessions(AgyDesktopClient);
+        AgyDesktop.Changed += () => { sessionsDirty = true; Wake(); };
+        Desktop = new DesktopOperations(dataDir, new CodexDesktopAdapter(), new ClaudeDesktopAdapter(), new AntigravityDesktopAdapter(AgyDesktopClient));
         OpenDesktopConversation = desktopConversation ?? (() => CodexDesktopControl.Connect());
         NativeDesktop = new CodexDesktopSessions(OpenDesktopConversation);
         NativeDesktop.Changed += () => { sessionsDirty = true; Wake(); };
@@ -178,6 +181,9 @@ public sealed class TerminalAgent {
     readonly DesktopOperations Desktop;
     readonly Func<IDesktopConversation> OpenDesktopConversation;
     readonly CodexDesktopSessions NativeDesktop;
+    readonly AntigravityDesktopClient AgyDesktopClient;
+    readonly AntigravityDesktopSessions AgyDesktop;
+    readonly Dictionary<string, Antigravity.Summary> newAgySessions = new Dictionary<string, Antigravity.Summary>(StringComparer.OrdinalIgnoreCase);
     /// Whether the relay has been given the answer to this operation.
     public bool Reported(string id) { lock (work) return reported.Contains(id); }
     /// Whether nothing has been typed or printed for a while and no tool says it is working: a moment to restart in.
@@ -347,8 +353,9 @@ public sealed class TerminalAgent {
         var native = NativeState(s);
         if (native != null) Reach.ObserveDesktop(s.Id, native.Ready, native.Takes, native.At);
         var known = s.Live ? Reach.Of(s.Tool, s.Id) : null;
-        var ways = Ways.Of(s, known, native);
-        bool asks = known != null && known.Status == "confirm";
+        var agy = AgyState(s);
+        var ways = Ways.Of(s, known, native, agy);
+        bool asks = ways.Status == "confirm";
         var organize = Organizer.ForList(s.Tool, s.Id, s.Title, s.Named);
         return new { id = s.Id, tool = s.Tool, dir = s.Dir, folder = s.Folder, kind = s.Kind, pinned = Marks.Is("pinned", s.Tool, s.Id), hidden = Marks.Is("hidden", s.Tool, s.Id), now = ways.Now, title = s.Title, organize = organize, updated = s.Updated, live = s.Live, host = s.Host, origin = s.Origin, status = ways.Status, can_takeover = s.CanTakeover, ownership_known = s.OwnershipKnown, takeover_reason = s.TakeoverReason,
             reach = ways.Reach, ways = s.Live ? ways.Named : null,
@@ -356,14 +363,22 @@ public sealed class TerminalAgent {
             why = s.Live ? ways.Why.Where(one => one.Key == "say" || one.Key == "end" || (one.Key == "stop" && ways.Status == "busy") || (one.Key == "answer" && asks)).ToDictionary(one => one.Key, one => one.Value) : null,
             transport = ways.Transport, turn = ways.Turn, wake = ways.Woken, completion = native != null && !native.CompletionReady ? "" : CompletionOf(s.Tool, s.Id, ways.Status),
             // the operation it came of, where it began in a desktop application that was opened for it from the phone
-            opened = s.Live ? Desktop.CameOf(s.Tool, s.Id, s.ControlFolder, s.Created, Ways.InApplication(s.Origin)) : "",
+            opened = s.Live || AgyAppSession(s) ? Desktop.CameOf(s.Tool, s.Id, s.ControlFolder, s.Created, s.Live && Ways.InApplication(s.Origin)) : "",
             // what the phone said to it and it has not taken yet, each with its number: waiting, or held since it was told to stop
             queued = Reach.Outbox.Of(s.Tool, s.Id).Select(item => new { id = item.Id, text = item.Text.Length > 200 ? item.Text.Substring(0, 199) + "…" : item.Text, state = item.State, at = Milliseconds(item.At) }).ToArray(),
-            ask = asks ? new { id = known.AskId, text = known.AskText, options = known.AskOptions } : null, last = known != null ? known.Last : "",
+            ask = agy != null ? AgyAsk(agy) : known != null && known.Status == "confirm" ? new { id = known.AskId, text = known.AskText, options = known.AskOptions } : null, last = known != null ? known.Last : "",
             // the collaboration task it is or was a member of, while the task is kept ("" for none)
             team = Teams.TeamOf(s.Tool, s.Id) };
     }
-    Ways WaysOf(SessionInfo s, Reach.Open known) { return Ways.Of(s, known, NativeState(s)); }
+    static bool AgyAppSession(SessionInfo s) { return s.Tool == "agy" && (s.Kind == Ways.AgyDesktop || s.Origin == Ways.AgyDesktop && s.Host == "shared"); }
+    AntigravityDesktopClient.State AgyState(SessionInfo s) { return s.Live && AgyAppSession(s) ? AgyDesktop.Get(s.Id) : null; }
+    void RefreshAgy(string session) {
+        AgyDesktop.Refresh(new[] { session }.Concat(AgyDesktop.All().Select(s => s.Id)));
+    }
+    static object AgyAsk(AntigravityDesktopClient.State s) {
+        return s != null && s.Waiting && !String.IsNullOrEmpty(s.AskId) ? new { id = s.AskId, kind = s.AskKind, text = s.AskText, options = s.AskOptions } : null;
+    }
+    Ways WaysOf(SessionInfo s, Reach.Open known) { return Ways.Of(s, known, NativeState(s), AgyState(s)); }
     readonly Dictionary<string, string[]> completions = new Dictionary<string, string[]>();
     string CompletionOf(string tool, string session, string status) {
         if (String.IsNullOrEmpty(session) || status == "busy" || status == "confirm" || Reach.Outbox.Of(tool, session).Length > 0) return "";
@@ -696,13 +711,13 @@ public sealed class TerminalAgent {
         }
         return root;
     }
-    void ValidateDesktopConversation(string session, string dir, string root, string server) {
+    void ValidateDesktopConversation(string session, string dir, string root, string server, string tool = "codex") {
         lock (work) {
             // Read settings without Preferences' connection-reset side effects on this worker.
             var fresh = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(dataDir, "config.json"), Encoding.UTF8));
             if (Get(fresh, "RemoteEnabled") != "True" || Get(fresh, "Server") != server)
                 throw new InvalidOperationException("电脑远控或项目权限已变化");
-            var current = sessions.FirstOrDefault(s => s.Tool == "codex" && s.Id == session && s.Dir == dir && s.Live);
+            var current = sessions.FirstOrDefault(s => s.Tool == tool && s.Id == session && s.Dir == dir && s.Live && (tool != "agy" || AgyAppSession(s)));
             if (current == null || !SamePath(DesktopFolder(current, fresh), root))
                 throw new InvalidOperationException("电脑上的原对话或工作目录已变化，请刷新后重试");
         }
@@ -858,10 +873,8 @@ public sealed class TerminalAgent {
     void ScanClaude(Dictionary<string, string> dirs, LiveTerminal[] running, Dictionary<int, int> parents, List<SessionInfo> found, Dictionary<string, int> ownerCounts, Action<string, string, DateTime, bool, string> note) {
         var open = new Dictionary<string, ClaudeSessions.Owner>();
         try {
-            foreach (string file in Directory.GetFiles(Path.Combine(ClaudeHome, "sessions"), "*.json")) {
+            foreach (var source in ClaudeSessions.LiveSessions(parents)) {
                 try {
-                    var source = ClaudeSessions.Inspect(file, parents);
-                    if (!source.Live) continue;
                     int pid = source.Pid; string session = source.Session;
                     int count; ownerCounts.TryGetValue(session, out count); ownerCounts[session] = count + 1;
                     LiveTerminal owner = null; int at = pid;
@@ -873,7 +886,7 @@ public sealed class TerminalAgent {
                     else {
                         ClaudeSessions.Owner prior;
                         open[session] = open.TryGetValue(session, out prior) ? ClaudeSessions.Preferred(new[] { prior, source }) : source;
-                        note(source.Dir, "claude", File.GetLastWriteTimeUtc(file), true, Folders.Held(source.Origin, Folders.OfClaude(source.Entry)));
+                        note(source.Dir, "claude", DateTime.FromFileTimeUtc(source.Started), true, Folders.Held(source.Origin, Folders.OfClaude(source.Entry)));
                     }
                 } catch { }
             }
@@ -894,17 +907,20 @@ public sealed class TerminalAgent {
                 }
             } catch { }
         }
-        // Conversations Claude Code has open in folders that are no projects: listed with their folder.
-        // Idle application conversations remain reachable too; Now keeps them out of the active count.
+        // A verified owner can precede the first transcript or its title, inside or outside a registered project.
         foreach (var held in open.Where(o => !found.Any(s => s.Tool == "claude" && s.Id == o.Key))) {
             try {
                 string where = held.Value.Dir ?? "", same;
-                if (!Elsewhere(where) || dirs.Values.Any(d => SamePath(d, where)) || !Regex.IsMatch(held.Key, Uuid)) continue;
+                string project = dirs.FirstOrDefault(d => SamePath(d.Value, where)).Key;
+                if (project == null && !Elsewhere(where)) continue;
                 var file = new FileInfo(Path.Combine(ClaudeHome, "projects", ProjectFolder(where), held.Key + ".jsonl"));
                 string title = file.Exists ? ClaudeTitle(file, out same) : "";
-                if (title.Length == 0) continue;        // nothing has been said in it yet
                 var source = held.Value;
-                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = "", Folder = where, Kind = Folders.Held(source.Origin, ClaudeKind(file)), Title = title, Named = ClaudeNamed(file), Updated = Milliseconds(file.LastWriteTimeUtc), Created = file.CreationTimeUtc, Live = true, Wakes = source.Socket.Length > 0, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
+                DateTime created = file.Exists ? file.CreationTimeUtc : DateTime.FromFileTimeUtc(source.Started);
+                bool named = title.Length > 0 ? ClaudeNamed(file) : !String.IsNullOrWhiteSpace(source.Name);
+                if (title.Length == 0) title = named ? source.Name : "Claude 对话 " + created.ToLocalTime().ToString("MM-dd HH:mm");
+                string kind = file.Exists ? ClaudeKind(file) : Folders.OfClaude(source.Entry);
+                found.Add(new SessionInfo { Id = held.Key, Tool = "claude", Dir = project ?? "", Folder = project == null ? where : "", Kind = Folders.Held(source.Origin, kind), Title = title, Named = named, Updated = Milliseconds(file.Exists ? file.LastWriteTimeUtc : created), Created = created, Live = true, Wakes = source.Socket.Length > 0, Host = source.Host, Origin = source.Origin, CanTakeover = source.CanTakeover, OwnershipKnown = source.CanTakeover || source.Host == "remote", Status = source.Status, TakeoverReason = source.Reason, Same = "" });
             } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
         }
         // and the ones a terminal of the phone's has taken on from there: listed so that the terminal keeps the conversation's name and marks
@@ -1025,6 +1041,28 @@ public sealed class TerminalAgent {
                 found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir, Kind = agyKind, Title = item.Title, Named = item.Named, Updated = item.Updated, Created = item.Created, Live = external, Host = external ? owner.Host : "", Origin = origin, Status = external ? item.Status : "", OwnershipKnown = owner.Known, CanTakeover = external && owner.CanTakeover, TakeoverReason = external ? owner.Reason : "", Same = item.Title });
             }
         } catch { }
+        var desktopItems = AgyDesktopClient.Summaries().ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+        AgyDesktop.Refresh();
+        lock (newAgySessions) {
+            foreach (var item in newAgySessions.Values.ToArray()) {
+                if (DateTime.UtcNow - item.Created > DesktopOperations.Looked || desktopItems.ContainsKey(item.Id) && !String.IsNullOrEmpty(desktopItems[item.Id].Folder))
+                    newAgySessions.Remove(item.Id);
+                else desktopItems[item.Id] = item;
+            }
+        }
+        var listed = new HashSet<string>(found.Where(s => s.Tool == "agy").Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+        foreach (var item in desktopItems.Values) {
+            if (listed.Contains(item.Id) || String.IsNullOrEmpty(item.Folder)) continue;
+            var state = AgyDesktop.Get(item.Id);
+            bool live = state != null && state.Live && SamePath(state.Folder, item.Folder);
+            string dir = dirs.FirstOrDefault(d => SamePath(d.Value, item.Folder)).Key;
+            note(item.Folder, "agy", item.Created, live, Ways.AgyDesktop);
+            if (dir == null && !(live && Elsewhere(item.Folder))) continue;
+            found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir ?? "", Folder = dir == null ? item.Folder : "",
+                Kind = Ways.AgyDesktop, Origin = Ways.AgyDesktop, Title = String.IsNullOrEmpty(item.Title) ? "Antigravity 桌面对话" : item.Title,
+                Named = item.Named, Created = item.Created, Updated = item.Updated, Live = live, Host = live ? "shared" : "",
+                OwnershipKnown = true, Status = live ? state.Status : "", TakeoverReason = "请在 Antigravity 桌面版关闭这段对话" });
+        }
     }
     // A program says once that it draws on the alternate screen, reads the mouse or takes pasted text in brackets.
     // When the output that said so is dropped from the history kept here, the switch is remembered, in the order
@@ -1239,7 +1277,17 @@ public sealed class TerminalAgent {
         if (dir.Length == 0 && saved.Folder.Length > 0) root = saved.Folder;
         else if (!AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         try {
+            string title = Organizer.Title(saved.Tool, saved.Id, saved.Title, saved.Named);
+            if (AgyAppSession(saved)) {
+                var read = AgyDesktopClient.ReadConversation(session, Get(op, "since"));
+                read["title"] = title;
+                if (!read.ContainsKey("ask")) read["ask"] = AgyAsk(AgyState(saved));
+                return read;
+            }
             string file = ConversationFile(tool, session, root);
+            if (file == null && tool == "claude" && saved.Live && ClaudeSessions.LiveSessions().Any(owner => owner.Session == session && SamePath(root, owner.Dir)))
+                return new Dictionary<string, object> { { "messages", new object[0] }, { "more", false }, { "stamp", "0.0" },
+                    { "title", title }, { "status", WaysOf(saved, Reach.Of(tool, session)).Status } };
             if (file == null) throw new FileNotFoundException();
             // A page that follows a conversation asks again and again: it says what it has (`since`), and is given
             // the conversation anew only when its file has changed. How it stands goes with either answer.
@@ -1247,7 +1295,7 @@ public sealed class TerminalAgent {
             string stamp = info.Length + "." + info.LastWriteTimeUtc.Ticks, since = Get(op, "since");
             var known = Reach.Of(tool, session);
             var result = since.Length > 0 && since == stamp ? new Dictionary<string, object> { { "same", true } } : Said(file, tool);
-            result["stamp"] = stamp; result["title"] = Organizer.Title(saved.Tool, saved.Id, saved.Title, saved.Named); result["status"] = known != null ? known.Status : saved.Status;
+            result["stamp"] = stamp; result["title"] = title; result["status"] = known != null ? known.Status : saved.Status;
             var native = NativeState(saved);
             if (native != null) result["status"] = native.Busy ? "busy" : native.Ready ? "waiting" : "confirm";
             return result;
@@ -1495,6 +1543,9 @@ public sealed class TerminalAgent {
     }
     void Execute(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string id = Get(op, "id"), terminal = Get(op, "terminal"), action = Get(op, "action");
+        string transport = Get(op, "transport");
+        bool agyControl = (action == "session_say" || action == "session_stop" || action == "session_answer")
+            && (transport == Ways.AgyApp || (Get(op, "tool") == "agy" && sessions.Any(s => s.Id == Get(op, "session") && AgyAppSession(s))));
         bool nativeControl = Get(op, "transport") == Ways.App && (action == "session_say" || action == "session_stop");
         // Native requests keep their durable identity even when the current route becomes a hook.
         // Resolve that fallback inside Desktop.Run, after replay/query and before dispatch.
@@ -1503,7 +1554,7 @@ public sealed class TerminalAgent {
         // the relay hands an operation over until its answer has arrived.)
         Dictionary<string, object> kept;
         bool saidBefore = action == "session_say" && Reach.Outbox.Find(id) != null && !(completed.TryGetValue(id, out kept) && kept.ContainsKey("result"));
-        if (completed.ContainsKey(id) && action != "app_open" && !nativeControl && !saidBefore) { reported.Remove(id); return; }
+        if (completed.ContainsKey(id) && action != "app_open" && !nativeControl && !agyControl && !saidBefore) { reported.Remove(id); return; }
         if (relaying.Contains(id)) return;       // being handed over: answered when that is done
         string error = ""; Dictionary<string, object> result = null;
         try {
@@ -1516,6 +1567,8 @@ public sealed class TerminalAgent {
             if (!project && !file && !update && !peek && !computer && !ownWork && !desktop && !organize && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z")) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
             if (Get(prefs, "RemoteEnabled") != "True") throw new InvalidOperationException("电脑远控已关闭");
+            if (op.ContainsKey("receipt") && (!(op["receipt"] is bool) || true.Equals(op["receipt"]) && !nativeControl && !agyControl))
+                throw new ArgumentException("回执查询无效");
             if (project) ChangeProjects(op, prefs, action);
             else if (update) { if (UpdateRequested == null) throw new InvalidOperationException("这台电脑运行的是不带自动更新的后台程序"); UpdateRequested(); }
             else if (action == "work_stats") {
@@ -1542,7 +1595,54 @@ public sealed class TerminalAgent {
                 if (!Desktop.Available(tool)) throw new InvalidOperationException("这台电脑暂不支持此桌面应用入口");
                 if (!AllDirs(prefs).TryGetValue(Get(op, "dir"), out folder) || !Directory.Exists(folder)) throw new ArgumentException("项目文件夹未获允许或已不存在");
                 Desktop.Check(tool, folder, draft); // validate before reserving the operation
-                RunAsync(id, () => Desktop.Open(id, tool, folder, draft), DesktopError);
+                RunAsync(id, () => {
+                    var opened = Desktop.Open(id, tool, folder, draft);
+                    string created = Get(opened, "session");
+                    if (tool == "agy" && SessionLocks.IsUuid(created)) {
+                        lock (newAgySessions) newAgySessions[created] = new Antigravity.Summary { Id = created, Folder = folder, Updated = Milliseconds(DateTime.UtcNow) };
+                        RefreshAgy(created);
+                    }
+                    return opened;
+                }, DesktopError, rescan: true);
+                return;
+            }
+            else if (agyControl) {
+                if (transport.Length > 0 && transport != Ways.AgyApp) throw new InvalidOperationException("这段对话的桌面连接已变化，请刷新后重试");
+                string session = Get(op, "session"), dir = Get(op, "dir"), text = Get(op, "text"), ask = Get(op, "ask"), choice = Get(op, "choice");
+                string scope = Get(op, "scope"), server = Get(prefs, "Server");
+                if (scope.Length == 0) scope = "once";
+                object allowValue;
+                bool allow = op.TryGetValue("allow", out allowValue) && true.Equals(allowValue);
+                if (Get(op, "tool") != "agy" || !SessionLocks.IsUuid(session)) throw new ArgumentException("桌面对话编号无效");
+                if (action == "session_answer") {
+                    if (!(allowValue is bool) || !Regex.IsMatch(ask, @"\A[a-f0-9]{8,32}\z")) throw new ArgumentException("回答无效");
+                    if (scope != "once" && !(allow && scope == "always")) throw new ArgumentException("授权范围无效");
+                    if (op.ContainsKey("choice") && (scope != "once" || !(allow ? Regex.IsMatch(choice, @"\Achoice:(0|[1-9][0-9]{0,2})\z") : choice == "deny")))
+                        throw new ArgumentException("回答选项无效");
+                }
+                bool query = true.Equals(op.ContainsKey("receipt") ? op["receipt"] : null);
+                RunAsync(id, () => Desktop.Run(id, new[] { action, "agy", session, dir, text, ask, allow.ToString(), scope, choice }, () => {
+                    var saved = sessions.FirstOrDefault(s => AgyAppSession(s) && s.Id == session && s.Dir == dir && s.Live);
+                    if (saved == null) throw new InvalidOperationException("电脑上没有找到这个桌面对话，请刷新后重试");
+                    string root = DesktopFolder(saved, prefs);
+                    ValidateDesktopConversation(session, dir, root, server, "agy");
+                    var state = AgyDesktopClient.Inspect(session);
+                    if (!state.Live || !SamePath(state.Folder, root)) throw new InvalidOperationException("桌面对话的工作目录已变化");
+                    ValidateDesktopConversation(session, dir, root, server, "agy");
+                    var ways = Ways.Of(saved, null, null, state);
+                    string verb = action.Substring("session_".Length);
+                    if (!Ways.AgyApp.Equals(ways.Named[verb])) throw new InvalidOperationException(ways.Why[verb]);
+                    Dictionary<string, object> answer;
+                    if (verb == "answer") {
+                        string selection = choice.Length > 0 ? choice : allow ? scope : "deny";
+                        var options = state.AskOptions.OfType<Dictionary<string, object>>();
+                        if (state.AskId != ask || !(options.Any(o => Get(o, "id") == selection) || (!allow && state.AskKind == "question")))
+                            throw new InvalidOperationException("确认请求或回答选项已变化，请刷新后重试");
+                        answer = AgyDesktopClient.Answer(session, ask, allow, scope, choice);
+                    } else answer = verb == "say" ? AgyDesktopClient.Send(session, id, text) : AgyDesktopClient.Stop(session);
+                    RefreshAgy(session);
+                    return answer;
+                }, true, query), DesktopError, rescan: true);
                 return;
             }
             else if (nativeControl) {
@@ -1585,7 +1685,13 @@ public sealed class TerminalAgent {
                 Reach.Stop(tool, session);
                 result = new Dictionary<string, object> { { "status", "asked" }, { "transport", Ways.Hook } };
             }
-            else if (action == "session_read") result = ReadConversation(op, prefs);
+            else if (action == "session_read") {
+                if (Get(op, "tool") == "agy" && sessions.Any(s => s.Id == Get(op, "session") && AgyAppSession(s))) {
+                    RunAsync(id, () => ReadConversation(op, prefs), DesktopError);
+                    return;
+                }
+                result = ReadConversation(op, prefs);
+            }
             else if (action == "session_mark") {
                 // pinned or hidden, or no longer: of a conversation this computer listed
                 string session = Get(op, "session"), tool = Get(op, "tool");
@@ -1828,7 +1934,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0],

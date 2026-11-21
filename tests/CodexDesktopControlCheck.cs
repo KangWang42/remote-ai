@@ -25,10 +25,32 @@ public static class CodexDesktopControlCheck {
         public void Dispose() { }
     }
     static object Field(object value, string name) { return value.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(value); }
+    sealed class AgyHub {
+        public int Sends, Stops, Answers;
+        public bool Asking;
+        public AntigravityDesktopClient Client(string root) {
+            string dir = Directory.CreateDirectory(Path.Combine(root, "daemon")).FullName;
+            File.WriteAllText(Path.Combine(dir, "hub_test.json"), Json.Serialize(new { pid = 1, httpPort = 1, csrfToken = Guid.NewGuid().ToString("N") }));
+            return new AntigravityDesktopClient(root, pid => pid == 1, (endpoint, method, body, timeout) => {
+                if (method == "SendUserCascadeMessage") Sends++;
+                if (method == "CancelCascadeInvocation") Stops++;
+                if (method == "HandleCascadeUserInteraction") { Answers++; Asking = false; }
+                if (method != "GetCascadeTrajectory") return new Dictionary<string, object>();
+                var step = new { type = "CORTEX_STEP_TYPE_ASK_QUESTION", status = "CORTEX_STEP_STATUS_WAITING",
+                    askQuestion = new { questions = new[] { new { id = "q", options = new[] { new { id = "a" }, new { id = "b" } } } } } };
+                return Json.Deserialize<Dictionary<string, object>>(Json.Serialize(new {
+                    status = "CASCADE_RUN_STATUS_RUNNING", trajectory = new { trajectoryId = Session,
+                        steps = Asking ? new object[] { step } : new object[0], metadata = new { workspaceUris = new[] { AntigravityDesktopClient.ToFileUri(root) } } }
+                }));
+            });
+        }
+    }
     static void Agent(string root) {
         Directory.CreateDirectory(root);
         var conversation = new Conversation { Folder = root };
-        var agent = new TerminalAgent(root, () => conversation);
+        var hub = new AgyHub();
+        var agy = hub.Client(root);
+        var agent = new TerminalAgent(root, () => conversation, agy);
         var sessions = (List<TerminalAgent.SessionInfo>)Field(agent, "sessions");
         sessions.Add(new TerminalAgent.SessionInfo { Id = Session, Tool = "codex", Dir = "demo", ControlFolder = root, Live = true });
         var prefs = new Dictionary<string, object> { { "RemoteEnabled", true }, { "RemoteDirs", new[] { "demo=" + root } } };
@@ -50,6 +72,23 @@ public static class CodexDesktopControlCheck {
             { "dir", "demo" }, { "transport", "codex-desktop" }, { "text", "test" }, { "at", (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds }
         };
         var first = request(); Require((string)Object(run(first)["result"])["status"] == "accepted" && conversation.Sends == 1, "agent native dispatch");
+        sessions.Add(new TerminalAgent.SessionInfo { Id = Session, Tool = "agy", Dir = "demo", ControlFolder = root, Kind = Ways.AgyDesktop, Live = true });
+        var app = request(); app.Remove("transport"); app["tool"] = "agy";
+        Require("accepted".Equals(Object(run(app)["result"])["status"]) && hub.Sends == 1, "default desktop send");
+        app["receipt"] = true; app["transport"] = Ways.AgyApp;
+        Require("accepted".Equals(Object(run(app)["result"])["status"]) && hub.Sends == 1, "explicit receipt for default route");
+        app["id"] = Guid.NewGuid().ToString("N"); app["action"] = "session_stop"; app.Remove("text"); app.Remove("receipt");
+        Require("confirmed".Equals(Object(run(app)["result"])["status"]) && hub.Stops == 1, "stop targets desktop invocation");
+        hub.Asking = true;
+        app["id"] = Guid.NewGuid().ToString("N"); app["action"] = "session_answer"; app["allow"] = true;
+        app["ask"] = agy.Inspect(Session).AskId; app["choice"] = "choice:2";
+        Require(((string)run(app)["error"]).Length > 0 && hub.Answers == 0, "stale choice refused before dispatch");
+        app["id"] = Guid.NewGuid().ToString("N"); app["choice"] = "choice:1";
+        Require("accepted".Equals(Object(run(app)["result"])["status"]) && hub.Answers == 1, "agent answers current question");
+        app["receipt"] = true;
+        Require("accepted".Equals(Object(run(app)["result"])["status"]) && hub.Answers == 1, "answered question receipt after resolution");
+        sessions.RemoveAt(1);
+        Console.WriteLine("Antigravity agent: default send, explicit receipt, stop, choice validation and answer replay passed");
         first["receipt"] = true; run(first); Require(conversation.Sends == 1, "agent queries durable result");
         first["text"] = "changed"; Require(((string)run(first)["error"]).Length > 0 && conversation.Sends == 1, "completed id cannot mask changed payload");
         var missing = request(); missing["dir"] = "other"; Require(((string)run(missing)["error"]).Length > 0, "native project allowlist");

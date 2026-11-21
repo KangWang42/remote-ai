@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPILER = Path(os.environ.get("WINDIR", "C:/Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-AGENT = ["RemoteCliAgent", "Antigravity", "Chats", "ClaudePermissions", "CodexSessions", "SessionLocks", "Transcripts", "Reach", "Outbox", "Running", "Stats", "Schedules", "Chains", "Marks",
+AGENT = ["RemoteCliAgent", "Antigravity", "AntigravityDesktop", "Chats", "ClaudePermissions", "CodexSessions", "SessionLocks", "Transcripts", "Reach", "Outbox", "Running", "Stats", "Schedules", "Chains", "Marks",
          "ClaudeRelay", "Folders", "FileTransfers", "Removal", "CodexQueue", "DesktopAdapters", "Ways", "CodexDesktopControl", "Tools", "AcpChat", "Quotas", "CodexApiBalance", "Teams", "Models", "Peers", "Worktrees",
          "Organizer", "OrganizeHistory", "OrganizeSource", "CodexOrganizer", "ClaudeOrganizer", "AgyOrganizer", "ApiOrganizer", "Attachments"]
 REFERENCES = ["System.Management", "System.Net.Http", "System.Web.Extensions", "System.Web", "System.Security"]
@@ -19,4 +19,4 @@ def compile_check(main, exe, extra=(), references=()):
         sources.append(str(one) if ("/" in str(one) or "\\" in str(one)) else str(ROOT / "agent-windows" / (one + ".cs")))
     subprocess.run([str(COMPILER), "/nologo", "/target:exe", "/platform:x64", "/codepage:65001",
                     *["/reference:" + name + ".dll" for name in REFERENCES + list(references)],
-                    "/main:" + main, "/out:" + str(exe), *sources], check=True)
+                    "/main:" + main, "/out:" + str(exe), *dict.fromkeys(sources)], check=True)
