@@ -28,6 +28,7 @@ public static class CodexDesktopControlCheck {
     sealed class AgyHub {
         public int Sends, Stops, Answers;
         public bool Asking;
+        public string FolderOverride = "";
         public AntigravityDesktopClient Client(string root) {
             string dir = Directory.CreateDirectory(Path.Combine(root, "daemon")).FullName;
             File.WriteAllText(Path.Combine(dir, "hub_test.json"), Json.Serialize(new { pid = 1, httpPort = 1, csrfToken = Guid.NewGuid().ToString("N") }));
@@ -36,11 +37,12 @@ public static class CodexDesktopControlCheck {
                 if (method == "CancelCascadeInvocation") Stops++;
                 if (method == "HandleCascadeUserInteraction") { Answers++; Asking = false; }
                 if (method != "GetCascadeTrajectory") return new Dictionary<string, object>();
+                string folder = FolderOverride.Length > 0 ? FolderOverride : root;
                 var step = new { type = "CORTEX_STEP_TYPE_ASK_QUESTION", status = "CORTEX_STEP_STATUS_WAITING",
                     askQuestion = new { questions = new[] { new { id = "q", options = new[] { new { id = "a" }, new { id = "b" } } } } } };
                 return Json.Deserialize<Dictionary<string, object>>(Json.Serialize(new {
                     status = "CASCADE_RUN_STATUS_RUNNING", trajectory = new { trajectoryId = Session,
-                        steps = Asking ? new object[] { step } : new object[0], metadata = new { workspaceUris = new[] { AntigravityDesktopClient.ToFileUri(root) } } }
+                        steps = Asking ? new object[] { step } : new object[0], metadata = new { workspaceUris = new[] { AntigravityDesktopClient.ToFileUri(folder) } } }
                 }));
             });
         }
@@ -87,8 +89,15 @@ public static class CodexDesktopControlCheck {
         Require("accepted".Equals(Object(run(app)["result"])["status"]) && hub.Answers == 1, "agent answers current question");
         app["receipt"] = true;
         Require("accepted".Equals(Object(run(app)["result"])["status"]) && hub.Answers == 1, "answered question receipt after resolution");
+        // Live Antigravity Desktop conversation whose external workspace folder no longer exists on disk remains controllable.
+        string goneWorkspace = Path.Combine(root, "gone-workspace");
+        hub.FolderOverride = goneWorkspace;
+        sessions[1].Dir = ""; sessions[1].Folder = goneWorkspace; sessions[1].ControlFolder = goneWorkspace;
+        var goneSend = request(); goneSend["tool"] = "agy"; goneSend["dir"] = ""; goneSend["transport"] = Ways.AgyApp;
+        Require("accepted".Equals(Object(run(goneSend)["result"])["status"]) && hub.Sends == 2, "live Antigravity Desktop session with deleted external folder must still accept messages");
+        hub.FolderOverride = "";
         sessions.RemoveAt(1);
-        Console.WriteLine("Antigravity agent: default send, explicit receipt, stop, choice validation and answer replay passed");
+        Console.WriteLine("Antigravity agent: default send, explicit receipt, stop, choice validation, answer replay and deleted-folder send passed");
         first["receipt"] = true; run(first); Require(conversation.Sends == 1, "agent queries durable result");
         first["text"] = "changed"; Require(((string)run(first)["error"]).Length > 0 && conversation.Sends == 1, "completed id cannot mask changed payload");
         var missing = request(); missing["dir"] = "other"; Require(((string)run(missing)["error"]).Length > 0, "native project allowlist");

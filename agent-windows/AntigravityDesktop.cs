@@ -45,6 +45,7 @@ public sealed class AntigravityDesktopClient {
         public DateTime At;
         internal string PendingInteractionKind = "", PendingCommandLine = "", PendingPathUri = "", PendingQuestionId = "", PendingPersistRule = "";
         internal string[] PendingChoiceIds = new string[0];
+        internal Dictionary<string, object> LastModel;
 
         internal bool SameAs(State other) {
             if (other == null) return false;
@@ -63,6 +64,7 @@ public sealed class AntigravityDesktopClient {
     readonly int timeoutMs;
     readonly object endpointGate = new object();
     Endpoint cachedEndpoint;
+    Dictionary<string, object> cachedDefaultModel;
     DateTime lastDiscoveryMiss = DateTime.MinValue;
 
     public static string DefaultHome {
@@ -177,7 +179,7 @@ public sealed class AntigravityDesktopClient {
 
     void InvalidateEndpoint(Endpoint failed) {
         lock (endpointGate) {
-            if (cachedEndpoint == failed) cachedEndpoint = null;
+            if (cachedEndpoint == failed) { cachedEndpoint = null; cachedDefaultModel = null; }
             lastDiscoveryMiss = DateTime.MinValue;
         }
     }
@@ -451,7 +453,8 @@ public sealed class AntigravityDesktopClient {
             TrajectoryId = trajectoryId.Length > 0 ? trajectoryId : id,
             Live = inActiveSummaries || trajectory != null,
             Updated = Antigravity.Milliseconds(updated),
-            At = DateTime.UtcNow
+            At = DateTime.UtcNow,
+            LastModel = ExtractModelFromSteps(steps)
         };
 
         ExtractPendingInteraction(state, steps);
@@ -614,6 +617,8 @@ public sealed class AntigravityDesktopClient {
                 { "items", new object[] { new Dictionary<string, object> { { "text", cleanDraft } } } },
                 { "clientMessageId", opId }
             };
+            var cascadeConfig = BuildCascadeConfig(ResolveDefaultModel());
+            if (cascadeConfig != null) sendReq["cascadeConfig"] = cascadeConfig;
             Call("SendUserCascadeMessage", sendReq, 0, false);
             sent = true;
         }
@@ -629,17 +634,24 @@ public sealed class AntigravityDesktopClient {
 
     /// Sends a message to an existing desktop conversation via `SendUserCascadeMessage`.
     public Dictionary<string, object> Send(string id, string operationId, string text) {
+        return Send(id, operationId, text, null);
+    }
+
+    internal Dictionary<string, object> Send(string id, string operationId, string text, Dictionary<string, object> modelOverride) {
         if (!Uuid.IsMatch(id ?? "")) throw new ArgumentException("对话编号无效");
         if (!OpId.IsMatch(operationId ?? "")) throw new ArgumentException("操作编号无效");
         string clean = (text ?? "").Trim();
         if (clean.Length == 0 || clean.Length > 8000 || clean.Any(c => Char.IsControl(c) && c != '\n' && c != '\r' && c != '\t')) {
             throw new ArgumentException("消息需为 1 至 8000 字，且不能含控制字符");
         }
+        var model = modelOverride ?? ResolveConversationModel(id) ?? ResolveDefaultModel();
         var payload = new Dictionary<string, object> {
             { "cascadeId", id },
             { "items", new object[] { new Dictionary<string, object> { { "text", clean } } } },
             { "clientMessageId", operationId }
         };
+        var cascadeConfig = BuildCascadeConfig(model);
+        if (cascadeConfig != null) payload["cascadeConfig"] = cascadeConfig;
         Call("SendUserCascadeMessage", payload, 0, false);
         return new Dictionary<string, object> {
             { "status", "accepted" },
@@ -649,6 +661,65 @@ public sealed class AntigravityDesktopClient {
             { "now", true },
             { "transport", TransportName }
         };
+    }
+
+    static Dictionary<string, object> BuildCascadeConfig(Dictionary<string, object> model) {
+        if (model == null || model.Count == 0) return null;
+        return new Dictionary<string, object> {
+            { "plannerConfig", new Dictionary<string, object> {
+                { "requestedModel", model },
+                { "conversational", new Dictionary<string, object>() }
+            } }
+        };
+    }
+
+    static Dictionary<string, object> ExtractModelFromSteps(List<Dictionary<string, object>> steps) {
+        if (steps == null) return null;
+        for (int i = steps.Count - 1; i >= 0; i--) {
+            var step = steps[i];
+            if (step == null || Text(step, "type") != "CORTEX_STEP_TYPE_USER_INPUT") continue;
+            var planner = Obj(Obj(Obj(step, "userInput"), "userConfig"), "plannerConfig");
+            if (planner == null) continue;
+            var requested = Obj(planner, "requestedModel");
+            if (requested != null && (Text(requested, "model").Length > 0 || Text(requested, "alias").Length > 0)) return requested;
+            string planModel = Text(planner, "planModel");
+            if (planModel.Length > 0) return new Dictionary<string, object> { { "model", planModel } };
+        }
+        return null;
+    }
+
+    Dictionary<string, object> ResolveConversationModel(string id) {
+        try {
+            var reply = Call("GetCascadeTrajectorySteps", new Dictionary<string, object> { { "cascadeId", id }, { "stepOffset", 0 } });
+            return ExtractModelFromSteps(AsObjectList(At(reply, "steps")));
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    Dictionary<string, object> ResolveDefaultModel() {
+        lock (endpointGate) {
+            if (cachedDefaultModel != null) return cachedDefaultModel;
+        }
+        try {
+            var data = Call("GetCascadeModelConfigData", new Dictionary<string, object>());
+            var model = Obj(Obj(data, "defaultOverrideModelConfig"), "modelOrAlias");
+            if (model == null || (Text(model, "model").Length == 0 && Text(model, "alias").Length == 0)) {
+                foreach (var cfg in AsObjectList(At(data, "clientModelConfigs"))) {
+                    var candidate = Obj(cfg, "modelOrAlias");
+                    if (candidate != null && (Text(candidate, "model").Length > 0 || Text(candidate, "alias").Length > 0)) {
+                        model = candidate;
+                        break;
+                    }
+                }
+            }
+            if (model != null) {
+                lock (endpointGate) cachedDefaultModel = model;
+            }
+            return model;
+        } catch (Exception) {
+            return null;
+        }
     }
 
     /// Cancels the running invocation of a desktop conversation via `CancelCascadeInvocation`.

@@ -1260,7 +1260,7 @@ An authenticated phone receives conversation capabilities and operation results.
 | --- | --- |
 | `app_open`, `tool: "agy"` | `StartCascade` in the registered workspace. A nonblank draft also calls `SendUserCascadeMessage`. A successful receipt carries `status: "created"`, `session`, and `sent`. |
 | List and `read` | `GetAllCascadeTrajectories`, `GetCascadeTrajectory` and `GetCascadeTrajectorySteps` supply summaries, state and messages. The response includes `stamp` and the current `ask`, including on an unchanged read. An offline desktop transcript can supply history. CLI records take precedence for duplicate IDs. |
-| `say` | `SendUserCascadeMessage` targets the listed conversation and carries the operation ID as `clientMessageId`. |
+| `say` | `SendUserCascadeMessage` targets the listed conversation, carries the operation ID as `clientMessageId`, and attaches `cascadeConfig.plannerConfig.requestedModel` (inheriting the conversation's existing `planModel`/`requestedModel` or falling back to `GetCascadeModelConfigData`). Live Antigravity Desktop conversations remain controllable even when their recorded external workspace folder is empty or no longer exists on disk. |
 | `stop` | `CancelCascadeInvocation` targets the busy conversation. The application stays open. |
 | `answer` | `HandleCascadeUserInteraction` targets the pending interaction. The agent checks the question and offered option again before dispatch. |
 

@@ -704,6 +704,12 @@ public sealed class TerminalAgent {
         if (s.Dir.Length > 0) {
             if (!AllDirs(prefs).TryGetValue(s.Dir, out root) || !SamePath(root, s.ControlFolder))
                 throw new InvalidOperationException("电脑远控或项目权限已变化");
+        } else if (AgyAppSession(s)) {
+            // Live Antigravity Desktop conversations are addressed by cascadeId through the verified local Hub;
+            // their workspace URI may be empty (playground/quick chat) or point to a moved/deleted folder.
+            root = s.Folder ?? "";
+            if (!s.Live || !SamePath(root, s.ControlFolder))
+                throw new InvalidOperationException("无法确认电脑上原对话的工作目录，请刷新后重试");
         } else {
             root = s.Folder;
             if (!s.Live || String.IsNullOrEmpty(root) || !Path.IsPathRooted(root) || !Directory.Exists(root) || !SamePath(root, s.ControlFolder))
@@ -823,7 +829,7 @@ public sealed class TerminalAgent {
         if (terminal.Dir.Length == 0) return terminal.Folder.Length > 0 ? terminal.Folder : null;
         return dirs.TryGetValue(terminal.Dir, out path) ? path : null;
     }
-    static bool SamePath(string a, string b) { return String.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
+    static bool SamePath(string a, string b) { return String.Equals((a ?? "").TrimEnd('\\', '/'), (b ?? "").TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
     static long Milliseconds(DateTime utc) { return (long)(utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
     // Reading the conversation lists can take seconds. The reports start it beside themselves, with the terminals as
     // they were at that moment, so that no key and no line of output waits for it; one reading at a time.
@@ -1052,13 +1058,15 @@ public sealed class TerminalAgent {
         }
         var listed = new HashSet<string>(found.Where(s => s.Tool == "agy").Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
         foreach (var item in desktopItems.Values) {
-            if (listed.Contains(item.Id) || String.IsNullOrEmpty(item.Folder)) continue;
+            if (listed.Contains(item.Id)) continue;
             var state = AgyDesktop.Get(item.Id);
-            bool live = state != null && state.Live && SamePath(state.Folder, item.Folder);
-            string dir = dirs.FirstOrDefault(d => SamePath(d.Value, item.Folder)).Key;
-            note(item.Folder, "agy", item.Created, live, Ways.AgyDesktop);
-            if (dir == null && !(live && Elsewhere(item.Folder))) continue;
-            found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir ?? "", Folder = dir == null ? item.Folder : "",
+            string folder = !String.IsNullOrEmpty(item.Folder) ? item.Folder : (state != null ? state.Folder : "");
+            bool live = state != null && state.Live && SamePath(state.Folder, folder);
+            if (String.IsNullOrEmpty(folder) && !live) continue;
+            string dir = folder.Length > 0 ? dirs.FirstOrDefault(d => SamePath(d.Value, folder)).Key : null;
+            if (folder.Length > 0) note(folder, "agy", item.Created, live, Ways.AgyDesktop);
+            if (dir == null && !(live && (folder.Length == 0 || Elsewhere(folder)))) continue;
+            found.Add(new SessionInfo { Id = item.Id, Tool = "agy", Dir = dir ?? "", Folder = dir == null ? folder : "",
                 Kind = Ways.AgyDesktop, Origin = Ways.AgyDesktop, Title = String.IsNullOrEmpty(item.Title) ? "Antigravity 桌面对话" : item.Title,
                 Named = item.Named, Created = item.Created, Updated = item.Updated, Live = live, Host = live ? "shared" : "",
                 OwnershipKnown = true, Status = live ? state.Status : "", TakeoverReason = "请在 Antigravity 桌面版关闭这段对话" });
@@ -1274,7 +1282,7 @@ public sealed class TerminalAgent {
         var saved = sessions.FirstOrDefault(s => s.Id == session && s.Tool == tool && s.Dir == dir);
         if (saved == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         // one that is open in a folder that is no project is read where it is
-        if (dir.Length == 0 && saved.Folder.Length > 0) root = saved.Folder;
+        if (dir.Length == 0 && (saved.Folder.Length > 0 || AgyAppSession(saved))) root = saved.Folder;
         else if (!AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         try {
             string title = Organizer.Title(saved.Tool, saved.Id, saved.Title, saved.Named);
@@ -1639,7 +1647,7 @@ public sealed class TerminalAgent {
                         if (state.AskId != ask || !(options.Any(o => Get(o, "id") == selection) || (!allow && state.AskKind == "question")))
                             throw new InvalidOperationException("确认请求或回答选项已变化，请刷新后重试");
                         answer = AgyDesktopClient.Answer(session, ask, allow, scope, choice);
-                    } else answer = verb == "say" ? AgyDesktopClient.Send(session, id, text) : AgyDesktopClient.Stop(session);
+                    } else answer = verb == "say" ? AgyDesktopClient.Send(session, id, text, state.LastModel) : AgyDesktopClient.Stop(session);
                     RefreshAgy(session);
                     return answer;
                 }, true, query), DesktopError, rescan: true);

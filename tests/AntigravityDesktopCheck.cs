@@ -118,6 +118,14 @@ public static class AntigravityDesktopCheck {
                 WriteJson(ctx.Response, 200, new Dictionary<string, object>());
                 return;
             }
+            if (method == "GetCascadeModelConfigData") {
+                WriteJson(ctx.Response, 200, new Dictionary<string, object> {
+                    { "defaultOverrideModelConfig", new Dictionary<string, object> {
+                        { "modelOrAlias", new Dictionary<string, object> { { "model", "MODEL_PLACEHOLDER_DEFAULT" } } }
+                    } }
+                });
+                return;
+            }
             if (method == "GetAllCascadeTrajectories") {
                 string wsUri = AntigravityDesktopClient.ToFileUri(ActiveFolder);
                 var summaries = new Dictionary<string, object> {
@@ -223,7 +231,10 @@ public static class AntigravityDesktopCheck {
                         { "metadata", new Dictionary<string, object> { { "createdAt", "2026-11-21T16:35:00Z" } } },
                         { "userInput", new Dictionary<string, object> {
                             { "items", new object[] { new Dictionary<string, object> { { "text", "请帮我检查仓库状态" } } } },
-                            { "userResponse", "<USER_REQUEST>\n请帮我检查仓库状态\n</USER_REQUEST>" }
+                            { "userResponse", "<USER_REQUEST>\n请帮我检查仓库状态\n</USER_REQUEST>" },
+                            { "userConfig", new Dictionary<string, object> {
+                                { "plannerConfig", new Dictionary<string, object> { { "planModel", "MODEL_PLACEHOLDER_CONV" } } }
+                            } }
                         } }
                     },
                     new Dictionary<string, object> {
@@ -520,6 +531,9 @@ public static class AntigravityDesktopCheck {
             Require((string)sent["status"] == "accepted" && true.Equals(sent["sent"]) && (string)sent["transport"] == "agy-desktop", "Send receipt wrong");
             var sendReq = hub.SendRequests[hub.SendRequests.Count - 1];
             Require((string)sendReq["cascadeId"] == convPerm && (string)sendReq["clientMessageId"] == sendOpId, "Send RPC payload wrong");
+            var sendPlanner = (Dictionary<string, object>)((Dictionary<string, object>)sendReq["cascadeConfig"])["plannerConfig"];
+            var sendModel = (Dictionary<string, object>)sendPlanner["requestedModel"];
+            Require((string)sendModel["model"] == "MODEL_PLACEHOLDER_CONV", "Send must inherit conversation planModel");
             Refused(() => client.Send(convPerm, sendOpId, "   "), "blank text");
 
             var stopped = client.Stop(convPerm);
@@ -541,6 +555,9 @@ public static class AntigravityDesktopCheck {
             Require((string)created["status"] == "created" && true.Equals(created["sent"]) && (string)created["session"] == convCreated, "CreateAndSend receipt wrong");
             Require(hub.StartRequests.Count == startsBefore + 1 && hub.SendRequests.Count == sendsBefore + 1, "StartCascade + SendUserCascadeMessage should both run once");
             Require((string)hub.SendRequests[hub.SendRequests.Count - 1]["clientMessageId"] == createOpId, "CreateAndSend should forward operationId as clientMessageId");
+            var createPlanner = (Dictionary<string, object>)((Dictionary<string, object>)hub.SendRequests[hub.SendRequests.Count - 1]["cascadeConfig"])["plannerConfig"];
+            var createModel = (Dictionary<string, object>)createPlanner["requestedModel"];
+            Require((string)createModel["model"] == "MODEL_PLACEHOLDER_DEFAULT", "CreateAndSend must attach default model from GetCascadeModelConfigData");
             // CameOf immediately resolves the directly created session!
             Require(ops.CameOf("agy", convCreated, projectDir, DateTime.UtcNow.AddMinutes(-10), false) == createOpId, "CameOf should immediately match directly created session");
             // Replay with same opId must NOT call StartCascade again
