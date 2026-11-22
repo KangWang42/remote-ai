@@ -53,14 +53,17 @@ public sealed class Teams {
         public List<string> Awaited = new List<string>();
         public Dictionary<string, string> Answers = new Dictionary<string, string>();
         internal readonly HashSet<string> Finishing = new HashSet<string>();
+        /// Roles the owner spoke to directly in their own chat since the last workflow step.
+        internal readonly HashSet<string> OwnerTurns = new HashSet<string>();
         /// Compare mode: per-tool worktree path, base commit SHA, summary, stat line, and diff text.
         public Dictionary<string, string> Worktrees = new Dictionary<string, string>();
         public Dictionary<string, string> BaseCommits = new Dictionary<string, string>();
         public Dictionary<string, string> Summaries = new Dictionary<string, string>();
         public Dictionary<string, string> Stats = new Dictionary<string, string>();
         public Dictionary<string, string> Diffs = new Dictionary<string, string>();
-        /// Tools that failed/exhausted quota in this task (tool -> brief reason), and each role's last dispatched prompt.
+        /// Tools that failed/exhausted quota in this task (tool -> brief reason), optional reset times (Unix seconds), and each role's last dispatched prompt.
         public Dictionary<string, string> Failed = new Dictionary<string, string>();
+        internal readonly Dictionary<string, long> FailedReset = new Dictionary<string, long>();
         public Dictionary<string, string> Pending = new Dictionary<string, string>();
         public bool Reminded;
         /// Lead: the rounds are spent and the leader's acceptance under way is the last one (no more tasks go out).
@@ -352,7 +355,40 @@ public sealed class Teams {
         if (hands.Limits == null) return null;
         try { return hands.Limits(tool); } catch (Exception) { return null; }
     }
+    void PruneRecovered(Team team) {
+        KeyValuePair<string, long>[] due;
+        lock (gate) {
+            if (team.FailedReset.Count == 0) return;
+            long now = Now() / 1000;
+            due = team.FailedReset.Where(p => p.Value > 0 && now >= p.Value).ToArray();
+        }
+        if (due.Length == 0) return;
+        var recovered = new List<string>();
+        foreach (var one in due) if (!IsExhausted(SafeLimits(one.Key))) recovered.Add(one.Key);
+        if (recovered.Count == 0) return;
+        lock (gate) {
+            bool changed = false;
+            foreach (string tool in recovered) {
+                changed |= team.Failed.Remove(tool);
+                team.FailedReset.Remove(tool);
+            }
+            if (changed) Save();
+        }
+    }
+    static bool ClearFailure(Team team, string role, string tool) {
+        bool cleared = false;
+        if (!String.IsNullOrEmpty(role)) { cleared |= team.Failed.Remove(role); team.FailedReset.Remove(role); }
+        if (!String.IsNullOrEmpty(tool)) { cleared |= team.Failed.Remove(tool); team.FailedReset.Remove(tool); }
+        return cleared;
+    }
+    static bool ClearFailures(Team team) {
+        bool cleared = team.Failed.Count > 0;
+        team.Failed.Clear();
+        team.FailedReset.Clear();
+        return cleared;
+    }
     Dictionary<string, string> Rooms(Team t) {
+        PruneRecovered(t);
         var rooms = new Dictionary<string, string>();
         Dictionary<string, string> failed;
         string[] list;
@@ -723,7 +759,7 @@ public sealed class Teams {
             team = items.FirstOrDefault(t => t.Id == id);
             if (team == null) throw new ArgumentException("没有找到这个协作任务");
             busy = team.Awaited.Select(role => team.Members.ContainsKey(role) ? team.Members[role] : "").Where(x => x.Length > 0).ToArray();
-            team.State = "stopped"; team.Note = "已停止"; team.Awaited.Clear(); team.Spent = false; team.Held.Clear();
+            team.State = "stopped"; team.Note = "已停止"; team.Awaited.Clear(); team.Finishing.Clear(); team.OwnerTurns.Clear(); team.Spent = false; team.Held.Clear();
             Save();
         }
         foreach (string terminal in busy) try { hands.Stop(terminal); } catch (Exception) { }
@@ -733,7 +769,7 @@ public sealed class Teams {
     /// Goes on where it was cut: every member whose turn was awaited is told to go on. Work whose rounds were spent
     /// is given one more (`Extend`).
     public void Resume(string id) {
-        Team team; List<KeyValuePair<string, string>> again;
+        Team team; List<KeyValuePair<string, string>> again; bool hadFailed;
         lock (gate) {
             team = items.FirstOrDefault(t => t.Id == id);
             if (team == null) throw new ArgumentException("没有找到这个协作任务");
@@ -742,11 +778,17 @@ public sealed class Teams {
         if (team.Spent) { Extend(team, ""); return; }
         lock (gate) {
             team.State = "running"; team.Note = "";
-            foreach (string role in team.Awaited) { team.Failed.Remove(role); team.Failed.Remove(ToolOf(team, role)); }
+            hadFailed = ClearFailures(team);
+            team.OwnerTurns.Clear();
             again = team.Awaited.Select(role => new KeyValuePair<string, string>(role, team.Members.ContainsKey(role) ? team.Members[role] : null)).ToList();
             Save();
         }
-        foreach (var one in again) DeliverOrReopen(team, one.Key, one.Value, "继续完成上面的任务。");
+        foreach (var one in again) {
+            string words = "继续完成上面的任务。";
+            if (hadFailed && one.Key == "leader" && team.Mode == "lead")
+                words += "\n\n此前受限或暂停的成员现可重新分派（ASSIGN 成员名: 任务内容）。" + RoomsBlock(team, Rooms(team));
+            DeliverOrReopen(team, one.Key, one.Value, words);
+        }
         Tell();
     }
 
@@ -762,6 +804,8 @@ public sealed class Teams {
         if ((text.Length == 0 && (attachments == null || attachments.Count == 0)) || text.Length > 4000)
             throw new ArgumentException("请输入文字或添加图片，文字最多 4000 字");
         Team team; string state, phase, mode; List<string> targets = new List<string>();
+        var stopTerminals = new List<string>();
+        bool hadFailed = false, redirectedToLeader = false;
         lock (gate) {
             team = items.FirstOrDefault(t => t.Id == id);
             if (team == null) throw new ArgumentException("没有找到这个协作任务");
@@ -776,11 +820,29 @@ public sealed class Teams {
                     string resolved = ResolveRole(team, target);
                     if (resolved == null) throw new ArgumentException("没有找到这个成员");
                     targets.Add(resolved);
-                    // Resuming a paused task with an explicit target drops stale failed members from Awaited.
-                    if (state == "paused") team.Awaited.Clear();
+                    // Resuming a paused task with an explicit target drops stale members from Awaited and stops any still running.
+                    if (state == "paused") {
+                        foreach (string old in team.Awaited) {
+                            string oldTerm;
+                            if (old != resolved && team.Members.TryGetValue(old, out oldTerm) && !String.IsNullOrEmpty(oldTerm)) stopTerminals.Add(oldTerm);
+                        }
+                        if (mode == "lead" && resolved == "leader" && team.Awaited.Any(r => r != "leader")) {
+                            redirectedToLeader = true;
+                            team.Answers.Clear(); team.Finishing.Clear(); team.Nudged.Clear(); team.Phase = "";
+                        }
+                        team.Awaited.Clear();
+                    }
                     if (!team.Awaited.Contains(resolved)) team.Awaited.Add(resolved);
                 } else {
-                    if (state == "paused" && mode == "lead" && team.Awaited.Count > 0 && team.Awaited.All(r => r != "leader" && FailedRole(team, r))) {
+                    if (state == "paused" && mode == "lead" && phase != "discuss") {
+                        foreach (string old in team.Awaited) {
+                            string oldTerm;
+                            if (old != "leader" && team.Members.TryGetValue(old, out oldTerm) && !String.IsNullOrEmpty(oldTerm)) stopTerminals.Add(oldTerm);
+                        }
+                        if (team.Awaited.Any(r => r != "leader")) {
+                            redirectedToLeader = true;
+                            team.Answers.Clear(); team.Finishing.Clear(); team.Nudged.Clear(); team.Phase = "";
+                        }
                         team.Awaited.Clear();
                         team.Awaited.Add("leader");
                     }
@@ -790,7 +852,10 @@ public sealed class Teams {
                 }
                 if (state == "paused") {
                     team.State = "running"; team.Note = "";
-                    foreach (string r in targets) { team.Failed.Remove(r); team.Failed.Remove(ToolOf(team, r)); }
+                    hadFailed = ClearFailures(team);
+                    team.OwnerTurns.Clear();
+                } else if (target.Length > 0) {
+                    foreach (string r in targets) ClearFailure(team, r, ToolOf(team, r));
                 }
                 if (state == "running" && mode == "lead" && targets.Remove("leader")) {
                     string added = Attachments.WithText(text, attachments);
@@ -819,11 +884,18 @@ public sealed class Teams {
                 team.Round++;
                 if (!team.Free && team.Round > team.Rounds) team.Rounds = Math.Min(MaxTotalRounds, team.Round + 2);
                 team.State = "running"; team.Note = ""; team.Phase = ""; team.Reminded = false; team.Last = false;
-                team.Awaited.Clear(); team.Answers.Clear(); team.Failed.Clear();
+                team.Awaited.Clear(); team.Answers.Clear(); team.Finishing.Clear(); team.OwnerTurns.Clear(); ClearFailures(team);
                 Save();
             }
         }
 
+        foreach (string oldTerm in stopTerminals) try { hands.Stop(oldTerm); } catch (Exception) { }
+        if (state == "running" && mode == "lead" && hands.Limits != null && target.Length == 0) {
+            string[] failedKeys;
+            lock (gate) failedKeys = team.Failed.Keys.ToArray();
+            var recovered = failedKeys.Where(k => !IsExhausted(SafeLimits(k))).ToArray();
+            if (recovered.Length > 0) lock (gate) { foreach (string k in recovered) { team.Failed.Remove(k); team.FailedReset.Remove(k); } Save(); }
+        }
         Log(team, "user", Attachments.WithText((target.Length > 0 ? "@" + RoleLabel(team, ResolveRole(team, target) ?? target) + " " : "") + text, attachments));
         if (state == "paused" && team.Spent) { Extend(team, text, attachments); return Of(id); }
 
@@ -832,7 +904,13 @@ public sealed class Teams {
             foreach (string role in targets) {
                 string terminal = null;
                 lock (gate) team.Members.TryGetValue(role, out terminal);
-                DeliverOrReopen(team, role, terminal, prefix + text, attachments);
+                string words = prefix + text;
+                if (state == "paused" && mode == "lead" && role == "leader") {
+                    words += RoomsBlock(team, Rooms(team));
+                    if (hadFailed || redirectedToLeader)
+                        words += "\n\n此前暂停或中断的成员现可重新分派。请按新要求用 ASSIGN 成员名: 任务内容 分派，或直接完成后写 DONE: 总结。";
+                }
+                DeliverOrReopen(team, role, terminal, words, attachments);
             }
         } else if (mode == "compare") {
             string prompt = "【用户补充要求 · 第 " + team.Round + " 轮】\n" + text + "\n\n请在你当前独立工作区中继续完善方案，完成后简要说明改了什么。";
@@ -934,8 +1012,7 @@ public sealed class Teams {
                 throw new ArgumentException("这个角色当前使用相同的工具、模型和思考深度");
             team.Members.TryGetValue(resolved, out oldTerminal);
             team.Pending.TryGetValue(resolved, out pending);
-            team.Failed.Remove(newTool);
-            team.Failed.Remove(resolved);
+            ClearFailure(team, resolved, newTool);
             if (rosterMember == null) {
                 if (!String.IsNullOrEmpty(model)) team.Models[newTool] = model;
                 if (effort != null) {
@@ -1056,7 +1133,7 @@ public sealed class Teams {
             }
             team.Members.TryGetValue(role, out terminal);
             team.Sessions.TryGetValue(role, out seat);
-            team.Failed.Remove(role); team.Failed.Remove(tool);
+            ClearFailure(team, role, tool);
             go = team.Awaited.Contains(role) && (team.State == "running" || team.State == "paused" && !team.Spent);
             if (go) { team.State = "running"; team.Note = ""; }
             read = role == "reviewer" || role.StartsWith("discuss:", StringComparison.Ordinal);
@@ -1107,13 +1184,52 @@ public sealed class Teams {
             if (team.Members.TryGetValue(role, out had) && had == terminal) return;
             team.Members[role] = terminal;
             if (!team.Opened.Contains(terminal)) team.Opened.Add(terminal);
-            team.Failed.Remove(role); team.Failed.Remove(tool);
-            go = !told && team.Awaited.Contains(role) && (team.State == "running" || team.State == "paused" && !team.Spent);
-            if (go) { team.State = "running"; team.Note = ""; }
+            ClearFailure(team, role, tool);
+            bool resume = team.Awaited.Contains(role) && (team.State == "running" || team.State == "paused" && !team.Spent);
+            if (resume) { team.State = "running"; team.Note = ""; }
+            if (told) team.OwnerTurns.Add(role);
+            go = !told && resume;
             Save();
         }
         Log(team, "切换", Who(team, role) + " 的对话已在手机上重新打开");
         if (go) DeliverOrReopen(team, role, terminal, "继续完成上面的任务。");
+    }
+    /// A member's chat was closed by the owner on the phone: if the task was waiting for it, pause cleanly instead of
+    /// hanging forever on a dead terminal.
+    public void Closed(string terminal) {
+        if (String.IsNullOrEmpty(terminal)) return;
+        bool paused = false;
+        lock (gate) {
+            var team = items.FirstOrDefault(t => t.State == "running" && t.Members.ContainsValue(terminal));
+            if (team == null) return;
+            string role = team.Members.First(p => p.Value == terminal).Key;
+            if (!team.Awaited.Contains(role)) return;
+            team.State = "paused";
+            team.Note = Label(ToolOf(team, role)) + " 的对话已中断：点“继续”重新打开接着做，或给领队发新要求";
+            Save();
+            paused = true;
+        }
+        if (paused) Tell();
+    }
+    /// The owner sent a message directly in a member's or leader's chat on the phone: resumes a paused awaited turn,
+    /// and lets a leader's explicit ASSIGN / DONE after direct owner guidance re-engage the team.
+    public void OwnerSpoke(string terminal) {
+        if (String.IsNullOrEmpty(terminal)) return;
+        bool changed = false;
+        lock (gate) {
+            var team = items.FirstOrDefault(t => t.State != "failed" && t.Members.ContainsValue(terminal));
+            if (team == null) return;
+            string role = team.Members.First(p => p.Value == terminal).Key;
+            team.OwnerTurns.Add(role);
+            if (team.State == "paused" && !team.Spent && team.Awaited.Contains(role)) {
+                team.State = "running"; team.Note = "";
+                if (role == "leader") ClearFailures(team);
+                else ClearFailure(team, role, ToolOf(team, role));
+                Save();
+                changed = true;
+            }
+        }
+        if (changed) Tell();
     }
 
     static string DefaultSwapRole(Team team) {
@@ -1233,31 +1349,47 @@ public sealed class Teams {
             lock (gate) team.Pending.TryGetValue(role, out pending);
             prompt = (pending ?? MemberTask(team, team.Goal)) + "\n\n" + words;
         }
-        Open(team, role, tool, prompt, read, wt, attachments);
+        Open(team, role, tool, words, read, wt, attachments, true, prompt);
     }
 
     // ---- the members' turns
-    void Open(Team team, string role, string tool, string words, bool read, string folderOverride, IList<Attachment> attachments = null) {
-        string model, effort;
+    void Open(Team team, string role, string tool, string words, bool read, string folderOverride, IList<Attachment> attachments = null, bool resume = false, string fallbackWords = null) {
+        string model, effort, resumeSession = "";
         lock (gate) {
             opening++;
-            team.Pending[role] = Cut(Attachments.WithText(words, attachments), 6000);
+            team.Pending[role] = Cut(Attachments.WithText(fallbackWords ?? words, attachments), 6000);
             var member = RosterOf(team, role);
             model = member != null ? member.Model : team.Models.ContainsKey(tool) ? team.Models[tool] : "";
             effort = member != null ? member.Effort : team.Efforts.ContainsKey(tool) ? team.Efforts[tool] : "";
+            Seat seat;
+            if (resume && team.Sessions.TryGetValue(role, out seat) && seat.Tool == tool && !String.IsNullOrEmpty(seat.Id))
+                resumeSession = seat.Id;
         }
         try {
-            string terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "", Attachments = attachments });
+            string terminal;
+            string usedWords = words;
+            bool resumed = false;
+            if (resumeSession.Length > 0) {
+                try {
+                    terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = words, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "", Session = resumeSession, Attachments = attachments });
+                    resumed = true;
+                } catch (Exception) {
+                    usedWords = fallbackWords ?? words;
+                    terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = usedWords, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "", Attachments = attachments });
+                }
+            } else {
+                usedWords = fallbackWords ?? words;
+                terminal = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Words = usedWords, Read = read, Folder = folderOverride ?? "", Model = model ?? "", Effort = effort ?? "", Attachments = attachments });
+            }
             lock (gate) {
                 team.Members[role] = terminal;
                 if (!team.Opened.Contains(terminal)) team.Opened.Add(terminal);
-                team.Sessions.Remove(role);
-                team.Failed.Remove(role);
-                team.Failed.Remove(tool);
+                if (!resumed) team.Sessions.Remove(role);
+                ClearFailure(team, role, tool);
                 if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
                 opening--; Save(); Monitor.PulseAll(gate);
             }
-            Log(team, role, "开始：" + Cut(words, 240));
+            Log(team, role, "开始：" + Cut(usedWords, 240));
         } catch (Exception problem) {
             lock (gate) {
                 team.State = team.Members.Count == 0 && team.Log.Count <= 1 ? "failed" : "paused";
@@ -1299,9 +1431,9 @@ public sealed class Teams {
         words += supplement;
         if (terminal != null) {
             try { TellMember(terminal, words, attachments); Log(team, role, "收到：" + Cut(words, 240)); return; }
-            catch (Exception) { }       // its conversation was closed: begun anew
+            catch (Exception) { }       // its conversation was closed: resumed from session or begun anew
         }
-        Open(team, role, tool, words, read, folderOverride, attachments);
+        Open(team, role, tool, words, read, folderOverride, attachments, true);
     }
     void Log(Team team, string who, string text) {
         lock (gate) {
@@ -1312,35 +1444,97 @@ public sealed class Teams {
         Tell();
     }
     void End(Team team, string state, string note) {
-        lock (gate) { team.State = state; team.Note = note; team.Awaited.Clear(); Save(); }
+        lock (gate) { team.State = state; team.Note = note; team.Awaited.Clear(); team.Finishing.Clear(); team.OwnerTurns.Clear(); Save(); }
         Log(team, "结果", note);
     }
 
+    static bool HasLeaderDirective(string said, bool allowDone) {
+        return Assign.IsMatch(said ?? "") || (allowDone && Finished(said) != null);
+    }
     /// A member's turn ended (Chat.Turned): what it said is passed on by the team's way of working.
     public void Turned(string terminal, string how, string said) {
         Team team; string role;
         // a tool that has run out says so as its answer (Antigravity CLI: "Individual quota reached …") and ends the
         // turn as if it were done: that turn failed
         if (how == "done" && QuotaStop(said)) how = "failed";
+        string[] stopOthers = new string[0];
+        bool stayPaused = false;
         lock (gate) {
             team = items.FirstOrDefault(t => t.State == "running" && t.Members.ContainsValue(terminal));
             if (team == null && opening > 0) {
                 Monitor.Wait(gate, 200);
                 team = items.FirstOrDefault(t => t.State == "running" && t.Members.ContainsValue(terminal));
             }
-            if (team == null) return;
-            role = team.Members.First(p => p.Value == terminal).Key;
-            if (!team.Awaited.Contains(role)) return;      // (a turn of its own owner's, from the phone)
-            team.Awaited.Remove(role);
-            if (team.Mode == "lead" && team.Phase != "discuss" && role != "leader" && how != "stopped") team.Finishing.Add(role);
-            Save();
+            if (team == null) {
+                team = items.FirstOrDefault(t => t.State != "failed" && t.Members.ContainsValue(terminal));
+                if (team == null) return;
+                role = team.Members.First(p => p.Value == terminal).Key;
+                bool ownerTurn = team.OwnerTurns.Remove(role);
+                if (how != "done") return;
+                bool cleared = ClearFailure(team, role, ToolOf(team, role));
+                if (team.Mode == "lead" && role == "leader" && ownerTurn && HasLeaderDirective(said, team.State == "paused" || team.State == "stopped" || team.State == "done")) {
+                    string prevState = team.State;
+                    stopOthers = team.Awaited.Where(r => r != "leader" && team.Members.ContainsKey(r)).Select(r => team.Members[r]).ToArray();
+                    if (prevState == "stopped" || prevState == "done") {
+                        team.Round++;
+                        if (!team.Free && team.Round > team.Rounds) team.Rounds = Math.Min(MaxTotalRounds, team.Round + 2);
+                    }
+                    team.State = "running"; team.Note = ""; team.Phase = ""; team.Reminded = false; team.Last = false;
+                    team.Spent = false; team.Held.Clear();
+                    team.Awaited.Clear(); team.Answers.Clear(); team.Finishing.Clear(); team.Nudged.Clear();
+                    ClearFailures(team);
+                    Save();
+                } else if (team.State == "paused" && !team.Spent && team.Awaited.Contains(role)) {
+                    team.Awaited.Remove(role);
+                    if (team.Mode == "lead" && team.Phase != "discuss" && role != "leader") {
+                        if (team.Awaited.Any(r => r != "leader")) {
+                            team.Answers[role] = said;
+                            stayPaused = true;
+                        } else {
+                            team.State = "running"; team.Note = "";
+                            team.Finishing.Add(role);
+                        }
+                    } else if (team.Awaited.Count == 0) {
+                        team.State = "running"; team.Note = "";
+                    } else {
+                        team.Answers[role] = said;
+                        stayPaused = true;
+                    }
+                    Save();
+                } else {
+                    if (cleared) Save();
+                    return;
+                }
+            } else {
+                role = team.Members.First(p => p.Value == terminal).Key;
+                bool ownerTurn = team.OwnerTurns.Remove(role);
+                if (!team.Awaited.Contains(role)) {
+                    if (how != "done") return;
+                    bool cleared = ClearFailure(team, role, ToolOf(team, role));
+                    if (team.Mode == "lead" && role == "leader" && ownerTurn && Assign.IsMatch(said ?? "")) {
+                        stopOthers = team.Awaited.Where(r => r != "leader" && team.Members.ContainsKey(r)).Select(r => team.Members[r]).ToArray();
+                        team.Phase = ""; team.Reminded = false; team.Last = false;
+                        team.Awaited.Clear(); team.Answers.Clear(); team.Finishing.Clear(); team.Nudged.Clear();
+                        ClearFailures(team);
+                        Save();
+                    } else {
+                        if (cleared) Save();
+                        return;
+                    }
+                } else {
+                    team.Awaited.Remove(role);
+                    if (team.Mode == "lead" && team.Phase != "discuss" && role != "leader" && how != "stopped") team.Finishing.Add(role);
+                    Save();
+                }
+            }
         }
+        foreach (string other in stopOthers) try { hands.Stop(other); } catch (Exception) { }
         Log(team, role, Cut(said, 4000));
+        if (stayPaused) { Tell(); return; }
         if (team.Mode == "compare") { Compared(team, role, how, said); return; }
         if (how == "done") {
             lock (gate) {
-                bool cleared = team.Failed.Remove(role) | team.Failed.Remove(ToolOf(team, role));
-                if (cleared) Save();
+                if (ClearFailure(team, role, ToolOf(team, role))) Save();
             }
         } else if (how == "stopped") {
             lock (gate) { team.State = "paused"; team.Note = Label(ToolOf(team, role)) + " 这一轮被停止：点“继续”接着做，或从右上角“⋯”换 AI 接手"; if (!team.Awaited.Contains(role)) team.Awaited.Add(role); Save(); }
@@ -1366,9 +1560,17 @@ public sealed class Teams {
         string failedTool = ToolOf(team, role);
         string reason = FailureReason(said);
         string pending = "";
+        long resetAt = 0;
+        if (reason == "额度已用尽") {
+            var windows = SafeLimits(failedTool);
+            if (windows != null) {
+                foreach (var w in windows) if (Math.Round(w.Used) >= 100 && w.Resets > resetAt) resetAt = w.Resets;
+            }
+        }
         lock (gate) {
             string failedKey = team.Roster.Length > 0 && reason != "额度已用尽" ? role : failedTool;
             team.Failed[failedKey] = reason;
+            if (resetAt > 0) team.FailedReset[failedKey] = resetAt;
             team.Pending.TryGetValue(role, out pending);
             Save();
         }
@@ -1428,9 +1630,9 @@ public sealed class Teams {
             if (backup != null) {
                 lock (gate) {
                     PromoteLeader(team, backup);
-                    team.Failed.Remove("leader");
-                    team.Failed.Remove(backup);
+                    ClearFailure(team, "leader", backup);
                     team.Members.Remove("leader");
+                    team.Sessions.Remove("leader");
                     team.Awaited.Clear();
                     team.Awaited.Add("leader");
                     Save();
@@ -1456,9 +1658,9 @@ public sealed class Teams {
         if (replacement != null) {
             lock (gate) {
                 team.Tools[slot] = replacement;
-                team.Failed.Remove(role);
-                team.Failed.Remove(replacement);
+                ClearFailure(team, role, replacement);
                 team.Members.Remove(role);
+                team.Sessions.Remove(role);
                 team.Awaited.Clear();
                 team.Awaited.Add(role);
                 Save();
@@ -1690,6 +1892,7 @@ public sealed class Teams {
         Tell();
     }
     Dictionary<string, string> AssignRoster(Team team, string said, bool canAssign) {
+        PruneRecovered(team);
         var tasks = new Dictionary<string, string>();
         var retired = new List<string>();
         var available = hands.Available == null ? team.Tools : hands.Available() ?? new string[0];
@@ -1702,17 +1905,18 @@ public sealed class Teams {
                 string requested = match.Groups[2].Value.ToLowerInvariant();
                 string tool = requested.Length > 0 ? requested : member == null ? "" : member.Tool;
                 string task = one.Item2;
+                bool switching = member == null || member.Tool != tool;
                 if (task.Length == 0 || (requested.Length > 0 && !team.AutoRoster) || !available.Contains(tool) ||
-                    team.Failed.ContainsKey(tool) || IsExhausted(SafeLimits(tool)) ||
+                    team.Failed.ContainsKey(tool) || (switching && IsExhausted(SafeLimits(tool))) ||
                     (team.Failed.ContainsKey(role) && member != null && member.Tool == tool))
                     continue;
-                if (canAssign && (member == null || member.Tool != tool)) {
+                if (canAssign && switching) {
                     if (tasks.ContainsKey(role)) continue;
                     string old;
                     if (team.Members.TryGetValue(role, out old)) retired.Add(old);
                     team.Members.Remove(role);
                     team.Sessions.Remove(role);
-                    team.Failed.Remove(role);
+                    ClearFailure(team, role, "");
                     SetRosterMember(team, role, tool, "");
                 }
                 tasks[role] = tasks.ContainsKey(role) ? tasks[role] + "\n" + task : task;

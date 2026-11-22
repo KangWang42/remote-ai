@@ -215,7 +215,7 @@ def main():
             time.sleep(0.3)
         assert reopened_team["state"] == "done" and reopened_team["round"] >= 3, reopened_team
         after_restart = read_codex_log()
-        assert any(e["event"] == "thread/start" and e["model"] == "gpt-6.2-sol" and e["config_effort"] == "high" for e in after_restart), after_restart
+        assert any(e["event"] == "thread/resume" and e["model"] == "gpt-6.2-sol" and e["config_effort"] == "high" for e in after_restart), after_restart
         assert any(e["event"] == "turn/start" and e["model"] == "gpt-6.2-sol" and e["effort"] == "high" for e in after_restart), after_restart
 
         # A screenshot crosses the relay, Windows collaboration and the actual tool adapter.

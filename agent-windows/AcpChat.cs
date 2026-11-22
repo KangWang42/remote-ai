@@ -129,6 +129,7 @@ public class AcpChat : JsonRpcChat {
 
     public override void Say(string text, string id, IList<Attachment> attachments = null) {
         lock (gate) {
+            if (Closed || Status == "ended") throw new InvalidOperationException("对话已结束");
             if (refused != null) throw new InvalidOperationException(refused);
             queued.Enqueue(new Queued { Text = text, Id = id ?? "", Attachments = attachments });
             if (Session.Length == 0) { State("busy"); return; }
@@ -150,10 +151,17 @@ public class AcpChat : JsonRpcChat {
             working = false; writing = thinking = "";
             var error = At(answer, "error");
             string reason = Text(At(answer, "result"), "stopReason");
-            TurnEnded(error != null ? "failed" : reason == "cancelled" ? "stopped" : reason == "end_turn" ? "done" : reason == "refusal" ? "failed" : "done",
-                error != null ? Text(error, "message") : reason == "max_tokens" || reason == "max_turn_requests" ? "这一轮达到了长度上限" : reason == "refusal" ? "工具拒绝了这个请求" : "");
+            bool wasStopping = stopping;
+            string how = error != null ? "failed" : reason == "cancelled" ? "stopped" : reason == "end_turn" ? "done" : reason == "refusal" ? "failed" : "done";
+            string errText = error != null ? Text(error, "message") : reason == "max_tokens" || reason == "max_turn_requests" ? "这一轮达到了长度上限" : reason == "refusal" ? "工具拒绝了这个请求" : "";
+            if (how == "stopped" && queued.Count > 0) {
+                TurnEndedQuiet("stopped", "");
+                Prompt();
+                return;
+            }
+            TurnEnded(how, errText);
             if (asks.Count > 0) State("confirm");
-            else if (queued.Count > 0 && !stopping) Prompt();
+            else if (queued.Count > 0 && !wasStopping) Prompt();
             else State("idle");
         });
     }
@@ -161,6 +169,7 @@ public class AcpChat : JsonRpcChat {
         lock (gate) {
             if (!working) throw new InvalidOperationException("它现在没有在执行");
             stopping = true;
+            queued.Clear();
             Notify("session/cancel", new Dictionary<string, object> { { "sessionId", Session } });
         }
     }

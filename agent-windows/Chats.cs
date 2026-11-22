@@ -151,6 +151,7 @@ public abstract class Chat : IRunning {
         Note(why);
         if (waited) TurnEnded("failed", why);
         State("ended");
+        Closed = true;
         if (listing) offeredSeen.Set();     // (nothing known: asked again later)
     }
 
@@ -330,12 +331,15 @@ public abstract class Chat : IRunning {
     /// How many commands the tool now runs in the background of this conversation, as the tool says it.
     protected void Background(int running) { background = Math.Max(0, running); }
     protected void Note(string text) { Event(new Dictionary<string, object> { { "t", "note" }, { "text", text }, { "at", Now() } }); }
-    protected void TurnEnded(string how, string error) {
+    protected void TurnEndedQuiet(string how, string error) {
         LastError = error ?? "";
         var turn = new Dictionary<string, object> { { "t", "turn" }, { "end", how }, { "at", Now() } };
         if (!String.IsNullOrEmpty(error)) turn["error"] = error;
         Event(turn);
         stopping = false;
+    }
+    protected void TurnEnded(string how, string error) {
+        TurnEndedQuiet(how, error);
         if (how == "done" && background > 0) return;
         var turned = Turned;
         if (turned != null) {
@@ -401,6 +405,8 @@ public sealed class ClaudeChat : Chat {
     readonly Dictionary<int, string> blocks = new Dictionary<int, string>();     // block index -> item, in the message being written
     readonly Dictionary<string, string> steps = new Dictionary<string, string>();   // tool_use id -> item
     readonly Queue<KeyValuePair<string, string>> said = new Queue<KeyValuePair<string, string>>();   // what the phone said, and its number, until it is given back
+    sealed class Queued { public string Text, Id; public IList<Attachment> Attachments; }
+    readonly Queue<Queued> afterStop = new Queue<Queued>();
     int requests;
 
     public static string Arguments(string session, bool resume, string mode, string mcpConfig = null, string model = "", string effort = "") {
@@ -423,12 +429,24 @@ public sealed class ClaudeChat : Chat {
     }
     public override void Say(string text, string id, IList<Attachment> attachments = null) {
         string shown = Attachments.WithText(text, attachments);
-        lock (gate) { said.Enqueue(new KeyValuePair<string, string>(shown, id ?? "")); if (Status != "confirm") State("busy"); }
+        lock (gate) {
+            if (Closed || Status == "ended") throw new InvalidOperationException("对话已结束");
+            if (stopping) {
+                afterStop.Enqueue(new Queued { Text = text, Id = id ?? "", Attachments = attachments });
+                if (Status != "confirm") State("busy");
+                return;
+            }
+            said.Enqueue(new KeyValuePair<string, string>(shown, id ?? ""));
+            if (Status != "confirm") State("busy");
+        }
+        SendUser(shown, attachments);
+    }
+    void SendUser(string shown, IList<Attachment> attachments) {
         object content = attachments != null && attachments.Count > 0 ? (object)Attachments.ClaudeContent(shown, attachments) : shown;
         Send(new Dictionary<string, object> { { "type", "user" }, { "message", new Dictionary<string, object> { { "role", "user" }, { "content", content } } } });
     }
     public override void Stop() {
-        lock (gate) { if (Status != "busy" && Status != "confirm") throw new InvalidOperationException("它现在没有在执行"); stopping = true; }
+        lock (gate) { if (Status != "busy" && Status != "confirm") throw new InvalidOperationException("它现在没有在执行"); stopping = true; afterStop.Clear(); }
         Send(new Dictionary<string, object> { { "type", "control_request" }, { "request_id", "stop-" + (++requests) }, { "request", new Dictionary<string, object> { { "subtype", "interrupt" } } } });
     }
     protected override void Received(Dictionary<string, object> m) {
@@ -478,6 +496,18 @@ public sealed class ClaudeChat : Chat {
         if (type == "result") {
             string subtype = Text(m, "subtype");
             bool ok = subtype == "success" && !true.Equals(At(m, "is_error"));
+            if (stopping && afterStop.Count > 0) {
+                TurnEndedQuiet("stopped", "");
+                blocks.Clear();
+                while (afterStop.Count > 0) {
+                    var next = afterStop.Dequeue();
+                    string shown = Attachments.WithText(next.Text, next.Attachments);
+                    said.Enqueue(new KeyValuePair<string, string>(shown, next.Id));
+                    SendUser(shown, next.Attachments);
+                }
+                State(asks.Count > 0 ? "confirm" : "busy");
+                return;
+            }
             TurnEnded(stopping && !ok ? "stopped" : ok ? "done" : "failed", ok || stopping ? "" : Text(m, "result").Length > 0 ? Cut(Text(m, "result"), 600) : subtype);
             blocks.Clear();
             State(asks.Count > 0 ? "confirm" : "idle");
@@ -686,6 +716,7 @@ public sealed class CodexChat : JsonRpcChat {
         public IList<Attachment> Attachments;
     }
     readonly List<Early> early = new List<Early>();     // said before the conversation was there
+    readonly List<Early> afterStop = new List<Early>(); // said while the current turn is being interrupted
 
     static string TomlString(string value) {
         value = value ?? "";
@@ -745,8 +776,10 @@ public sealed class CodexChat : JsonRpcChat {
     }
     public override void Say(string text, string id, IList<Attachment> attachments = null) {
         lock (gate) {
+            if (Closed || Status == "ended") throw new InvalidOperationException("对话已结束");
             if (Session.Length == 0) { early.Add(new Early { Text = text, Id = id ?? "", Attachments = attachments }); State("busy"); return; }
             if (turn.Length > 0) {
+                if (stopping) { afterStop.Add(new Early { Text = text, Id = id ?? "", Attachments = attachments }); State("busy"); return; }
                 // it is at work: the words join the turn, as its own window's box does
                 Call("turn/steer", new Dictionary<string, object> { { "threadId", Session }, { "expectedTurnId", turn }, { "input", Words(text, attachments) }, { "clientUserMessageId", Client(id) } }, answer => {
                     if (At(answer, "error") != null) Start(text, id, attachments);       // the turn had just ended: a new one
@@ -779,6 +812,7 @@ public sealed class CodexChat : JsonRpcChat {
         lock (gate) {
             if (turn.Length == 0) throw new InvalidOperationException("它现在没有在执行");
             stopping = true;
+            afterStop.Clear();
             Call("turn/interrupt", new Dictionary<string, object> { { "threadId", Session }, { "turnId", turn } }, _ => { });
         }
     }
@@ -788,7 +822,15 @@ public sealed class CodexChat : JsonRpcChat {
             case "turn/completed": {
                 var done = At(p, "turn"); string status = Text(done, "status");
                 if (Text(done, "id") == turn || turn.Length == 0) turn = "";
+                var queuedNext = afterStop.Count > 0 ? afterStop.ToArray() : null;
+                afterStop.Clear();
+                if (queuedNext != null && status == "interrupted") {
+                    TurnEndedQuiet("stopped", "");
+                    foreach (var one in queuedNext) Start(one.Text, one.Id, one.Attachments);
+                    break;
+                }
                 TurnEnded(status == "completed" ? "done" : status == "interrupted" ? "stopped" : "failed", status == "failed" ? Text(At(done, "error"), "message") : "");
+                if (queuedNext != null) foreach (var one in queuedNext) Start(one.Text, one.Id, one.Attachments);
                 State(asks.Count > 0 ? "confirm" : turn.Length > 0 ? "busy" : "idle");
                 break;
             }

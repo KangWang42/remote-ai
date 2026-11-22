@@ -178,6 +178,197 @@ public static class TeamsCheck {
         Require(!Team(teams, id).Members.ContainsValue("other-chat"), "a conversation that was never a member joins nothing");
     }
 
+    /// Recovery from quota exhaustion and manual interruptions:
+    /// 1. Quota-exhausted roster member pauses -> after quota recovers (even with stale 100% cache or closed terminal),
+    ///    Resume / Say lets the leader assign that member again and reopens its saved conversation.
+    /// 2. Quota window reset automatically clears stale failure marks while other members keep working.
+    /// 3. Interrupting a member (stopped or closed) then giving the leader new requirements via team Say (default or
+    ///    targeted) or directly inside the leader's chat stops stale siblings, wakes the team, and reaches the member.
+    /// 4. Parallel sibling finishing while paused is preserved; directly resuming a paused member (OwnerSpoke or
+    ///    Rejoin with message) delivers its result back to the leader; stopping the team and speaking directly to the
+    ///    leader with ASSIGN restarts cleanly while racing turns without OwnerSpoke remain ignored.
+    static void Recovering(string folder) {
+        var dead = new HashSet<string>();
+        var openedSessions = new List<string>();
+        double claudeUsed = 100;
+        long claudeReset = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - 5;
+        var hands = new Teams.Hands {
+            Begin = one => {
+                string t = "rec-" + (++made);
+                tools[t] = one.Tool + (one.Model.Length > 0 ? "#" + one.Model : "");
+                openedSessions.Add(t + ":" + one.Session);
+                told.Add(new[] { t, one.Tool, one.Words });
+                return t;
+            },
+            Say = (terminal, words) => {
+                if (dead.Contains(terminal)) throw new InvalidOperationException("这个成员的对话已经结束");
+                told.Add(new[] { terminal, "", words });
+            },
+            Stop = terminal => stopped.Add(terminal),
+            Close = terminal => closed.Add(terminal),
+            Changes = dir => "",
+            Available = () => new[] { "codex", "claude", "agy" },
+            Limits = tool => tool == "claude"
+                ? new[] { new Quotas.Window { Name = "five_hour", Used = claudeUsed, Resets = claudeReset } }
+                : new[] { new Quotas.Window { Name = "five_hour", Used = 15 } }
+        };
+        var teams = new Teams(Path.Combine(folder, "recovering.dat"), hands);
+
+        // 1) Roster member hits quota -> pauses -> Resume clears Failed & stale 100% cache no longer blocks existing member;
+        //    if the member's terminal closed while paused, leader dispatch reopens its saved conversation session.
+        string qId = "8181818181818181";
+        var qPreset = Lead(qId, new object[] { "codex", "claude" }, 3);
+        qPreset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude", "sonnet") };
+        string qLeader = teams.Start(qPreset).Members["leader"];
+        teams.Turned(qLeader, "done", "ASSIGN member-1: 修导出接口");
+        string qMember = Team(teams, qId).Members["member-1"];
+        string qSession = "11111111-aaaa-4aaa-8aaa-111111111111";
+        teams.Learn(qMember, "claude", qSession);
+        teams.Turned(qMember, "failed", "You've hit your 5-hour limit");
+        // Leader has no other member and stalls -> team pauses awaiting leader
+        teams.Turned(qLeader, "done", "目前 Claude 额度耗尽，没有其他成员可以接手。");
+        teams.Turned(qLeader, "done", "等 Claude 额度恢复后再继续。");
+        var qt = Team(teams, qId);
+        Require(qt.State == "paused" && qt.Awaited.SequenceEqual(new[] { "leader" }) && qt.Failed.ContainsKey("claude"),
+            "roster task pauses with claude marked failed");
+        // Member terminal closed during the long wait, and cached quota still reports 100%
+        dead.Add(qMember);
+        teams.Resume(qId);
+        qt = Team(teams, qId);
+        Require(qt.State == "running" && qt.Failed.Count == 0 && Last(qLeader).Contains("现可重新分派"),
+            "Resume clears stale member failure and informs leader");
+        teams.Turned(qLeader, "done", "ASSIGN member-1: 额度恢复了，继续修导出接口");
+        qt = Team(teams, qId);
+        string reopenedMember = qt.Members["member-1"];
+        Require(reopenedMember != qMember && qt.Awaited.SequenceEqual(new[] { "member-1" })
+            && openedSessions.Contains(reopenedMember + ":" + qSession)
+            && Last(reopenedMember).Contains("继续修导出接口"),
+            "leader can dispatch to recovered member even with stale quota cache, resuming its saved session");
+        teams.Turned(reopenedMember, "done", "导出接口已修好并测试通过");
+        teams.Turned(qLeader, "done", "VERIFIED: 运行导出测试 4 项通过\nDONE: 导出接口修复完成");
+        Require(Team(teams, qId).State == "done", "quota-recovered roster task finishes cleanly");
+
+        // 2) Parallel member keeps running while claude hits quota; once quota window resets, PruneRecovered clears claude automatically
+        string autoRecId = "8282828282828282";
+        var arPreset = Lead(autoRecId, new object[] { "codex", "claude", "agy" }, 4);
+        arPreset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude"), Member("member-2", "agy") };
+        string arLeader = teams.Start(arPreset).Members["leader"];
+        teams.Turned(arLeader, "done", "ASSIGN member-1: 写接口\nASSIGN member-2: 写界面");
+        var art = Team(teams, autoRecId);
+        string arM1 = art.Members["member-1"], arM2 = art.Members["member-2"];
+        claudeUsed = 100;
+        claudeReset = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - 1;
+        teams.Turned(arM1, "failed", "quota exceeded");
+        Require(Team(teams, autoRecId).Failed.ContainsKey("claude"), "claude marked failed while agy works");
+        // Quota resets before agy finishes
+        claudeUsed = 5;
+        teams.Turned(arM2, "done", "界面已写好");
+        art = Team(teams, autoRecId);
+        Require(!art.Failed.ContainsKey("claude") && !Last(arLeader).Contains("不可派工"),
+            "expired quota failure is pruned automatically once limits recover");
+        teams.Turned(arLeader, "done", "ASSIGN member-1: 补完接口");
+        Require(Team(teams, autoRecId).Awaited.SequenceEqual(new[] { "member-1" }) && Last(arM1).Contains("补完接口"),
+            "leader dispatches back to member-1 after automatic quota recovery");
+        teams.Turned(arM1, "done", "接口补完了");
+        teams.Turned(arLeader, "done", "VERIFIED: 接口与界面联调通过\nDONE: 全部完成");
+        Require(Team(teams, autoRecId).State == "done", "auto-recovered task completes");
+
+        // 3) Leader sends wrong instruction -> user stops member-1 -> user gives new requirement via team Say (default target) -> stops sibling & redirects via leader
+        string stopId = "8383838383838383";
+        var sPreset = Lead(stopId, new object[] { "codex", "claude", "agy" }, 3);
+        sPreset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude"), Member("member-2", "agy") };
+        string sLeader = teams.Start(sPreset).Members["leader"];
+        teams.Turned(sLeader, "done", "ASSIGN member-1: 按错误方案 A 改\nASSIGN member-2: 按错误方案 A 写测试");
+        var st = Team(teams, stopId);
+        string sM1 = st.Members["member-1"], sM2 = st.Members["member-2"];
+        teams.Turned(sM1, "stopped", "");
+        Require(Team(teams, stopId).State == "paused", "stopping member-1 pauses task");
+        stopped.Clear();
+        teams.Say(stopId, "刚才方案 A 错了，全部改成方案 B", "");
+        st = Team(teams, stopId);
+        Require(st.State == "running" && st.Awaited.SequenceEqual(new[] { "leader" }) && stopped.Contains(sM2)
+            && Last(sLeader).Contains("全部改成方案 B") && Last(sLeader).Contains("现可重新分派"),
+            "default Say on paused lead task stops stale sibling and routes new requirement to leader");
+        teams.Turned(sLeader, "done", "收到，改成方案 B。\nASSIGN member-1: 按方案 B 实现");
+        Require(Team(teams, stopId).Awaited.SequenceEqual(new[] { "member-1" }) && Last(sM1).Contains("按方案 B 实现"),
+            "leader reaches previously stopped member-1 with new instruction");
+        teams.Turned(sM1, "done", "方案 B 已实现并验证");
+        teams.Turned(sLeader, "done", "VERIFIED: 检查方案 B 实现与测试通过\nDONE: 方案 B 完成");
+        Require(Team(teams, stopId).State == "done", "redirected task finishes cleanly");
+
+        // 4) User closes member-1 chat (Teams.Closed) -> pauses cleanly (no deadlock) -> user talks directly in leader's chat (OwnerSpoke) -> leader assigns member-1 -> reopens saved session
+        string closeId = "8484848484848484";
+        var cPreset = Lead(closeId, new object[] { "codex", "claude" }, 3);
+        cPreset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude") };
+        string cLeader = teams.Start(cPreset).Members["leader"];
+        teams.Turned(cLeader, "done", "ASSIGN member-1: 错误任务");
+        string cM1 = Team(teams, closeId).Members["member-1"];
+        string cSession = "22222222-bbbb-4bbb-8bbb-222222222222";
+        teams.Learn(cM1, "claude", cSession);
+        dead.Add(cM1);
+        teams.Closed(cM1);
+        Require(Team(teams, closeId).State == "paused" && Team(teams, closeId).Awaited.SequenceEqual(new[] { "member-1" }),
+            "closing an awaited member chat pauses task instead of deadlocking");
+        // Casual question in leader's chat without ASSIGN/DONE keeps task paused
+        teams.OwnerSpoke(cLeader);
+        teams.Turned(cLeader, "done", "好的，你希望改成什么要求？");
+        Require(Team(teams, closeId).State == "paused", "casual direct chat with paused leader does not force-resume");
+        // Now owner gives new requirement directly in leader's chat and leader dispatches ASSIGN member-1
+        teams.OwnerSpoke(cLeader);
+        teams.Turned(cLeader, "done", "明白，我重新派给 member-1。\nASSIGN member-1: 改成正确的任务 C");
+        var ct = Team(teams, closeId);
+        string cM1Reborn = ct.Members["member-1"];
+        Require(ct.State == "running" && cM1Reborn != cM1 && ct.Awaited.SequenceEqual(new[] { "member-1" })
+            && openedSessions.Contains(cM1Reborn + ":" + cSession) && Last(cM1Reborn).Contains("改成正确的任务 C"),
+            "direct leader chat with ASSIGN wakes paused task and reopens closed member session");
+        teams.Turned(cM1Reborn, "done", "任务 C 已完成");
+        teams.Turned(cLeader, "done", "VERIFIED: 复核任务 C 改动与输出\nDONE: 任务 C 完成");
+        Require(Team(teams, closeId).State == "done", "task recovered via direct leader chat finishes cleanly");
+
+        // 5) Parallel sibling finishes while paused; direct OwnerSpoke on paused member resumes task and delivers both answers; Rejoin(told: true) also resumes paused state
+        string parId = "8585858585858585";
+        var pPreset = Lead(parId, new object[] { "codex", "claude", "agy" }, 3);
+        pPreset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude"), Member("member-2", "agy") };
+        string pLeader = teams.Start(pPreset).Members["leader"];
+        teams.Turned(pLeader, "done", "ASSIGN member-1: 任务 1\nASSIGN member-2: 任务 2");
+        var pt = Team(teams, parId);
+        string pM1 = pt.Members["member-1"], pM2 = pt.Members["member-2"];
+        teams.Learn(pM1, "claude", "33333333-cccc-4ccc-8ccc-333333333333");
+        teams.Turned(pM1, "stopped", "");
+        teams.Turned(pM2, "done", "任务 2 已完成");
+        pt = Team(teams, parId);
+        Require(pt.State == "paused" && pt.Awaited.SequenceEqual(new[] { "member-1" }) && pt.Answers["member-2"] == "任务 2 已完成",
+            "sibling completion while paused is preserved instead of dropped");
+        teams.Rejoin("rejoined-m1", "claude", "33333333-cccc-4ccc-8ccc-333333333333", true);
+        Require(Team(teams, parId).State == "running" && Team(teams, parId).Members["member-1"] == "rejoined-m1",
+            "Rejoin with told=true still transitions paused task back to running");
+        teams.Turned("rejoined-m1", "done", "任务 1 也完成了");
+        Require(Team(teams, parId).Phase == "verify" && Last(pLeader).Contains("任务 1 也完成了") && Last(pLeader).Contains("任务 2 已完成"),
+            "both resumed member and preserved sibling results reach leader acceptance");
+        teams.Turned(pLeader, "done", "VERIFIED: 两项任务均已核验通过\nDONE: 全部完成");
+        Require(Team(teams, parId).State == "done", "parallel paused recovery finishes cleanly");
+
+        // 6) Whole team stopped -> racing leader turn without OwnerSpoke ignored; direct leader chat with OwnerSpoke + ASSIGN restarts into next round
+        string stId = "8686868686868686";
+        var stPreset = Lead(stId, new object[] { "codex", "claude" }, 2);
+        stPreset["roster"] = new[] { Member("leader", "codex"), Member("member-1", "claude") };
+        string stLeader = teams.Start(stPreset).Members["leader"];
+        teams.Turned(stLeader, "done", "ASSIGN member-1: 旧任务");
+        string stM1 = Team(teams, stId).Members["member-1"];
+        teams.Stop(stId);
+        int beforeStopped = told.Count;
+        teams.Turned(stLeader, "done", "ASSIGN member-1: 过期指令");
+        Require(told.Count == beforeStopped && Team(teams, stId).State == "stopped", "racing leader turn after Stop without OwnerSpoke is ignored");
+        teams.OwnerSpoke(stLeader);
+        teams.Turned(stLeader, "done", "好的，重新开始。\nASSIGN member-1: 全新任务");
+        var stNow = Team(teams, stId);
+        Require(stNow.State == "running" && stNow.Round == 2 && stNow.Awaited.SequenceEqual(new[] { "member-1" }) && Last(stM1).Contains("全新任务"),
+            "direct leader chat after Stop restarts collaboration and reaches member");
+        teams.Turned(stM1, "done", "全新任务完成");
+        teams.Turned(stLeader, "done", "VERIFIED: 全新任务检查通过\nDONE: 完成");
+        Require(Team(teams, stId).State == "done", "restarted stopped team finishes cleanly");
+    }
+
     static void Accepting(string file) {
         Require(Teams.Verified("VERIFIED: 运行 npm test，12 项全部通过\nDONE: 好了") == "运行 npm test，12 项全部通过", "what was checked, on its line");
         Require(Teams.Verified("**VERIFIED:**\n- dotnet build 无警告\n- 打开 /cart 页面，数量可改\nDONE: 好了") == "- dotnet build 无警告\n- 打开 /cart 页面，数量可改", "what was checked, on the lines under it up to DONE");
@@ -1154,6 +1345,7 @@ public static class TeamsCheck {
             FreeRounds(folder);
             CollaborationAttachments(folder);
             Restarting(folder);
+            Recovering(folder);
         } catch (Exception problem) {
             Console.Error.WriteLine("teams check failed: " + problem.Message + "\n" + problem.StackTrace);
             return 1;

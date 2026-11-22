@@ -782,7 +782,16 @@ a `note` and the new program's events; nothing the ended program still writes is
 has ended is gone on with in a new chat of the same conversation; one whose tool never named its conversation is begun
 anew with its task. Where the task waited for that member (running, or paused with rounds left), it goes on: the member
 is told `继续完成上面的任务。`. When the phone itself ends a member's chat and goes on with the conversation (`start`
-with its `session`, `form: "chat"`), the new terminal takes the member's place in the same way.
+with its `session`, `form: "chat"`), the new terminal takes the member's place in the same way (resuming a paused task
+even when the phone opened it with a message). Closing an awaited member's chat pauses the task cleanly rather than
+waiting on a closed terminal; when a later dispatch or resume finds a member's terminal closed, the task reopens that
+member's known `session` (falling back to a new conversation if the session cannot be loaded). Resuming a paused task,
+sending follow-up guidance to a paused task, quota window reset, or a member completing a turn clears stale failure
+marks so the leader can assign previously paused or quota-exhausted members again; existing roster members are not
+silently dropped for a cached quota reading once their failure mark is cleared. Sending a message directly inside a
+paused or stopped leader's chat re-engages the workflow when the leader replies with `ASSIGN` or `DONE` (stopping any
+stale sibling member turns), and sending directly inside a paused awaited member's chat resumes the task so its
+completed answer still reaches the leader.
 
 A member whose whole answer is only its tool saying that its account ran out (at most 600 characters, words such as
 `quota reached`, `usage limit reached`, `upgrade your plan`, `额度已用完`, and no `ASSIGN`, `DONE`, `VERIFIED` or

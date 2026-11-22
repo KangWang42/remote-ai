@@ -1920,10 +1920,11 @@ public sealed class TerminalAgent {
                         if ((text.Length == 0 && (attachments == null || attachments.Count == 0)) || text.Length > 8000)
                             throw new ArgumentException("请输入文字或添加图片，文字最多 8000 字");
                         live.Chat.Say(text, id, attachments);
+                        Teams.OwnerSpoke(live.Id);
                     }
                     else if (action == "stop") live.Chat.Stop();
                     else if (action == "answer") live.Chat.Answer(Get(op, "ask"), Get(op, "decision"));
-                    else if (action == "close") live.Pty.Dispose();
+                    else if (action == "close") { live.Pty.Dispose(); Teams.Closed(live.Id); }
                     else throw new ArgumentException("对话不接受这个操作");
                 }
                 else if (action == "input") { lastInput = DateTime.UtcNow; string text = Get(op, "data"); if (text.Length == 0 || text.Length > 16000) throw new ArgumentException("输入无效"); live.Pty.Write(text); }
