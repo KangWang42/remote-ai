@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -387,28 +388,33 @@ def main():
                 assert len(native_requests) == before_stop, 'opening or cancelling end confirmation must not stop a process'
                 picture('positron-codex-%s.png' % ('owned' if can_end else 'unowned'))
 
-            # ---- Three-way switcher (应用 / 桌面 / 终端) + Antigravity direct create + agy-desktop send & stop without turn
+            # ---- Two kinds (应用 / 终端); a held press on a tool of 应用 on a project's page opens its desktop app.
+            # Antigravity direct create + agy-desktop send & stop without turn.
             info['tools'] = ['codex', 'claude', 'agy', 'shell']
             info['features'] = ['peek', 'reach', 'end', 'chat', 'chat-agy', 'codex-desktop-open', 'claude-desktop-open', 'agy-desktop-open', 'codex-desktop-control', 'agy-desktop-control']
             for width in [320, 390]:
                 ask('Emulation.setDeviceMetricsOverride', width=width, height=900, deviceScaleFactor=1, mobile=True)
                 navigate()
-                assert value("Array.from(document.querySelectorAll('#sheet .seg button')).map(b => b.textContent)") == ['应用', '桌面', '终端']
+                assert value("Array.from(document.querySelectorAll('#sheet .seg button')).map(b => b.textContent)") == ['应用', '终端']
                 shape = value("({width:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth})")
                 assert shape['width'] == width and shape['scroll'] <= width and shape['body'] <= width, shape
-            value("Array.from(document.querySelectorAll('#sheet .seg button')).find(b => b.textContent === '桌面').click()")
-            until("Array.from(document.querySelectorAll('#sheet .tools button')).map(b => b.textContent).join(',') === 'Antigravity,Claude,Codex'")
-            picture('desktop-tab-390.png')
+
+            def project_page():
+                ask('Page.navigate', url='http://127.0.0.1:%d/?project=%s' % (port, urllib.parse.quote(info['workspaces'][0])))
+                until("Array.from(document.querySelectorAll('#begin .seg button')).map(b => b.textContent).join(',') === '应用,终端' && document.querySelectorAll('#launch button').length === 3")
+
+            def held(name):
+                value("Array.from(document.querySelectorAll('#launch button')).find(b => b.textContent === %s).dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))" % json.dumps(name))
+
+            project_page()
+            picture('project-app-tiles-390.png')
             # Claude draft sheet offers the secondary fallback to phone chat when chat is enabled.
-            value("Array.from(document.querySelectorAll('#sheet .tools button')).find(b => b.textContent === 'Claude').click()")
-            value("document.querySelector('#sheet .anywhere button.choice').click()")
+            held('Claude')
             until("document.querySelector('#desktop-draft') !== null")
             assert value("document.querySelector('#sheet .desktop-fallback')?.textContent") == '改为在手机直接新建（同步历史）'
             # Antigravity direct create & send: idempotent receipt retry on 503, then directly enters live reader.
-            navigate()
-            assert value("Array.from(document.querySelectorAll('#sheet .seg button[aria-pressed=\"true\"]')).map(b => b.textContent)") == ['桌面']
-            value("Array.from(document.querySelectorAll('#sheet .tools button')).find(b => b.textContent === 'Antigravity').click()")
-            value("document.querySelector('#sheet .anywhere button.choice').click()")
+            project_page()
+            held('agy')
             until("document.querySelector('#desktop-draft') !== null")
             assert value("document.getElementById('desktop-draft').maxLength") == 8000
             assert value("document.querySelector('#sheet button.solid').textContent") == '在 Antigravity 中新建'
@@ -439,7 +445,7 @@ def main():
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']
             assert len(errors) <= 4 and all('503' in e['params']['entry']['text'] for e in errors), errors
             (out / 'report.json').write_text(json.dumps({'layouts': shapes, 'requests': len(requests), 'uniqueOperations': len({r['id'] for r in requests}), 'agyOpenRequests': len(agy_open_requests), 'agyConvRequests': len(agy_conv_requests), 'injected503': len(errors)}, ensure_ascii=False, indent=2), encoding='utf-8')
-            print('desktop UI: 320/390/430/1440 layouts, keyboard, 3-way desktop switcher, Antigravity direct create & native send/stop, Codex native send/stop, receipt-only retry, busy draft, transcript refresh and legacy handoff passed')
+            print('desktop UI: 320/390/430/1440 layouts, keyboard, two kinds with desktop apps on a held press, Antigravity direct create & native send/stop, Codex native send/stop, receipt-only retry, busy draft, transcript refresh and legacy handoff passed')
         finally:
             if pipe: pipe.close()
             browser.terminate(); browser.wait(timeout=10)

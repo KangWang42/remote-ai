@@ -1575,6 +1575,48 @@
       } };
     }
 
+    // 重启成员: a member's tool started anew on the same conversation (after its account changed or its quota came
+    // back), with the model and effort it goes on with; the task goes on where it waited for it
+    const canRestart = team => hasV2() && team.mode !== 'compare' && (team.state === 'running' || team.state === 'paused')
+      && memberRolesOf(team).some(role => (team.members || {})[role] || (team.member_sessions || {})[role]);
+    function restartPage() {
+      const team = currentTeam;
+      const roles = memberRolesOf(team).filter(role => (team.members || {})[role] || (team.member_sessions || {})[role]);
+      const failedOrAwaited = (team.awaited || []).find(r => roles.includes(r));
+      const state = { role: failedOrAwaited || roles[0], model: null, effort: '' };
+      const label = role => roleName(team, role);
+      return { title: '重启成员', build(p) {
+        if (menuButton) menuButton.hidden = true;
+        const tool = toolOf(team, state.role);
+        p.body.append(kit.section('成员', kit.chips(roles.map(role => [role, label(role)]), { chosen: state.role, label: '重启的成员' }, value => {
+          state.role = value; state.model = null; state.effort = ''; p.refresh();
+        })));
+        if (hasModels()) {
+          if (!modelCatalog && !modelError) loadModels().then(() => { if (activeSheet && !activeSheet.gone) p.refresh(); });
+          const current = modelOf(team, state.role);
+          const select = makeModelSelect({ id: 'team-restart-model', tool, value: state.model === null ? current : state.model, ariaLabel: '模型',
+            onchange: value => { state.model = value; state.effort = reconcileEffort(tool, value, state.effort); p.refresh(); } });
+          const rows = [kit.row({ icon: tool, tint: tool, label: '模型', detail: TOOLS[tool] || tool, end: select })];
+          const efforts = effortListFor(tool, state.model === null ? current : state.model);
+          if (hasEffort() && efforts.length) rows.push(kit.row({ icon: 'spark', tint: tool, label: '思考深度',
+            end: makeEffortSelect({ id: 'team-restart-effort', tool, model: state.model === null ? current : state.model, value: state.effort || effortOf(team, state.role), ariaLabel: '思考深度', onchange: value => { state.effort = value; } }) }));
+          p.body.append(kit.section('接着使用', kit.group(...rows)));
+        }
+        const go = kit.go('重启', async () => {
+          const payload = { team: team.id, role: state.role, tool };
+          if (state.model !== null) payload.model = state.model;
+          if (hasEffort() && state.effort && state.effort !== effortOf(team, state.role)) payload.effort = state.effort;
+          const res = await work('team_swap', payload);
+          updateTeamLocal(res.team);
+          lastKey = keyOf(currentTeam);
+          toast('已重启' + label(state.role));
+          p.sheet.goBack();
+          page.refresh();
+        }, { busy: '正在重启…', id: 'team-restart-go' });
+        p.foot.append(...go.nodes);
+      } };
+    }
+
     // whom a message goes to, named short for the composer's one line (the member cards name each in full)
     function targetOptions(team) {
       const first = ['', team.mode === 'compare' ? '全部候选' : '自动分配'];
@@ -1614,6 +1656,7 @@
         const badge = badgeInfo(team, asks);
         p.body.append(kit.who({ icon: 'spark', tint: 'agy', title: team.goal || '协作任务', line: (MODES[team.mode] || '协作') + (team.dir ? ' · ' + team.dir : '') + ' · ' + badge[0], state: TONE_DOT[badge[1]] || '' }));
         const rows = [];
+        if (canRestart(team)) rows.push(kit.row({ id: 'team-restart', icon: 'refresh', tint: 'muted', label: '重启成员', go: () => p.sheet.replace(restartPage()) }));
         if (canSwap(team)) rows.push(kit.row({ id: 'team-swap', icon: 'hand', tint: 'muted', label: '换 AI 接手', go: () => p.sheet.replace(swapPage()) }));
         if (team.state === 'running') rows.push(kit.row({ id: 'team-stop', icon: 'stop', tint: 'muted', label: '停止', act: () => { p.sheet.goBack(); act('team_stop', { state: 'stopped' }, '已停止'); } }));
         if (rows.length) p.body.append(kit.group(...rows));

@@ -142,7 +142,7 @@ public sealed class TerminalAgent {
         });
         Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands {
             Begin = BeginMember, Say = SayToMember, SayWithAttachments = SayToMember, ReadAttachment = ReadQueuedAttachment,
-            Stop = StopMember, Close = CloseMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
+            Stop = StopMember, Close = CloseMember, Restart = RestartMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
             MakeWorktree = MakeTeamWorktree, WorktreeDiff = Worktrees.Diff, WorktreeStat = Worktrees.Stat, ApplyWorktree = ApplyTeamWorktree, CleanWorktrees = CleanTeamWorktrees });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
@@ -231,8 +231,9 @@ public sealed class TerminalAgent {
     }
     // What a terminal's program gives is kept for the next report, which goes out at once.
     Action<string> Emitted(LiveTerminal live) {
+        int generation = live.Generation;
         return text => {
-            lock (gate) { live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
+            lock (gate) { if (live.Generation != generation) return; live.Pending.Append(text); live.Printed = DateTime.UtcNow; }
             Wake();
         };
     }
@@ -272,6 +273,10 @@ public sealed class TerminalAgent {
         public string Id, Tool, Dir, Session = "", Status = "", Title = ""; public IRunning Pty; public long Seq;
         /// The model and reasoning effort a conversation was begun with (a team's member, Models.cs); "" for its tool's default.
         public string Model = "", Effort = "";
+        /// How widely a conversation may work (full, edit, read), as it was begun: kept when it is started anew.
+        public string Mode = "";
+        /// How often its program was started anew in this terminal (RestartMember): what an earlier one still says is dropped.
+        public int Generation;
         /// A conversation run through its tool's structured mode (Chats.cs) rather than a screen; null for a screen.
         public Chat Chat { get { return Pty as Chat; } }
         // A terminal runs in a project (Dir). One that took on a conversation that was open in a folder that is no
@@ -456,12 +461,14 @@ public sealed class TerminalAgent {
             // read only where it is asked for, and never wider than its owner allows
             string widest = Get(prefs, "RemoteMaxMode"), mode = one.Read ? "read" : widest;
             string first = one.Words.Split('\n')[0].Trim();
-            var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = one.Tool, Dir = one.Project, Model = one.Model, Effort = one.Effort, Title = first.Length > 60 ? first.Substring(0, 59) + "…" : first };
+            bool resume = one.Session.Length > 0;
+            var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = one.Tool, Dir = one.Project, Session = one.Session, Model = one.Model, Effort = one.Effort, Mode = mode, Title = first.Length > 60 ? first.Substring(0, 59) + "…" : first };
             string place = one.Folder.Length > 0 ? one.Folder : Place(live, dirs);
-            live.Pty = Chat.Open(one.Tool, launcher, place, "", false, mode, Emitted(live), Quotas, one.Read ? null : Peers.Offer(one.Tool, place), one.Model, one.Effort);
+            live.Pty = Chat.Open(one.Tool, launcher, place, one.Session, resume, mode, Emitted(live), Quotas, one.Read ? null : Peers.Offer(one.Tool, place), one.Model, one.Effort);
             Heard(live);
             terminals[live.Id] = live;
-            live.Chat.Say(one.Words, null, one.Attachments);
+            if (resume) Recall(live, place);
+            if (one.Words.Length > 0 || (one.Attachments != null && one.Attachments.Count > 0)) live.Chat.Say(one.Words, null, one.Attachments);
             return live.Id;
         }
     }
@@ -494,6 +501,36 @@ public sealed class TerminalAgent {
         catch (ArgumentException) { return null; }
     }
     void StopMember(string terminal) { try { Member(terminal).Stop(); } catch (InvalidOperationException) { } }
+    /// Starts the program of a conversation the phone runs anew in the same terminal, going on with the same
+    /// conversation: an account signed in or a quota renewed since is what it works with then. `model`/`effort`: null
+    /// keeps what it had. False where the terminal is gone or its tool has not named the conversation yet.
+    bool RestartMember(string terminal, string model, string effort) {
+        lock (work) {
+            LiveTerminal live;
+            if (!terminals.TryGetValue(terminal, out live) || live.Chat == null || live.Pty.Closed) return false;
+            var old = live.Chat;
+            string session = old.Session.Length > 0 ? old.Session : live.Session, launcher = FindTool(live.Tool);
+            if (session.Length == 0) return false;
+            if (launcher == null) throw new InvalidOperationException("电脑上没有 " + Label(live.Tool));
+            if (model != null && model.Length > 0 && !Models.Valid(model)) throw new ArgumentException("模型名称无效");
+            effort = effort == null ? null : Models.CleanEffort(effort);
+            // never wider than its owner allows now
+            string widest = Get(Preferences(), "RemoteMaxMode"), mode = live.Mode == "read" ? "read" : widest;
+            string place = old.Folder;
+            lock (gate) live.Generation++;          // what the program that ends now still says is not passed on
+            old.Dispose();
+            live.Session = session;
+            if (model != null) live.Model = model;
+            if (effort != null) live.Effort = effort;
+            live.Mode = mode;
+            var emit = Emitted(live);
+            emit(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "已重新启动 " + Label(live.Tool) + (live.Model.Length > 0 ? " · " + live.Model : "") }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
+            live.Pty = Chat.Open(live.Tool, launcher, place, session, true, mode, emit, Quotas, mode == "read" ? null : Peers.Offer(live.Tool, place), live.Model, live.Effort);
+            Heard(live);
+            soon = true;
+            return true;
+        }
+    }
     /// Closes a member's terminal as the phone's "close" does; one already closed is left as it is.
     void CloseMember(string terminal) {
         lock (work) {
@@ -512,7 +549,7 @@ public sealed class TerminalAgent {
     /// A conversation the phone runs tells a team when a turn of it ends.
     void Heard(LiveTerminal live) {
         var chat = live.Chat;
-        if (chat != null) chat.Turned += (how, words) => Teams.Turned(live.Id, how, words);
+        if (chat != null) chat.Turned += (how, words) => { if (live.Chat == chat) Teams.Turned(live.Id, how, words); };
     }
     string[] AvailableChatTools() { return new[] { "claude", "codex", "agy" }.Where(t => Tool.Named(t).Chats && FindTool(t) != null).ToArray(); }
     readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
@@ -1845,12 +1882,21 @@ public sealed class TerminalAgent {
                     if (fork || Get(op, "history") == "True") throw new ArgumentException("对话选项无效");
                     bool resume = !fresh && session.Length > 0;
                     string place = Place(live, dirs);
-                    live.Pty = Chat.Open(tool, launcher, place, session, resume, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, place));
+                    // the model and effort asked for; a conversation gone on with without one keeps what it had here
+                    var before = resume && !op.ContainsKey("model") ? terminals.Values.Concat(ended).LastOrDefault(t => t.Chat != null && t.Tool == tool && String.Equals(t.Session, session, StringComparison.OrdinalIgnoreCase)) : null;
+                    live.Model = before != null ? before.Model : Get(op, "model").Trim();
+                    live.Effort = before != null ? before.Effort : Models.CleanEffort(Get(op, "effort"));
+                    if (live.Model.Length > 0 && !Models.Valid(live.Model)) throw new ArgumentException("模型名称无效");
+                    if (Get(op, "effort").Trim().Length > 0 && live.Effort.Length == 0) throw new ArgumentException("思考深度无效");
+                    live.Mode = before != null && before.Mode == "read" ? "read" : Get(prefs, "RemoteMaxMode");
+                    live.Pty = Chat.Open(tool, launcher, place, session, resume, live.Mode, Emitted(live), Quotas, live.Mode == "read" ? null : Peers.Offer(tool, place), live.Model, live.Effort);
                     Heard(live);
                     terminals[terminal] = live;
                     if (resume) Recall(live, Place(live, dirs));
                     string first = Get(op, "text").Trim();
                     if (first.Length > 0) live.Chat.Say(first, id);
+                    // a team's member gone on with here is that member again (Teams.Rejoin)
+                    if (resume) { string chatSession = session; bool told = first.Length > 0; Task.Run(() => Teams.Rejoin(terminal, tool, chatSession, told)); }
                 } else {
                     live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, kind.SupportsStandalone && SupportsStandalone(launcher), fresh), Place(live, dirs), 80, 24, Emitted(live));
                     terminals[terminal] = live;

@@ -394,25 +394,30 @@
   $('back').onclick = () => bridge().close();
   $('files').onclick = () => { if (terminal && terminal.dir) location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; };
 
-  // Into a terminal of the phone's: the conversation is closed here and gone on with there, once the computer has let it go.
-  async function inTerminal() {
-    const { tool, dir, session } = terminal;
-    bridge().send({ action: 'close' });
-    toast('正在转到终端…');
+  // The same conversation in a new terminal of the phone's: closed here, and gone on with there once the computer has
+  // let it go. `form`: 'chat' to go on with it as a conversation (restarted: its tool started anew, `more` the model
+  // and effort it goes on with), '' in a terminal's screen.
+  async function reopen(form, more = {}) {
+    const { tool, dir, session, id: was } = terminal;
+    if (terminal.state !== 'closed') bridge().send({ action: 'close' });
     for (let n = 0; n < 40; n++) {
       await new Promise(done => setTimeout(done, 500));
       try {
-        const list = await (await fetch('../api/terminal', { credentials: 'same-origin' })).json();
+        const list = await (await fetch('../api/terminal', { credentials: 'same-origin', cache: 'no-store' })).json();
         const listed = (list.sessions || []).find(s => s.id === session && s.tool === tool);
-        if (listed && !listed.live) break;
+        const open = (list.terminals || []).some(t => t.id === was && (t.state === 'running' || t.state === 'starting'));
+        if (listed && !listed.live && !open) break;
       } catch (error) { /* asked again */ }
     }
-    try {
-      const { status, body } = await bridge().post({ action: 'start', id: newId(), tool, dir, session, history: false });
-      if (status !== 200) throw new Error(body.error || '没有打开');
-      const tail = bridge().teamQuery ? bridge().teamQuery() : (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : '');
-      location.replace('../terminal/?id=' + body.terminal + tail);
-    } catch (error) { toast(error.message); }
+    const start = Object.assign({ action: 'start', id: newId(), tool, dir, session, history: false }, form ? { form } : {}, more);
+    const { status, body } = await bridge().post(start);
+    if (status !== 200) throw new Error(body.error || '没有打开');
+    const tail = bridge().teamQuery ? bridge().teamQuery() : (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : '');
+    location.replace((form === 'chat' ? '?id=' : '../terminal/?id=') + body.terminal + tail);
+  }
+  async function inTerminal() {
+    toast('正在转到终端…');
+    try { await reopen(''); } catch (error) { toast(error.message); }
   }
   // ---- the menu: what the conversation is, what is done with it (handed to another AI, asked at a time), its
   // name, and how it is read. Each opens as a page of the same sheet (../ui/sheet.js, ../ui/work.js).
@@ -443,6 +448,7 @@
         { id: 'menu-files', icon: 'folder', tint: 'file', label: '项目文件', why: terminal.dir ? '' : '这段对话不在项目里', say: toast, act: () => { p.sheet.close(null, true); location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; } },
         { id: 'menu-copy', icon: 'copy', tint: 'copy', label: '复制全文', say: toast, act: async () => { p.sheet.close(null); toast(await RemoteSheet.copy(said.innerText.trim()) ? '已复制整段对话' : '没能复制，请长按选择文字'); } }]));
       const rows = [ui.row({ icon: 'pen', tint: 'muted', label: '重命名', value: terminal.title || '', go: () => p.sheet.push(renamePage()) })];
+      if (terminal.session) rows.push(ui.row({ icon: 'refresh', tint: 'muted', label: '重启对话', go: () => p.sheet.push(RemoteRestart.page(work, of(), choice => reopen('chat', choice))) }));
       if (terminal.session && terminal.dir && !ended) rows.push(ui.row({ icon: 'term', tint: 'muted', label: '在终端中打开', go: () => p.sheet.push(ui.confirm({ title: '在终端中打开', text: '这里的对话会关闭，在手机终端里继续同一段对话。', label: '在终端中打开', busy: '正在转到终端…', act: async sheet => { sheet.close(null, true); await inTerminal(); } })) }));
       if (ended && terminal.session) rows.push(ui.row({ icon: 'play', tint: 'good', label: '继续这段对话', act: () => { p.sheet.close(null, true); bridge().again(); } }));
       p.body.append(ui.section('对话', ui.group(...rows)));

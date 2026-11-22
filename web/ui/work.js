@@ -112,16 +112,36 @@
     }
     // Reads the computer's list once more, for a page that was opened before it changed.
     async fresh() { try { await this.o.reload(); } catch (error) { /* the last list stays */ } }
+    // The collaboration task a phone's terminal is a member of, and its role there: { team, role, tool } or null.
+    async member(terminal) {
+      const listed = ((this.data || {}).terminals || []).find(t => t.id === terminal);
+      if (!terminal || !listed || !listed.team || !this.has('teams-v2')) return null;
+      const team = ((await this.work('teams')).teams || []).find(t => t.id === listed.team);
+      const role = team && Object.keys(team.members || {}).find(r => team.members[r] === terminal);
+      if (!role || !['running', 'paused', 'done', 'stopped'].includes(team.state)) return null;
+      return { team, role, tool: listed.tool };
+    }
+    // The AIs a member's work can be handed to in its task: those the computer runs conversations of.
+    teamTools() {
+      const device = (this.data || {}).device || {};
+      return NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && this.has('chat') && (tool !== 'agy' || this.has('chat-agy')));
+    }
 
     // ================= handing a conversation over to another AI
     /* from: { id (the conversation), tool, title, dir, terminal (the phone's that runs it, if one does) } */
     handoff(sheetOrNull, from) {
       const work = this;
-      const state = { to: '', note: '', loaded: false };
+      const state = { to: '', note: '', loaded: false, member: undefined };
       const page = {
         title: '交给另一个 AI',
         build(p) {
-          if (!state.loaded) { state.loaded = true; work.fresh().then(p.refresh); }
+          if (!state.loaded) {
+            state.loaded = true;
+            work.fresh().then(() => work.member(from.terminal)).then(member => { state.member = member; }, () => { state.member = null; }).then(p.refresh);
+          }
+          // a member of a collaboration task is handed over within it: the task goes on with the AI that takes over
+          if (state.member) { work.teamHandoffPage(state.member, state).build(p); return; }
+          if (from.terminal && state.member === undefined) { p.body.append(ui.loading(), ui.loading()); return; }
           const data = work.data || { device: {} }, device = data.device || {};
           const listed = work.find(from.id);
           const takers = work.list().filter(c => c.open && c.id !== from.id && work.sayable(c));
@@ -178,6 +198,32 @@
         }
       };
       return sheetOrNull ? sheetOrNull.push(page) : window.RemoteSheet.open(page);
+    }
+    // A team member's work given to another AI in the same task (`team_swap`): it takes over with the task's record and
+    // the folder's changes, and the conversation that takes over is shown in place of this one.
+    teamHandoffPage(member, state) {
+      const work = this, { team, role } = member;
+      return { build(p) {
+        const tools = work.teamTools().filter(tool => tool !== member.tool);
+        const named = role === 'leader' ? '领队' : /^member-\d$/.test(role) ? '成员 ' + role.slice(7) : role === 'writer' ? '写手' : role === 'reviewer' ? '审查' : '成员';
+        p.body.append(ui.who({ icon: mark(member.tool), tint: tint(member.tool), title: team.goal || '协作任务', line: '协作 · ' + named + ' · ' + (TOOLS[member.tool] || member.tool) }));
+        if (!['running', 'paused'].includes(team.state)) { p.body.append(ui.summary('协作任务已结束，在协作页发新要求后再换 AI', 'bad', 'hand')); return; }
+        if (!tools.length) { p.body.append(ui.summary('电脑上没有可以接手的其它 AI', 'bad', 'hand')); return; }
+        if (!tools.includes(state.to)) state.to = tools[0];
+        p.body.append(ui.section('在协作中交给', ui.group(...tools.map(tool => ui.row({ icon: tool, tint: tint(tool), label: TOOLS[tool], checked: tool === state.to, act: () => { state.to = tool; p.refresh(); } })))));
+        const note = ui.area({ id: 'handoff-note', value: state.note, placeholder: '补充说明（可不填）', max: 1000, rows: 3, label: '补充说明' }, value => { state.note = value; });
+        p.body.append(ui.section('补充说明', note));
+        const go = ui.go('交给 ' + TOOLS[state.to] + ' 接手', async () => {
+          const payload = { team: team.id, role, tool: state.to };
+          if (state.note.trim()) payload.note = state.note.trim();
+          const done = await work.work('team_swap', payload);
+          const next = done.team && done.team.members ? done.team.members[role] || done.team.members[state.to] : '';
+          p.sheet.close(null, true);
+          work.toast('已在协作中交给 ' + TOOLS[state.to]);
+          if (next) location.replace(work.base + 'chat/?id=' + encodeURIComponent(next) + '&team=' + encodeURIComponent(team.id));
+        }, { busy: '正在交接…', id: 'handoff-go' });
+        p.foot.append(...go.nodes);
+      } };
     }
     // what a hand-over says, read before it is given
     briefPage(from, note) {

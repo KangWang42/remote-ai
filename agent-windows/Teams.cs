@@ -113,8 +113,9 @@ public sealed class Teams {
     }
     static readonly string[] MemberRoles = { "member-1", "member-2", "member-3" };
     /// A member's conversation to begin: its tool, the project, the first words, read only or not, the folder where it
-    /// is not the project's own (a worktree, `compare`), the model and reasoning effort ("" for the tool's default).
-    public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = "", Effort = ""; public bool Read; public IList<Attachment> Attachments; }
+    /// is not the project's own (a worktree, `compare`), the model and reasoning effort ("" for the tool's default),
+    /// and the conversation of its tool to go on with ("" for a new one).
+    public sealed class Opening { public string Tool = "", Project = "", Words = "", Folder = "", Model = "", Effort = "", Session = ""; public bool Read; public IList<Attachment> Attachments; }
     /// What the program does for a team: begin a member's conversation, tell it something, stop or close one, read project
     /// changes, read quota limits, list available chat tools, and manage Git worktrees for `compare`.
     public sealed class Hands {
@@ -126,6 +127,9 @@ public sealed class Teams {
         public Func<string, string, Attachment> ReadAttachment;                  // project, relative path -> image or null
         public Action<string> Stop;                                              // terminal
         public Action<string> Close;                                             // terminal: ends it; its conversation stays in the tool's history
+        /// Starts the tool of a member's terminal anew, going on with the same conversation (model, effort: null keeps
+        /// what it had); false where the terminal is gone or its tool has not named the conversation yet.
+        public Func<string, string, string, bool> Restart;
         public Func<string, string> Changes;                                     // project -> what changed, in words
         public Func<string, Quotas.Window[]> Limits;                             // tool -> its main windows still running
         public Func<string[]> Available;                                         // chat-capable tools installed on this computer
@@ -318,6 +322,14 @@ public sealed class Teams {
     static readonly Regex QuotaErrorPattern = new Regex(@"(hit your [\w\s-]{0,24}limit|rate[\s_-]*limit|usage[\s_-]*limit|quota|out of credits|credit balance|too many requests|\b429\b|overloaded|额度|限额|已达上限|额度用尽|额度已用完|额度用完)", RegexOptions.IgnoreCase);
     /// Whether a member's failure message indicates quota or rate-limit exhaustion.
     public static bool IsQuotaError(string text) { return !String.IsNullOrWhiteSpace(text) && QuotaErrorPattern.IsMatch(text); }
+    static readonly Regex QuotaStopPattern = new Regex(@"(quota (?:reached|exceeded|exhausted)|(?:usage|rate) limit (?:reached|exceeded)|hit your [\w\s-]{0,24}limit|out of credits|credit balance is too low|upgrade your (?:subscription|plan)|额度已用(?:尽|完)|额度用(?:尽|完)|已达(?:到)?(?:使用)?上限)", RegexOptions.IgnoreCase);
+    /// Whether a turn's whole answer is only its tool saying that its account has run out: short, of those words, and
+    /// with none of the lines a member's real answer is read by.
+    public static bool QuotaStop(string said) {
+        string text = (said ?? "").Trim();
+        return text.Length > 0 && text.Length <= 600 && QuotaStopPattern.IsMatch(text) && !AnyAssign.IsMatch(text)
+            && Finished(text) == null && Verified(text) == null && Verdict(text) == null;
+    }
     /// A tool's limits in words for the leader; 80%+ is tight and 100% is exhausted.
     public static string Room(Quotas.Window[] windows) {
         if (windows == null || windows.Length == 0) return "额度未知";
@@ -896,6 +908,16 @@ public sealed class Teams {
         if (newTool != "claude" && newTool != "codex" && newTool != "agy") throw new ArgumentException("接手 AI 无效");
         if (!String.IsNullOrEmpty(model) && !RemoteCli.Models.Valid(model)) throw new ArgumentException("模型名称无效");
         if (!String.IsNullOrEmpty(effort) && !RemoteCli.Models.ValidEffort(effort)) throw new ArgumentException("思考深度无效");
+        // the same AI again: its own conversation is started anew rather than handed to a new one
+        string same = null;
+        lock (gate) {
+            var found = items.FirstOrDefault(t => t.Id == id);
+            if (found != null && found.Mode != "compare" && found.State != "failed") {
+                string asked = role.Length > 0 ? ResolveRole(found, role) : DefaultSwapRole(found);
+                if (asked != null && ToolOf(found, asked) == newTool) same = asked;
+            }
+        }
+        if (same != null) return Restart(id, same, model, effort, note);
         Team team; string resolved, oldTool, oldTerminal = null, pending = "", mode, phase, prevState;
         bool launchNow = false;
         lock (gate) {
@@ -1001,6 +1023,97 @@ public sealed class Teams {
         else
             Open(team, resolved, newTool, prompt, readOnly, null);
         return Of(id);
+    }
+
+    /// Restarts a member: its tool is started anew and goes on with the same conversation, so that what the tool reads
+    /// when it starts (the account signed in, its quota, its settings) is read again. `model` and `effort`, where given,
+    /// are what it goes on with ("" for its tool's default). A member whose turn was awaited goes on with its task; one
+    /// whose conversation is not known yet is begun anew for that task.
+    public Team Restart(string id, string role, string model = null, string effort = null, string note = "") {
+        if (model != null) model = model.Trim();
+        if (effort != null) effort = effort.Trim().ToLowerInvariant();
+        if (!String.IsNullOrEmpty(model) && !RemoteCli.Models.Valid(model)) throw new ArgumentException("模型名称无效");
+        if (!String.IsNullOrEmpty(effort) && !RemoteCli.Models.ValidEffort(effort)) throw new ArgumentException("思考深度无效");
+        Team team; string terminal, tool, useModel, useEffort, folder = null; Seat seat; bool go, read;
+        lock (gate) {
+            team = items.FirstOrDefault(t => t.Id == id);
+            if (team == null) throw new ArgumentException("没有找到这个协作任务");
+            if (team.State == "failed") throw new InvalidOperationException("这个协作任务没有启动成功，请重新新建");
+            string resolved = ResolveRole(team, (role ?? "").Trim());
+            if (resolved == null) throw new ArgumentException("没有找到这个成员");
+            if (team.Phase == "discuss" && !resolved.StartsWith("discuss:", StringComparison.Ordinal) && team.Members.ContainsKey("discuss:" + resolved)) resolved = "discuss:" + resolved;
+            role = resolved;
+            tool = ToolOf(team, role);
+            var member = RosterOf(team, role);
+            if (member != null) {
+                SetRosterMember(team, member.Role, tool, model ?? member.Model, effort ?? (model == null || model == member.Model ? member.Effort : ""));
+                useModel = RosterOf(team, role).Model; useEffort = RosterOf(team, role).Effort;
+            } else {
+                if (model != null) { if (model.Length > 0) team.Models[tool] = model; else team.Models.Remove(tool); }
+                if (effort != null) { if (effort.Length > 0) team.Efforts[tool] = effort; else team.Efforts.Remove(tool); }
+                useModel = team.Models.ContainsKey(tool) ? team.Models[tool] : "";
+                useEffort = team.Efforts.ContainsKey(tool) ? team.Efforts[tool] : "";
+            }
+            team.Members.TryGetValue(role, out terminal);
+            team.Sessions.TryGetValue(role, out seat);
+            team.Failed.Remove(role); team.Failed.Remove(tool);
+            go = team.Awaited.Contains(role) && (team.State == "running" || team.State == "paused" && !team.Spent);
+            if (go) { team.State = "running"; team.Note = ""; }
+            read = role == "reviewer" || role.StartsWith("discuss:", StringComparison.Ordinal);
+            if (team.Mode == "compare") team.Worktrees.TryGetValue(tool, out folder);
+            Save();
+        }
+        string summary = "已重启 " + Who(team, role) + (model != null ? "，模型 " + (useModel.Length > 0 ? useModel : "工具默认") : "")
+            + (!String.IsNullOrEmpty(effort) ? "，思考深度 " + effort : "") + (String.IsNullOrEmpty(note) ? "" : "（" + Cut(note.Trim(), 120) + "）");
+        bool restarted = false;
+        try {
+            if (!String.IsNullOrEmpty(terminal) && hands.Restart != null) restarted = hands.Restart(terminal, useModel, useEffort);
+            if (!restarted && seat != null) {
+                // its terminal is gone: the conversation is gone on with in a new one
+                string fresh = hands.Begin(new Opening { Tool = tool, Project = team.Dir, Session = seat.Id, Read = read, Folder = folder ?? "", Model = useModel, Effort = useEffort });
+                lock (gate) { team.Members[role] = fresh; if (!team.Opened.Contains(fresh)) team.Opened.Add(fresh); Save(); }
+                terminal = fresh; restarted = true;
+            }
+        } catch (Exception problem) {
+            string why = problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "电脑端出错";
+            lock (gate) {
+                if (go) { team.State = "paused"; team.Note = Label(tool) + " 没有重启：" + why; }
+                Save();
+            }
+            Tell();
+            throw new InvalidOperationException(Label(tool) + " 没有重启：" + why);
+        }
+        if (!restarted) {
+            if (!go) throw new InvalidOperationException("这个成员还没有可以重启的对话");
+            Log(team, "切换", summary);
+            DeliverOrReopen(team, role, null, "继续完成上面的任务。");
+            return Of(id);
+        }
+        Log(team, "切换", summary);
+        if (go) DeliverOrReopen(team, role, terminal, "继续完成上面的任务。");
+        return Of(id);
+    }
+    /// A conversation that was a member is open on the phone again in a terminal of its own (the phone ended it and
+    /// went on with it): that terminal is the member now, and where the task waited for it, it goes on with its task.
+    /// `told` where the phone already said something to it.
+    public void Rejoin(string terminal, string tool, string session, bool told) {
+        if (String.IsNullOrEmpty(session)) return;
+        Team team; string role; bool go;
+        lock (gate) {
+            team = items.FirstOrDefault(t => t.State != "failed" && t.Sessions.Any(p => p.Value.Tool == tool && String.Equals(p.Value.Id, session, StringComparison.OrdinalIgnoreCase)));
+            if (team == null) return;
+            role = team.Sessions.First(p => p.Value.Tool == tool && String.Equals(p.Value.Id, session, StringComparison.OrdinalIgnoreCase)).Key;
+            string had;
+            if (team.Members.TryGetValue(role, out had) && had == terminal) return;
+            team.Members[role] = terminal;
+            if (!team.Opened.Contains(terminal)) team.Opened.Add(terminal);
+            team.Failed.Remove(role); team.Failed.Remove(tool);
+            go = !told && team.Awaited.Contains(role) && (team.State == "running" || team.State == "paused" && !team.Spent);
+            if (go) { team.State = "running"; team.Note = ""; }
+            Save();
+        }
+        Log(team, "切换", Who(team, role) + " 的对话已在手机上重新打开");
+        if (go) DeliverOrReopen(team, role, terminal, "继续完成上面的任务。");
     }
 
     static string DefaultSwapRole(Team team) {
@@ -1206,6 +1319,9 @@ public sealed class Teams {
     /// A member's turn ended (Chat.Turned): what it said is passed on by the team's way of working.
     public void Turned(string terminal, string how, string said) {
         Team team; string role;
+        // a tool that has run out says so as its answer (Antigravity CLI: "Individual quota reached …") and ends the
+        // turn as if it were done: that turn failed
+        if (how == "done" && QuotaStop(said)) how = "failed";
         lock (gate) {
             team = items.FirstOrDefault(t => t.State == "running" && t.Members.ContainsValue(terminal));
             if (team == null && opening > 0) {
@@ -1288,7 +1404,7 @@ public sealed class Teams {
                         } else {
                             pauseNoMember = true;
                             team.State = "paused";
-                            team.Note = Label(failedTool) + " 失败（" + reason + "），且没有其他可用成员：可从右上角“⋯”换 AI 接手，或稍后继续";
+                            team.Note = Label(failedTool) + " 失败（" + reason + "），且没有其他可用成员：可从右上角“⋯”重启或换 AI 接手，或稍后继续";
                             team.Awaited.Clear();
                             team.Awaited.Add("leader");
                         }
@@ -1325,7 +1441,7 @@ public sealed class Teams {
             }
             lock (gate) {
                 team.State = "paused";
-                team.Note = Label(failedTool) + "（领队）失败（" + reason + "），没有可用备用 AI：可从右上角“⋯”换 AI 接手，或稍后继续";
+                team.Note = Label(failedTool) + "（领队）失败（" + reason + "），没有可用备用 AI：可从右上角“⋯”重启或换 AI 接手，或稍后继续";
                 if (!team.Awaited.Contains("leader")) team.Awaited.Add("leader");
                 Save();
             }
@@ -1353,7 +1469,7 @@ public sealed class Teams {
         }
         lock (gate) {
             team.State = "paused";
-            team.Note = Label(failedTool) + " 失败（" + reason + "），没有其他可用备用 AI：可从右上角“⋯”换 AI 接手，或稍后继续";
+            team.Note = Label(failedTool) + " 失败（" + reason + "），没有其他可用备用 AI：可从右上角“⋯”重启或换 AI 接手，或稍后继续";
             if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
             Save();
         }
@@ -1384,6 +1500,8 @@ public sealed class Teams {
     static bool MembersWorking(Team team) {
         return team.Finishing.Count > 0 || team.Awaited.Any(role => role != "leader");
     }
+    /// A member named in the task's record: its role where the task has a roster, the leader marked as such.
+    static string Who(Team team, string role) { return RoleLabel(team, role) + (role == "leader" && team.Roster.Length == 0 ? "（领队）" : ""); }
     static string RoleLabel(Team team, string role) {
         var member = RosterOf(team, role);
         return member == null ? Label(ToolOf(team, role)) : member.Role + " · " + Label(member.Tool);

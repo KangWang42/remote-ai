@@ -541,18 +541,18 @@ def main():
             assert asked[-1]['allow'] is False and asked[-1]['transport'] == 'agy-desktop' and 'choice' not in asked[-1], asked[-1]
             assert forwarded[-1]['action'] == 'session_answer' and forwarded[-1]['allow'] is False and forwarded[-1]['transport'] == 'agy-desktop', forwarded[-1]
 
-            # Project page 3-way switcher at 320px width
+            # Project page: two kinds (应用 / 终端) at 320px width; desktop apps open on a held press of a tool of 应用
             ask('Emulation.setDeviceMetricsOverride', width=320, height=900, deviceScaleFactor=1, mobile=True)
             ask('Page.navigate', url='http://127.0.0.1:%d/?project=%s' % (port, PROJECT))
-            until("document.querySelectorAll('#begin .seg button').length === 3")
-            assert texts('#begin .seg button') == ['应用', '桌面', '终端']
-            value("Array.from(document.querySelectorAll('#begin .seg button')).find(b => b.textContent === '桌面').click()")
-            until("Array.from(document.querySelectorAll('#launch button')).map(b => b.textContent).join(',') === 'Antigravity,Claude,Codex'")
+            until("document.querySelectorAll('#begin .seg button').length === 2")
+            assert texts('#begin .seg button') == ['应用', '终端']
+            value("Array.from(document.querySelectorAll('#begin .seg button')).find(b => b.textContent === '应用').click()")
+            until("document.querySelectorAll('#launch button').length === 3")
             assert value("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
-            picture('project-desktop-tab-320.png')
+            picture('project-app-tab-320.png')
 
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
-            print('ways UI: Claude Code, Codex and Antigravity are told, stopped, answered (multi-choice & approval) and opened by the same controls; reasons shown; 3-way switcher verified')
+            print('ways UI: Claude Code, Codex and Antigravity are told, stopped, answered (multi-choice & approval) and opened by the same controls; reasons shown; two kinds verified')
         finally:
             if pipe: pipe.close()
             browser.terminate(); browser.wait(timeout=10)

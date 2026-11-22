@@ -186,7 +186,7 @@
   // It rises as the sheet of ui/sheet.js: a single answer that ends or saves something is its one button at the foot;
   // several are rows with a mark for what each does, those that end or delete something apart at the end.
   const MARK = { pin: 'pin', hide: 'hide', finish: 'stop', end: 'stop', handoff: 'hand', add: 'folder', enter: 'enter', delete: 'trash', remove: 'trash', rename: 'pen',
-    resume: 'term', chat: 'chat', 'chat-close': 'chat', close: 'term', copy: 'copy', organize: 'spark', follow_up: 'clock' };
+    resume: 'term', chat: 'chat', 'chat-close': 'chat', close: 'term', copy: 'copy', organize: 'spark', follow_up: 'clock', select: 'tick' };
   function ask(title, text, choices, fields) {
     const kit = window.RemoteSheet.ui;
     return window.RemoteSheet.open({ title, build(p) {
@@ -1285,7 +1285,8 @@
     if (await run({ action: 'project_add', path, name: '', create: false }, '正在添加…')) { toast('已加为项目'); refresh(); }
   }
   async function manage(x) {
-    const s = x.s, choices = [];
+    if (window.RemoteSelect && window.RemoteSelect.active) return;
+    const s = x.s, choices = [{ label: '多选', value: 'select' }];
     if (supportsOrganize(s) && pageHost.has('organize')) {
       choices.push({ label: s.organize?.follow_up ? '移出待跟进' : '加入待跟进', value: 'follow_up' });
       choices.push({ label: '整理这段对话', value: 'organize' });
@@ -1302,9 +1303,9 @@
     if (x.t && x.live) choices.push({ label: '结束终端', value: 'end', kind: 'danger' });
     // a saved conversation of a project that nothing has open can be put away (the computer keeps it recoverable)
     if (s && !x.t && !s.live && s.dir && usable() && (data.device.features || []).includes('delete')) choices.push({ label: '删除对话', value: 'delete', kind: 'danger' });
-    if (!choices.length) return;
     const choice = await ask(x.title, '', choices);
-    if (choice === 'follow_up') setFollowUp(s, !s.organize?.follow_up);
+    if (choice === 'select') window.RemoteSelect.start(x);
+    else if (choice === 'follow_up') setFollowUp(s, !s.organize?.follow_up);
     else if (choice === 'organize') window.RemoteOrganize.open({ session: s.id, tool: s.tool });
     else if (choice === 'pin') mark(s, { pinned: !s.pinned });
     else if (choice === 'hide') mark(s, s.hidden ? { hidden: false } : { hidden: true, pinned: false });
@@ -1480,6 +1481,7 @@
     if (list.dataset.signature === signature) return;
     list.dataset.signature = signature;
     list.replaceChildren(...cards);
+    if (window.RemoteSelect) window.RemoteSelect.paint(list);      // (cards made anew are marked again while choosing)
   }
   function applyProjectFold(key) {
     const head = document.querySelector('#project .section-head[data-fold="' + key + '"]');
@@ -1677,6 +1679,7 @@
   // (`own`: this page's part of the tab is meant, whoever has the tabs)
   function go(name, own) {
     if (!TABS[name]) return;
+    if (window.RemoteSelect) window.RemoteSelect.stop();
     if (!own && appTabs.includes(name)) { native.appPage(name); return; }
     const left = project;
     if (left) { project = ''; cameFrom = 'projects'; if (history.state && history.state.project) history.back(); }
@@ -1780,7 +1783,7 @@
   // What the views of their own work with: the page's helpers, what the computer last said, and the ways into a
   // conversation. A view names its tab and says how it is opened (asked for what it shows) and drawn.
   const pageHost = window.RemoteCliPage = {
-    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, closeReader, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, held, saved, keep, loadMarkdown, markdownNode,
+    $, el, svg, ICON, TOOLS, api, newId, toast, openSheet, closeReader, ask, ago, base, things, whereOf, wayOf, usable, running, phaseOf, go, takeOver, open, start, chat, chatOk, canEnd, held, saved, keep, loadMarkdown, markdownNode,
     openSession: s => { if (!usable()) return toast('电脑离线，暂时无法打开'); return s.live ? takeOver(s) : readHistory(s); },
     get data() { return data; },
     get relayVersion() { return relayVersion; }, startAgyShell,

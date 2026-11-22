@@ -1,19 +1,18 @@
 /* 新建对话: where a new conversation begins, and with what. As a conversation (应用: Claude Code or Codex, run by the
    computer through the tool's structured mode and shown on the phone as a conversation, chat/; on a computer that
    cannot, the desktop app of Codex or of Claude, which opens with the first words in its box), or in a terminal
-   (Claude Code, Codex, the shell, as a screen). Both are offered wherever a conversation is begun, and the kind that
-   stands open is the one its owner chose last: kept, in the app for every computer. A held press on a tool of 应用
-   opens its desktop app on the computer instead, where the computer offers that.
+   (Claude Code, Codex, the shell, as a screen). These two are offered wherever a conversation is begun, and the kind
+   that stands open is the one its owner chose last: kept, in the app for every computer. A held press on a tool of
+   应用 on a project's page opens its desktop app on the computer instead, where the computer offers that.
    A project's page offers them for that project (`draw`); 任务, and the app's own lists, for every project
    (`anywhere`). */
 (() => {
   'use strict';
   const page = window.RemoteCliPage, { $, el, ICON, TOOLS, api, newId, toast, openSheet } = page;
-  const KINDS = { app: '应用', desktop: '桌面', term: '终端' };
+  const KINDS = { app: '应用', term: '终端' };
   const APPS = { codex: 'Codex', claude: 'Claude', agy: 'Antigravity' };
-  const DESKTOP_ORDER = ['agy', 'claude', 'codex'];
-  // what the computer offers of each kind: structured conversations (应用), desktop apps on the computer (桌面),
-  // and terminals (终端). When the computer offers no structured chat, 应用 falls back to desktop apps directly.
+  // what the computer offers of each kind: conversations (应用) and terminals (终端). Where the computer runs no
+  // conversation of a tool, 应用 opens that tool's desktop app on the computer instead.
   const desktop = tool => page.has(tool + '-desktop-open');
   const viaShell = 'agy-shell';
   function offered() {
@@ -26,13 +25,9 @@
       term.splice(term.indexOf('shell'), 0, viaShell);
     }
     const chatApps = ['codex', 'claude', 'agy'].filter(tool => page.chatOk(tool));
-    const desktopApps = DESKTOP_ORDER.filter(tool => desktop(tool));
-    if (chatApps.length && desktopApps.length) return { app: chatApps, desktop: desktopApps, term };
-    if (desktopApps.length) return { app: Object.keys(APPS).filter(tool => desktop(tool)), desktop: [], term };
-    return { app: chatApps, desktop: [], term };
+    return { app: chatApps.length ? chatApps : Object.keys(APPS).filter(tool => desktop(tool)), term };
   }
   function named(kind, tool) {
-    if (kind === 'desktop') return APPS[tool] || tool;
     if (tool === 'agy' || tool === viaShell) return kind === 'app' && !page.chatOk('agy') && desktop('agy') ? APPS.agy : 'agy';
     return kind === 'app' ? APPS[tool] : TOOLS[tool];
   }
@@ -71,19 +66,16 @@
     if (tool === viaShell) {
       return page.startAgyShell(project);
     }
-    if (kind === 'desktop') return inApp(tool, project);
     return kind !== 'app' ? page.start(tool, project) : page.chatOk(tool) ? page.chat(tool, project) : inApp(tool, project);
   }
 
   // Keep the terminal entry visible on the default 应用 tab as well.
   function choices(kind, has) {
-    if (kind === 'desktop') return has.desktop;
     if (kind === 'app') return has.app.concat(has.term.filter(tool => (tool === 'agy' || tool === viaShell) && !has.app.includes(tool)));
     return has.term;
   }
   // agy under 应用 is a conversation or desktop app where offered, else its terminal
   const kindFor = (kind, tool) => {
-    if (kind === 'desktop') return 'desktop';
     if (tool === viaShell) return 'term';
     if (tool === 'agy' && kind === 'app' && !page.chatOk('agy') && !desktop('agy')) return 'term';
     return kind;
@@ -107,7 +99,7 @@
     const data = page.data, has = offered();
     const latest = name => Math.max(0, ...(data.terminals || []).filter(t => t.dir === name).map(t => t.created || 0), ...(data.sessions || []).filter(s => s.dir === name).map(s => s.updated || 0));
     const names = (data.device.workspaces || []).slice().sort((a, b) => latest(b) - latest(a));
-    if (!has.app.length && !has.desktop.length && !has.term.length) { toast('电脑上没有可用的工具'); return false; }
+    if (!has.app.length && !has.term.length) { toast('电脑上没有可用的工具'); return false; }
     // a conversation begins in a project: without one, the page of projects is shown, where one is added
     if (!names.length) { toast('请先添加一个项目'); page.go('projects', true); return true; }
     const picked = await openSheet((form, finish) => {

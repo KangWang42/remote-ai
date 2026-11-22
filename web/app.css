@@ -773,3 +773,22 @@ html[data-theme="dark"] .team-chip .dot.n-ag, html[data-theme="dark"] .team-slot
 .organize-field .rs-input { width: 100%; min-width: 0; }
 .organize-more-btn { margin-top: 2px; }
 .saved-reader { min-width: 0; overflow-wrap: anywhere; }
+
+/* 多选 (select.js): chosen cards are ringed and ticked; the bar at the foot takes the tabs' place while it lasts */
+.card.choosable { position: relative; cursor: pointer; }
+.card.choosable > button.side { display: none; }
+.card.choosable .ask { pointer-events: none; opacity: .45; }
+.card.choosable .chev { visibility: hidden; }
+.card.choosable > button.open { padding-right: 50px; }
+.card.choosable::after { content: ""; position: absolute; top: 21px; right: 14px; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); background: var(--panel); box-sizing: border-box; pointer-events: none; }
+.card.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.card.chosen::after { border-color: var(--accent); background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / 14px no-repeat; }
+body.selecting #tabs { visibility: hidden; }
+#select-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 8px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -6px 18px rgba(0, 0, 0, .06); }
+#select-bar b { flex: 1; min-width: 0; font-size: .95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#select-bar button { min-height: 42px; padding: 0 16px; border-radius: 12px; font-weight: 600; background: var(--raised); color: var(--ink); }
+#select-bar button.quit { background: none; color: var(--muted); padding: 0 8px; }
+#select-bar #select-go { background: var(--accent); color: var(--on-accent); }
+#select-bar button.danger { background: var(--bad-soft, var(--raised)); color: var(--bad); }
+#select-bar button:disabled { opacity: .4; }
+body.selecting main, body.selecting #home { padding-bottom: 76px; }

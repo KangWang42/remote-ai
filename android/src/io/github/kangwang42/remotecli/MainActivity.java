@@ -111,6 +111,8 @@ public final class MainActivity extends Activity {
     private String appTab = "home";                 // the tab the app's lists were left at
     private FrameLayout root;
     private ScrollView nativeScroll;
+    /** The tabs at the foot of a list, and a bar that stands in their place for a while (多选 on 任务). */
+    private View tabsView, footBar;
     private WebView web;                        // one WebView for the whole activity: its session, bridge and scroll survive a tab change
     private View connectionBanner;              // an inline retry when a computer's pages cannot be reached
     private TextView bannerText;
@@ -303,6 +305,7 @@ public final class MainActivity extends Activity {
         connectionHealth.retire();
         connectionBanner = null; bannerText = null;
         root.removeAllViews();
+        tabsView = null; footBar = null;
         bars(kit.BG);
         ScrollView scroll = new ScrollView(this);
         nativeScroll = scroll;
@@ -313,7 +316,8 @@ public final class MainActivity extends Activity {
             // the tabs stay at the foot while the list above them is scrolled
             LinearLayout shell = kit.column();
             shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-            shell.addView(tabs.build(name, this::appPage));
+            tabsView = tabs.build(name, this::appPage);
+            shell.addView(tabsView);
             root.addView(shell, new FrameLayout.LayoutParams(-1, -1));
             incoming = scroll;
         } else {
@@ -330,6 +334,16 @@ public final class MainActivity extends Activity {
         }
         screen = name;
         if ("home".equals(name)) bench.restorePosition(scroll);
+    }
+
+    /** Puts `bar` at the foot of the list in the tabs' place; null gives the tabs back. */
+    void foot(View bar) {
+        if (tabsView == null || !(tabsView.getParent() instanceof LinearLayout)) return;
+        LinearLayout shell = (LinearLayout) tabsView.getParent();
+        if (footBar != null) shell.removeView(footBar);
+        footBar = bar;
+        tabsView.setVisibility(bar == null ? View.VISIBLE : View.GONE);
+        if (bar != null) shell.addView(bar, new LinearLayout.LayoutParams(-1, -2));
     }
 
     void rememberWorkbenchPosition() {
@@ -1013,6 +1027,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if ("home".equals(screen) && bench.back()) return;
         if ("computer".equals(screen)) { home(""); return; }
         if ("reminders".equals(screen)) { appPage("me"); return; }
         if ("scan".equals(screen) || "add".equals(screen)) { endScan(); home(""); return; }

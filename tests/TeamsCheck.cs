@@ -115,6 +115,69 @@ public static class TeamsCheck {
     }
 
     /// 领队 accepts the work in a turn of its own, with what it checked; nothing else ends it as done.
+    /// A member whose tool ran out: its answer saying so is a failed turn; the owner restarts it (the same AI again)
+    /// in its own terminal, or goes on with its conversation on the phone, and the task goes on with it.
+    static void Restarting(string folder) {
+        const string quota = "\n⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h35m22s.\n";
+        Require(Teams.QuotaStop(quota) && Teams.QuotaStop("You've hit your usage limit. Upgrade your plan.") && Teams.QuotaStop("额度已用完，请稍后再试"),
+            "a tool's own words that it ran out are a stop for quota");
+        Require(!Teams.QuotaStop("修好了额度显示：quota reached 时显示红色。\nDONE: 修好额度显示") && !Teams.QuotaStop("ASSIGN codex: 处理 quota exceeded 的提示")
+            && !Teams.QuotaStop(new string('x', 700) + " quota reached") && !Teams.QuotaStop("数量检查完毕"), "a real answer that speaks of quota is not a stop");
+
+        var restarts = new List<string>();
+        var live = new HashSet<string>();
+        var hands = Hands();
+        hands.Available = () => new[] { "agy" };       // no other AI to take the lead
+        hands.Restart = (terminal, model, effort) => {
+            if (!live.Contains(terminal)) return false;
+            restarts.Add(terminal + "|" + model + "|" + effort);
+            tools[terminal] = tools[terminal].Split('#', '~')[0] + (model.Length > 0 ? "#" + model : "") + (effort.Length > 0 ? "~" + effort : "");
+            return true;
+        };
+        var teams = new Teams(Path.Combine(folder, "restart.dat"), hands);
+        string id = "5656565656565656";
+        var given = Lead(id, new object[] { "agy", "agy" }, 0);
+        given["roster"] = new[] { Member("leader", "agy", "gemini-3-pro"), Member("member-1", "agy") };
+        string leader = teams.Start(given).Members["leader"];
+        live.Add(leader);
+        teams.Learn(leader, "agy", "aaaaaaaa-1111-4111-8111-123456789abc");
+        teams.Turned(leader, "done", quota);
+        var team = Team(teams, id);
+        Require(team.State == "paused" && team.Awaited.SequenceEqual(new[] { "leader" }) && team.Note.Contains("额度已用尽") && team.Note.Contains("重启"),
+            "a leader whose answer is that it ran out pauses the task, with restart offered: " + team.Note);
+
+        // restarted with the same AI and a model of its own: in its own terminal, and it goes on
+        int before = told.Count;
+        var restarted = teams.Swap(id, "leader", "agy", "", "gemini-3-flash");
+        Require(restarted.Members["leader"] == leader && restarts.Last() == leader + "|gemini-3-flash|" && restarted.State == "running"
+            && restarted.Roster[0].Model == "gemini-3-flash" && !restarted.Failed.Any(), "restarting the leader keeps its conversation and terminal, with the chosen model");
+        Require(told.Skip(before).Any(x => x[0] == leader && x[2] == "继续完成上面的任务。") && restarted.Log.Any(s => s.Who == "切换" && s.Text.Contains("已重启 leader · Antigravity CLI") && s.Text.Contains("gemini-3-flash")),
+            "the restarted leader is told to go on, and the record says so");
+        teams.Turned(leader, "done", "ASSIGN member-1: 修复状态显示");
+        string member = Team(teams, id).Members["member-1"];
+        Require(Last(member).Contains("修复状态显示"), "the restarted leader's work goes out");
+
+        // a member whose terminal ended is gone on with in a new one, its conversation the same
+        teams.Learn(member, "agy", "bbbbbbbb-2222-4222-8222-123456789abc");
+        var gone = new List<string>();
+        hands.Begin = one => { string t = "t" + (++made); tools[t] = one.Tool; gone.Add(one.Session); told.Add(new[] { t, one.Tool, one.Words }); return t; };
+        var again = teams.Restart(id, "member-1");
+        string next = again.Members["member-1"];
+        Require(next != member && gone.Last() == "bbbbbbbb-2222-4222-8222-123456789abc" && Last(next) == "继续完成上面的任务。", "a member with no terminal is restarted from its conversation");
+
+        // the phone ends the member's chat and goes on with it: that terminal is the member again
+        teams.Learn(next, "agy", "bbbbbbbb-2222-4222-8222-123456789abc");
+        teams.Turned(next, "stopped", "");
+        Require(Team(teams, id).State == "paused", "a stopped member pauses the task");
+        teams.Rejoin("phone-chat", "agy", "bbbbbbbb-2222-4222-8222-123456789abc", false);
+        team = Team(teams, id);
+        Require(team.Members["member-1"] == "phone-chat" && team.State == "running" && Last("phone-chat") == "继续完成上面的任务。", "a member gone on with on the phone rejoins and goes on");
+        teams.Turned("phone-chat", "done", "状态显示已修复，测试通过");
+        Require(Team(teams, id).Phase == "verify", "its result reaches the leader's acceptance");
+        teams.Rejoin("other-chat", "agy", "cccccccc-3333-4333-8333-123456789abc", false);
+        Require(!Team(teams, id).Members.ContainsValue("other-chat"), "a conversation that was never a member joins nothing");
+    }
+
     static void Accepting(string file) {
         Require(Teams.Verified("VERIFIED: 运行 npm test，12 项全部通过\nDONE: 好了") == "运行 npm test，12 项全部通过", "what was checked, on its line");
         Require(Teams.Verified("**VERIFIED:**\n- dotnet build 无警告\n- 打开 /cart 页面，数量可改\nDONE: 好了") == "- dotnet build 无警告\n- 打开 /cart 页面，数量可改", "what was checked, on the lines under it up to DONE");
@@ -1090,6 +1153,7 @@ public static class TeamsCheck {
             Roster(folder);
             FreeRounds(folder);
             CollaborationAttachments(folder);
+            Restarting(folder);
         } catch (Exception problem) {
             Console.Error.WriteLine("teams check failed: " + problem.Message + "\n" + problem.StackTrace);
             return 1;

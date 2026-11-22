@@ -1,8 +1,9 @@
 """The menus of a conversation's page and a terminal's page (web/ui/sheet.js, web/ui/work.js), through the real relay
 server: the menu opens as one sheet; a Codex conversation is handed to a new Claude Code conversation, which is begun
 with what the computer wrote for the hand-over (`brief`); a question is set for it at a time on weekdays and switched
-off from its row; the look is changed from the menu; a terminal's menu shows its own choices; the phone's back key
-(history) leads back a page and then closes the sheet. The computer is played here, by the relay's own interface for
+off from its row; the look is changed from the menu; the conversation is restarted with a model and effort chosen (its
+tool started anew on the same conversation); a terminal's menu shows its own choices; the phone's back key (history)
+leads back a page and then closes the sheet; on the list, several are chosen (多选) and ended, or told 继续, at once. The computer is played here, by the relay's own interface for
 computers: nothing real is started or told.
 
 Usage: python tests/menus_ui_check.py <Edge/Chrome executable> <screenshot directory>
@@ -26,7 +27,8 @@ from ws_client import Socket        # noqa: E402
 
 CODEX = "0199cccc-dddd-7eee-8fff-000000000001"
 BRIEF = "【对话交接】下面是我在另一段对话里的进展（Codex，“结算页的金额”，项目 web-shop），请接着处理。\n\n我最初的要求：\n结算页的金额有时多出一位小数"
-FEATURES = ["chat", "files", "peek", "work", "chains", "brief", "schedule-days"]
+FEATURES = ["chat", "files", "peek", "work", "chains", "brief", "schedule-days", "teams", "teams-v2", "teams-models", "teams-effort"]
+MODELS = {"codex": [{"id": "gpt-6.2-sol", "label": "Sol", "efforts": ["medium", "high"]}, {"id": "gpt-6.2-astra", "label": "Astra", "efforts": ["high", "xhigh"]}]}
 
 
 def free_port():
@@ -151,6 +153,10 @@ class Computer:
             return {"text": BRIEF + ("\n\n我的补充：\n" + op["note"] if op.get("note") else ""), "tool": op["from_tool"], "dir": "web-shop", "title": "结算页的金额"}
         if action == "work_chains":
             return {"chains": []}
+        if action == "work_team_models":
+            return {"models": MODELS}
+        if action == "work_teams":
+            return {"teams": []}
         return {}
 
 
@@ -320,6 +326,23 @@ def main():
             until("!document.querySelector('dialog.rs')", "the sheet is gone")
             value("localStorage.setItem('rcli-skin', 'paper')")
 
+            # ---- restarted: the same conversation in its tool started anew, with a model and an effort chosen
+            press("#menu", "the menu")
+            press_text("重启对话", "restart")
+            until(sheet_title + " === '重启对话'", "the restart page")
+            until("[...document.querySelectorAll('dialog.rs .rs-row[role=radio]')].map(r => r.innerText.trim()).join('|') === '沿用当前|Sol|Astra'", "the models the computer lists, the one in use first")
+            until("(() => { const row = [...document.querySelectorAll('dialog.rs .rs-row[role=radio]')].find(r => r.innerText.trim() === 'Astra'); if (!row) return false; row.click(); return true; })()", "a model chosen")
+            press_text("极高", "an effort chosen")
+            picture("menu-restart.png")
+            closed_before = len([op for op in computer.seen if op["action"] == "close"])
+            press("#restart-go", "restart")
+            until("new URLSearchParams(location.search).get('id') !== %s && location.pathname.endsWith('/chat/') && document.getElementById('where-text').textContent.startsWith('Codex')" % json.dumps(first), "the conversation's page again, in a new chat", 25)
+            closes = [op for op in computer.seen if op["action"] == "close"][closed_before:]
+            again = [op for op in computer.seen if op["action"] == "start" and op.get("session") == CODEX]
+            assert [op["terminal"] for op in closes] == [first], closes
+            assert len(again) == 1 and again[0]["form"] == "chat" and again[0]["model"] == "gpt-6.2-astra" and again[0]["effort"] == "xhigh" and not again[0].get("text"), again
+            restarted = value("new URLSearchParams(location.search).get('id')")
+
             # ---- a plain terminal's menu: no conversation to hand over
             shell = phone.call("/api/terminal", {"id": secrets.token_hex(16), "action": "start", "tool": "shell", "dir": "web-shop"})["terminal"]
             ask("Page.navigate", url=base + "terminal/?id=" + shell)
@@ -342,8 +365,42 @@ def main():
             assert [t["title"] for t in json.loads(http_get(port, "/api/terminal", phone.cookie))["terminals"] if t["id"] == shell] == ["部署脚本"]
             press(".rs-close", "closed")
 
+            # ---- several at once from the list: chosen by a held press and taps, ended, and told 继续
+            claude = [t for t in computer.terminals.values() if t["tool"] == "claude"][0]
+            keys = {"shell": "terminal:" + shell, "claude": "session:claude:" + claude["session"], "restarted": "session:codex:" + computer.terminals[restarted]["session"]}
+            card = "document.querySelector('[data-list-key=\"%s\"]')"
+            ask("Page.navigate", url=base + "?tab=tasks")
+            until(" && ".join(card % key for key in keys.values()), "the list, with the terminal and the conversations")
+            value(card % keys["shell"] + ".dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))")
+            press_text("多选", "choose several")
+            until("document.getElementById('select-bar') && !document.getElementById('select-bar').hidden && document.querySelector('#select-bar b').textContent === '已选 1 个'", "choosing, with the held card chosen")
+            value(card % keys["claude"] + ".querySelector('button.open').click()")
+            until("document.querySelector('#select-bar b').textContent === '已选 2 个' && document.querySelectorAll('[data-list-key].chosen').length === 2", "a press chooses, nothing opens")
+            assert value("location.search") == "?tab=tasks", value("location.href")
+            picture("list-chosen.png")
+            press("#select-end", "end the chosen")
+            press("#ask-go", "confirmed")
+            until("!document.getElementById('select-bar') || document.getElementById('select-bar').hidden", "choosing ends once done")
+            for _ in range(50):
+                ended = {op["terminal"] for op in computer.seen if op["action"] == "close"}
+                if {shell, claude["id"]} <= ended:
+                    break
+                time.sleep(0.1)
+            assert {shell, claude["id"]} <= ended and restarted not in ended, ended
+            until(card % keys["restarted"], "the restarted conversation on the list")
+            value(card % keys["restarted"] + ".dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))")
+            press_text("多选", "choose again")
+            press("#select-go", "told 继续")
+            for _ in range(80):
+                told = [op for op in computer.seen if op["action"] == "say" and op["terminal"] == restarted]
+                if told:
+                    break
+                time.sleep(0.1)
+            assert told and told[-1]["text"] == "继续", told
+            until("!document.getElementById('select-bar') || document.getElementById('select-bar').hidden", "choosing ends")
+
             assert not problems, problems
-            print("menus: one sheet with pages for a conversation and a terminal; handed to a new Claude Code conversation with the brief; a question on weekdays set and switched off; the look; the back key")
+            print("menus: one sheet with pages for a conversation and a terminal; handed to a new Claude Code conversation with the brief; a question on weekdays set and switched off; the look; restarted with a model; the back key; several ended and told 继续 from the list")
         finally:
             if computer:
                 computer.alive = False

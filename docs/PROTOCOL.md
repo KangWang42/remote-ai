@@ -266,7 +266,7 @@ to held requests. Switching to the background cancels the active reader; returni
 
 | `action` | Fields |
 | --- | --- |
-| `start` | `tool` (`claude`, `codex`, `agy`, `opencode`, `qoder`, `cline`, `pi`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list), `form: "chat"` (a conversation run through its tool's structured mode, see "Chats"; `claude` and `codex` need `chat`, `agy` needs `chat` and `chat-agy`, not with `history` or `fork`) with optional `text` (the first thing to say, at most 8,000 characters) |
+| `start` | `tool` (`claude`, `codex`, `agy`, `opencode`, `qoder`, `cline`, `pi`, `shell`), `dir` (a workspace name); optional `session` (continue that conversation), `takeover` (end the owning computer CLI first), `fork` (Codex only: new conversation with the source history), `history` (let the tool show its own list), `form: "chat"` (a conversation run through its tool's structured mode, see "Chats"; `claude` and `codex` need `chat`, `agy` needs `chat` and `chat-agy`, not with `history` or `fork`) with optional `text` (the first thing to say, at most 8,000 characters), `model` and `effort` (what the tool goes on with, as `team_models` lists them; the relay passes them unchanged). A chat that goes on with `session` and names no `model` keeps the model, effort and read-only mode its last chat of that conversation had on the computer; a conversation that was a collaboration member becomes that member again (see "The owner's work") |
 | `input` | `terminal`, `data` (at most 16,000 characters) |
 | `say` | `terminal`, `text` (at most 8,000 characters, no control characters but line breaks and tabs), optional `attachments` (1-4 reserved screenshot paths, when the computer advertises `attachments`). A chat may send attachments with empty `text`. The computer appends one blank line and `附图：<absolute path>` for each image. Claude Code, Codex app-server and ACP use native image input only where that channel has been verified to accept it. A message for a running terminal from where the terminal is not on the screen (a list, the app's workbench): what the box of the terminal's page sends, the text and then Enter. The relay knows from the program's output whether it takes pasted text in brackets (`ESC [ ? 2004 h`): it then gives the computer `input` with the text between `ESC [ 200 ~` and `ESC [ 201 ~` and `\r`, and otherwise the text on one line and `\r`. Refused while the terminal's phase is `confirm`: Enter would answer its question |
 | `resize` | `terminal`, `cols` (20–240), `rows` (6–100). Not for a chat |
@@ -773,6 +773,20 @@ Each role has its own conversation, model and optional reasoning effort (`effort
 the tool's default. The relay derives `tools` from the roster and includes the roster in `team` and `device.team_cards`.
 `team_say.target` and `team_swap.role` use the role name. For example, `member-2` addresses only that member. A `team_swap`
 can also change a role's model or reasoning effort while keeping the same tool. An explicit empty `model` or `effort` selects the tool's default.
+
+**Restarting a member** (重启成员). A `team_swap` whose `tool` is the role's own tool restarts that member: the computer
+ends the program of the member's chat and starts its tool again on the same conversation in the same terminal (Claude
+Code `--resume`, Codex `thread/resume`, ACP `session/load`), with `model` and `effort` where given, so that what the
+tool reads when it starts (the account signed in, a renewed quota, its settings) is read again. The chat's readers see
+a `note` and the new program's events; nothing the ended program still writes is passed on. A member whose terminal
+has ended is gone on with in a new chat of the same conversation; one whose tool never named its conversation is begun
+anew with its task. Where the task waited for that member (running, or paused with rounds left), it goes on: the member
+is told `继续完成上面的任务。`. When the phone itself ends a member's chat and goes on with the conversation (`start`
+with its `session`, `form: "chat"`), the new terminal takes the member's place in the same way.
+
+A member whose whole answer is only its tool saying that its account ran out (at most 600 characters, words such as
+`quota reached`, `usage limit reached`, `upgrade your plan`, `额度已用完`, and no `ASSIGN`, `DONE`, `VERIFIED` or
+`REVIEW` line; Antigravity CLI 1.5 ends such a turn as done) is taken as a failed turn for quota, as a tool error is.
 
 With `item.auto_roster: true` (自动组队), the request supplies only a `leader` entry (including its chosen `model` and `effort`). The agent shows the leader every installed provider's shared quota
 and offers by name, with examples built from them, only the providers that can still take work: an `ASSIGN` to one that

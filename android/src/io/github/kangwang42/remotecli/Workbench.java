@@ -112,7 +112,10 @@ final class Workbench {
     private String filtersMark;
     private final Map<String, TextView> peeks = new HashMap<>();       // address, line break, terminal -> the line it last said
 
-    Workbench(MainActivity activity, Kit kit) { this.activity = activity; this.kit = kit; }
+    /** 多选: several tasks chosen and told 继续 or ended together. */
+    private final Selection selection;
+
+    Workbench(MainActivity activity, Kit kit) { this.activity = activity; this.kit = kit; this.selection = new Selection(kit); }
 
     void rememberPosition(ScrollView scroll) {
         scrollY = scroll.getScrollY();
@@ -222,6 +225,7 @@ final class Workbench {
         metrics = null; metricCells = null; metricLabels = null; metricDots = null; external = null;
         summary = null; statusPillHost = null; pillName = null; pillState = null; pillDotWrap = null; searchBox = null;
         organizeButton = null; taskRows.clear(); taskScroll = null;
+        selection.stop();       // (a screen built anew has no bar at its foot)
 
         if (tasks) {
             if (list.length() > 0) {
@@ -1035,9 +1039,10 @@ final class Workbench {
         if (canOrganize(task)) actions.addView(organizeMenu(task));
         card.addView(actions, kit.below(12));
 
-        kit.press(card, () -> openTask(task));
-        card.setOnLongClickListener(v -> { manage(task); return true; });
+        kit.press(card, () -> press(task));
+        card.setOnLongClickListener(v -> { if (selection.active()) choose(task); else manage(task); return true; });
         taskRows.put(taskKey(task), card);
+        selection.dress(card, taskKey(task));
         return card;
     }
 
@@ -1105,10 +1110,11 @@ final class Workbench {
             status.addView(kit.statusPill(entry.hidden ? "已隐藏" : AggregateSessions.label(task.kind), kit.MUTED, kit.RAISED, 0));
         }
 
-        kit.press(row, () -> openTask(task));
-        row.setOnLongClickListener(v -> { manage(task); return true; });
+        kit.press(row, () -> press(task));
+        row.setOnLongClickListener(v -> { if (selection.active()) choose(task); else manage(task); return true; });
         if (organizer) row.addView(organizeMenu(task));
         taskRows.put(taskKey(task), row);
+        selection.dress(row, taskKey(task));
         return row;
     }
 
@@ -1152,10 +1158,11 @@ final class Workbench {
     // ---- what is done with a thing besides opening it: pinned, hidden, its folder made a project, ended
     private void manage(AggregateSessions.Thing task) {
         final AggregateSessions.Entry entry = task.entry;
-        if (entry.team) { openTask(task); return; }
         Snapshot snapshot = snapshots.get(task.url);
         boolean marks = snapshot != null && snapshot.marks && !entry.conversation().isEmpty();
         final List<String> labels = new ArrayList<>(), does = new ArrayList<>();
+        labels.add("多选"); does.add("select");
+        if (entry.team) { labels.add("查看协作"); does.add("open"); }
         if (canOrganize(task)) {
             labels.add(entry.followUp ? "移出待跟进" : "加入待跟进");
             does.add("follow_up");
@@ -1173,7 +1180,9 @@ final class Workbench {
         if (labels.isEmpty()) return;
         kit.sheet(entry.shownTitle(), AggregateSessions.where(entry), labels.toArray(new String[0]), null, danger, which -> {
             String what = does.get(which);
-            if ("follow_up".equals(what)) followUpRemote(task, !entry.followUp);
+            if ("select".equals(what)) beginChoosing(task);
+            else if ("open".equals(what)) openTask(task);
+            else if ("follow_up".equals(what)) followUpRemote(task, !entry.followUp);
             else if ("organize".equals(what)) activity.organize(task.url, entry.tool, entry.conversation());
             else if ("say".equals(what)) sayTask(task);
             else if ("pin".equals(what)) markRemote(task, true, !entry.pinned);
@@ -1183,6 +1192,85 @@ final class Workbench {
             else stopTask(task);
         });
     }
+    // ---- 多选: chosen by presses, then each told 继续 or ended (Selection keeps the choice)
+    private void press(AggregateSessions.Thing task) { if (selection.active()) choose(task); else openTask(task); }
+    private void beginChoosing(AggregateSessions.Thing task) {
+        selection.start(taskKey(task), task);
+        activity.foot(selection.bar(this::endChoosing, () -> batch(true), () -> batch(false)));
+        dressRows();
+    }
+    private void choose(AggregateSessions.Thing task) { selection.toggle(taskKey(task), task); dressRows(); }
+    private void endChoosing() { selection.stop(); activity.foot(null); dressRows(); }
+    private void dressRows() { for (Map.Entry<String, View> row : taskRows.entrySet()) selection.dress(row.getValue(), row.getKey()); }
+    /** Whether the back key was taken to end choosing. */
+    boolean back() { if (!selection.active()) return false; endChoosing(); return true; }
+
+    /** What 继续 does to one task: its request (address path, then the operation), or null where it cannot go on now. */
+    private String[] goOnWith(AggregateSessions.Thing task) throws org.json.JSONException {
+        AggregateSessions.Entry entry = task.entry;
+        Snapshot snapshot = snapshots.get(task.url);
+        if (snapshot == null || !"on".equals(snapshot.state)) return null;
+        JSONObject op = new JSONObject().put("id", UUID.randomUUID().toString().replace("-", ""));
+        boolean quiet = !AggregateSessions.needs(task.kind) && !AggregateSessions.working(task.kind);
+        if (entry.team) return "paused".equals(entry.state) ? new String[]{"/api/work", op.put("action", "team_resume").put("team", entry.id).toString()} : null;
+        if (entry.terminal && entry.running()) return quiet ? new String[]{"/api/terminal", op.put("action", "say").put("terminal", entry.id).put("text", "继续").toString()} : null;
+        if (entry.live) return quiet && entry.reached && entry.canSay ? new String[]{"/api/conversation", op.put("action", "say").put("session", entry.id).put("text", "继续").toString()} : null;
+        // ended: gone on with as a conversation on the phone, told 继续
+        String session = entry.conversation(), tool = entry.tool;
+        boolean chats = snapshot.can.contains("chat") && ("claude".equals(tool) || "codex".equals(tool) || "agy".equals(tool) && snapshot.can.contains("chat-agy"));
+        if (session.isEmpty() || entry.project.isEmpty() || !chats) return null;
+        return new String[]{"/api/terminal", op.put("action", "start").put("tool", tool).put("dir", entry.project).put("session", session)
+            .put("history", false).put("form", "chat").put("text", "继续").toString()};
+    }
+    /** What 结束 does to one task: its request, or null where there is nothing to end. */
+    private String[] endWith(AggregateSessions.Thing task) throws org.json.JSONException {
+        AggregateSessions.Entry entry = task.entry;
+        JSONObject op = new JSONObject().put("id", UUID.randomUUID().toString().replace("-", ""));
+        if (entry.team) return "running".equals(entry.state) || "paused".equals(entry.state) ? new String[]{"/api/work", op.put("action", "team_stop").put("team", entry.id).toString()} : null;
+        if (!canEnd(task.url, entry)) return null;
+        return entry.terminal ? new String[]{"/api/terminal", op.put("action", "close").put("terminal", entry.id).toString()}
+            : new String[]{"/api/conversation", op.put("action", "end").put("session", entry.id).toString()};
+    }
+    private void batch(boolean goOn) {
+        final List<AggregateSessions.Thing> all = selection.chosen();
+        final List<AggregateSessions.Thing> things = new ArrayList<>();
+        final List<String[]> asks = new ArrayList<>();
+        for (AggregateSessions.Thing task : all) {
+            try {
+                String[] request = goOn ? goOnWith(task) : endWith(task);
+                if (request != null) { things.add(task); asks.add(request); }
+            } catch (org.json.JSONException broken) { /* left out, counted below */ }
+        }
+        final int skipped = all.size() - asks.size();
+        if (asks.isEmpty()) {
+            android.widget.Toast.makeText(activity, goOn ? "选中的对话现在不能继续" : "选中的对话没有可结束的", android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Runnable run = () -> {
+            endChoosing();
+            activity.net.execute(() -> {
+                int done = 0;
+                String first = "";
+                // one at a time: each computer takes its operations in order, and an ended terminal frees its place first
+                for (int i = 0; i < asks.size(); i++) {
+                    AggregateSessions.Thing task = things.get(i);
+                    try {
+                        JSONObject result = post(task.url + asks.get(i)[0], CookieManager.getInstance().getCookie(task.url), new JSONObject(asks.get(i)[1]), 40000);
+                        if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error"));
+                        done++;
+                    } catch (Exception error) {
+                        if (first.isEmpty()) first = task.entry.shownTitle() + "：" + (error.getMessage() == null ? "没有完成" : error.getMessage());
+                    }
+                }
+                final String message = (goOn ? "已继续 " : "已结束 ") + done + " 个" + (skipped > 0 ? "，" + skipped + " 个" + (goOn ? "不能继续" : "没有可结束的") : "")
+                    + (done < asks.size() ? "，" + (asks.size() - done) + " 个没有完成：" + first : "");
+                activity.runOnUiThread(() -> { android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_LONG).show(); refresh(); });
+            });
+        };
+        if (goOn) run.run();
+        else kit.sheet("结束选中的 " + asks.size() + " 个？", "正在执行的会被中断；对话记录保留，之后可以继续。", new String[]{"结束"}, null, 0, which -> run.run());
+    }
+
     private void deleteTask(AggregateSessions.Thing task) {
         kit.sheet("删除“" + task.entry.shownTitle() + "”？", "", new String[]{"删除"}, null, 0, which -> ask(task.url, "/api/conversation", "已删除", "没有删除，请稍后重试", op -> op.put("action", "delete").put("session", task.entry.id)));
     }

@@ -313,7 +313,8 @@
   const say = text => { const t = ui(); if (t && t.notice) t.notice(text); else if (t) t.error(text); };
   const worker = () => work || (work = window.RemoteWork.forPage('../', say));
   async function again() {
-    if (!terminal || terminal.state !== 'closed' || ['shell', 'agy'].includes(terminal.tool)) return;
+    // (an Antigravity CLI conversation is gone on with as a conversation; its screen in a terminal is not)
+    if (!terminal || terminal.state !== 'closed' || terminal.tool === 'shell' || (terminal.tool === 'agy' && terminal.form !== 'chat')) return;
     const start = { action: 'start', id: newId(), tool: terminal.tool, dir: terminal.dir };
     if (terminal.session) start.session = terminal.session;
     start.history = false;
