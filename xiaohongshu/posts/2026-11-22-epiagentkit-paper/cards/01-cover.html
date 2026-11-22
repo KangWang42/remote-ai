@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>封面</title>
+<link rel="stylesheet" href="../../../card.css">
+<style>
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 26px; }
+  .box { padding: 18px 16px; border-radius: 18px; }
+  .box.bad { background: var(--card); border: 1.5px solid var(--line); }
+  .box.good { background: var(--dark); color: #fff; }
+  .tag { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 800; }
+  .box.bad .tag { background: #ece7dc; color: var(--muted); }
+  .box.good .tag { background: var(--mark); color: var(--ink); }
+  .box ul { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 11px; }
+  .box li { position: relative; padding-left: 16px; font-size: 14.5px; line-height: 1.48; font-weight: 700; }
+  .box.bad li { color: var(--muted); font-weight: 600; }
+  .box li::before { content: ""; position: absolute; left: 0; top: 7px; width: 7px; height: 7px; border-radius: 50%; }
+  .box.bad li::before { background: #c5beb0; }
+  .box.good li::before { background: var(--mark); }
+  .note { margin-top: 16px; padding: 13px 16px; border-radius: 14px; background: var(--card); border: 1.5px dashed var(--blue); font-size: 14px; line-height: 1.5; color: var(--ink); font-weight: 700; }
+  .note span { color: var(--blue); }
+</style>
+</head>
+<body>
+  <span class="chip">EpiAgentKit · 科研写作实践</span>
+  <h1 class="big">用 AI 写论文<br>最大的坑：<br><span class="mark">防御性写作</span></h1>
+  <p class="lead">论文要的不是“面面俱到”，而是方法、分析和讨论都<span class="blue">合适</span>。</p>
+  <div class="vs">
+    <div class="box bad">
+      <span class="tag">AI 的默认习惯</span>
+      <ul>
+        <li>选冷门复杂模型</li>
+        <li>跑十几个敏感性分析</li>
+        <li>到处贴免责与局限</li>
+        <li>把过程日志写进正文</li>
+      </ul>
+    </div>
+    <div class="box good">
+      <span class="tag">论文真正要的</span>
+      <ul>
+        <li>同类常用的常规方法</li>
+        <li>精准检验关键假设</li>
+        <li>只写影响结论的边界</li>
+        <li>正文与核查分开</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note">来自实践踩坑，已固化进 <span>EpiAgentKit</span> 写作与统计工作流</div>
+  <div class="foot"><b>EpiAgentKit</b><span>科研 AI 工作流</span></div>
+</body>
+</html>

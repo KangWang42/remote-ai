@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>删免责套话与正文核查分离</title>
+<link rel="stylesheet" href="../../../card.css">
+<style>
+  body { padding-top: 32px; }
+  h1 { margin-top: 12px; font-size: 38px; }
+  .card { margin-top: 12px; padding: 14px 18px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .card .k { display: inline-block; padding: 3px 10px; border-radius: 999px; background: var(--dark); color: #fff; font-size: 12px; font-weight: 800; }
+  .card b { display: block; margin-top: 7px; font-size: 17.5px; line-height: 1.3; font-weight: 800; }
+  .card p { margin: 7px 0 0; font-size: 13.6px; line-height: 1.5; color: var(--muted); }
+  .rule { margin-top: 8px; padding: 9px 12px; border-left: 4px solid var(--blue); background: #f6f3ec; border-radius: 0 10px 10px 0; font-size: 13.5px; line-height: 1.45; font-weight: 700; color: var(--ink); }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 9px; }
+  .pane { padding: 10px 12px; border-radius: 12px; }
+  .pane.main { background: #edf3fe; }
+  .pane.inner { background: #f6f3ec; }
+  .pane strong { display: block; font-size: 13.8px; font-weight: 800; margin-bottom: 3px; }
+  .pane.main strong { color: var(--blue); }
+  .pane span { display: block; font-size: 12.8px; line-height: 1.46; color: var(--muted); }
+  .bar { margin-top: 12px; padding: 13px; font-size: 17px; }
+</style>
+</head>
+<body>
+  <span class="chip">04 · 工作流做法（下）</span>
+  <h1>删掉<span class="mark">防御性免责</span><br>把信息放回对的位置</h1>
+  <div class="card">
+    <span class="k">闸门 3</span>
+    <b>留不留一条局限，只问一句话</b>
+    <div class="rule">“删掉这句后，读者会不会误解证据强度、适用范围或结论？”</div>
+    <p>会就写实，不会就删。不每段末尾机械加保留意见，不写“虽有不足但仍具有重要意义”。</p>
+  </div>
+  <div class="card">
+    <span class="k">闸门 4</span>
+    <b>正文与内部核查拆开，不是藏问题</b>
+    <div class="split">
+      <div class="pane main">
+        <strong>进论文正文</strong>
+        <span>最终口径、复现必需信息、影响偏倚判断的真实局限</span>
+      </div>
+      <div class="pane inner">
+        <strong>留内部核查</strong>
+        <span>清洗调试、失败试验、数据审计与取舍过程记录</span>
+      </div>
+    </div>
+  </div>
+  <div class="bar">克制不是隐瞒，是不把工作日志写进正文</div>
+  <div class="foot"><b>EpiAgentKit</b><span>科研 AI 工作流</span><span class="page">5 / 6</span></div>
+</body>
+</html>

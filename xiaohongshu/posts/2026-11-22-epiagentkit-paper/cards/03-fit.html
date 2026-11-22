@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>论文要的是合适</title>
+<link rel="stylesheet" href="../../../card.css">
+<style>
+  body { padding-top: 34px; }
+  h1 { margin-top: 12px; font-size: 38px; }
+  .grid { display: grid; gap: 11px; margin-top: 18px; }
+  .item { padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .head { display: flex; align-items: center; gap: 10px; }
+  .pill { padding: 3px 11px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 13px; font-weight: 800; }
+  .head b { font-size: 16.5px; font-weight: 800; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .col { padding: 10px 11px; border-radius: 12px; font-size: 13px; line-height: 1.45; }
+  .col.no { background: #f6f3ec; color: var(--muted); }
+  .col.yes { background: #edf3fe; color: var(--ink); font-weight: 700; }
+  .col small { display: block; font-size: 11.5px; font-weight: 800; margin-bottom: 4px; }
+  .col.no small { color: #8b8579; }
+  .col.yes small { color: var(--blue); }
+  .bar { margin-top: 16px; padding: 14px; font-size: 17.5px; }
+</style>
+</head>
+<body>
+  <span class="chip">02 · 核心原则</span>
+  <h1>论文要的是<span class="mark">合适</span><br>不是“无可指摘”</h1>
+  <div class="grid">
+    <div class="item">
+      <div class="head"><span class="pill">方法</span><b>常规且同行认得懂</b></div>
+      <div class="pair">
+        <div class="col no"><small>盲目求全</small>选冷门高难算法，评委看不懂</div>
+        <div class="col yes"><small>恰当合适</small>采用领域和目标期刊常用方法</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="head"><span class="pill">分析</span><b>主分析站住主角位</b></div>
+      <div class="pair">
+        <div class="col no"><small>盲目求全</small>穷举十几种敏感性，喧宾夺主</div>
+        <div class="col yes"><small>恰当合适</small>只检验真正有争议的核心假设</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="head"><span class="pill">讨论</span><b>局限只谈真实影响</b></div>
+      <div class="pair">
+        <div class="col no"><small>盲目求全</small>无关缺陷全写上，免责套话刷屏</div>
+        <div class="col yes"><small>恰当合适</small>只写改变偏倚与结论解释的边界</div>
+      </div>
+    </div>
+  </div>
+  <div class="bar">对发表无益的堆砌，再全面也是偏离</div>
+  <div class="foot"><b>EpiAgentKit</b><span>科研 AI 工作流</span><span class="page">3 / 6</span></div>
+</body>
+</html>
