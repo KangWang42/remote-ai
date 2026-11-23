@@ -542,7 +542,7 @@ def main():
             value("document.getElementById('menu').click()")
             until("!!document.querySelector('dialog.rs[open]')", "the menu")
             rows = value("Array.from(document.querySelectorAll('dialog.rs .rs-row b, dialog.rs .rs-row.danger > span')).map(b => b.textContent)")
-            assert rows[:2] == ["重命名", "在终端中打开"] and rows[-1] == "结束对话", rows
+            assert rows[:4] == ["转为协作", "重命名", "重启对话", "在终端中打开"] and rows[-1] == "结束对话", rows
             value(sheet_button % json.dumps("结束对话") + ".click()")
             until("!!document.getElementById('rs-confirm') && document.getElementById('rs-confirm').classList.contains('danger')", "asked once")
             value("document.getElementById('rs-confirm').click()")

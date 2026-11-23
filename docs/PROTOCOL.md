@@ -176,7 +176,7 @@ and `why` (see "The ways into a conversation, and stopping one"): by which way e
 computer's words for what cannot be done. `activity` is `active` for a conversation in a
 command-line window of its own or one with `reach`, `locked` for another that a program holds, `history` otherwise.
 
-Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `file-upload`, `attachments`, `update`, `peek`, `organize`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort` and `teams-flex-rounds`
+Agents may advertise `info.features`: `codex-fork`, `codex-takeover`, `terminal-exit`, `files`, `file-upload`, `attachments`, `update`, `peek`, `organize`, `settings`, `work`, `chains`, `brief`, `schedule-days`, `chat`, `chat-agy`, `teams`, `teams-v2`, `teams-models`, `teams-grouped`, `teams-roster`, `teams-effort`, `teams-flex-rounds` and `teams-promote`
 (the work capabilities are described in "The owner's work", below; `organize` is described in "Conversation organization"). These are forwarded
 under `device.features`. Sessions may include `can_takeover`, `ownership_known`, and `takeover_reason`.
 Every session and every terminal carries `team`: the id of the collaboration task it is or was a member of, `""` for
@@ -641,7 +641,7 @@ on as the operation `work_<action>` and keeps nothing.
 | `handoff` | `from`, `to` (two different conversations; `to` is open), optional `note` (at most 1,000 characters) | `{"status": "accepted", "note": "...", "length": n}`; held for up to 85 seconds, as a message for an idle conversation is |
 | `brief` | `from` (a conversation the computer lists), optional `note` (at most 1,000 characters); needs `brief` | `{"text": "...", "tool", "dir", "title"}`: what `handoff` would say, said to nobody |
 | `teams` | none; needs `teams` | `{"teams": [...]}`: multi-AI collaboration tasks kept on this computer |
-| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for legacy `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), optional `roster` (for `lead` with `teams-roster`: `[{role, tool, model, effort?}]`, first entry `leader`, optional `member-1`..`member-3`; `auto_roster: true` supplies only `leader`), `rounds` (1 to 10, default 3; 1 for `compare`; `0` for `lead` leaves the number to the leader, 自由轮数, and needs `teams-flex-rounds`), optional `models` (`{tool: model}` for tools of `tools`; a non-empty model needs `teams-models`), optional `efforts` (`{tool: effort}` or `roster[*].effort`; a non-empty effort needs `teams-effort`) | `{"team": {...}}` |
+| `team_start` | `item`: `id` (16 to 32 hex digits; repeated id returns the existing task), `mode` (`review`, `lead` or `compare`), `dir` (a workspace name), `goal` (1 to 4,000 characters), optional `discuss` (boolean for `review` / `lead`: run a read-only planning round before writing), optional `rules` (at most 1,000 characters of custom delegation preference), `tools` (2 chat-capable tools for `review`: `[writer, reviewer]`; 2 to 4 distinct chat-capable tools for legacy `lead`: `[leader, ...members]`; 2 to 3 distinct chat-capable tools for `compare`), optional `roster` (for `lead` with `teams-roster`: `[{role, tool, model, effort?}]`, first entry `leader`, optional `member-1`..`member-3`; `auto_roster: true` supplies only `leader`), `rounds` (1 to 10, default 3; 1 for `compare`; `0` for `lead` leaves the number to the leader, 自由轮数, and needs `teams-flex-rounds`), optional `models` (`{tool: model}` for tools of `tools`; a non-empty model needs `teams-models`), optional `efforts` (`{tool: effort}` or `roster[*].effort`; a non-empty effort needs `teams-effort`), optional `from_terminal` (32 hex digits: promote an idle live structured chat in `dir` in-place as `leader`/`writer` for `lead`/`review` without `discuss`; needs `teams-promote`), optional `context` (at most 6,000 characters of agreed pre-collaboration background synced to members; needs `teams-promote`) | `{"team": {...}}` |
 | `team_models` | none; needs `teams-models` | `{"models": {"codex": [{"id", "label", "efforts"?, "default_effort"?, "is_default"?}], "claude": [...], "agy": [...]}}`: for each chat tool installed on the computer, the models and reasoning effort tiers it lists itself (empty lists where it lists none: only its default is offered) |
 | `team_say` | `team`: its `id`, `text` (up to 4,000 characters, may be empty when screenshots are attached), optional `target` (role or tool name, max 32 chars), optional `attachments` (1-4 reserved screenshot paths, when the computer advertises `attachments`). Requires `teams-v2`. | `{"team": {...}}`: interjects while `running`, resumes with guidance while `paused`, refines candidates while `choose`, or starts a follow-up round after `done`/`stopped` (`review`/`lead`) |
 | `team_pick` | `team`: its `id`, `tool`: winning tool name (from `CHAT_TOOLS`) or `""` to discard all; needs `teams-v2` | `{"team": {...}}`: checks and applies the chosen `compare` worktree patch to the main project folder (or discards all) and removes all temporary worktrees |
@@ -887,12 +887,18 @@ a follow-up turn, so it does not hold the result either.
 
 On Windows (`agent-windows/Peers.cs`), a chat can consult another installed chat-capable AI in the same project
 mid-turn through a per-conversation local MCP server (`remote_ai`, tool `ask_ai(tool, question, fresh?)`) bridged by
-`RemoteCliAgent.exe --mcp <pipe> <token>` over a named pipe (`RemoteCli.peers.<hash>`). The server is attached only
+`RemoteCliAgent.exe --mcp <pipe> <token>` over a named pipe (`RemoteCli.peers.<hash>`). For standalone project chats
+not yet inside a collaboration task, `remote_ai` also exposes `start_collaboration(goal, mode?, context?, members?, reviewer?, rounds?, rules?)`
+(default `mode: "lead"`, `auto_roster: true`, `rounds: 0`): calling it displays a phone confirmation card via the chat's
+`ask` event (without `always`), and upon user approval promotes the current conversation in-place as the task's `leader`
+or `writer`, returning the collaboration prompt inside the active turn so `ASSIGN` / `DONE` takes effect when the turn
+finishes. The server is attached only
 for that session without modifying global tool settings: Claude Code receives `--mcp-config <temp.json>` (with
 `MCP_TOOL_TIMEOUT=300000`), Codex receives `-c mcp_servers.remote_ai.{command,args,tool_timeout_sec,startup_timeout_sec}`
 on `codex app-server`, and Antigravity CLI receives `mcpServers` in ACP `session/new` / `session/load`. `tools/list`
-omits the caller itself and embeds each peer's current quota and tight (>=80%) warning from `Quotas.cs`. Calls to
-`ask_ai` are auto-approved without prompting the phone and shown as `step` items (`请教 <工具>：...`). The consulted
+omits the caller itself in `ask_ai` and embeds each peer's current quota and tight (>=80%) warning from `Quotas.cs`.
+CLI-level tool permission prompts for `ask_ai` and `start_collaboration` are auto-approved (the latter uses Remote AI's
+own phone confirmation card) and shown as `step` items (`请教 <工具>：...` / `发起协作 · ...`). The consulted
 peer runs in `read` mode without MCP (preventing recursion), automatically denies write/command permission prompts
 (allowing only read/search inspection on ACP), reuses its read-only session for follow-ups unless `fresh: true`, and is
 disposed together with any temporary config file when the caller chat closes.

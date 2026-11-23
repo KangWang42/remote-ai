@@ -399,6 +399,168 @@
       };
     }
 
+    // ================= promoting a conversation into a collaboration task
+    /* from: { id (session), tool, title, dir, terminal } */
+    promotePage(from, onStarted) {
+      const work = this;
+      const defaults = window.RemoteTeamDefaults || null;
+      const ROUNDS = [1, 2, 3, 5, 10];
+      const RULES_KEY = 'remotecli.team.rules';
+      const savedRules = () => { try { return localStorage.getItem(RULES_KEY) || ''; } catch { return ''; } };
+      const keepRules = text => { try { if (text) localStorage.setItem(RULES_KEY, text); else localStorage.removeItem(RULES_KEY); } catch { } };
+      const cleanTitle = (from.title || '').trim();
+      const genericTitle = !cleanTitle || cleanTitle === '对话' || cleanTitle === '新的对话' || cleanTitle === TOOLS[from.tool];
+      const state = {
+        id: newId(),
+        mode: 'lead',
+        autoRoster: true,
+        goal: genericTitle ? '' : cleanTitle,
+        rules: savedRules(),
+        rounds: 0,
+        lastFixedRounds: 3,
+        members: [],
+        reviewer: '',
+        loaded: false
+      };
+      return {
+        title: '转为协作',
+        build(p) {
+          if (!state.loaded) {
+            state.loaded = true;
+            work.fresh().then(p.refresh);
+          }
+          const why = work.ready('转为协作');
+          const tools = work.teamTools();
+          const device = (work.data || {}).device || {};
+          const used = tool => {
+            const q = (device.quotas || []).find(one => one.tool === tool);
+            const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
+            const most = pool.length ? Math.max(...pool.map(w => w.used)) : null;
+            return most === null ? '' : ' · ' + Math.round(most) + '%';
+          };
+          const named = tools.map(tool => [tool, (TOOLS[tool] || tool) + used(tool)]);
+
+          p.body.append(ui.who({
+            icon: mark(from.tool), tint: tint(from.tool),
+            title: from.title || TOOLS[from.tool] || '对话',
+            line: (state.mode === 'review' ? '当前对话将担任写手 · ' : '当前对话将担任领队 · ') + (TOOLS[from.tool] || from.tool) + (from.dir ? ' · ' + from.dir : '')
+          }));
+          if (why) { p.body.append(ui.summary(why, 'bad', 'spark')); return; }
+          if (!work.has('teams-promote')) { p.body.append(ui.summary('电脑端或中转版本较旧，不支持将对话转为协作，请更新后再试', 'bad', 'spark')); return; }
+          if (!from.dir) { p.body.append(ui.summary('这段对话不在项目里，无法转为协作', 'bad', 'spark')); return; }
+          if (!tools.includes(from.tool)) { p.body.append(ui.summary((TOOLS[from.tool] || from.tool) + ' 暂不支持参与协作', 'bad', 'spark')); return; }
+
+          if (!state.reviewer || !tools.includes(state.reviewer)) {
+            state.reviewer = tools.find(t => t !== from.tool) || from.tool;
+          }
+          if (!state.members.length) {
+            const first = tools.find(t => t !== from.tool) || from.tool;
+            const second = tools.find(t => t !== from.tool && t !== first) || '';
+            state.members = second ? [first, second] : [first];
+          }
+          const flexAllowed = state.mode === 'lead' && work.has('teams-flex-rounds');
+          if (!flexAllowed && state.rounds === 0) state.rounds = state.lastFixedRounds || 3;
+
+          const modeChoices = tools.length >= 2 ? [['lead', '分工协作'], ['review', '写审']] : [['lead', '分工协作']];
+          if (!modeChoices.some(([k]) => k === state.mode)) state.mode = 'lead';
+          const modeHint = state.mode === 'lead'
+            ? '当前对话担任领队，保留已有上下文；新成员会自动收到前期背景和并行分工说明'
+            : '当前对话担任写手继续完成，另一个 AI 只读审查并给出修改意见';
+          p.body.append(ui.section('方式', ui.seg(modeChoices, state.mode, value => {
+            state.mode = value;
+            if (value !== 'lead' && state.rounds === 0) state.rounds = state.lastFixedRounds || 3;
+            p.refresh();
+          }, { label: '方式', full: true }), modeHint));
+
+          const goal = ui.area({ id: 'promote-goal', value: state.goal, placeholder: '要协作完成什么（可补充要求或约束）', max: 4000, rows: 3, label: '目标' }, value => { state.goal = value; });
+          p.body.append(ui.section('目标', goal));
+
+          if (state.mode === 'lead') {
+            p.body.append(ui.section('组队方式', ui.seg([['auto', '自动组队'], ['manual', '手动选成员']], state.autoRoster ? 'auto' : 'manual', value => {
+              state.autoRoster = value === 'auto';
+              p.refresh();
+            }, { label: '组队方式', full: true }), state.autoRoster ? '领队按任务和额度按需创建 1–3 个执行成员' : '提前指定 1–3 个执行成员（默认按设置中的模型与思考深度）'));
+            if (!state.autoRoster) {
+              const memberRows = state.members.map((tool, idx) => ui.row({
+                icon: mark(tool), tint: tint(tool),
+                label: '执行成员 ' + (idx + 1) + ' · ' + (TOOLS[tool] || tool),
+                detail: used(tool) ? '额度已用' + used(tool).replace(' · ', ' ') : '点击切换工具',
+                end: state.members.length > 1 ? el('button', {
+                  type: 'button', className: 'rs-mini', textContent: '移除',
+                  onclick: e => { e.stopPropagation(); state.members.splice(idx, 1); p.refresh(); }
+                }) : '',
+                act: () => {
+                  const nextIdx = (tools.indexOf(tool) + 1) % tools.length;
+                  state.members[idx] = tools[nextIdx];
+                  p.refresh();
+                }
+              }));
+              const memberNodes = [ui.group(...memberRows)];
+              if (state.members.length < 3) {
+                memberNodes.push(ui.group(ui.row({
+                  icon: 'plus', tint: 'muted', id: 'promote-member-add',
+                  label: '添加执行成员（' + state.members.length + ' / 3）',
+                  act: () => {
+                    const nextTool = tools.find(t => t !== from.tool && !state.members.includes(t)) || tools[0];
+                    state.members.push(nextTool);
+                    p.refresh();
+                  }
+                })));
+              }
+              p.body.append(ui.section('执行成员', memberNodes, '点成员行可切换工具；同账号共用额度'));
+            }
+          } else {
+            p.body.append(ui.section('审查', ui.chips(named, { chosen: state.reviewer, label: '审查的 AI' }, value => { state.reviewer = value; }), '审查的 AI 以只读方式运行'));
+          }
+
+          const roundChoices = (flexAllowed ? [[0, '自由轮数']] : []).concat(ROUNDS.map(n => [n, n + ' 轮']));
+          p.body.append(ui.section('最多几轮', ui.seg(roundChoices, state.rounds, value => {
+            state.rounds = value;
+            if (value > 0) state.lastFixedRounds = value;
+          }, { label: '轮数', full: !flexAllowed }), state.rounds === 0 ? '由领队按进展与验收结果决定何时结束（最多 20 轮）' : '达到轮数上限仍未通过验收时会暂停，点「继续」可追加轮次'));
+
+          const rules = ui.area({ id: 'promote-rules', value: state.rules, placeholder: '选填：分工偏好或额外约束（自动记住）', max: 1000, rows: 2, label: '分工偏好' }, value => { state.rules = value; });
+          p.body.append(ui.section('分工偏好（选填）', rules));
+
+          const go = ui.go('转为协作', async () => {
+            const text = state.goal.trim();
+            if (!text) { goal.box.focus(); throw new Error('请写下要协作完成什么'); }
+            const trimmedRules = state.rules.trim();
+            keepRules(trimmedRules);
+            const savedPrefs = defaults ? defaults.readPrefs() : { models: {}, efforts: {} };
+            const defaultModel = tool => work.has('teams-models') && savedPrefs.models && savedPrefs.models[tool] ? savedPrefs.models[tool] : '';
+            const defaultEffort = tool => work.has('teams-effort') && savedPrefs.efforts && savedPrefs.efforts[tool] ? savedPrefs.efforts[tool] : '';
+            const submitRounds = state.mode === 'lead' && flexAllowed && state.rounds === 0 ? 0 : (state.rounds || state.lastFixedRounds || 3);
+            let item;
+            if (state.mode === 'lead') {
+              const roster = [{ role: 'leader', tool: from.tool, model: '' }];
+              if (!state.autoRoster) {
+                state.members.slice(0, 3).forEach((tool, idx) => {
+                  const entry = { role: 'member-' + (idx + 1), tool, model: defaultModel(tool) };
+                  const eff = defaultEffort(tool);
+                  if (eff) entry.effort = eff;
+                  roster.push(entry);
+                });
+              }
+              item = { id: state.id, mode: 'lead', dir: from.dir, goal: text, tools: roster.map(r => r.tool), roster, rounds: submitRounds, from_terminal: from.terminal };
+              if (state.autoRoster) item.auto_roster = true;
+            } else {
+              item = { id: state.id, mode: 'review', dir: from.dir, goal: text, tools: [from.tool, state.reviewer], rounds: submitRounds, from_terminal: from.terminal };
+              const rm = defaultModel(state.reviewer), re = defaultEffort(state.reviewer);
+              if (rm) item.models = { [state.reviewer]: rm };
+              if (re) item.efforts = { [state.reviewer]: re };
+            }
+            if (trimmedRules) item.rules = trimmedRules;
+            const made = await work.work('team_start', { item });
+            p.sheet.close(made.team || true, true);
+            work.toast('已转为协作任务');
+            if (onStarted) onStarted(made.team || null);
+          }, { busy: '正在开启协作…', id: 'promote-go' });
+          p.foot.append(...go.nodes);
+        }
+      };
+    }
+
     // ================= choosing conversations
     /* A page of conversations to choose one (or, `multi`, several) of. picked(ids) is told the choice. */
     pickPage(title, list, chosen, picked, { multi, note } = {}) {

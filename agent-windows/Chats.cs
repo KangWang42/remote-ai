@@ -99,6 +99,7 @@ public abstract class Chat : IRunning {
     protected sealed class Asked {
         public string Id, Text; public object Request; public string Kind = ""; public bool Always;
         public List<string> Choices = new List<string>();
+        public Action<string> OnReply;
     }
 
     protected Chat(string tool, string folder, Action<string> emit) {
@@ -175,9 +176,63 @@ public abstract class Chat : IRunning {
             Event(new Dictionary<string, object> { { "t", "answered" }, { "id", ask }, { "decision", decision } });
             if (asks.Count == 0 && Status == "confirm") State("busy");
         }
-        Reply(asked, decision);
+        if (asked.OnReply != null) asked.OnReply(decision);
+        else Reply(asked, decision);
     }
     protected abstract void Reply(Asked asked, string decision);
+    /// Asks the phone to confirm an in-chat action initiated by Remote AI itself (e.g. promoting the conversation to
+    /// a collaboration task) and waits until the user answers, the call is cancelled, the chat stops, or the timeout
+    /// expires. Always shows allow/deny without "always" so collaboration is never silently auto-started.
+    public bool Confirm(string kind, string title, string text, CancellationToken cancel, int timeoutSeconds = 240) {
+        var done = new ManualResetEventSlim(false);
+        string decision = "";
+        string askId;
+        lock (gate) {
+            if (Closed || disposed || Status == "ended") return false;
+            askId = Ask(null, kind, title, text, false, null, d => { decision = d ?? ""; done.Set(); });
+        }
+        try {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(Math.Max(5, timeoutSeconds));
+            while (!done.Wait(150)) {
+                if (cancel.IsCancellationRequested || Closed || disposed || DateTime.UtcNow >= deadline) {
+                    WithdrawInternal(askId);
+                    return false;
+                }
+            }
+            return decision == "allow";
+        } finally {
+            done.Dispose();
+        }
+    }
+    /// Emits a lightweight system note inside this conversation stream (thread-safe).
+    public void Notice(string text) {
+        if (String.IsNullOrWhiteSpace(text)) return;
+        lock (gate) { if (!Closed && !disposed) Note(text); }
+    }
+    void WithdrawInternal(string askId) {
+        Action<string> notify = null;
+        lock (gate) {
+            Asked asked;
+            if (!asks.TryGetValue(askId, out asked)) return;
+            asks.Remove(askId);
+            Event(new Dictionary<string, object> { { "t", "answered" }, { "id", askId }, { "decision", "gone" } });
+            if (asks.Count == 0 && Status == "confirm") State("busy");
+            notify = asked.OnReply;
+        }
+        if (notify != null) try { notify("gone"); } catch (Exception) { }
+    }
+    protected void CancelConfirmations() {
+        var callbacks = new List<Action<string>>();
+        lock (gate) {
+            foreach (var one in asks.Values.Where(a => a.OnReply != null).ToArray()) {
+                asks.Remove(one.Id);
+                Event(new Dictionary<string, object> { { "t", "answered" }, { "id", one.Id }, { "decision", "gone" } });
+                callbacks.Add(one.OnReply);
+            }
+            if (asks.Count == 0 && Status == "confirm") State("busy");
+        }
+        foreach (var cb in callbacks) try { cb("gone"); } catch (Exception) { }
+    }
 
     // ---- the tool's program
     protected void Run(string launcher, string args, IDictionary<string, string> extraEnv = null) {
@@ -222,9 +277,13 @@ public abstract class Chat : IRunning {
         try { process.WaitForExit(5000); exit = process.ExitCode; } catch { }
         Action<string, string> notify = null;
         string crashNote = "";
+        var droppedReplies = new List<Action<string>>();
         lock (gate) {
             OnEnded();
-            foreach (var asked in asks.Keys.ToArray()) Event(new Dictionary<string, object> { { "t", "answered" }, { "id", asked }, { "decision", "gone" } });
+            foreach (var one in asks.Values.ToArray()) {
+                Event(new Dictionary<string, object> { { "t", "answered" }, { "id", one.Id }, { "decision", "gone" } });
+                if (one.OnReply != null) droppedReplies.Add(one.OnReply);
+            }
             asks.Clear();
             bool midTurn = !disposed && (Status == "busy" || Status == "confirm");
             if (!disposed && exit.HasValue && exit.Value != 0) {
@@ -245,6 +304,7 @@ public abstract class Chat : IRunning {
         }
         var seat = Interlocked.Exchange(ref mcp, null);
         if (seat != null) seat.Dispose();
+        foreach (var cb in droppedReplies) try { cb("gone"); } catch (Exception) { }
         if (notify != null) ThreadPool.QueueUserWorkItem(_ => { try { notify("failed", crashNote); } catch (Exception) { } });
     }
     public void Write(string text) { throw new InvalidOperationException("对话不接受终端输入"); }
@@ -351,8 +411,8 @@ public abstract class Chat : IRunning {
             ThreadPool.QueueUserWorkItem(_ => { try { turned(how, said); } catch (Exception) { } });
         }
     }
-    protected string Ask(object request, string kind, string title, string text, bool always, IList<string> choices = null) {
-        var asked = new Asked { Id = Guid.NewGuid().ToString("N").Substring(0, 16), Request = request, Kind = kind, Text = (title + (text.Length > 0 ? "\n" + text : "")).Trim(), Always = always };
+    protected string Ask(object request, string kind, string title, string text, bool always, IList<string> choices = null, Action<string> onReply = null) {
+        var asked = new Asked { Id = Guid.NewGuid().ToString("N").Substring(0, 16), Request = request, Kind = kind, Text = (title + (text.Length > 0 ? "\n" + text : "")).Trim(), Always = always, OnReply = onReply };
         var options = new List<object>();
         if (choices != null && choices.Count > 0) {
             asked.Choices.AddRange(choices);
@@ -447,6 +507,7 @@ public sealed class ClaudeChat : Chat {
     }
     public override void Stop() {
         lock (gate) { if (Status != "busy" && Status != "confirm") throw new InvalidOperationException("它现在没有在执行"); stopping = true; afterStop.Clear(); }
+        CancelConfirmations();
         Send(new Dictionary<string, object> { { "type", "control_request" }, { "request_id", "stop-" + (++requests) }, { "request", new Dictionary<string, object> { { "subtype", "interrupt" } } } });
     }
     protected override void Received(Dictionary<string, object> m) {
@@ -550,6 +611,10 @@ public sealed class ClaudeChat : Chat {
                     string question = Text(input, "question");
                     title = Peers.StepTitle(Text(input, "tool"), question);
                     if (question.Length > 0) more["detail"] = Cut(question, 2000);
+                } else if (toolName == "mcp__" + Peers.ServerName + "__" + Peers.CollabToolName || toolName.EndsWith("__" + Peers.CollabToolName, StringComparison.Ordinal)) {
+                    string goal = Text(input, "goal");
+                    title = Peers.CollabStepTitle(Text(input, "mode"), goal);
+                    if (goal.Length > 0) more["detail"] = Cut(goal, 2000);
                 } else {
                     title = Brief(At(part, "name"), input);
                     string command = Text(input, "command");
@@ -597,8 +662,8 @@ public sealed class ClaudeChat : Chat {
         }
         string name = Text(request, "tool_name"), shown = Text(request, "display_name");
         var input = At(request, "input");
-        // Built-in read-only peer consultation runs without asking the phone for permission each time.
-        if (mcp != null && name == "mcp__" + mcp.Name + "__" + Peers.ToolName) {
+        // Built-in Remote AI MCP tools run through Remote AI's own controls (`ask_ai` is read-only; `start_collaboration` shows Remote AI's own confirmation card).
+        if (mcp != null && (name == "mcp__" + mcp.Name + "__" + Peers.ToolName || name == "mcp__" + mcp.Name + "__" + Peers.CollabToolName)) {
             Respond(id, new Dictionary<string, object> { { "behavior", "allow" }, { "updatedInput", input ?? new Dictionary<string, object>() } }, null);
             return;
         }
@@ -815,6 +880,7 @@ public sealed class CodexChat : JsonRpcChat {
             afterStop.Clear();
             Call("turn/interrupt", new Dictionary<string, object> { { "threadId", Session }, { "turnId", turn } }, _ => { });
         }
+        CancelConfirmations();
     }
     protected override void Notified(string method, object p) {
         switch (method) {
@@ -887,6 +953,11 @@ public sealed class CodexChat : JsonRpcChat {
                 string question = Text(argsObj, "question");
                 title = Peers.StepTitle(Text(argsObj, "tool"), question);
                 if (question.Length > 0) more["detail"] = Cut(question, 2000);
+            } else if (toolName == Peers.CollabToolName) {
+                var argsObj = At(item, "arguments");
+                string goal = Text(argsObj, "goal");
+                title = Peers.CollabStepTitle(Text(argsObj, "mode"), goal);
+                if (goal.Length > 0) more["detail"] = Cut(goal, 2000);
             } else {
                 title = Text(item, "server") + "：" + toolName;
             }

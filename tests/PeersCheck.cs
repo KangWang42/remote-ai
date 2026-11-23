@@ -150,7 +150,111 @@ public static class PeersCheck {
                 if (tool == "agy") Require(all.Contains("mcpCount=1"), "agy: ACP session/new received mcpServers: " + all);
             }
         }
-        Console.WriteLine("peers: MCP bridge, read-only guards, session reuse, quotas, cleanup and all 3 chat drivers ok");
+
+        // 3. In-chat collaboration promotion (`start_collaboration`): listed when CollabHooks allows it, requires
+        //    explicit phone confirmation, defaults to lead + auto_roster + free rounds, and works even on single-tool hosts.
+        string pipe2 = Peers.PipeName(root + "-collab");
+        bool canPromote = true;
+        bool confirmAnswer = false;
+        string lastConfirmTitle = "", lastConfirmDetail = "";
+        Dictionary<string, object> promotedItem = null;
+        var hooks = new Peers.CollabHooks {
+            CanPromote = tid => canPromote && tid == "term-1",
+            Confirm = (tid, kind, title, detail, cancel) => {
+                lastConfirmTitle = title; lastConfirmDetail = detail;
+                return confirmAnswer;
+            },
+            Promote = (tid, item) => {
+                promotedItem = item;
+                canPromote = false;
+                return new Peers.CollabStarted { TeamId = "aabbccddeeff00112233445566778899", Prompt = "【对话已转为协作任务】请输出 ASSIGN" };
+            }
+        };
+        // Single-tool host (only claude installed): ask_ai omitted, start_collaboration still offered!
+        using (var singlePeers = new Peers(pipe2, t => t == "claude" ? claudeCmd : null, quotas, mcpDir, selfExe, 20, hooks)) {
+            var seat2 = singlePeers.Offer("claude", workDir, "term-1", "demo-proj");
+            Require(seat2 != null, "single-tool promotable chat still receives MCP server");
+            var bInfo = new ProcessStartInfo(seat2.Command, String.Join(" ", seat2.Args.Select(a => "\"" + a + "\""))) {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false)
+            };
+            using (var bridge2 = Process.Start(bInfo)) {
+                try {
+                    Rpc(bridge2, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 1 }, { "method", "initialize" }, { "params", new Dictionary<string, object> { { "protocolVersion", "2025-11-25" } } } });
+                    var list2 = Rpc(bridge2, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 2 }, { "method", "tools/list" } });
+                    var tools2 = (At(At(list2, "result"), "tools") as IEnumerable).Cast<object>().ToList();
+                    Require(tools2.Count == 1 && Text(tools2[0], "name") == Peers.CollabToolName, "single-tool host lists only start_collaboration");
+
+                    // Denied confirmation -> Promote NOT called
+                    bool isErr2;
+                    confirmAnswer = false;
+                    string denied = CallText(Rpc(bridge2, new Dictionary<string, object> {
+                        { "jsonrpc", "2.0" }, { "id", 3 }, { "method", "tools/call" },
+                        { "params", new Dictionary<string, object> {
+                            { "name", Peers.CollabToolName },
+                            { "arguments", new Dictionary<string, object> { { "goal", "重构导出模块" }, { "context", "已确认保持 CSV 字段顺序不变" } } } } } }), out isErr2);
+                    Require(isErr2 && denied.Contains("拒绝") && promotedItem == null, "denied confirmation blocks promotion: " + denied);
+                    Require(lastConfirmTitle.Contains("转为协作") && lastConfirmDetail.Contains("分工协作（自动组队 · 自由轮数）") && lastConfirmDetail.Contains("重构导出模块"),
+                        "confirmation card shows clear Chinese defaults: " + lastConfirmDetail);
+
+                    // Allowed confirmation -> Promote called with defaults (lead, auto_roster=true, rounds=0)
+                    confirmAnswer = true;
+                    string allowed = CallText(Rpc(bridge2, new Dictionary<string, object> {
+                        { "jsonrpc", "2.0" }, { "id", 4 }, { "method", "tools/call" },
+                        { "params", new Dictionary<string, object> {
+                            { "name", Peers.CollabToolName },
+                            { "arguments", new Dictionary<string, object> { { "goal", "重构导出模块" }, { "context", "已确认保持 CSV 字段顺序不变" } } } } } }), out isErr2);
+                    Require(!isErr2 && allowed.Contains("对话已转为协作任务") && promotedItem != null, "allowed confirmation promotes chat: " + allowed);
+                    Require(Text(promotedItem, "mode") == "lead" && true.Equals(At(promotedItem, "auto_roster"))
+                        && Convert.ToInt32(At(promotedItem, "rounds")) == 0 && Text(promotedItem, "context").Contains("CSV"),
+                        "default promotion uses lead + auto_roster + free rounds + context");
+
+                    // After promotion, CanPromote returns false so start_collaboration disappears from tools/list
+                    var listAfter = Rpc(bridge2, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 5 }, { "method", "tools/list" } });
+                    var toolsAfter = (At(At(listAfter, "result"), "tools") as IEnumerable).Cast<object>().ToList();
+                    Require(toolsAfter.Count == 0, "start_collaboration omitted once chat is already in a team");
+                } finally {
+                    seat2.Dispose();
+                    try { bridge2.StandardInput.Close(); } catch { }
+                    if (!bridge2.WaitForExit(3000)) try { bridge2.Kill(); } catch { }
+                }
+            }
+        }
+
+        // 4. Chat.Confirm end-to-end on a live Chat: emits ask card without `always`, unblocks on Answer("allow"/"deny"),
+        //    and withdraws cleanly on cancellation.
+        var confirmEvents = new List<string>();
+        using (var chat = Chat.Open("claude", claudeCmd, workDir, "", false, "full", line => { lock (confirmEvents) confirmEvents.Add(line); }, quotas, null)) {
+            string askId = null;
+            using (var cts = new CancellationTokenSource()) {
+                bool? result = null;
+                var worker = new Thread(() => { result = chat.Confirm("collab", "将当前对话转为协作任务？", "目标：测试确认", cts.Token, 10); });
+                worker.Start();
+                for (int i = 0; i < 40 && askId == null; i++) {
+                    Thread.Sleep(50);
+                    lock (confirmEvents) {
+                        var askLine = confirmEvents.FirstOrDefault(l => l.Contains("\"t\":\"ask\""));
+                        if (askLine != null) askId = Text(Json.Deserialize<Dictionary<string, object>>(askLine), "id");
+                    }
+                }
+                Require(!String.IsNullOrEmpty(askId) && chat.Status == "confirm", "Confirm emits ask event and sets confirm state");
+                string askJson;
+                lock (confirmEvents) askJson = confirmEvents.First(l => l.Contains("\"t\":\"ask\""));
+                Require(!askJson.Contains("\"always\""), "Confirm never offers permanent always option: " + askJson);
+                chat.Answer(askId, "allow");
+                Require(worker.Join(3000) && result == true, "Confirm returns true when answered allow");
+            }
+            using (var cts2 = new CancellationTokenSource()) {
+                bool? result2 = null;
+                var worker2 = new Thread(() => { result2 = chat.Confirm("collab", "取消测试", "目标：取消", cts2.Token, 10); });
+                worker2.Start();
+                Thread.Sleep(150);
+                cts2.Cancel();
+                Require(worker2.Join(3000) && result2 == false, "Confirm returns false and withdraws ask card on cancel");
+            }
+        }
+
+        Console.WriteLine("peers: MCP bridge, read-only guards, session reuse, quotas, start_collaboration confirm, cleanup and all 3 chat drivers ok");
         return 0;
     }
 }

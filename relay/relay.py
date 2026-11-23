@@ -1526,6 +1526,22 @@ class Relay:
                 efforts = {tool: e.strip().lower() for tool, e in efforts.items() if e.strip()}
                 if efforts and "teams-effort" not in features:
                     raise RemoteError("这台电脑的电脑端版本较旧，不支持设置思考深度，请更新电脑端")
+                from_terminal = item.get("from_terminal", "")
+                if from_terminal is None:
+                    from_terminal = ""
+                if not isinstance(from_terminal, str) or (from_terminal and not _id.fullmatch(from_terminal)):
+                    raise RemoteError("来源对话无效")
+                context = item.get("context", "")
+                if context is None:
+                    context = ""
+                if not isinstance(context, str) or len(context.strip()) > 6000 or "\0" in context:
+                    raise RemoteError("前期背景不能超过 6000 字")
+                if (from_terminal or context.strip()) and "teams-promote" not in features:
+                    raise RemoteError("这台电脑的电脑端版本较旧，不支持将对话转为协作，请更新电脑端")
+                if from_terminal and mode not in ("lead", "review"):
+                    raise RemoteError("对话转为协作只支持分工协作或写审")
+                if from_terminal and discuss:
+                    raise RemoteError("对话转为协作不支持先议后写")
                 question["item"] = {"id": item["id"], "mode": mode, "dir": folder, "goal": goal.strip(), "tools": tools, "rounds": rounds}
                 if models:
                     question["item"]["models"] = models
@@ -1538,6 +1554,10 @@ class Relay:
                     question["item"]["discuss"] = True
                 if rules.strip():
                     question["item"]["rules"] = rules.strip()
+                if from_terminal:
+                    question["item"]["from_terminal"] = from_terminal
+                if context.strip():
+                    question["item"]["context"] = context.strip()
             elif action in ("team_stop", "team_resume", "team_remove"):
                 if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
                     raise RemoteError("协作任务无效")
@@ -1683,7 +1703,7 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

@@ -32,7 +32,7 @@ public sealed class Teams {
     public static readonly string[] Modes = { "review", "lead", "compare" };
     public sealed class Step { public long At; public string Who = "", Text = ""; }
     public sealed class Team {
-        public string Id = "", Dir = "", Mode = "", Goal = "", Rules = "", State = "running", Note = "", Phase = "", Picked = "";
+        public string Id = "", Dir = "", Mode = "", Goal = "", Context = "", Rules = "", State = "running", Note = "", Phase = "", Picked = "";
         public bool Discuss;
         public string[] Tools = new string[0];          // review: writer, reviewer; lead: leader + members; compare: candidates
         public RosterMember[] Roster = new RosterMember[0];
@@ -115,6 +115,13 @@ public sealed class Teams {
         }
     }
     static readonly string[] MemberRoles = { "member-1", "member-2", "member-3" };
+    /// An existing live chat conversation being promoted in-place into a collaboration task (`Promote`).
+    public sealed class SourceChat {
+        public string Terminal = "", Tool = "", Dir = "", Session = "", Model = "", Effort = "", Context = "";
+        /// True when triggered inside the chat's active turn (MCP `start_collaboration`): the prompt is returned as the
+        /// tool result instead of sending a new user turn.
+        public bool InTurn;
+    }
     /// A member's conversation to begin: its tool, the project, the first words, read only or not, the folder where it
     /// is not the project's own (a worktree, `compare`), the model and reasoning effort ("" for the tool's default),
     /// and the conversation of its tool to go on with ("" for a new one).
@@ -172,7 +179,7 @@ public sealed class Teams {
         Func<string, Dictionary<string, string>> map = name => { object value; var d = kept.TryGetValue(name, out value) ? value as Dictionary<string, object> : null; return d == null ? new Dictionary<string, string>() : d.ToDictionary(p => p.Key, p => Convert.ToString(p.Value)); };
         int number;
         var team = new Team {
-            Id = word("id"), Dir = word("dir"), Mode = word("mode"), Goal = word("goal"), Rules = word("rules"),
+            Id = word("id"), Dir = word("dir"), Mode = word("mode"), Goal = word("goal"), Context = word("context"), Rules = word("rules"),
             State = word("state"), Note = word("note"), Phase = word("phase"), Picked = word("picked"),
             Discuss = String.Equals(word("discuss"), "True", StringComparison.OrdinalIgnoreCase),
             AutoRoster = String.Equals(word("auto_roster"), "True", StringComparison.OrdinalIgnoreCase),
@@ -205,7 +212,7 @@ public sealed class Teams {
     void Save() {
         if (file == null) return;
         var all = items.Select(t => new Dictionary<string, object> {
-            { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "rules", t.Rules },
+            { "id", t.Id }, { "dir", t.Dir }, { "mode", t.Mode }, { "goal", t.Goal }, { "context", t.Context }, { "rules", t.Rules },
             { "state", t.State }, { "note", t.Note }, { "phase", t.Phase }, { "picked", t.Picked },
             { "discuss", t.Discuss }, { "reminded", t.Reminded }, { "last", t.Last }, { "spent", t.Spent }, { "held", t.Held },
             { "tools", t.Tools }, { "rounds", t.Rounds }, { "round", t.Round }, { "created", t.Created },
@@ -246,6 +253,7 @@ public sealed class Teams {
             { "log", t.Log.Skip(Math.Max(0, t.Log.Count - 80)).Select(s => new Dictionary<string, object> { { "at", s.At }, { "who", s.Who }, { "text", s.Text } }).ToArray() }
         };
         if (t.Last) shown["last"] = true;
+        if (t.Context.Length > 0) shown["context"] = t.Context;
         if (t.Efforts.Count > 0) shown["efforts"] = new Dictionary<string, string>(t.Efforts);
         if (t.Roster.Length > 0) {
             shown["roster"] = t.Roster.Select(member => member.Shown()).ToArray();
@@ -432,22 +440,23 @@ public sealed class Teams {
         return usable.OrderBy(x => x.Item2).ThenBy(x => x.Item3).Select(x => x.Item1).FirstOrDefault();
     }
     static string ExtraRules(Team t) { return String.IsNullOrEmpty(t.Rules) ? "" : "\n\n【分工偏好】\n" + Cut(t.Rules, 1000); }
+    static string ContextBlock(Team t) { return String.IsNullOrEmpty(t.Context) ? "" : "\n\n## 前期已确认背景\n" + Cut(t.Context, 4000); }
     static string RoomsBlock(Team t, IDictionary<string, string> rooms) {
         // a self-forming leader may take on any installed tool, so it sees all of them
         var tools = t.Tools.Concat(t.AutoRoster ? rooms.Keys : Enumerable.Empty<string>()).Distinct();
         return rooms.Count > 0 ? "\n\n## 当前额度\n" + String.Join("\n", tools.Where(rooms.ContainsKey).Select(tool => "- " + Label(tool) + (tool == t.Tools[0] ? "（你）" : "") + "：" + rooms[tool])) : "";
     }
     public static string DiscussFirst(Team t, string tool) {
-        return "【协作任务 · 方案讨论（只读）】目标：" + t.Goal + ExtraRules(t)
+        return "【协作任务 · 方案讨论（只读）】目标：" + t.Goal + ContextBlock(t) + ExtraRules(t)
             + "\n\n正式动手修改代码前，各位 AI 先只读查看相关代码并简明提出自己的方案建议（3–6 条要点：核心思路、涉及文件、潜在风险与边界条件）。不要修改任何文件。";
     }
     public static string WriterFirst(Team t, string discussion = "") {
-        return "【协作任务 · 写】" + t.Goal + ExtraRules(t)
+        return "【协作任务 · 写】" + t.Goal + ContextBlock(t) + ExtraRules(t)
             + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 前期方案讨论汇总\n" + Cut(discussion, 12000))
             + "\n\n请直接干脆地完成任务，完成后简明说明做了什么、改了哪些文件。之后 " + Label(t.Tools[1]) + " 会只读审查你的改动，有问题再交回修改。";
     }
     public static string ReviewerAsk(Team t, string words, string changes) {
-        return "【协作任务 · 审查 · 第 " + t.Round + " 轮】另一个 AI（" + Label(t.Tools[0]) + "）正在完成这项任务：\n" + t.Goal + ExtraRules(t)
+        return "【协作任务 · 审查 · 第 " + t.Round + " 轮】另一个 AI（" + Label(t.Tools[0]) + "）正在完成这项任务：\n" + t.Goal + ContextBlock(t) + ExtraRules(t)
             + "\n\n它这一轮的说明：\n" + Cut(words, 6000) + (changes.Length > 0 ? "\n\n改动：\n" + Cut(changes, 30000) : "")
             + "\n\n请只审查，不要修改任何文件。没有必须修改的实质问题就直接通过，不要吹毛求疵。回答的第一行只写 REVIEW: PASS 或 REVIEW: CHANGES，之后逐条列出必须修改的问题与建议。";
     }
@@ -497,7 +506,30 @@ public sealed class Teams {
         + "- 只要设计时交付设计，不改代码。\n"
         + "- 工作量大或需要不同专长时才分工，按专长、额度、依赖和文件归属选人，同一文件只交给一位成员。设计和实现都要分给多人时，先定下接口和文件归属，再按模块派实现；互不依赖的部分同批派出，依赖他人产出的等那份产出确认后再派。\n"
         + "- 改动影响面大、有风险或你没有把握时，请另一位 AI 只读审阅；小改动由你验收即可。\n"
-        + "用户指定成员执行或要求组队时按要求派出。每项派工写清成品、负责的文件和要交回的验收证据。由成员自行调查、选择实现、修复并复测。跨范围的发现和需统一决定的取舍由你处理。";
+        + "用户指定成员执行或要求组队时按要求派出。每项派工写清成品、负责的文件和要交回的验收证据。由成员自行调查、选择实现、修复并复测。跨范围的发现和需统一决定的取舍由你处理。\n\n"
+        + "## 给成员交底（写好 ASSIGN）\n"
+        + "每位成员首次接单都是全新独立对话，看不到你之前的讨论、调查结论或其它成员的产出。写 ASSIGN 时让对方一次看懂、避免重复摸索：\n"
+        + "- 首次派给某位成员时，按任务需要交代 5 项（没有的跳过，不必凑字）：\n"
+        + "  1. 背景与已定约束：与用户或前期讨论确认的前提、边界和不要改的方向；\n"
+        + "  2. 成品与范围：明确交付什么（代码改动 / 设计方案 / 只读审查）、负责哪些文件或模块，以及不要碰哪些区域；\n"
+        + "  3. 接口与依赖约定：与其他成员衔接的数据结构、函数签名、路径或前置产出；\n"
+        + "  4. 已有线索：你已查到的关键文件路径、符号、复现步骤或已知风险；\n"
+        + "  5. 验收要求：要跑哪些测试或检查，交回什么证据证明达标。\n"
+        + "- 后续轮次续派同一成员时，它保留了上一轮上下文，只需增量说明本轮要修/要补的内容、新增约束或其它成员的变动，不必重复抄写已知背景。";
+    public static string PromotedLeaderFirst(Team t, IDictionary<string, string> rooms, bool inTurn) {
+        string basePrompt = LeaderFirst(t, rooms);
+        string intro = "【对话已转为协作任务 · 你担任领队】\n"
+            + "你保留了刚才对话的全部上下文，但新派出的执行成员看不到这段对话历史。写 ASSIGN 时请把前期已经与用户敲定的方案、约束、关键文件路径和验收标准交代清楚。"
+            + (inTurn ? "\n请直接在本轮回答末尾按格式写出 ASSIGN 成员名: 任务内容（或自行完成后写 DONE: 总结），本轮结束后 Remote AI 会自动派出成员并推进后续轮次。\n\n" : "\n\n");
+        return intro + basePrompt;
+    }
+    public static string PromotedWriterFirst(Team t, bool inTurn) {
+        return "【对话已转为协作任务 · 写审 · 你担任写手】\n目标：" + t.Goal + ExtraRules(t)
+            + "\n\n当前对话已转为写审协作，由你负责实现（保留刚才的全部上下文），" + Label(t.Tools[1]) + " 负责只读审查（最多 " + t.Rounds + " 轮）。"
+            + (inTurn
+                ? "请按目标完成本轮实现（若前面已经完成修改，直接汇总改动即可），并在本轮回答末尾简明说明做了什么、改了哪些文件；本轮结束后会自动交给 " + Label(t.Tools[1]) + " 只读审查。"
+                : "请按目标继续完成实现，完成后简明说明做了什么、改了哪些文件；之后会自动交给 " + Label(t.Tools[1]) + " 只读审查，有问题再交回修改。");
+    }
     /// How the rounds go: the leader sets each round's aim by what it has seen; free rounds end when the goal is met.
     static string RoundsGuide(Team t) {
         return "每轮根据实际改动和检查结果安排剩余工作，只差复核时由你复核或派一位只读成员。达标即结束。"
@@ -544,14 +576,40 @@ public sealed class Teams {
         var pending = Underway.Matches(last).Cast<Match>().LastOrDefault();
         return pending != null && !CompletedWork.IsMatch(last, pending.Index + pending.Length);
     }
-    const string MemberGuide = "\n\n按派工交付写明的成品：派的是设计就交设计，不要顺带实现。在分派范围内自主调查、选择实现、修复并复测。跨范围发现交领队裁决，组队和派工由领队负责。只有用户明确要求时才使用工具内置的子代理。"
-        + "\n等操作和检查结束再交回，写明实际产出、改动文件、关键取舍，以及派工要求的验收证据。完成时可用 DONE: 总结。确实无法继续时用“阻塞：”说明原因、已经尝试的办法和需要领队决定的事项。";
-    public static string MemberTask(Team t, string task) {
-        return "【协作任务 · 成员】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task
-            + "\n\n项目目标供参考：" + t.Goal + MemberGuide;
+    const string MemberGuide = "\n\n## 执行与交回要求\n"
+        + "- 按派工交付写明的成品：派的是设计就交设计，不要顺带实现；若派工明确为只读审查或核对，只做检查与建议，不要修改任何文件。\n"
+        + "- 在分派范围内自主调查、选择实现、修复并复测。跨范围发现交领队裁决，组队和派工由领队负责。只有用户明确要求时才使用工具内置的子代理。\n"
+        + "- 等操作和检查结束再交回，写明实际产出、改动文件、关键取舍，以及派工要求的验收证据。完成时可用 DONE: 总结。确实无法继续时用“阻塞：”说明原因、已经尝试的办法和需要领队决定的事项。";
+    static string SiblingBlock(Team t, string role, IDictionary<string, string> batch) {
+        if (batch == null || batch.Count <= 1) return "";
+        var others = new List<string>();
+        foreach (var pair in batch) {
+            if (pair.Key == role) continue;
+            string first = Regex.Replace((pair.Value ?? "").Trim(), @"\s+", " ");
+            if (first.Length > 180) first = first.Substring(0, 180) + "…";
+            others.Add("- " + RoleLabel(t, pair.Key) + "：" + first);
+        }
+        if (others.Count == 0) return "";
+        return "\n\n## 同批并行成员分工\n" + String.Join("\n", others)
+            + "\n以上成员与你在同一项目目录并行工作。请严格只改动你负责的文件与范围，不要修改对方负责的文件或重复对方工作；若发现跨范围依赖或冲突，先在交回结果中写明，由领队统一协调。";
+    }
+    public static string MemberTask(Team t, string task, string role = "", IDictionary<string, string> batch = null, bool followUp = false) {
+        string siblings = SiblingBlock(t, role, batch);
+        if (followUp) {
+            return "【协作任务 · 第 " + t.Round + " 轮补充派工】领队（" + Label(t.Tools[0]) + "）安排的新任务：\n" + task
+                + siblings
+                + "\n\n沿用本任务此前目标与约定，在你的范围内继续处理；等操作和检查结束再交回本轮新增改动、结论与复测证据。完成时可用 DONE: 总结；确实无法继续时用“阻塞：”说明原因和需要领队决定的事项。";
+        }
+        string seatTag = String.IsNullOrEmpty(role) ? "成员" : "成员 · " + role;
+        return "【协作任务 · " + seatTag + " · 第 " + t.Round + " 轮】领队（" + Label(t.Tools[0]) + "）分派给你的任务：\n" + task
+            + "\n\n项目目标供参考：" + t.Goal
+            + ContextBlock(t)
+            + ExtraRules(t)
+            + siblings
+            + MemberGuide;
     }
     public static string CompareFirst(Team t, string tool) {
-        return "【协作任务 · 并行比稿】目标：" + t.Goal + ExtraRules(t)
+        return "【协作任务 · 并行比稿】目标：" + t.Goal + ContextBlock(t) + ExtraRules(t)
             + "\n\n你正在该项目的独立 Git worktree 副本中工作，不会与其他候选 AI 冲突。请直接完成你的最佳实现并验证关键路径，完成后简明说明你的方案思路、改了哪些文件以及取舍理由。用户会对比各候选方案并选择一个合并。";
     }
     public static string Results(Team t, Dictionary<string, string> answers, string changes, IDictionary<string, string> rooms, string guide = "") {
@@ -665,7 +723,7 @@ public sealed class Teams {
         return members.ToArray();
     }
 
-    public Team Start(Dictionary<string, object> given) {
+    Team ParseTeam(Dictionary<string, object> given) {
         Func<string, string> word = name => { object value; return given.TryGetValue(name, out value) && value != null ? Convert.ToString(value) : ""; };
         object raw; given.TryGetValue("tools", out raw);
         var tools = (raw as IEnumerable ?? new object[0]).Cast<object>().Select(Convert.ToString).ToArray();
@@ -673,6 +731,8 @@ public sealed class Teams {
         if (given.ContainsKey("rounds") && rounds == 0 && word("mode") != "lead") throw new ArgumentException("只有分工协作可以不限轮数");
         string rules = word("rules").Trim();
         if (rules.Length > 1000) throw new ArgumentException("分工偏好不能超过 1000 字");
+        string context = word("context").Trim();
+        if (context.Length > 6000) context = context.Substring(0, 6000);
         string mode = word("mode");
         bool discuss = (mode == "review" || mode == "lead") && String.Equals(word("discuss"), "True", StringComparison.OrdinalIgnoreCase);
         object automatic;
@@ -691,7 +751,7 @@ public sealed class Teams {
         object models; given.TryGetValue("models", out models);
         object efforts; given.TryGetValue("efforts", out efforts);
         var team = new Team {
-            Id = word("id"), Dir = word("dir"), Mode = mode, Goal = word("goal").Trim(), Rules = rules,
+            Id = word("id"), Dir = word("dir"), Mode = mode, Goal = word("goal").Trim(), Context = context, Rules = rules,
             Discuss = discuss, Tools = tools, Models = RemoteCli.Models.Chosen(models, tools), Efforts = RemoteCli.Models.ChosenEfforts(efforts, tools), Roster = roster, AutoRoster = auto,
             Rounds = given.ContainsKey("rounds") && rounds == 0 ? 0 : Math.Max(1, Math.Min(MostRounds, rounds == 0 ? (mode == "compare" ? 1 : 3) : rounds)),
             Created = Now()
@@ -705,6 +765,11 @@ public sealed class Teams {
             throw new ArgumentException("并行比稿需要 2 至 3 个不同的 AI");
         if (team.Mode == "compare" && hands.MakeWorktree == null)
             throw new InvalidOperationException("当前环境不支持独立工作区比稿");
+        return team;
+    }
+
+    public Team Start(Dictionary<string, object> given) {
+        var team = ParseTeam(given);
 
         lock (gate) {
             var same = items.FirstOrDefault(t => t.Id == team.Id);
@@ -750,6 +815,72 @@ public sealed class Teams {
 
         string role = team.Mode == "review" ? "writer" : "leader";
         Open(team, role, team.Tools[0], team.Mode == "review" ? WriterFirst(team) : LeaderFirst(team, Rooms(team)), false, null);
+        return Of(team.Id);
+    }
+
+    /// Promotes an existing live conversation (`source`) in-place into a `lead` or `review` collaboration task,
+    /// binding its terminal and session as `leader` (for `lead`) or `writer` (for `review`) while preserving all prior
+    /// context. When `source.InTurn` is true (triggered mid-turn via MCP), `initialPrompt` is returned to be handed
+    /// back as the MCP tool result without sending a second turn; otherwise `initialPrompt` is delivered immediately.
+    public Team Promote(Dictionary<string, object> given, SourceChat source, out string initialPrompt) {
+        if (source == null || String.IsNullOrEmpty(source.Terminal) || String.IsNullOrEmpty(source.Tool))
+            throw new ArgumentException("来源对话无效");
+        var team = ParseTeam(given);
+        if (team.Mode != "lead" && team.Mode != "review")
+            throw new ArgumentException("对话转为协作只支持分工协作或写审");
+        if (team.Discuss)
+            throw new ArgumentException("对话转为协作不支持先议后写");
+        if (!String.Equals(team.Dir, source.Dir, StringComparison.Ordinal))
+            throw new ArgumentException("协作项目必须与当前对话所在项目一致");
+        if (!String.Equals(team.Tools[0], source.Tool, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("领队或写手必须使用当前对话的工具");
+        if (String.IsNullOrEmpty(team.Context) && !String.IsNullOrEmpty(source.Context))
+            team.Context = Cut(source.Context.Trim(), 6000);
+        // Preserve the existing conversation's active model/effort on the promoted role when not explicitly overridden.
+        string cleanModel = RemoteCli.Models.Valid(source.Model) ? source.Model : "";
+        string cleanEffort = RemoteCli.Models.CleanEffort(source.Effort);
+        if (team.Roster.Length > 0) {
+            var leader = team.Roster[0];
+            string m = leader.Model.Length > 0 ? leader.Model : cleanModel;
+            string e = leader.Effort.Length > 0 ? leader.Effort : cleanEffort;
+            if (m != leader.Model || e != leader.Effort) SetRosterMember(team, "leader", leader.Tool, m, e);
+        } else {
+            if (cleanModel.Length > 0 && !team.Models.ContainsKey(source.Tool)) team.Models[source.Tool] = cleanModel;
+            if (cleanEffort.Length > 0 && !team.Efforts.ContainsKey(source.Tool)) team.Efforts[source.Tool] = cleanEffort;
+        }
+
+        string firstRole = team.Mode == "review" ? "writer" : "leader";
+        initialPrompt = team.Mode == "review"
+            ? PromotedWriterFirst(team, source.InTurn)
+            : PromotedLeaderFirst(team, Rooms(team), source.InTurn);
+
+        lock (gate) {
+            var same = items.FirstOrDefault(t => t.Id == team.Id);
+            if (same != null) return same.Copy();
+            if (items.Any(t => t.Members.ContainsValue(source.Terminal))
+                || (!String.IsNullOrEmpty(source.Session) && items.Any(t => t.Past.Any(s => s.Tool == source.Tool && String.Equals(s.Id, source.Session, StringComparison.OrdinalIgnoreCase)))))
+                throw new InvalidOperationException("当前对话已经在协作任务中");
+            if (items.Count(t => t.State == "running" || t.State == "paused") >= 3)
+                throw new InvalidOperationException("最多同时进行 3 个协作任务，请先结束一个");
+            team.Members[firstRole] = source.Terminal;
+            team.Opened.Add(source.Terminal);
+            team.Awaited.Add(firstRole);
+            team.Pending[firstRole] = Cut(initialPrompt, 6000);
+            var seat = String.IsNullOrEmpty(source.Session) ? null : SeatOf(source.Tool + ":" + source.Session);
+            if (seat != null) {
+                team.Sessions[firstRole] = seat;
+                team.Past.Add(seat);
+            }
+            items.Add(team);
+            while (items.Count > Most) {
+                var drop = items.Where(t => t.State != "running" && t.State != "paused" && t.State != "choose").OrderBy(t => t.Created).FirstOrDefault() ?? items[0];
+                items.Remove(drop);
+            }
+            Save();
+        }
+        Log(team, "目标", team.Goal);
+        Log(team, "切换", "由当前对话转为协作任务（" + Label(source.Tool) + " 担任" + (team.Mode == "review" ? "写手" : "领队") + "）");
+        if (!source.InTurn) DeliverOrReopen(team, firstRole, source.Terminal, initialPrompt);
         return Of(team.Id);
     }
 
@@ -1401,7 +1532,7 @@ public sealed class Teams {
             Tell();
         }
     }
-    void Ask(Team team, string role, string tool, string words, bool read, string folderOverride = null, IList<Attachment> attachments = null) {
+    void Ask(Team team, string role, string tool, string words, bool read, string folderOverride = null, IList<Attachment> attachments = null, string fallbackWords = null) {
         string terminal;
         string supplement = "";
         string[] queuedPaths = new string[0];
@@ -1413,7 +1544,7 @@ public sealed class Teams {
                 team.LeaderInput = "";
                 team.LeaderAttachments.Clear();
             }
-            team.Pending[role] = Cut(Attachments.WithText(words + supplement, attachments), 6000);
+            team.Pending[role] = Cut(Attachments.WithText((fallbackWords ?? words) + supplement, attachments), 6000);
             if (!team.Awaited.Contains(role)) team.Awaited.Add(role);
             Save();
         }
@@ -1429,11 +1560,12 @@ public sealed class Teams {
             attachments = images;
         }
         words += supplement;
+        string fallback = fallbackWords != null ? fallbackWords + supplement : null;
         if (terminal != null) {
             try { TellMember(terminal, words, attachments); Log(team, role, "收到：" + Cut(words, 240)); return; }
             catch (Exception) { }       // its conversation was closed: resumed from session or begun anew
         }
-        Open(team, role, tool, words, read, folderOverride, attachments, true);
+        Open(team, role, tool, words, read, folderOverride, attachments, true, fallback);
     }
     void Log(Team team, string who, string text) {
         lock (gate) {
@@ -1806,7 +1938,13 @@ public sealed class Teams {
                     foreach (string member in tasks.Keys) if (!team.Awaited.Contains(member)) team.Awaited.Add(member);
                     Save();
                 }
-                foreach (var task in tasks) Ask(team, task.Key, ToolOf(team, task.Key), MemberTask(team, task.Value), false);
+                foreach (var task in tasks) {
+                    bool followUp;
+                    lock (gate) followUp = team.Members.ContainsKey(task.Key) || team.Sessions.ContainsKey(task.Key);
+                    string fullPrompt = MemberTask(team, task.Value, task.Key, tasks, false);
+                    string prompt = followUp ? MemberTask(team, task.Value, task.Key, tasks, true) : fullPrompt;
+                    Ask(team, task.Key, ToolOf(team, task.Key), prompt, false, null, null, fullPrompt);
+                }
                 return;
             }
             // a DONE outside the acceptance turn opens it; within it, only with what was checked
@@ -1884,10 +2022,17 @@ public sealed class Teams {
         Log(team, "继续", "追加第 " + team.Round + " 轮");
         string added = words.Length > 0 ? "\n\n【用户补充】\n" + words : "";
         foreach (var one in held) {
-            string prompt = one.Key == "writer" ? WriterAgain(team, one.Value)
-                : one.Key == "leader" ? "【协作任务 · 第 " + team.Round + " 轮】用户追加了一轮。请按上一轮验收的结论继续：用 ASSIGN 成员名: 修改内容 派出还要做的修复，或自己修好后写 DONE: 总结。"
-                : MemberTask(team, one.Value);
-            Ask(team, one.Key, ToolOf(team, one.Key), prompt + added, false, null, attachments);
+            if (one.Key == "writer" || one.Key == "leader") {
+                string prompt = one.Key == "writer" ? WriterAgain(team, one.Value)
+                    : "【协作任务 · 第 " + team.Round + " 轮】用户追加了一轮。请按上一轮验收的结论继续：用 ASSIGN 成员名: 修改内容 派出还要做的修复，或自己修好后写 DONE: 总结。";
+                Ask(team, one.Key, ToolOf(team, one.Key), prompt + added, false, null, attachments);
+            } else {
+                bool followUp;
+                lock (gate) followUp = team.Members.ContainsKey(one.Key) || team.Sessions.ContainsKey(one.Key);
+                string fullPrompt = MemberTask(team, one.Value, one.Key, held, false) + added;
+                string prompt = (followUp ? MemberTask(team, one.Value, one.Key, held, true) : MemberTask(team, one.Value, one.Key, held, false)) + added;
+                Ask(team, one.Key, ToolOf(team, one.Key), prompt, false, null, attachments, fullPrompt);
+            }
         }
         Tell();
     }

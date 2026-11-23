@@ -20,11 +20,23 @@ namespace RemoteCli {
 public sealed class Peers : IDisposable {
     public const string ServerName = "remote_ai";
     public const string ToolName = "ask_ai";
+    public const string CollabToolName = "start_collaboration";
     public const string Flag = "--mcp";
     public const int DefaultTimeoutSeconds = 240;
     const int MaxFrameBytes = 16 * 1024 * 1024;
     const int MaxQuestionChars = 16000;
     const int MaxAnswerChars = 24000;
+
+    /// Host callbacks allowing an active standalone conversation to be promoted in-place into a collaboration task
+    /// (`Teams.cs`) after explicit confirmation on the user's phone.
+    public sealed class CollabHooks {
+        public Func<string, bool> CanPromote;
+        public Func<string, string, string, string, CancellationToken, bool> Confirm;
+        public Func<string, Dictionary<string, object>, CollabStarted> Promote;
+    }
+    public sealed class CollabStarted {
+        public string TeamId = "", Prompt = "";
+    }
 
     static readonly Dictionary<string, string> Strengths = new Dictionary<string, string> {
         { "codex", "擅长决策拍板、架构权衡、疑难排查与代码审查" },
@@ -38,7 +50,7 @@ public sealed class Peers : IDisposable {
     }
 
     sealed class Seat {
-        public string Token = "", CallerTool = "", Folder = "", ConfigFile = "";
+        public string Token = "", CallerTool = "", Folder = "", ConfigFile = "", TerminalId = "", ProjectDir = "";
         public readonly object Gate = new object();
         public readonly Dictionary<string, Consultant> Consultants = new Dictionary<string, Consultant>();
         public bool Closed;
@@ -56,6 +68,7 @@ public sealed class Peers : IDisposable {
     readonly string configDir;
     readonly string program;
     readonly int timeoutSeconds;
+    readonly CollabHooks collab;
     readonly object gate = new object();
     readonly Dictionary<string, Seat> seats = new Dictionary<string, Seat>();
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 };
@@ -63,13 +76,14 @@ public sealed class Peers : IDisposable {
 
     public string Pipe { get { return pipe; } }
 
-    public Peers(string pipeName, Func<string, string> findTool, Quotas quotas, string configDir, string program = null, int timeoutSeconds = DefaultTimeoutSeconds) {
+    public Peers(string pipeName, Func<string, string> findTool, Quotas quotas, string configDir, string program = null, int timeoutSeconds = DefaultTimeoutSeconds, CollabHooks collab = null) {
         pipe = pipeName;
         this.findTool = findTool ?? (_ => null);
         this.quotas = quotas;
         this.configDir = configDir;
         this.program = String.IsNullOrWhiteSpace(program) ? DefaultProgram() : program;
         this.timeoutSeconds = Math.Max(2, timeoutSeconds);
+        this.collab = collab;
         new Thread(Listen) { IsBackground = true, Name = "peers" }.Start();
     }
 
@@ -78,15 +92,17 @@ public sealed class Peers : IDisposable {
         return File.Exists(beside) ? beside : null;
     }
 
-    /// Offers `ask_ai` to a conversation of `callerTool` working in `folder`. Returns null when no bridge executable
-    /// or no other chat-capable tool is installed on this computer.
-    public Chat.McpServer Offer(string callerTool, string folder) {
+    /// Offers `remote_ai` MCP tools (`ask_ai` and, for promotable project chats, `start_collaboration`) to a
+    /// conversation of `callerTool` working in `folder`.
+    public Chat.McpServer Offer(string callerTool, string folder, string terminalId = "", string projectDir = "") {
         if (disposed || String.IsNullOrEmpty(program) || !File.Exists(program) || String.IsNullOrEmpty(folder)) return null;
-        if (AvailablePeers(callerTool).Length == 0) return null;
+        bool hasPeers = AvailablePeers(callerTool).Length > 0;
+        bool hasPromote = collab != null && !String.IsNullOrEmpty(terminalId) && !String.IsNullOrEmpty(projectDir) && AvailableTools().Length > 0;
+        if (!hasPeers && !hasPromote) return null;
         string token = Guid.NewGuid().ToString("N");
         string[] args = { Flag, pipe, token };
         string configFile = WriteClaudeConfig(token, program, args);
-        var seat = new Seat { Token = token, CallerTool = callerTool ?? "", Folder = folder, ConfigFile = configFile };
+        var seat = new Seat { Token = token, CallerTool = callerTool ?? "", Folder = folder, ConfigFile = configFile, TerminalId = terminalId ?? "", ProjectDir = projectDir ?? "" };
         lock (gate) {
             if (disposed) { DeleteQuietly(configFile); return null; }
             seats[token] = seat;
@@ -141,51 +157,90 @@ public sealed class Peers : IDisposable {
         try { using (var poke = new NamedPipeClientStream(".", pipe, PipeDirection.InOut)) poke.Connect(100); } catch (Exception) { }
     }
 
+    string[] AvailableTools() {
+        return Tool.All.Where(t => t.Chats && !String.IsNullOrEmpty(findTool(t.Name))).Select(t => t.Name).ToArray();
+    }
     string[] AvailablePeers(string callerTool) {
-        return Tool.All.Where(t => t.Chats && t.Name != callerTool && !String.IsNullOrEmpty(findTool(t.Name))).Select(t => t.Name).ToArray();
+        return AvailableTools().Where(t => t != callerTool).ToArray();
+    }
+    bool CanPromoteSeat(Seat seat) {
+        return collab != null && collab.Promote != null && !String.IsNullOrEmpty(seat.TerminalId) && !String.IsNullOrEmpty(seat.ProjectDir)
+            && AvailableTools().Length > 0 && (collab.CanPromote == null || collab.CanPromote(seat.TerminalId));
     }
 
-    /// Tool definition returned to MCP `tools/list`, with live peer availability and quota hints.
+    /// Tool definitions returned to MCP `tools/list`, with live peer availability, quota hints, and collaboration promotion.
     object[] ToolDefinitions(Seat seat) {
+        var defs = new List<object>();
         string[] peers = AvailablePeers(seat.CallerTool);
-        if (peers.Length == 0) return new object[0];
-        var lines = new List<string>();
-        foreach (string peer in peers) {
-            string label = Tool.LabelOf(peer);
-            string strength = Strengths.ContainsKey(peer) ? "，" + Strengths[peer] : "";
-            string quota = "";
-            if (quotas != null) {
-                Quotas.Window[] windows = null;
-                try { windows = quotas.Of(peer); } catch (Exception) { }
-                string room = Teams.Room(windows);
-                if (room != "额度未知") quota = "；" + room + (room.EndsWith("紧张", StringComparison.Ordinal) ? "（非必要请勿调用）" : "");
+        if (peers.Length > 0) {
+            var lines = new List<string>();
+            foreach (string peer in peers) {
+                string label = Tool.LabelOf(peer);
+                string strength = Strengths.ContainsKey(peer) ? "，" + Strengths[peer] : "";
+                string quota = "";
+                if (quotas != null) {
+                    Quotas.Window[] windows = null;
+                    try { windows = quotas.Of(peer); } catch (Exception) { }
+                    string room = Teams.Room(windows);
+                    if (room != "额度未知") quota = "；" + room + (room.EndsWith("紧张", StringComparison.Ordinal) ? "（非必要请勿调用）" : "");
+                }
+                lines.Add("- " + peer + "（" + label + strength + quota + "）");
             }
-            lines.Add("- " + peer + "（" + label + strength + quota + "）");
-        }
-        string description = "向同一项目中的另一位 AI 只读请教或请求交叉审查（例如架构权衡、疑难排查、方案复核或代码审查）。"
-            + "对方默认只读，只给意见、不修改文件；同一段对话内再次请教同一 AI 会延续上下文，传入 fresh=true 可开启新上下文。\n"
-            + "当前可请教的 AI：\n" + String.Join("\n", lines)
-            + "\n标记“紧张”的 AI 额度已用 80% 以上，尽量减少调用或保持问题简短。";
-        var schema = new Dictionary<string, object> {
-            { "type", "object" },
-            { "properties", new Dictionary<string, object> {
-                { "tool", new Dictionary<string, object> { { "type", "string" }, { "enum", peers }, { "description", "要请教的 AI 工具名：" + String.Join(" / ", peers) } } },
-                { "question", new Dictionary<string, object> { { "type", "string" }, { "description", "具体问题、背景、涉及的文件路径及希望对方重点核验或拍板的点" } } },
-                { "fresh", new Dictionary<string, object> { { "type", "boolean" }, { "description", "为 true 时不延续本次对话里与该 AI 之前的请教记录，另起一段新的只读上下文（默认 false）" } } } } },
-            { "required", new[] { "tool", "question" } },
-            { "additionalProperties", false } };
-        var annotations = new Dictionary<string, object> {
-            { "title", "请教另一位 AI（只读）" },
-            { "readOnlyHint", true },
-            { "destructiveHint", false },
-            { "idempotentHint", false },
-            { "openWorldHint", false } };
-        return new object[] {
-            new Dictionary<string, object> {
+            string description = "向同一项目中的另一位 AI 只读请教或请求交叉审查（例如架构权衡、疑难排查、方案复核或代码审查）。"
+                + "对方默认只读，只给意见、不修改文件；同一段对话内再次请教同一 AI 会延续上下文，传入 fresh=true 可开启新上下文。\n"
+                + "当前可请教的 AI：\n" + String.Join("\n", lines)
+                + "\n标记“紧张”的 AI 额度已用 80% 以上，尽量减少调用或保持问题简短。";
+            var schema = new Dictionary<string, object> {
+                { "type", "object" },
+                { "properties", new Dictionary<string, object> {
+                    { "tool", new Dictionary<string, object> { { "type", "string" }, { "enum", peers }, { "description", "要请教的 AI 工具名：" + String.Join(" / ", peers) } } },
+                    { "question", new Dictionary<string, object> { { "type", "string" }, { "description", "具体问题、背景、涉及的文件路径及希望对方重点核验或拍板的点" } } },
+                    { "fresh", new Dictionary<string, object> { { "type", "boolean" }, { "description", "为 true 时不延续本次对话里与该 AI 之前的请教记录，另起一段新的只读上下文（默认 false）" } } } } },
+                { "required", new[] { "tool", "question" } },
+                { "additionalProperties", false } };
+            var annotations = new Dictionary<string, object> {
+                { "title", "请教另一位 AI（只读）" },
+                { "readOnlyHint", true },
+                { "destructiveHint", false },
+                { "idempotentHint", false },
+                { "openWorldHint", false } };
+            defs.Add(new Dictionary<string, object> {
                 { "name", ToolName },
                 { "description", description },
                 { "inputSchema", schema },
-                { "annotations", annotations } } };
+                { "annotations", annotations } });
+        }
+        if (CanPromoteSeat(seat)) {
+            string[] allTools = AvailableTools();
+            string desc = "将当前对话原地升级为多 AI 协作任务（保留当前对话全部上下文，当前对话担任分工协作的领队或写审的写手）。"
+                + "仅在用户明确要求开启协作时调用，不要未经用户请求擅自发起。调用时会先在用户手机上弹出确认卡片，用户允许后才正式开启。\n"
+                + "默认方式为分工协作（mode=\"lead\"，自动组队，自由轮数）。请务必在 context 中精炼总结前期已与用户确认的背景、方案、约束、关键文件路径和已完成进展，以便系统同步给新加入的成员。\n"
+                + "当前可用工具：" + String.Join(" / ", allTools.Select(t => t + "（" + Tool.LabelOf(t) + "）")) + "。";
+            var schema = new Dictionary<string, object> {
+                { "type", "object" },
+                { "properties", new Dictionary<string, object> {
+                    { "goal", new Dictionary<string, object> { { "type", "string" }, { "description", "本次协作要完成的总目标（1 至 4000 字）" } } },
+                    { "mode", new Dictionary<string, object> { { "type", "string" }, { "enum", new[] { "lead", "review" } }, { "description", "协作方式：lead 为分工协作（默认，当前对话当领队）；review 为写审（当前对话当写手，另一个 AI 只读审查）" } } },
+                    { "context", new Dictionary<string, object> { { "type", "string" }, { "description", "前期对话中已确认的需求细节、方案决策、约束边界、关键文件路径与已有进展；会自动同步给首次加入的成员" } } },
+                    { "members", new Dictionary<string, object> { { "type", "array" }, { "items", new Dictionary<string, object> { { "type", "string" }, { "enum", allTools } } }, { "description", "仅 lead 模式选填：手动指定 1 至 3 个执行成员的工具名；省略则由领队自动组队" } } },
+                    { "reviewer", new Dictionary<string, object> { { "type", "string" }, { "enum", allTools }, { "description", "仅 review 模式选填：负责只读审查的 AI 工具名；省略则自动选另一位可用 AI" } } },
+                    { "rounds", new Dictionary<string, object> { { "type", "integer" }, { "description", "轮数上限：lead 模式默认 0（自由轮数，最多 20 轮），也可传 1–10；review 模式默认 3（1–10）" } } },
+                    { "rules", new Dictionary<string, object> { { "type", "string" }, { "description", "选填：分工偏好或额外协作约定（最多 1000 字）" } } } } },
+                { "required", new[] { "goal" } },
+                { "additionalProperties", false } };
+            var annotations = new Dictionary<string, object> {
+                { "title", "将当前对话转为协作任务" },
+                { "readOnlyHint", false },
+                { "destructiveHint", false },
+                { "idempotentHint", false },
+                { "openWorldHint", false } };
+            defs.Add(new Dictionary<string, object> {
+                { "name", CollabToolName },
+                { "description", desc },
+                { "inputSchema", schema },
+                { "annotations", annotations } });
+        }
+        return defs.ToArray();
     }
 
     Dictionary<string, object> Ask(Seat seat, string peerTool, string question, bool fresh, CancellationToken cancel) {
@@ -282,6 +337,105 @@ public sealed class Peers : IDisposable {
         return chat;
     }
 
+    Dictionary<string, object> StartCollaboration(Seat seat, Dictionary<string, object> args, CancellationToken cancel) {
+        if (!CanPromoteSeat(seat)) return Fail("当前对话无法转为协作任务（可能已在协作中、不在项目目录或已结束）");
+        args = args ?? new Dictionary<string, object>();
+        string goal = Text(args, "goal").Trim();
+        if (goal.Length == 0) return Fail("请提供协作目标（goal）");
+        if (goal.Length > 4000) goal = goal.Substring(0, 4000);
+        string mode = Text(args, "mode").Trim().ToLowerInvariant();
+        if (mode.Length == 0) mode = "lead";
+        if (mode != "lead" && mode != "review") return Fail("对话转为协作仅支持分工协作（lead）或写审（review）");
+        string context = Text(args, "context").Trim();
+        if (context.Length > 6000) context = context.Substring(0, 6000);
+        string rules = Text(args, "rules").Trim();
+        if (rules.Length > 1000) rules = rules.Substring(0, 1000);
+
+        string[] available = AvailableTools();
+        if (!available.Contains(seat.CallerTool)) return Fail("当前工具不支持参与协作");
+
+        int rounds = mode == "lead" ? 0 : 3;
+        object rawRounds = At(args, "rounds");
+        if (rawRounds != null) {
+            int parsed;
+            if (!Int32.TryParse(Convert.ToString(rawRounds, CultureInfo.InvariantCulture), out parsed)) return Fail("轮数无效");
+            if (mode == "lead") {
+                if (parsed != 0 && (parsed < 1 || parsed > Teams.MostRounds)) return Fail("分工协作轮数需为 0（自由轮数）或 1 至 10");
+            } else {
+                if (parsed < 1 || parsed > Teams.MostRounds) return Fail("写审轮数需在 1 至 10 之间");
+            }
+            rounds = parsed;
+        }
+
+        var item = new Dictionary<string, object> {
+            { "id", Guid.NewGuid().ToString("N") },
+            { "mode", mode },
+            { "dir", seat.ProjectDir },
+            { "goal", goal },
+            { "rounds", rounds }
+        };
+        if (context.Length > 0) item["context"] = context;
+        if (rules.Length > 0) item["rules"] = rules;
+
+        var detail = new StringBuilder();
+        if (mode == "lead") {
+            var members = new List<string>();
+            object rawMembers = At(args, "members");
+            var memberEnum = rawMembers as IEnumerable;
+            if (memberEnum != null && !(rawMembers is string)) {
+                foreach (object one in memberEnum) {
+                    string t = Convert.ToString(one ?? "").Trim().ToLowerInvariant();
+                    if (t.Length == 0) continue;
+                    if (!available.Contains(t)) return Fail("电脑上不可用的协作成员工具：" + t);
+                    members.Add(t);
+                }
+            }
+            if (members.Count > 3) return Fail("最多指定 3 个执行成员");
+            bool autoRoster = members.Count == 0;
+            var roster = new List<Dictionary<string, object>> {
+                new Dictionary<string, object> { { "role", "leader" }, { "tool", seat.CallerTool }, { "model", "" } }
+            };
+            for (int i = 0; i < members.Count; i++)
+                roster.Add(new Dictionary<string, object> { { "role", "member-" + (i + 1) }, { "tool", members[i] }, { "model", "" } });
+            item["tools"] = roster.Select(r => (string)r["tool"]).ToArray();
+            item["roster"] = roster.ToArray();
+            item["auto_roster"] = autoRoster;
+
+            string roundText = rounds == 0 ? "自由轮数" : rounds + " 轮";
+            detail.AppendLine("方式：分工协作（" + (autoRoster ? "自动组队" : "指定成员") + " · " + roundText + "）");
+            detail.AppendLine("项目：" + seat.ProjectDir);
+            detail.AppendLine("领队：当前对话（" + Tool.LabelOf(seat.CallerTool) + "）");
+            detail.AppendLine(autoRoster
+                ? "成员：领队按任务动态创建（可用：" + String.Join("、", available.Select(Tool.LabelOf)) + "）"
+                : "成员：" + String.Join("、", members.Select(Tool.LabelOf)));
+        } else {
+            string reviewer = Text(args, "reviewer").Trim().ToLowerInvariant();
+            if (reviewer.Length == 0) reviewer = available.FirstOrDefault(t => t != seat.CallerTool) ?? seat.CallerTool;
+            if (!available.Contains(reviewer)) return Fail("电脑上不可用的审查工具：" + reviewer);
+            item["tools"] = new[] { seat.CallerTool, reviewer };
+            detail.AppendLine("方式：写审（" + rounds + " 轮）");
+            detail.AppendLine("项目：" + seat.ProjectDir);
+            detail.AppendLine("写手：当前对话（" + Tool.LabelOf(seat.CallerTool) + "）");
+            detail.AppendLine("审查：" + Tool.LabelOf(reviewer) + "（只读）");
+        }
+        detail.AppendLine("目标：" + (goal.Length > 400 ? goal.Substring(0, 400) + "…" : goal));
+        if (rules.Length > 0) detail.AppendLine("偏好：" + (rules.Length > 200 ? rules.Substring(0, 200) + "…" : rules));
+
+        if (collab.Confirm != null) {
+            bool allowed = collab.Confirm(seat.TerminalId, "collab", "将当前对话转为协作任务？", detail.ToString().TrimEnd(), cancel);
+            if (!allowed) return Fail(cancel.IsCancellationRequested ? "开启协作已取消" : "用户拒绝了开启协作，请继续以普通对话处理。");
+        }
+        if (seat.Closed || disposed || cancel.IsCancellationRequested) return Fail("开启协作已取消");
+        try {
+            CollabStarted started = collab.Promote(seat.TerminalId, item);
+            if (started == null || String.IsNullOrEmpty(started.TeamId)) return Fail("未能开启协作任务");
+            return new Dictionary<string, object> { { "ok", true }, { "text", started.Prompt } };
+        } catch (Exception ex) {
+            string why = ex is ArgumentException || ex is InvalidOperationException ? ex.Message : "电脑端开启协作失败";
+            return Fail(why);
+        }
+    }
+
     static Dictionary<string, object> Fail(string error) {
         return new Dictionary<string, object> { { "ok", false }, { "error", error } };
     }
@@ -319,14 +473,16 @@ public sealed class Peers : IDisposable {
                         : Fail("当前对话已结束，无法请教其他 AI");
                 } else if (op == "list") {
                     reply = new Dictionary<string, object> { { "ok", true }, { "tools", ToolDefinitions(seat) } };
-                } else if (op == "call") {
-                    // Watch for client disconnect (e.g. caller stopped/cancelled the MCP call) so the peer stops too.
+                } else if (op == "call" || op == "collab") {
+                    // Watch for client disconnect (e.g. caller stopped/cancelled the MCP call) so the peer/confirmation stops too.
                     using (var stopWatch = new CancellationTokenSource()) {
                         var probe = new byte[1];
                         var watching = stream.ReadAsync(probe, 0, 1, stopWatch.Token).ContinueWith(t => {
                             if (!stopWatch.IsCancellationRequested && (t.IsFaulted || (!t.IsCanceled && t.Result == 0))) cancel.Cancel();
                         }, TaskContinuationOptions.ExecuteSynchronously);
-                        reply = Ask(seat, Text(req, "tool"), Text(req, "question"), true.Equals(At(req, "fresh")), cancel.Token);
+                        reply = op == "call"
+                            ? Ask(seat, Text(req, "tool"), Text(req, "question"), true.Equals(At(req, "fresh")), cancel.Token)
+                            : StartCollaboration(seat, At(req, "args") as Dictionary<string, object>, cancel.Token);
                         stopWatch.Cancel();
                     }
                 } else {
@@ -419,20 +575,25 @@ public sealed class Peers : IDisposable {
                     } else if (method == "tools/call") {
                         string name = Text(p, "name");
                         var args = At(p, "arguments");
-                        if (name != ToolName) {
+                        if (name != ToolName && name != CollabToolName) {
                             reply(id, ToolResult("不支持的工具：" + name, true));
                             continue;
                         }
                         string reqKey = Convert.ToString(id);
-                        var reqPayload = new Dictionary<string, object> {
-                            { "op", "call" }, { "token", token },
-                            { "tool", Text(args, "tool") }, { "question", Text(args, "question") },
-                            { "fresh", true.Equals(At(args, "fresh")) } };
+                        var reqPayload = name == ToolName
+                            ? new Dictionary<string, object> {
+                                { "op", "call" }, { "token", token },
+                                { "tool", Text(args, "tool") }, { "question", Text(args, "question") },
+                                { "fresh", true.Equals(At(args, "fresh")) } }
+                            : new Dictionary<string, object> {
+                                { "op", "collab" }, { "token", token },
+                                { "args", args as Dictionary<string, object> ?? new Dictionary<string, object>() } };
+                        string fallbackErr = name == ToolName ? "请教失败" : "开启协作失败";
                         Task.Run(() => {
                             var back = pipeCall(reqKey, reqPayload, 3000);
                             if (back == null) reply(id, ToolResult("电脑端协作服务暂时不可用或调用已取消", true));
                             else if (true.Equals(At(back, "ok"))) reply(id, ToolResult(Text(back, "text"), false));
-                            else reply(id, ToolResult(Text(back, "error").Length > 0 ? Text(back, "error") : "请教失败", true));
+                            else reply(id, ToolResult(Text(back, "error").Length > 0 ? Text(back, "error") : fallbackErr, true));
                         });
                     } else {
                         fail(id, -32601, "Method not found");
@@ -478,6 +639,13 @@ public sealed class Peers : IDisposable {
         string first = (question ?? "").Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
         if (first.Length > 140) first = first.Substring(0, 140) + "…";
         return "请教 " + who + (first.Length > 0 ? "：" + first : "");
+    }
+    /// Formats a step title for a `start_collaboration` tool call across chat drivers.
+    public static string CollabStepTitle(string mode, string goal) {
+        string kind = String.Equals(mode, "review", StringComparison.OrdinalIgnoreCase) ? "写审" : "分工协作";
+        string first = (goal ?? "").Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+        if (first.Length > 140) first = first.Substring(0, 140) + "…";
+        return "发起协作 · " + kind + (first.Length > 0 ? "：" + first : "");
     }
 }
 }

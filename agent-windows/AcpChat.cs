@@ -172,6 +172,7 @@ public class AcpChat : JsonRpcChat {
             queued.Clear();
             Notify("session/cancel", new Dictionary<string, object> { { "sessionId", Session } });
         }
+        CancelConfirmations();
     }
 
     protected override void Notified(string method, object p) {
@@ -206,9 +207,10 @@ public class AcpChat : JsonRpcChat {
             string kind = Text(u, "kind"), title = Text(u, "title"), rawName = Text(u, "name");
             var input = At(u, "rawInput") ?? At(u, "args");
             bool isPeer = IsPeerAsk(rawName, title, input);
-            string name = isPeer ? "mcp" : kind == "execute" ? "shell" : kind == "edit" || kind == "delete" || kind == "move" ? "edit" : kind == "search" || kind == "fetch" ? "search" : kind == "read" ? "read" : "tool";
-            string detail = isPeer ? Text(input, "question") : Command(u);
-            string shown = isPeer ? Peers.StepTitle(Text(input, "tool"), detail) : Titled(kind, title, rawName, detail);
+            bool isCollab = !isPeer && IsCollabStart(rawName, title, input);
+            string name = (isPeer || isCollab) ? "mcp" : kind == "execute" ? "shell" : kind == "edit" || kind == "delete" || kind == "move" ? "edit" : kind == "search" || kind == "fetch" ? "search" : kind == "read" ? "read" : "tool";
+            string detail = isPeer ? Text(input, "question") : isCollab ? Text(input, "goal") : Command(u);
+            string shown = isPeer ? Peers.StepTitle(Text(input, "tool"), detail) : isCollab ? Peers.CollabStepTitle(Text(input, "mode"), detail) : Titled(kind, title, rawName, detail);
             Item(id, "step", Cut(shown, 200), new Dictionary<string, object> { { "name", name }, { "detail", Cut(detail, 2000) }, { "state", "run" } });
         }
         string back = Given(u);
@@ -259,11 +261,17 @@ public class AcpChat : JsonRpcChat {
         if (title == Peers.ToolName || title.IndexOf(Peers.ToolName, StringComparison.Ordinal) >= 0) return true;
         return Text(input, "question").Length > 0 && RemoteCli.Tool.Of(Text(input, "tool")) != null;
     }
+    static bool IsCollabStart(string name, string title, object input) {
+        if (name == Peers.CollabToolName || name.EndsWith("__" + Peers.CollabToolName, StringComparison.Ordinal) || name.EndsWith("_" + Peers.CollabToolName, StringComparison.Ordinal)) return true;
+        if (title == Peers.CollabToolName || title.IndexOf(Peers.CollabToolName, StringComparison.Ordinal) >= 0) return true;
+        return Text(input, "goal").Length > 0 && (Text(input, "mode") == "lead" || Text(input, "mode") == "review");
+    }
     protected override void Requested(object id, string method, object p) {
         if (method == "session/request_permission") {
             var request = new Dictionary<string, object> { { "id", id }, { "params", p } };
             var call = At(p, "toolCall"); string kind = Text(call, "kind"), command = Command(call), title = Text(call, "title"), rawName = Text(call, "name");
-            if (mcp != null && IsPeerAsk(rawName, title, At(call, "rawInput") ?? At(call, "args"))) {
+            var callInput = At(call, "rawInput") ?? At(call, "args");
+            if (mcp != null && (IsPeerAsk(rawName, title, callInput) || IsCollabStart(rawName, title, callInput))) {
                 var options = Many(p, "options").ToList();
                 var allow = options.FirstOrDefault(one => Text(one, "kind") == "allow_once") ?? options.FirstOrDefault(one => Text(one, "kind").StartsWith("allow", StringComparison.Ordinal));
                 if (allow != null) {

@@ -129,7 +129,11 @@ public sealed class TerminalAgent {
         NativeDesktop = new CodexDesktopSessions(OpenDesktopConversation);
         NativeDesktop.Changed += () => { sessionsDirty = true; Wake(); };
         Quotas = new Quotas(dataDir);
-        Peers = new Peers(RemoteCli.Peers.PipeName(dataDir), FindTool, Quotas, Path.Combine(dataDir, "mcp"));
+        Peers = new Peers(RemoteCli.Peers.PipeName(dataDir), FindTool, Quotas, Path.Combine(dataDir, "mcp"), null, RemoteCli.Peers.DefaultTimeoutSeconds, new Peers.CollabHooks {
+            CanPromote = CanPromoteTerminal,
+            Confirm = ConfirmInTerminal,
+            Promote = PromoteFromMcp
+        });
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += () => { sessionsDirty = true; Wake(); }; Reach.Outbox.Changed += () => { sessionsDirty = true; Wake(); };
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
@@ -219,7 +223,7 @@ public sealed class TerminalAgent {
             string model = Get(kept, "model");
             live.Model = Models.Valid(model) ? model : "";
             live.Effort = Models.CleanEffort(Get(kept, "effort"));
-            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, where), live.Model, live.Effort);
+            live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, where, live.Id, live.Dir), live.Model, live.Effort);
             Heard(live);
             terminals[id] = live;
             return;
@@ -525,7 +529,8 @@ public sealed class TerminalAgent {
             live.Mode = mode;
             var emit = Emitted(live);
             emit(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "已重新启动 " + Label(live.Tool) + (live.Model.Length > 0 ? " · " + live.Model : "") }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
-            live.Pty = Chat.Open(live.Tool, launcher, place, session, true, mode, emit, Quotas, mode == "read" ? null : Peers.Offer(live.Tool, place), live.Model, live.Effort);
+            string promoteId = Teams.TeamOf(live.Id, live.Tool, session).Length > 0 ? "" : live.Id;
+            live.Pty = Chat.Open(live.Tool, launcher, place, session, true, mode, emit, Quotas, mode == "read" ? null : Peers.Offer(live.Tool, place, promoteId, live.Dir), live.Model, live.Effort);
             Heard(live);
             soon = true;
             return true;
@@ -550,6 +555,82 @@ public sealed class TerminalAgent {
     void Heard(LiveTerminal live) {
         var chat = live.Chat;
         if (chat != null) chat.Turned += (how, words) => { if (live.Chat == chat) Teams.Turned(live.Id, how, words); };
+    }
+    bool CanPromoteTerminal(string terminalId) {
+        if (String.IsNullOrEmpty(terminalId)) return false;
+        string tool, session;
+        lock (work) {
+            LiveTerminal live;
+            if (!terminals.TryGetValue(terminalId, out live) || live.Pty.Closed || live.Chat == null) return false;
+            if (String.IsNullOrEmpty(live.Dir) || live.Mode == "read") return false;
+            tool = live.Tool;
+            session = live.Chat.Session.Length > 0 ? live.Chat.Session : live.Session;
+        }
+        return Teams.TeamOf(terminalId, tool, session).Length == 0;
+    }
+    bool ConfirmInTerminal(string terminalId, string kind, string title, string detail, CancellationToken cancel) {
+        Chat chat = null;
+        lock (work) {
+            LiveTerminal live;
+            if (terminals.TryGetValue(terminalId, out live) && !live.Pty.Closed) chat = live.Chat;
+        }
+        if (chat == null) return false;
+        Wake();
+        bool allowed = chat.Confirm(kind, title, detail, cancel);
+        Wake();
+        return allowed;
+    }
+    string ExtractConversationContext(string tool, string session, string dir, string folder) {
+        if (String.IsNullOrEmpty(session)) return "";
+        try {
+            string file = ConversationFile(tool, session, folder);
+            if (file == null) return "";
+            var read = Said(file, tool);
+            var said = ((IEnumerable)read["messages"]).Cast<Dictionary<string, object>>().ToList();
+            if (said.Count == 0) return "";
+            Func<string, int, string> cut = (text, most) => { text = (text ?? "").Trim(); return text.Length <= most ? text : text.Substring(0, most) + "…"; };
+            var asked = said.Where(m => Convert.ToString(m["role"]) == "user").Select(m => Convert.ToString(m["text"])).Where(s => !String.IsNullOrWhiteSpace(s)).ToList();
+            string answered = said.Where(m => Convert.ToString(m["role"]) == "assistant").Select(m => Convert.ToString(m["text"])).LastOrDefault(s => !String.IsNullOrWhiteSpace(s)) ?? "";
+            var steps = said.Where(m => Convert.ToString(m["role"]) == "tool").Select(m => Convert.ToString(m["text"])).Where(s => !String.IsNullOrWhiteSpace(s)).ToList();
+            var sb = new StringBuilder();
+            if (asked.Count > 0) sb.AppendLine("最初要求：" + cut(asked[0], 600));
+            if (asked.Count > 1) sb.AppendLine("最近要求：" + cut(asked[asked.Count - 1], 600));
+            if (answered.Length > 0) sb.AppendLine("最近结论：" + cut(answered, 1800));
+            if (steps.Count > 0) sb.AppendLine("最近操作：\n" + String.Join("\n", steps.Skip(Math.Max(0, steps.Count - 6)).Select(step => "- " + cut(step, 140))));
+            return sb.ToString().Trim();
+        } catch (Exception) { return ""; }
+    }
+    Peers.CollabStarted PromoteFromMcp(string terminalId, Dictionary<string, object> item) {
+        Teams.SourceChat source;
+        Chat chat;
+        string folder = "";
+        lock (work) {
+            LiveTerminal live;
+            if (!terminals.TryGetValue(terminalId, out live) || live.Pty.Closed || live.Chat == null)
+                throw new InvalidOperationException("当前对话已结束");
+            if (String.IsNullOrEmpty(live.Dir))
+                throw new InvalidOperationException("当前对话不在项目目录中，无法转为协作");
+            if (live.Mode == "read")
+                throw new InvalidOperationException("只读对话无法转为协作");
+            chat = live.Chat;
+            folder = chat.Folder;
+            source = new Teams.SourceChat {
+                Terminal = live.Id,
+                Tool = live.Tool,
+                Dir = live.Dir,
+                Session = chat.Session.Length > 0 ? chat.Session : live.Session,
+                Model = live.Model,
+                Effort = live.Effort,
+                InTurn = true
+            };
+        }
+        if (String.IsNullOrWhiteSpace(Get(item, "context")))
+            source.Context = ExtractConversationContext(source.Tool, source.Session, source.Dir, folder);
+        string prompt;
+        var team = Teams.Promote(item, source, out prompt);
+        chat.Notice("已转为协作任务（" + (team.Mode == "review" ? "写审" : "分工协作") + "）");
+        Wake();
+        return new Peers.CollabStarted { TeamId = team.Id, Prompt = prompt };
     }
     string[] AvailableChatTools() { return new[] { "claude", "codex", "agy" }.Where(t => Tool.Named(t).Chats && FindTool(t) != null).ToArray(); }
     readonly Queue<string[]> rested = new Queue<string[]>();       // conversations that have just stopped by themselves: tool, number
@@ -695,6 +776,35 @@ public sealed class TerminalAgent {
         if (action == "work_team_start") {
             var item = (op.ContainsKey("item") ? op["item"] : null) as Dictionary<string, object>;
             if (item == null) throw new ArgumentException("协作任务无效");
+            string fromTerminal = Get(item, "from_terminal").Trim();
+            if (fromTerminal.Length > 0) {
+                LiveTerminal live;
+                if (!terminals.TryGetValue(fromTerminal, out live) || live.Pty.Closed || live.Chat == null)
+                    throw new InvalidOperationException("原对话已结束，无法转为协作");
+                if (live.Mode == "read")
+                    throw new InvalidOperationException("只读对话无法转为协作");
+                if (String.IsNullOrEmpty(live.Dir))
+                    throw new InvalidOperationException("这段对话不在项目里，无法转为协作");
+                if (live.Chat.Status == "busy" || live.Chat.Status == "confirm")
+                    throw new InvalidOperationException("对话正在执行或等待确认，请等本轮结束后再转为协作");
+                string session = live.Chat.Session.Length > 0 ? live.Chat.Session : live.Session;
+                var source = new Teams.SourceChat {
+                    Terminal = live.Id,
+                    Tool = live.Tool,
+                    Dir = live.Dir,
+                    Session = session,
+                    Model = live.Model,
+                    Effort = live.Effort,
+                    InTurn = false
+                };
+                if (String.IsNullOrWhiteSpace(Get(item, "context")))
+                    source.Context = ExtractConversationContext(source.Tool, source.Session, source.Dir, live.Chat.Folder);
+                string unused;
+                var promoted = Teams.Promote(item, source, out unused);
+                live.Chat.Notice("已转为协作任务（" + (promoted.Mode == "review" ? "写审" : "分工协作") + "）");
+                Wake();
+                return new Dictionary<string, object> { { "team", Teams.Shown(promoted) } };
+            }
             return new Dictionary<string, object> { { "team", Teams.Shown(Teams.Start(item)) } };
         }
         if (action == "work_team_stop") { Teams.Stop(Get(op, "team")); return new Dictionary<string, object>(); }
@@ -1889,7 +1999,7 @@ public sealed class TerminalAgent {
                     if (live.Model.Length > 0 && !Models.Valid(live.Model)) throw new ArgumentException("模型名称无效");
                     if (Get(op, "effort").Trim().Length > 0 && live.Effort.Length == 0) throw new ArgumentException("思考深度无效");
                     live.Mode = before != null && before.Mode == "read" ? "read" : Get(prefs, "RemoteMaxMode");
-                    live.Pty = Chat.Open(tool, launcher, place, session, resume, live.Mode, Emitted(live), Quotas, live.Mode == "read" ? null : Peers.Offer(tool, place), live.Model, live.Effort);
+                    live.Pty = Chat.Open(tool, launcher, place, session, resume, live.Mode, Emitted(live), Quotas, live.Mode == "read" ? null : Peers.Offer(tool, place, live.Id, live.Dir), live.Model, live.Effort);
                     Heard(live);
                     terminals[terminal] = live;
                     if (resume) Recall(live, Place(live, dirs));
@@ -1989,7 +2099,7 @@ public sealed class TerminalAgent {
             }).ToArray();
             var payload = new Dictionary<string, object> {
                 { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0],

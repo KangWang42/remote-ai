@@ -576,6 +576,22 @@ class TerminalRelayTests(unittest.TestCase):
         for bad_rounds in ({"id": team, "mode": "review", "dir": "demo", "goal": "写", "tools": ["claude", "codex"], "rounds": 0}, dict(free, rounds=-1), dict(free, rounds=11), dict(free, rounds=True)):
             with self.assertRaisesRegex(RemoteError, "轮数"):
                 self.relay.work({"id": "f" * 32, "action": "team_start", "item": bad_rounds}, now=1010, wait=0)
+        # promoting an existing conversation (`from_terminal` / `context`): gated by `teams-promote`
+        promoted = dict(free, from_terminal="a" * 32, context="  前期已确认方案  ")
+        with self.assertRaisesRegex(RemoteError, "对话转为协作"):
+            self.relay.work({"id": "1" * 32, "action": "team_start", "item": promoted}, now=1011, wait=0)
+        self.info["features"] = features + ["teams-effort", "teams-flex-rounds", "teams-promote"]
+        self.relay.agent({"info": self.info}, now=1012)
+        self.assertIn("teams-promote", self.relay.overview(now=1012)["device"]["features"])
+        asked, _ = self._carried({"id": "2" * 32, "action": "team_start", "item": promoted}, {"team": {}})
+        self.assertEqual((asked["item"]["from_terminal"], asked["item"]["context"]), ("a" * 32, "前期已确认方案"))
+        for bad_promote in (dict(promoted, mode="compare", tools=["claude", "codex"], rounds=1, roster=None),
+                            dict(promoted, discuss=True),
+                            dict(promoted, from_terminal="not-a-terminal"),
+                            dict(promoted, context="x" * 6001)):
+            bad_item = {k: v for k, v in bad_promote.items() if v is not None}
+            with self.assertRaises(RemoteError):
+                self.relay.work({"id": "3" * 32, "action": "team_start", "item": bad_item}, now=1013, wait=0)
 
     def test_team_cards_and_members_are_listed_for_the_owner(self):
         team, sid = "e" * 32, "11111111-2222-3333-4444-555555555555"

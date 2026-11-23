@@ -70,6 +70,8 @@ button.rs-row:active, label.rs-row:active { background: var(--raised); }
 .rs-split { display: flex; align-items: center; min-width: 0; }
 .rs-split > .rs-row { flex: 1 1 auto; min-width: 0; padding-right: 8px; }
 .rs-split > .rs-end { flex: none; display: grid; padding: 8px 14px 8px 4px; }
+.rs-mini { min-height: 30px; padding: 0 10px; border-radius: 999px; font-size: .78rem; font-weight: 600; color: var(--bad); background: var(--bad-soft, color-mix(in srgb, var(--bad) 12%, transparent)); }
+.rs-mini:active { opacity: .75; }
 .rs-row.warn { color: var(--bad); }
 .rs-row.warn .rs-glyph { --tint: var(--bad); }
 .rs-row.danger { color: var(--bad); justify-content: center; font-weight: 600; }

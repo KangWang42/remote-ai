@@ -1019,6 +1019,134 @@ public static class TeamsCheck {
         Require(deliveredImages[writer].SequenceEqual(new[] { relative }), "paused team_say resumes the member with an attachment");
     }
 
+    /// Promoting an existing conversation in-place (both MCP mid-turn and UI idle paths) and comprehensive member
+    /// briefing: shared pre-collaboration context, delegation rules, parallel sibling boundaries, concise incremental
+    /// follow-ups, and full-briefing fallback when a member session must start anew.
+    static void PromotingAndBriefing(string folder) {
+        var dead = new HashSet<string>();
+        var openedSessions = new List<string>();
+        var hands = new Teams.Hands {
+            Begin = one => {
+                if (one.Session == "unresumable-session-id") throw new InvalidOperationException("resume failed");
+                string t = "pro-" + (++made);
+                tools[t] = one.Tool + (one.Read ? ":read" : "") + (one.Model.Length > 0 ? "#" + one.Model : "") + (one.Effort.Length > 0 ? "~" + one.Effort : "");
+                openedSessions.Add(t + ":" + one.Session);
+                told.Add(new[] { t, one.Tool, one.Words });
+                return t;
+            },
+            Say = (terminal, words) => {
+                if (dead.Contains(terminal)) throw new InvalidOperationException("这个成员的对话已经结束");
+                told.Add(new[] { terminal, "", words });
+            },
+            Stop = terminal => stopped.Add(terminal),
+            Close = terminal => closed.Add(terminal),
+            Changes = dir => changes,
+            Available = () => new[] { "codex", "claude", "agy" }
+        };
+        string file = Path.Combine(folder, "promote.dat");
+        var teams = new Teams(file, hands);
+
+        // 1) MCP in-turn promotion (lead + auto_roster + free rounds): does not send a second message to the active
+        //    leader terminal, returns leader prompt with briefing guidance, and immediately dispatches when the turn ends.
+        string mcpId = "9191919191919191";
+        var mcpReq = new Dictionary<string, object> {
+            { "id", mcpId }, { "mode", "lead" }, { "dir", "web-shop" },
+            { "goal", "实现优惠券结算并补充测试" },
+            { "context", "已和用户确认：优惠券只支持满减，不改老订单表结构，入口在 CheckoutService.cs。" },
+            { "rules", "后端交给 Claude，前端与样式交给 Gemini" },
+            { "tools", new object[] { "codex" } },
+            { "roster", new[] { Member("leader", "codex") } },
+            { "auto_roster", true },
+            { "rounds", 0 }
+        };
+        var src = new Teams.SourceChat {
+            Terminal = "live-chat-1", Tool = "codex", Dir = "web-shop",
+            Session = "11111111-1111-4111-8111-111111111111", Model = "gpt-6.2-sol", Effort = "high", InTurn = true
+        };
+        int toldBefore = told.Count;
+        string mcpPrompt;
+        var promoted = teams.Promote(mcpReq, src, out mcpPrompt);
+        Require(told.Count == toldBefore, "in-turn MCP promotion does not inject an extra user turn");
+        Require(promoted.Members["leader"] == "live-chat-1" && promoted.Sessions["leader"].Id == src.Session
+            && promoted.Roster[0].Model == "gpt-6.2-sol" && promoted.Roster[0].Effort == "high"
+            && promoted.AutoRoster && promoted.Free && promoted.Context.Contains("不改老订单表结构"),
+            "promoted team preserves leader terminal, session, model, effort, free rounds and shared context");
+        Require(mcpPrompt.Contains("对话已转为协作任务") && mcpPrompt.Contains("给成员交底（写好 ASSIGN）")
+            && mcpPrompt.Contains("看不到这段对话历史") && mcpPrompt.Contains("本轮回答末尾"),
+            "promoted MCP leader prompt reminds leader to brief fresh members thoroughly");
+
+        // Refuses duplicate promotion of the same conversation
+        bool dupRefused = false;
+        try {
+            string unused;
+            var dupReq = new Dictionary<string, object>(mcpReq);
+            dupReq["id"] = "9292929292929292";
+            teams.Promote(dupReq, src, out unused);
+        } catch (InvalidOperationException) { dupRefused = true; }
+        Require(dupRefused, "cannot promote a conversation already belonging to a team");
+
+        // Leader finishes the SAME turn with parallel ASSIGN -> both members get Context, Rules, and Sibling overview
+        teams.Turned("live-chat-1", "done",
+            "ASSIGN member-1 claude: 实现 CheckoutService.cs 满减校验并补单测\n"
+            + "ASSIGN member-2 agy: 在 CheckoutView.js 增加优惠券输入框与提示文案");
+        var t1 = Team(teams, mcpId);
+        string m1 = t1.Members["member-1"], m2 = t1.Members["member-2"];
+        Require(Last(m1).Contains("前期已确认背景") && Last(m1).Contains("不改老订单表结构")
+            && Last(m1).Contains("分工偏好") && Last(m1).Contains("后端交给 Claude")
+            && Last(m1).Contains("同批并行成员分工") && Last(m1).Contains("member-2") && Last(m1).Contains("CheckoutView.js")
+            && !Last(m1).Contains("- member-1"),
+            "first dispatch to member-1 carries shared context, rules, and sibling boundaries without listing itself: " + Last(m1));
+        Require(Last(m2).Contains("前期已确认背景") && Last(m2).Contains("同批并行成员分工") && Last(m2).Contains("member-1")
+            && Last(m2).Contains("若派工明确为只读审查或核对"),
+            "first dispatch to member-2 carries shared context, sibling boundaries and read-only guard: " + Last(m2));
+
+        // Round 2 follow-up to an already-live member is concise (no redundant static Context/Goal dump)
+        teams.Turned(m1, "done", "已实现满减校验");
+        teams.Turned(m2, "done", "已增加输入框");
+        teams.Turned("live-chat-1", "done", "ASSIGN member-1: 补充满减边界值为 0 的用例");
+        string followUpMsg = Last(m1);
+        Require(followUpMsg.Contains("第 2 轮补充派工") && followUpMsg.Contains("边界值为 0")
+            && !followUpMsg.Contains("前期已确认背景") && !followUpMsg.Contains("执行与交回要求"),
+            "follow-up round to live member sends concise incremental briefing: " + followUpMsg);
+
+        // If a member's terminal died and session cannot be resumed, fallback opens a brand-new session with FULL briefing
+        teams.Learn(m1, "claude", "unresumable-session-id");
+        dead.Add(m1);
+        teams.Turned(m1, "done", "已补充用例");
+        teams.Turned("live-chat-1", "done", "ASSIGN member-1: 顺便修一下错误文案");
+        string m1Reborn = Team(teams, mcpId).Members["member-1"];
+        Require(m1Reborn != m1 && Last(m1Reborn).Contains("前期已确认背景") && Last(m1Reborn).Contains("执行与交回要求") && Last(m1Reborn).Contains("修一下错误文案"),
+            "fresh fallback session after failed resume receives full briefing instead of incremental stub: " + Last(m1Reborn));
+
+        // Persistence preserves Context
+        var reloaded = Team(new Teams(file, hands), mcpId);
+        Require(reloaded.Context.Contains("不改老订单表结构"), "shared Context persists in teams.dat");
+
+        // 2) UI idle promotion into review mode: immediately delivers writer kickoff prompt, and reviewer gets Context
+        string revId = "9393939393939393";
+        var revReq = new Dictionary<string, object> {
+            { "id", revId }, { "mode", "review" }, { "dir", "web-shop" },
+            { "goal", "完成退款接口重构" },
+            { "tools", new object[] { "claude", "codex" } },
+            { "rounds", 2 }
+        };
+        var revSrc = new Teams.SourceChat {
+            Terminal = "live-chat-2", Tool = "claude", Dir = "web-shop",
+            Session = "22222222-2222-4222-8222-222222222222",
+            Context = "最近结论：已约定退款接口保持幂等键 idempotency_key 不变。",
+            InTurn = false
+        };
+        string revPrompt;
+        teams.Promote(revReq, revSrc, out revPrompt);
+        Require(Last("live-chat-2").Contains("对话已转为协作任务 · 写审") && Last("live-chat-2").Contains("完成退款接口重构"),
+            "UI idle promotion delivers kickoff prompt directly to existing writer terminal");
+        changes = "M RefundApi.cs";
+        teams.Turned("live-chat-2", "done", "已完成退款接口重构并跑过单测");
+        string reviewer = Team(teams, revId).Members["reviewer"];
+        Require(Last(reviewer).Contains("idempotency_key") && Last(reviewer).Contains("RefundApi.cs"),
+            "review mode reviewer receives pre-collaboration Context alongside diff: " + Last(reviewer));
+    }
+
     public static int Main() {
         string folder = Path.Combine(Path.GetTempPath(), "remote-ai-teams-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
@@ -1346,6 +1474,7 @@ public static class TeamsCheck {
             CollaborationAttachments(folder);
             Restarting(folder);
             Recovering(folder);
+            PromotingAndBriefing(folder);
         } catch (Exception problem) {
             Console.Error.WriteLine("teams check failed: " + problem.Message + "\n" + problem.StackTrace);
             return 1;

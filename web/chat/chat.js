@@ -269,6 +269,14 @@
     $('send').disabled = kind === 'off';
     $('send').classList.toggle('going', sendingPictures);
   }
+  function teamUrl(teamId) {
+    const fromBench = new URLSearchParams(location.search).get('from') === 'bench';
+    return '../?tab=together&do=team&item=' + encodeURIComponent(teamId) + (fromBench ? '&from=bench' : '');
+  }
+  function openTeam(teamId) {
+    if (!teamId) return;
+    location.href = teamUrl(teamId);
+  }
   function header() {
     if (!terminal) return;
     $('title').textContent = terminal.title || TOOLS[terminal.tool] || '对话';
@@ -276,6 +284,11 @@
     $('where-text').textContent = (TOOLS[terminal.tool] || terminal.tool) + ' · ' + (terminal.dir || base(terminal.folder));
     $('dot').className = device.online ? 'on' : 'off';
     $('files').hidden = !terminal.dir;
+    const teamBar = $('team-bar');
+    if (teamBar) {
+      teamBar.hidden = !terminal.team;
+      if (terminal.team) $('team-bar-text').textContent = '协作任务进行中 · 当前对话已加入协作';
+    }
     canPicture();
     if (terminal.error && terminal.error !== lastError) { lastError = terminal.error; if (drawn) toast(terminal.error); }
   }
@@ -393,6 +406,7 @@
   $('again').onclick = () => bridge().again();
   $('back').onclick = () => bridge().close();
   $('files').onclick = () => { if (terminal && terminal.dir) location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; };
+  if ($('team-bar')) $('team-bar').onclick = () => { if (terminal && terminal.team) openTeam(terminal.team); };
 
   // The same conversation in a new terminal of the phone's: closed here, and gone on with there once the computer has
   // let it go. `form`: 'chat' to go on with it as a conversation (restarted: its tool started anew, `more` the model
@@ -447,7 +461,24 @@
         { id: 'menu-schedule', icon: 'clock', tint: 'time', label: '定时提问', why: noSession || (ended ? '对话已结束，先继续这段对话' : ''), say: toast, act: () => work.schedules(p.sheet, of()) },
         { id: 'menu-files', icon: 'folder', tint: 'file', label: '项目文件', why: terminal.dir ? '' : '这段对话不在项目里', say: toast, act: () => { p.sheet.close(null, true); location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; } },
         { id: 'menu-copy', icon: 'copy', tint: 'copy', label: '复制全文', say: toast, act: async () => { p.sheet.close(null); toast(await RemoteSheet.copy(said.innerText.trim()) ? '已复制整段对话' : '没能复制，请长按选择文字'); } }]));
-      const rows = [ui.row({ icon: 'pen', tint: 'muted', label: '重命名', value: terminal.title || '', go: () => p.sheet.push(renamePage()) })];
+      const rows = [];
+      if (terminal.team) {
+        rows.push(ui.row({ icon: 'relay', tint: 'agy', id: 'menu-team', label: '查看协作任务', value: '已加入', go: () => { p.sheet.close(null, true); openTeam(terminal.team); } }));
+      } else {
+        const promoteWhy = !terminal.dir ? '这段对话不在项目里'
+          : ended ? '对话已结束，先继续这段对话'
+          : (state === 'busy' || state === 'confirm') ? '请等本轮对话结束后再转为协作'
+          : '';
+        rows.push(ui.row({
+          icon: 'spark', tint: 'agy', id: 'menu-promote', label: '转为协作',
+          detail: promoteWhy || '保留上下文，原地升级为多 AI 协作',
+          go: () => {
+            if (promoteWhy) return toast(promoteWhy);
+            p.sheet.push(work.promotePage(of(), team => { if (team && team.id) openTeam(team.id); }));
+          }
+        }));
+      }
+      rows.push(ui.row({ icon: 'pen', tint: 'muted', label: '重命名', value: terminal.title || '', go: () => p.sheet.push(renamePage()) }));
       if (terminal.session) rows.push(ui.row({ icon: 'refresh', tint: 'muted', label: '重启对话', go: () => p.sheet.push(RemoteRestart.page(work, of(), choice => reopen('chat', choice))) }));
       if (terminal.session && terminal.dir && !ended) rows.push(ui.row({ icon: 'term', tint: 'muted', label: '在终端中打开', go: () => p.sheet.push(ui.confirm({ title: '在终端中打开', text: '这里的对话会关闭，在手机终端里继续同一段对话。', label: '在终端中打开', busy: '正在转到终端…', act: async sheet => { sheet.close(null, true); await inTerminal(); } })) }));
       if (ended && terminal.session) rows.push(ui.row({ icon: 'play', tint: 'good', label: '继续这段对话', act: () => { p.sheet.close(null, true); bridge().again(); } }));

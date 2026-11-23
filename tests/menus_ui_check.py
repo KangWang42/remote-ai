@@ -27,7 +27,7 @@ from ws_client import Socket        # noqa: E402
 
 CODEX = "0199cccc-dddd-7eee-8fff-000000000001"
 BRIEF = "【对话交接】下面是我在另一段对话里的进展（Codex，“结算页的金额”，项目 web-shop），请接着处理。\n\n我最初的要求：\n结算页的金额有时多出一位小数"
-FEATURES = ["chat", "files", "peek", "work", "chains", "brief", "schedule-days", "teams", "teams-v2", "teams-models", "teams-effort"]
+FEATURES = ["chat", "files", "peek", "work", "chains", "brief", "schedule-days", "teams", "teams-v2", "teams-models", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote"]
 MODELS = {"codex": [{"id": "gpt-6.2-sol", "label": "Sol", "efforts": ["medium", "high"]}, {"id": "gpt-6.2-astra", "label": "Astra", "efforts": ["high", "xhigh"]}]}
 
 
@@ -50,7 +50,7 @@ class Computer:
     def __init__(self, port, password):
         self.port, self.cookie, self.instance = port, "", secrets.token_hex(16)
         self.lock = threading.Lock()
-        self.terminals, self.output, self.acks, self.seen, self.schedules = {}, [], [], [], []
+        self.terminals, self.output, self.acks, self.seen, self.schedules, self.teams = {}, [], [], [], [], []
         self.alive = True
         self.call("/api/login", {"password": password})
 
@@ -75,7 +75,7 @@ class Computer:
             output, self.output = self.output, []
             acks, self.acks = self.acks, []
             terminals = [{"id": t["id"], "state": t["state"], "tool": t["tool"], "dir": t["dir"], "folder": "", "session": t["session"], "status": t["status"] if t["state"] == "running" else "",
-                          "created": t["created"], "title": t["title"], "form": t["form"], "said": "", "ask": "", "cols": 80, "rows": 24} for t in self.terminals.values()]
+                          "created": t["created"], "title": t["title"], "form": t["form"], "said": "", "ask": "", "team": t.get("team", ""), "cols": 80, "rows": 24} for t in self.terminals.values()]
             sessions = [{"id": t["session"], "tool": t["tool"], "dir": t["dir"], "title": t["title"] or "新的对话", "updated": t["created"], "live": t["state"] == "running"}
                         for t in self.terminals.values() if t["session"]]
         self.call("/api/terminal/agent", {"info": {"instance": self.instance, "enabled": True, "tools": ["claude", "codex", "shell"], "workspaces": ["web-shop"], "features": FEATURES,
@@ -156,7 +156,24 @@ class Computer:
         if action == "work_team_models":
             return {"models": MODELS}
         if action == "work_teams":
-            return {"teams": []}
+            return {"teams": self.teams}
+        if action == "work_team_start":
+            item = op["item"]
+            src = item.get("from_terminal", "")
+            team = {
+                "id": item["id"], "dir": item["dir"], "mode": item["mode"], "goal": item["goal"], "rules": item.get("rules", ""),
+                "state": "running", "note": "", "phase": "", "discuss": False, "picked": "",
+                "tools": item["tools"], "rounds": item.get("rounds", 0), "round": 1, "created": int(time.time() * 1000),
+                "models": item.get("models", {}), "roster": item.get("roster", []), "auto_roster": bool(item.get("auto_roster")),
+                "members": {"leader" if item["mode"] == "lead" else "writer": src} if src else {},
+                "awaited": ["leader" if item["mode"] == "lead" else "writer"], "failed": {}, "member_sessions": {},
+                "log": [{"at": int(time.time() * 1000), "who": "目标", "text": item["goal"]}]
+            }
+            if src and src in self.terminals:
+                with self.lock:
+                    self.terminals[src]["team"] = team["id"]
+            self.teams = [t for t in self.teams if t["id"] != team["id"]] + [team]
+            return {"team": team}
         return {}
 
 
@@ -342,6 +359,25 @@ def main():
             assert [op["terminal"] for op in closes] == [first], closes
             assert len(again) == 1 and again[0]["form"] == "chat" and again[0]["model"] == "gpt-6.2-astra" and again[0]["effort"] == "xhigh" and not again[0].get("text"), again
             restarted = value("new URLSearchParams(location.search).get('id')")
+
+            # ---- promote the conversation in-place to a collaboration task, then verify live team banner
+            press("#menu", "the menu for promote")
+            until(sheet_title + " === '对话'", "the menu opens")
+            press("#menu-promote", "promote to collaboration")
+            until(sheet_title + " === '转为协作'", "the promote page opens")
+            assert value("document.getElementById('promote-goal').value") == "", value("document.getElementById('promote-goal').value")
+            value("(() => { const box = document.getElementById('promote-goal'); box.value = '修复结算页金额小数问题'; box.dispatchEvent(new Event('input')); })()")
+            picture("menu-promote.png")
+            press("#promote-go", "confirm promote")
+            until("location.search.includes('do=team&item=')", "navigates to the promoted collaboration task", 20)
+            promoted_ops = [op for op in computer.seen if op["action"] == "work_team_start"]
+            assert len(promoted_ops) == 1 and promoted_ops[0]["item"]["from_terminal"] == restarted and promoted_ops[0]["item"]["goal"] == "修复结算页金额小数问题" and promoted_ops[0]["item"]["mode"] == "lead" and promoted_ops[0]["item"]["auto_roster"] is True and promoted_ops[0]["item"]["rounds"] == 0, promoted_ops
+            ask("Page.navigate", url=base + "chat/?id=" + restarted)
+            until("document.getElementById('team-bar') && !document.getElementById('team-bar').hidden", "promoted chat shows live collaboration banner")
+            press("#menu", "menu after promotion")
+            until("document.getElementById('menu-team') && !document.getElementById('menu-promote')", "menu offers 查看协作任务 once promoted")
+            press(".rs-close", "closed")
+            until("!document.querySelector('dialog.rs')", "sheet closed")
 
             # ---- a plain terminal's menu: no conversation to hand over
             shell = phone.call("/api/terminal", {"id": secrets.token_hex(16), "action": "start", "tool": "shell", "dir": "web-shop"})["terminal"]
