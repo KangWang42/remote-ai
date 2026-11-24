@@ -7,9 +7,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * How much of each tool's usage limits is used, as the computers tell it (device.quotas, docs/PROTOCOL.md): the
- * limits are the account's, not a computer's, so of what several computers tell the newest is shown for each tool.
- * The words are those of the computer's own page (web/me.js).
+ * How much of each tool's usage limits remains, calculated from what the computers report as used
+ * (device.quotas, docs/PROTOCOL.md): the limits are the account's, not a computer's, so of what several
+ * computers tell the newest is shown for each tool. The words match the computer's own page (web/me.js).
  */
 final class QuotaLines {
     static final class Window {
@@ -78,13 +78,29 @@ final class QuotaLines {
         return name;
     }
     static String label(String tool, Window w) { return (w.group.isEmpty() ? tool(tool) : w.group) + " · " + window(w.name); }
-    /** "38% · 2 小时后重置" */
+    /** Remaining quota percentage clamped to [0, 100], converted from the reported used share. */
+    static double remaining(double used) {
+        if (Double.isNaN(used)) return 0;
+        return Math.max(0.0, Math.min(100.0, 100.0 - used));
+    }
+    /** Visual fill share for the remaining bar: 0 when exhausted, otherwise at least 2% so small remainders stay visible. */
+    static float barShare(double used) {
+        double left = remaining(used);
+        return left <= 0 ? 0f : (float) Math.max(2.0, Math.min(100.0, left));
+    }
+    /** "剩余 62% · 2 小时后重置" */
     static String detail(Window w, long nowSeconds) {
-        String used = Math.round(w.used) + "%";
-        if (w.resets == 0) return used;
+        String left = "剩余 " + Math.round(remaining(w.used)) + "%";
+        if (w.resets == 0) return left;
         long minutes = Math.round((w.resets - nowSeconds) / 60.0);
-        if (minutes <= 0) return used + " · 已重置";
-        return used + " · " + (minutes < 60 ? minutes + " 分钟" : minutes < 2880 ? Math.round(minutes / 60.0) + " 小时" : Math.round(minutes / 1440.0) + " 天") + "后重置";
+        if (minutes <= 0) return left + " · 已重置";
+        return left + " · " + (minutes < 60 ? minutes + " 分钟" : minutes < 2880 ? Math.round(minutes / 60.0) + " 小时" : Math.round(minutes / 1440.0) + " 天") + "后重置";
+    }
+    /** Newest reading timestamp across all displayed tools (0 if empty). */
+    static long newestAt(List<Reading> shown) {
+        long at = 0;
+        for (Reading one : shown) if (one.at > at) at = one.at;
+        return at;
     }
     enum Level { NORMAL, ELEVATED, HIGH }
     static Level level(double used) {

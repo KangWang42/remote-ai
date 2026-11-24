@@ -1839,6 +1839,25 @@ class TerminalRelayTests(unittest.TestCase):
             self.relay.agent({"info": self.info, "terminals": many}, now=1005)
             self.assertEqual(ids(), {"%032x" % n for n in range(10, 10 + tr.MAX_HISTORY)})
 
+    def test_start_params_and_terminal_metadata(self):
+        info = dict(self.info, max_mode="edit", features=["chat", "chat-agy", "chat-params", "teams-models", "teams-effort"])
+        self.relay.agent({"info": info, "terminals": []}, now=1001)
+        overview = self.relay.overview(now=1002)
+        self.assertEqual(overview["device"]["max_mode"], "edit")
+        self.assertIn("chat-params", overview["device"]["features"])
+        with self.assertRaises(tr.RemoteError):
+            self.relay.command({"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "mode": "admin"}, now=1003)
+        with self.assertRaises(tr.RemoteError):
+            self.relay.command({"action": "start", "id": "b" * 32, "tool": "claude", "dir": "demo", "model": "bad model!"}, now=1004)
+        res = self.relay.command({"action": "start", "id": "c" * 32, "tool": "claude", "dir": "demo", "form": "chat",
+                                  "model": "claude-opus-5-5", "effort": "high", "mode": "read"}, now=1005)
+        tid = res["terminal"]
+        self.relay.agent({"info": info, "acks": [{"id": "c" * 32}],
+                          "terminals": [{"id": tid, "state": "running", "form": "chat", "tool": "claude", "dir": "demo",
+                                         "model": "claude-opus-5-5", "effort": "high", "mode": "read"}]}, now=1006)
+        term = self.relay.overview(tid, now=1007)["terminal"]
+        self.assertEqual((term["model"], term["effort"], term["mode"]), ("claude-opus-5-5", "high", "read"))
+
 
 if __name__ == "__main__":
     unittest.main()

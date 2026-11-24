@@ -147,14 +147,14 @@
           const takers = work.list().filter(c => c.open && c.id !== from.id && work.sayable(c));
           // a new conversation of a tool the computer has, in the same project: begun with the hand-over as its first message
           const fresh = from.dir && work.has('chat') ? NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && (tool !== 'agy' || work.has('chat-agy'))) : [];
-          // how much of its limits each tool has used, where the computer knows it (primary pool first)
-          const used = tool => {
+          // how much of its limits each tool has left, where the computer knows it (primary pool first)
+          const remaining = tool => {
             const q = (device.quotas || []).find(one => one.tool === tool);
             const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
-            const most = pool.length ? Math.max(...pool.map(w => w.used)) : null;
-            return most === null ? '' : ' · 额度已用 ' + Math.round(most) + '%';
+            const least = pool.length ? Math.min(...pool.map(w => Math.max(0, Math.min(100, 100 - (Number(w.used) || 0))))) : null;
+            return least === null ? '' : ' · 剩余额度 ' + Math.round(least) + '%';
           };
-          const offers = fresh.map(tool => ({ key: 'new:' + tool, tool, label: '新对话 · ' + TOOLS[tool], detail: '在 ' + from.dir + ' 中开始' + (tool === from.tool ? ' · 同一工具，重新开始' : '') + used(tool), tint: tool, icon: tool }))
+          const offers = fresh.map(tool => ({ key: 'new:' + tool, tool, label: '新对话 · ' + TOOLS[tool], detail: '在 ' + from.dir + ' 中开始' + (tool === from.tool ? ' · 同一工具，重新开始' : '') + remaining(tool), tint: tool, icon: tool }))
             .concat(takers.map(c => ({ key: c.id, c, label: c.title || TOOLS[c.tool], detail: c.where + (c.place ? ' · ' + c.place : ''), tint: tint(c.tool), icon: ['claude', 'codex', 'agy'].includes(c.tool) ? c.tool : 'chat' })));
           // another tool before the one it was in: the usual reason is that one has run out
           offers.sort((a, b) => (a.tool === from.tool) - (b.tool === from.tool));
@@ -432,13 +432,13 @@
           const why = work.ready('转为协作');
           const tools = work.teamTools();
           const device = (work.data || {}).device || {};
-          const used = tool => {
+          const remaining = tool => {
             const q = (device.quotas || []).find(one => one.tool === tool);
             const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
-            const most = pool.length ? Math.max(...pool.map(w => w.used)) : null;
-            return most === null ? '' : ' · ' + Math.round(most) + '%';
+            const least = pool.length ? Math.min(...pool.map(w => Math.max(0, Math.min(100, 100 - (Number(w.used) || 0))))) : null;
+            return least === null ? null : Math.round(least);
           };
-          const named = tools.map(tool => [tool, (TOOLS[tool] || tool) + used(tool)]);
+          const named = tools.map(tool => { const left = remaining(tool); return [tool, (TOOLS[tool] || tool) + (left === null ? '' : ' · 剩 ' + left + '%')]; });
 
           p.body.append(ui.who({
             icon: mark(from.tool), tint: tint(from.tool),
@@ -481,10 +481,10 @@
               p.refresh();
             }, { label: '组队方式', full: true }), state.autoRoster ? '领队按任务和额度按需创建 1–3 个执行成员' : '提前指定 1–3 个执行成员（默认按设置中的模型与思考深度）'));
             if (!state.autoRoster) {
-              const memberRows = state.members.map((tool, idx) => ui.row({
+              const memberRows = state.members.map((tool, idx) => { const left = remaining(tool); return ui.row({
                 icon: mark(tool), tint: tint(tool),
                 label: '执行成员 ' + (idx + 1) + ' · ' + (TOOLS[tool] || tool),
-                detail: used(tool) ? '额度已用' + used(tool).replace(' · ', ' ') : '点击切换工具',
+                detail: left !== null ? '剩余额度 ' + left + '%' : '点击切换工具',
                 end: state.members.length > 1 ? el('button', {
                   type: 'button', className: 'rs-mini', textContent: '移除',
                   onclick: e => { e.stopPropagation(); state.members.splice(idx, 1); p.refresh(); }
@@ -494,7 +494,7 @@
                   state.members[idx] = tools[nextIdx];
                   p.refresh();
                 }
-              }));
+              }); });
               const memberNodes = [ui.group(...memberRows)];
               if (state.members.length < 3) {
                 memberNodes.push(ui.group(ui.row({

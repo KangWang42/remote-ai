@@ -355,10 +355,20 @@
   // them when it is left without going on to a terminal's page.
   const leave = left => { if (!left && fromBench && native && native.home) native.home(); };
   // Resolves with whether the page is left for the terminal that was started.
-  async function start(tool, dir, session, takeover, fork, extra) {
+  function applyParams(payload, tool, params) {
+    const d = window.RemoteTeamDefaults;
+    const saved = d ? d.savedParams(tool, data && data.device && data.device.max_mode) : {};
+    const chosen = Object.assign({}, saved, params || {});
+    if (chosen.model) payload.model = chosen.model;
+    if (chosen.effort) payload.effort = chosen.effort;
+    if (chosen.mode && tool !== 'agy' && pageHost.has('chat-params')) payload.mode = chosen.mode;
+    return payload;
+  }
+  async function start(tool, dir, session, takeover, fork, extra, params) {
     const payload = { action: 'start', tool, dir, history: false };
     if (session) Object.assign(payload, { session, takeover: !!takeover });
     if (fork) payload.fork = true;
+    if (!session) applyParams(payload, tool, params);
     const result = await run(payload, '正在电脑上启动 ' + TOOLS[tool] + '…');
     if (result) open(result.terminal, 'terminal', extra);
     return !!result;
@@ -389,9 +399,10 @@
   // the tools the computer runs as a conversation, and what it says of itself where it does (Antigravity CLI: by ACP)
   const CHAT_TOOLS = { claude: 'chat', codex: 'chat', agy: 'chat-agy' };
   const chatOk = tool => !!data && (data.device.features || []).includes('chat') && !!CHAT_TOOLS[tool] && (data.device.features || []).includes(CHAT_TOOLS[tool]) && (data.device.tools || []).includes(tool);
-  async function chat(tool, dir, session, takeover, extra) {
+  async function chat(tool, dir, session, takeover, extra, params) {
     const payload = { action: 'start', tool, dir, history: false, form: 'chat' };
     if (session) Object.assign(payload, { session, takeover: !!takeover });
+    if (!session) applyParams(payload, tool, params);
     const result = await run(payload, '正在电脑上启动 ' + TOOLS[tool] + '…');
     if (result) open(result.terminal, 'chat', extra);
     return !!result;

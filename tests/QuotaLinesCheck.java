@@ -9,23 +9,28 @@ public final class QuotaLinesCheck {
     static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
     public static void main(String[] args) {
         long now = 1_800_000_000L;
-        require(QuotaLines.level(50) == QuotaLines.Level.NORMAL, "50% stays normal");
-        require(QuotaLines.level(50.1) == QuotaLines.Level.ELEVATED && QuotaLines.level(79.9) == QuotaLines.Level.ELEVATED, "above half and below 80% is amber");
-        require(QuotaLines.level(80) == QuotaLines.Level.HIGH && QuotaLines.level(100) == QuotaLines.Level.HIGH, "red starts at 80%");
+        require(QuotaLines.level(50) == QuotaLines.Level.NORMAL, "50% used (50% remaining) stays normal");
+        require(QuotaLines.level(50.1) == QuotaLines.Level.ELEVATED && QuotaLines.level(79.9) == QuotaLines.Level.ELEVATED, "below 50% remaining and above 20% is amber");
+        require(QuotaLines.level(80) == QuotaLines.Level.HIGH && QuotaLines.level(100) == QuotaLines.Level.HIGH, "red starts at 20% remaining");
+        require(Math.abs(QuotaLines.remaining(0) - 100) < 1e-6 && Math.abs(QuotaLines.remaining(38) - 62) < 1e-6
+            && Math.abs(QuotaLines.remaining(100)) < 1e-6 && Math.abs(QuotaLines.remaining(120)) < 1e-6
+            && Math.abs(QuotaLines.remaining(-5) - 100) < 1e-6, "remaining quota clamps to [0, 100]");
+        require(QuotaLines.barShare(100) == 0f && QuotaLines.barShare(99.5) == 2f && Math.abs(QuotaLines.barShare(38) - 62f) < 1e-4, "bar share reflects remaining quota");
         QuotaLines.Reading older = new QuotaLines.Reading("claude", 1000, "", Arrays.asList(new QuotaLines.Window("five_hour", 10, now + 3600)));
         QuotaLines.Reading newer = new QuotaLines.Reading("claude", 2000, "", Arrays.asList(new QuotaLines.Window("five_hour", 38, now + 2 * 3600), new QuotaLines.Window("seven_day", 93.4, now - 5)));
         QuotaLines.Reading codex = new QuotaLines.Reading("codex", 1500, "Codex 用 ChatGPT 账号登录后才能读取额度", Collections.<QuotaLines.Window>emptyList());
         QuotaLines.Reading quiet = new QuotaLines.Reading("agy", 1500, "", Collections.<QuotaLines.Window>emptyList());
         List<QuotaLines.Reading> shown = QuotaLines.newest(Arrays.asList(codex, older, quiet, newer), now);
         require(shown.size() == 2 && shown.get(0).tool.equals("claude") && shown.get(1).tool.equals("codex"), "claude first, codex with why, a tool with nothing to say left out");
-        require(shown.get(0).at == 2000 && shown.get(0).windows.size() == 1, "the newest of two computers, its window that is over left out");
+        require(shown.get(0).at == 2000 && shown.get(0).windows.size() == 1 && QuotaLines.newestAt(shown) == 2000, "the newest of two computers, its window that is over left out");
         QuotaLines.Window w = shown.get(0).windows.get(0);
         require(QuotaLines.label("claude", w).equals("Claude Code · 5 小时"), QuotaLines.label("claude", w));
-        require(QuotaLines.detail(w, now).equals("38% · 2 小时后重置"), QuotaLines.detail(w, now));
-        require(QuotaLines.detail(new QuotaLines.Window("seven_day", 93.4, now + 5 * 86400), now).equals("93% · 5 天后重置") && QuotaLines.high(new QuotaLines.Window("seven_day", 93.4, 0)), "nearly used up");
-        require(QuotaLines.detail(new QuotaLines.Window("five_hour", 5, now + 600), now).equals("5% · 10 分钟后重置"), "minutes");
+        require(QuotaLines.detail(w, now).equals("剩余 62% · 2 小时后重置"), QuotaLines.detail(w, now));
+        require(QuotaLines.detail(new QuotaLines.Window("seven_day", 93.4, now + 5 * 86400), now).equals("剩余 7% · 5 天后重置") && QuotaLines.high(new QuotaLines.Window("seven_day", 93.4, 0)), "nearly used up");
+        require(QuotaLines.detail(new QuotaLines.Window("five_hour", 5, now + 600), now).equals("剩余 95% · 10 分钟后重置"), "minutes");
         require(QuotaLines.window("300m").equals("5 小时") && QuotaLines.window("10080m").equals("7 天") && QuotaLines.window("primary").equals("primary"), "windows named by their length");
-        require(QuotaLines.detail(new QuotaLines.Window("x", 12.4, 0), now).equals("12%"), "without a time");
+        require(QuotaLines.detail(new QuotaLines.Window("x", 12.4, 0), now).equals("剩余 88%"), "without a time");
+        require(QuotaLines.detail(new QuotaLines.Window("x", 100, 0), now).equals("剩余 0%"), "exhausted");
         QuotaLines.Reading agy = new QuotaLines.Reading("agy", 1800, "", Arrays.asList(
             new QuotaLines.Window("five_hour", 2, now + 3600),
             new QuotaLines.Window("seven_day", 1, now + 86400),

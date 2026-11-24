@@ -33,10 +33,17 @@ final class AppPages {
     AppPages(MainActivity activity, Kit kit, Workbench bench) { this.activity = activity; this.kit = kit; this.bench = bench; }
 
     View build(String tab) {
-        generation++; holders.clear(); deviceSummaries.clear(); stats.clear(); answered = 0;
+        generation++; holders.clear(); deviceSummaries.clear(); stats.clear(); answered = 0; quotaMark = "";
         boolean mine = "me".equals(tab);
         LinearLayout page = kit.page(16);
-        View refreshAction = kit.circleAction(R.drawable.ic_refresh, "刷新", false, () -> activity.appPage(tab));
+        final View[] refreshHolder = new View[1];
+        View refreshAction = kit.circleAction(R.drawable.ic_refresh, "刷新", false, () -> {
+            Motion.spinOnce(refreshHolder[0]);
+            bench.refresh();
+            if (expected > 0) refresh(tab);
+            else activity.appPage(tab);
+        });
+        refreshHolder[0] = refreshAction;
         page.addView(kit.head(mine ? "我的" : "协作", kit.text(mine ? "设备连接与个人偏好" : "交接上下文，让对话接着做", 14, kit.MUTED), refreshAction));
         JSONArray computers = activity.computers();
         expected = computers.length();
@@ -52,23 +59,43 @@ final class AppPages {
     }
 
     private LinearLayout quotaCard;
+    private String quotaMark = "";
     private final java.util.Set<String> expandedQuotas = new java.util.HashSet<>();
-    /** The tools' limits, first on 我的: primary pool per tool by default; secondary pools toggle open on tap. */
+    /** The tools' remaining limits, first on 我的: primary pool per tool by default; secondary pools toggle open on tap. */
     void drawQuotas() {
         if (quotaCard == null) return;
-        quotaCard.removeAllViews();
         List<QuotaLines.Reading> shown = bench.quotas();
-        quotaCard.setVisibility(shown.isEmpty() ? View.GONE : View.VISIBLE);
-        long now = System.currentTimeMillis() / 1000;
-        LinearLayout head = kit.row();
-        head.addView(kit.semibold("额度", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
-        quotaCard.addView(head);
+        long nowMs = System.currentTimeMillis();
+        long now = nowMs / 1000;
+        StringBuilder sig = new StringBuilder();
+        sig.append(now / 60).append('|');
         for (QuotaLines.Reading one : shown) {
-            if ("api".equals(one.billingType)) quotaLine(quotaCard, "Codex · API 余额", one.balance.isEmpty() ? "暂未读到余额" : one.balance, kit.MUTED, -1);
-            if ("credits".equals(one.billingType)) quotaLine(quotaCard, "Codex · 额外额度", one.balance, kit.MUTED, -1);
-            if (one.windows.isEmpty() && !one.why.isEmpty()) quotaLine(quotaCard, QuotaLines.tool(one.tool), one.why, kit.MUTED, -1);
+            sig.append(one.tool).append(':').append(one.at).append(':').append(one.why).append(':')
+                .append(one.billingType).append(':').append(one.balance).append(':')
+                .append(expandedQuotas.contains(one.tool)).append(';');
+            for (QuotaLines.Window w : one.windows) {
+                sig.append(w.group).append('/').append(w.name).append('=').append(Math.round(QuotaLines.remaining(w.used))).append('@').append(w.resets).append(',');
+            }
+        }
+        String nextMark = sig.toString();
+        if (nextMark.equals(quotaMark)) return;
+        quotaMark = nextMark;
+        quotaCard.removeAllViews();
+        quotaCard.setVisibility(shown.isEmpty() ? View.GONE : View.VISIBLE);
+        if (shown.isEmpty()) return;
+        LinearLayout head = kit.row();
+        head.addView(kit.semibold("剩余额度", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
+        long newest = QuotaLines.newestAt(shown);
+        String ago = AggregateSessions.ago(newest, nowMs);
+        if (!ago.isEmpty()) head.addView(kit.text(ago + "更新", 12, kit.MUTED));
+        quotaCard.addView(head);
+        int barIndex = 0;
+        for (QuotaLines.Reading one : shown) {
+            if ("api".equals(one.billingType)) quotaLine(quotaCard, "Codex · API 余额", one.balance.isEmpty() ? "暂未读到余额" : one.balance, kit.MUTED, -1, -1);
+            if ("credits".equals(one.billingType)) quotaLine(quotaCard, "Codex · 额外额度", one.balance, kit.MUTED, -1, -1);
+            if (one.windows.isEmpty() && !one.why.isEmpty()) quotaLine(quotaCard, QuotaLines.tool(one.tool), one.why, kit.MUTED, -1, -1);
             for (QuotaLines.Window w : QuotaLines.primary(one)) {
-                quotaLine(quotaCard, QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used);
+                quotaLine(quotaCard, QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used, barIndex++);
             }
             List<QuotaLines.Window> extra = QuotaLines.extra(one);
             if (!extra.isEmpty()) {
@@ -79,13 +106,14 @@ final class AppPages {
                 toggle.setPadding(kit.dp(12), kit.dp(9), kit.dp(12), kit.dp(9));
                 toggle.setBackground(kit.shape(kit.subSurface(), 0, 12));
                 toggle.addView(kit.text("其他 " + pools + " 个池子", 12.5f, kit.MUTED), new LinearLayout.LayoutParams(0, -2, 1));
-                toggle.addView(kit.semibold((warn ? "接近上限 · " : "") + (open ? "收起 ▴" : "展开 ▾"), 12.5f, warn ? kit.BAD : kit.accentInk()));
+                toggle.addView(kit.semibold((warn ? "余量不足 · " : "") + (open ? "收起 ▴" : "展开 ▾"), 12.5f, warn ? kit.BAD : kit.accentInk()));
                 final String toolKey = one.tool;
                 kit.press(toggle, () -> {
                     if (expandedQuotas.contains(toolKey)) expandedQuotas.remove(toolKey);
                     else expandedQuotas.add(toolKey);
                     drawQuotas();
                 });
+                Motion.springPress(toggle, 0.98f);
                 LinearLayout.LayoutParams toggleLp = new LinearLayout.LayoutParams(-1, -2);
                 toggleLp.topMargin = kit.dp(10);
                 quotaCard.addView(toggle, toggleLp);
@@ -94,31 +122,45 @@ final class AppPages {
                     sub.setPadding(kit.dp(12), kit.dp(2), kit.dp(2), kit.dp(2));
                     LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(-1, -2);
                     subLp.topMargin = kit.dp(4);
+                    int extraIdx = 0;
                     for (QuotaLines.Window w : extra) {
-                        quotaLine(sub, QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used);
+                        quotaLine(sub, QuotaLines.label(one.tool, w), QuotaLines.detail(w, now), QuotaLines.high(w) ? kit.BAD : kit.MUTED, w.used, extraIdx++);
                     }
                     quotaCard.addView(sub, subLp);
+                    Motion.riseIn(sub, kit.dp(6), 0);
                 }
             }
         }
     }
-    private void quotaLine(LinearLayout host, String label, String detail, int tone, double used) {
+    private void quotaLine(LinearLayout host, String label, String detail, int tone, double used, int barIndex) {
         LinearLayout line = kit.row();
         line.setPadding(0, kit.dp(12), 0, 0);
         line.addView(kit.medium(label, 14, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
-        line.addView(kit.text(detail, 12, tone));
+        boolean low = used >= 0 && QuotaLines.level(used) == QuotaLines.Level.HIGH;
+        if (low) {
+            View dot = kit.dot(kit.BAD, 6);
+            ((LinearLayout.LayoutParams) dot.getLayoutParams()).rightMargin = kit.dp(5);
+            Motion.pulse(dot, 0.32f, 1.25f, 1600);
+            line.addView(dot);
+            line.addView(kit.semibold(detail, 12, tone));
+        } else {
+            line.addView(kit.text(detail, 12, tone));
+        }
         host.addView(line);
         if (used < 0) return;
         LinearLayout track = new LinearLayout(activity);
         track.setBackground(kit.shape(kit.RAISED, 0, 3));
         track.setClipToOutline(true);
-        View part = new View(activity);
         QuotaLines.Level level = QuotaLines.level(used);
         int fill = level == QuotaLines.Level.HIGH ? kit.BAD : level == QuotaLines.Level.ELEVATED ? kit.BUSY : kit.ACCENT;
-        part.setBackground(kit.shape(fill, 0, 3));
-        float share = (float) Math.max(2, Math.min(100, used));
-        track.addView(part, new LinearLayout.LayoutParams(0, -1, share));
-        if (share < 100) track.addView(new View(activity), new LinearLayout.LayoutParams(0, -1, 100 - share));
+        float share = QuotaLines.barShare(used);
+        if (share > 0f) {
+            View part = new View(activity);
+            part.setBackground(kit.shape(fill, 0, 3));
+            track.addView(part, new LinearLayout.LayoutParams(0, -1, share));
+            Motion.revealBar(part, barIndex);
+        }
+        if (share < 100f) track.addView(new View(activity), new LinearLayout.LayoutParams(0, -1, 100f - share));
         LinearLayout.LayoutParams bar = new LinearLayout.LayoutParams(-1, kit.dp(6));
         bar.topMargin = kit.dp(6);
         host.addView(track, bar);
@@ -127,8 +169,10 @@ final class AppPages {
     private void buildMe(LinearLayout page, JSONArray computers) {
         quotaCard = kit.cardBox(22);
         quotaCard.setPadding(kit.dp(16), kit.dp(16), kit.dp(16), kit.dp(16));
+        Motion.smoothLayout(quotaCard);
         page.addView(quotaCard, kit.below(18));
         drawQuotas();
+        if (quotaCard.getVisibility() == View.VISIBLE) Motion.riseIn(quotaCard, kit.dp(10), 0);
 
         // Compact 3-metric KPI summary card for today's work
         LinearLayout summary = kit.cardBox(20);
@@ -151,9 +195,11 @@ final class AppPages {
             if (only != null) {
                 String url = only.optString("url");
                 kit.press(summary, () -> activity.computerPage(url, "me"));
+                Motion.springPress(summary, 0.985f);
             }
         }
         page.addView(summary, kit.below(14));
+        Motion.riseIn(summary, kit.dp(10), 45);
 
         // Unified "我的电脑" grouped list
         LinearLayout connections = kit.settingGroup(page, "我的电脑");
@@ -196,6 +242,14 @@ final class AppPages {
         int remColor = "已开启".equals(remStatus) ? kit.goodInk() : "需授权".equals(remStatus) ? kit.BAD : kit.MUTED;
         kit.setting(preferences, R.drawable.ic_shield, kit.goodInk(), "提醒与权限", "通知、电池与后台联网", remStatus, remColor, activity::reminderSettings);
         kit.setting(preferences, R.drawable.ic_palette, kit.accentInk(), "外观与文字", "主题、字号与终端阅读方式", activity.appearanceName(), kit.MUTED, activity::look);
+        if (expected > 0) {
+            kit.setting(preferences, R.drawable.ic_settings, TINT_AGY, "模型与常用参数", "可视化设置模型、思考深度与权限模式", "", kit.MUTED, () -> {
+                java.util.List<String> urls = new java.util.ArrayList<>();
+                JSONArray saved = activity.computers();
+                for (int i = 0; i < saved.length(); i++) if (saved.optJSONObject(i) != null) urls.add(saved.optJSONObject(i).optString("url"));
+                activity.pick("选择电脑", urls, url -> activity.computerSettings(url, "part-team-defaults"));
+            });
+        }
 
         LinearLayout updates = kit.settingGroup(page, "版本与更新");
         kit.setting(updates, R.drawable.ic_update, kit.toolBadgeFg("agy"), "手机 App 更新", "检查手机安装包更新", "v" + activity.versionName(), kit.MUTED, activity::checkUpdate);
@@ -275,12 +329,12 @@ final class AppPages {
         card.setBackground(kit.shape(kit.heroTintBg(), kit.heroBorder(), 24));
         kit.elevate(card, 1.5f);
 
-        // Pipeline strip: [CC] --- [CX] --- [AG]
+        // Pipeline strip: [CC] ---> [CX] ---> [AG] with live animated flow
         LinearLayout pipe = kit.row();
         pipe.addView(heroBadge("CC", kit.toolBadgeBg("claude"), kit.toolBadgeFg("claude")));
-        pipe.addView(flowLine(), flowLp());
+        pipe.addView(flowLine(0), flowLp());
         pipe.addView(heroBadge("CX", kit.toolBadgeBg("codex"), kit.toolBadgeFg("codex")));
-        pipe.addView(flowLine(), flowLp());
+        pipe.addView(flowLine(520), flowLp());
         pipe.addView(heroBadge("AG", kit.toolBadgeBg("agy"), kit.toolBadgeFg("agy")));
         card.addView(pipe);
 
@@ -292,7 +346,9 @@ final class AppPages {
         cta.setMinHeight(kit.dp(48));
         cta.setBackground(kit.shape(kit.solidInk(), 0, 14));
         kit.press(cta, () -> pickTogether("协作任务", "team"));
+        Motion.springPress(cta, 0.97f);
         card.addView(cta, kit.below(16));
+        Motion.riseIn(card, kit.dp(10), 0);
         return card;
     }
 
@@ -305,18 +361,13 @@ final class AppPages {
         return badge;
     }
 
-    private View flowLine() {
-        View line = new View(activity);
-        GradientDrawable dash = new GradientDrawable();
-        dash.setShape(GradientDrawable.LINE);
-        dash.setStroke(kit.dp(2), Kit.tint(kit.ACCENT, Kit.light(kit.BG) ? 84 : 110), kit.dp(5), kit.dp(4));
-        line.setBackground(dash);
-        line.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-        return line;
+    private View flowLine(long phaseOffsetMs) {
+        int dashColor = Kit.tint(kit.ACCENT, Kit.light(kit.BG) ? 84 : 110);
+        return new Motion.FlowLineView(activity, dashColor, kit.ACCENT, activity.getResources().getDisplayMetrics().density, phaseOffsetMs);
     }
 
     private LinearLayout.LayoutParams flowLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, kit.dp(4), 1);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, kit.dp(14), 1);
         lp.leftMargin = kit.dp(8); lp.rightMargin = kit.dp(8);
         return lp;
     }
@@ -424,6 +475,7 @@ final class AppPages {
         btn.setPadding(kit.dp(14), 0, kit.dp(14), 0);
         btn.setBackground(kit.shape(kit.PANEL, kit.cardBorder(), 99));
         kit.press(btn, action);
+        Motion.springPress(btn, 0.95f);
         return btn;
     }
 
@@ -454,15 +506,15 @@ final class AppPages {
         }
         boolean hasData = !stats.isEmpty();
         if (metricPrompts != null) {
-            metricPrompts.setText(hasData ? String.valueOf(prompts) : "—");
+            if (hasData) Motion.countTo(metricPrompts, prompts); else metricPrompts.setText("—");
             metricPrompts.setTextColor(hasData ? kit.INK : kit.MUTED);
         }
         if (metricSessions != null) {
-            metricSessions.setText(hasData ? String.valueOf(sessions) : "—");
+            if (hasData) Motion.countTo(metricSessions, sessions); else metricSessions.setText("—");
             metricSessions.setTextColor(hasData ? kit.INK : kit.MUTED);
         }
         if (metricMinutes != null) {
-            metricMinutes.setText(hasData ? String.valueOf(Math.round(seconds / 60)) : "—");
+            if (hasData) Motion.countTo(metricMinutes, Math.round(seconds / 60)); else metricMinutes.setText("—");
             metricMinutes.setTextColor(hasData ? kit.INK : kit.MUTED);
         }
         if (coverage != null) {
@@ -518,6 +570,7 @@ final class AppPages {
         tile.addView(kit.semibold(title, 15, kit.INK), kit.below(12));
         tile.addView(kit.text(hint, 12.5f, kit.MUTED), kit.below(3));
         kit.press(tile, () -> pickTogether(title, what));
+        Motion.springPress(tile, 0.96f);
         return tile;
     }
 

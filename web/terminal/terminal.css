@@ -2,7 +2,7 @@
 :root { color-scheme: light; --bg: #f2f3f7; --term-bg: #fbfbfc; --panel: #ffffff; --raised: #f1f3f6; --ink: #0e1116; --muted: #5b6270; --line: #e6e8ec; --accent: #2f54eb; --on-accent: #ffffff; --good: #15803d; --busy: #9a5b00; --bad: #c0261a; --warn-ink: #9a5b00; --warn-bg: #f1f3f6; --elevate: 0 1px 2px rgba(14, 17, 22, .04), 0 8px 24px rgba(14, 17, 22, .05); --rim: rgba(14, 17, 22, .07); }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; width: 100%; height: 100%; background: var(--term-bg, var(--bg)); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; overflow: hidden; }
-main { height: 100%; height: 100dvh; display: flex; flex-direction: column; min-width: 0; }
+main { position: fixed; inset: var(--vv-top, 0px) 0 auto 0; height: 100%; height: var(--vv-h, 100dvh); display: flex; flex-direction: column; min-width: 0; }
 
 header { display: flex; align-items: center; gap: 2px; padding: calc(5px + env(safe-area-inset-top)) 6px 5px 4px; background: color-mix(in srgb, var(--term-bg, var(--bg)) 92%, transparent); box-shadow: inset 0 -0.5px 0 var(--rim, var(--line)); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); z-index: 4; }
 .who { flex: 1; min-width: 0; padding: 3px 6px; border-radius: 10px; cursor: pointer; display: grid; grid-template-columns: minmax(0, auto) auto 1fr; align-items: center; column-gap: 6px; transition: background .12s; }

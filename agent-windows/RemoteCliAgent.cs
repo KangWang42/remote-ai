@@ -1516,16 +1516,32 @@ public sealed class TerminalAgent {
     }
     /// This program's own processes, which a takeover never ends: the phone's terminals and itself.
     int[] OwnRoots() { return terminals.Values.Select(t => t.Pty.Id).Concat(new[] { Process.GetCurrentProcess().Id }).ToArray(); }
-    public static string Command(string tool, string launcher, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false) {
+    public static string Command(string tool, string launcher, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false, string model = "", string effort = "") {
         Tool.Named(tool);
         if (launcher == null || launcher.IndexOfAny(new[] { '"', '%', '\r', '\n' }) >= 0) throw new ArgumentException("工具路径无效");
         if (!String.IsNullOrEmpty(session) && !Regex.IsMatch(session, @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z")) throw new ArgumentException("历史会话编号无效");
-        string args = Arguments(tool, session, history, mode, fork, noDaemon, fresh);
+        string args = Arguments(tool, session, history, mode, fork, noDaemon, fresh, model, effort);
         return LaunchCommand(launcher, args);
     }
-    public static string Arguments(string tool, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false) {
-        return Tool.Named(tool).Arguments(session ?? "", history, mode, fork, noDaemon, fresh);
+    public static string Arguments(string tool, string session, bool history, string mode, bool fork = false, bool noDaemon = false, bool fresh = false, string model = "", string effort = "") {
+        return Tool.Named(tool).Arguments(session ?? "", history, mode, fork, noDaemon, fresh, model, effort);
     }
+    public static string ClampMode(string requested, string maxMode) {
+        int maxRank = ModeRank(maxMode);
+        if (maxRank < 0) maxRank = 2;
+        string clean = (requested ?? "").Trim().ToLowerInvariant();
+        if (clean.Length == 0) return ModeName(maxRank);
+        int askRank = ModeRank(clean);
+        if (askRank < 0) throw new ArgumentException("权限模式无效");
+        return ModeName(Math.Min(askRank, maxRank));
+    }
+    static int ModeRank(string mode) {
+        if (mode == "read") return 0;
+        if (mode == "edit") return 1;
+        if (mode == "full") return 2;
+        return -1;
+    }
+    static string ModeName(int rank) { return rank <= 0 ? "read" : rank == 1 ? "edit" : "full"; }
     public static ProcessStartInfo ComputerProcess(ComputerTakeover takeover, string mode) {
         if (takeover == null || String.IsNullOrEmpty(takeover.Launcher)) throw new InvalidOperationException("电脑上没有找到这个工具");
         string args = Arguments(takeover.Tool, takeover.Session, false, mode, false, Tool.Named(takeover.Tool).SupportsStandalone, false);
@@ -1985,6 +2001,8 @@ public sealed class TerminalAgent {
                 bool fresh = kind.NamedAtStart && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
                 var live = new LiveTerminal { Id = terminal, Tool = tool, Dir = dir, Folder = folder, Session = fork ? "" : session };
+                string requestedMode = Get(op, "mode").Trim().ToLowerInvariant();
+                string maxMode = Get(prefs, "RemoteMaxMode");
                 if (Get(op, "form") == "chat") {
                     // A conversation run through its tool's structured mode: what it says and does is given as events, and
                     // the first thing to say, where there is one, is said at once (Chats.cs).
@@ -1992,13 +2010,13 @@ public sealed class TerminalAgent {
                     if (fork || Get(op, "history") == "True") throw new ArgumentException("对话选项无效");
                     bool resume = !fresh && session.Length > 0;
                     string place = Place(live, dirs);
-                    // the model and effort asked for; a conversation gone on with without one keeps what it had here
+                    // the model, effort and permission mode asked for; a conversation gone on with without one keeps what it had here
                     var before = resume && !op.ContainsKey("model") ? terminals.Values.Concat(ended).LastOrDefault(t => t.Chat != null && t.Tool == tool && String.Equals(t.Session, session, StringComparison.OrdinalIgnoreCase)) : null;
                     live.Model = before != null ? before.Model : Get(op, "model").Trim();
                     live.Effort = before != null ? before.Effort : Models.CleanEffort(Get(op, "effort"));
                     if (live.Model.Length > 0 && !Models.Valid(live.Model)) throw new ArgumentException("模型名称无效");
                     if (Get(op, "effort").Trim().Length > 0 && live.Effort.Length == 0) throw new ArgumentException("思考深度无效");
-                    live.Mode = before != null && before.Mode == "read" ? "read" : Get(prefs, "RemoteMaxMode");
+                    live.Mode = requestedMode.Length > 0 ? ClampMode(requestedMode, maxMode) : (before != null && before.Mode == "read" ? "read" : ClampMode("", maxMode));
                     live.Pty = Chat.Open(tool, launcher, place, session, resume, live.Mode, Emitted(live), Quotas, live.Mode == "read" ? null : Peers.Offer(tool, place, live.Id, live.Dir), live.Model, live.Effort);
                     Heard(live);
                     terminals[terminal] = live;
@@ -2008,7 +2026,12 @@ public sealed class TerminalAgent {
                     // a team's member gone on with here is that member again (Teams.Rejoin)
                     if (resume) { string chatSession = session; bool told = first.Length > 0; Task.Run(() => Teams.Rejoin(terminal, tool, chatSession, told)); }
                 } else {
-                    live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", Get(prefs, "RemoteMaxMode"), fork, kind.SupportsStandalone && SupportsStandalone(launcher), fresh), Place(live, dirs), 80, 24, Emitted(live));
+                    live.Model = Get(op, "model").Trim();
+                    live.Effort = Models.CleanEffort(Get(op, "effort"));
+                    if (live.Model.Length > 0 && !Models.Valid(live.Model)) throw new ArgumentException("模型名称无效");
+                    if (Get(op, "effort").Trim().Length > 0 && live.Effort.Length == 0) throw new ArgumentException("思考深度无效");
+                    live.Mode = ClampMode(requestedMode, maxMode);
+                    live.Pty = new PseudoTerminal(Command(tool, launcher, session, Get(op, "history") == "True", live.Mode, fork, kind.SupportsStandalone && SupportsStandalone(launcher), fresh, live.Model, live.Effort), Place(live, dirs), 80, 24, Emitted(live));
                     terminals[terminal] = live;
                 }
             } else {
@@ -2098,8 +2121,8 @@ public sealed class TerminalAgent {
                 return taken++ == 0 || room >= 0;
             }).ToArray();
             var payload = new Dictionary<string, object> {
-                { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
-                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
+                { "info", new { instance = instance, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools, agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell", max_mode = ClampMode("", Get(prefs, "RemoteMaxMode")),
+                    features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "organize" }.Concat(Desktop.Tools.Select(tool => tool + "-desktop-open")).Concat(Settled != null ? new[] { "projects" } : new string[0]).Concat(UpdateRequested != null ? new[] { "update" } : new string[0]).Concat(Computer != null ? new[] { "settings" } : new string[0]).ToArray(),
                     projects = settings.Select(d => Project(d.Key, d.Value, true, true))
                         .Concat(own.Where(p => !settings.ContainsKey(p.Key)).Select(p => Project(p.Key, p.Value, false, allowed.ContainsKey(p.Key)))).ToArray(),
                     candidates = candidates.ToArray(), quotas = enabled ? Quotas.Report() : new object[0],
@@ -2109,6 +2132,7 @@ public sealed class TerminalAgent {
                 { "terminals", terminals.Values.Concat(ended).Select(t => new { id = t.Id, state = t.Pty.Closed ? "closed" : "running", cols = t.Pty.Cols, rows = t.Pty.Rows, session = t.Session, status = t.Status, exit_code = t.Pty.ExitCode, error = t.Pty.ExitCode.HasValue && t.Pty.ExitCode.Value != 0 ? "程序退出（代码 " + t.Pty.ExitCode.Value + "），请检查终端画面中的原因" : "",
                     tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title, completion = CompletionOf(t.Tool, t.Session, t.Status),
                     form = t.Chat != null ? "chat" : "", said = t.Chat != null ? t.Chat.Said : "", ask = t.Chat != null ? t.Chat.Asking : "",
+                    model = t.Model ?? "", effort = t.Effort ?? "", mode = t.Mode ?? "",
                     team = t.Chat != null ? Teams.TeamOf(t.Id, t.Tool, t.Session) : "" }).ToArray() },
                 { "output", output }, { "acks", acknowledgments }
             };

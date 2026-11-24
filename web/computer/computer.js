@@ -227,22 +227,46 @@
         el('div', { className: 'team-default-field' }, el('label', { htmlFor: modelSel.id, textContent: '默认模型' }), modelSel),
         el('div', { className: 'team-default-field' }, el('label', { htmlFor: effortSel.id, textContent: '思考深度' }), effortSel)
       ];
-      const hasCustom = Object.prototype.hasOwnProperty.call(prefs.models, tool) || Object.prototype.hasOwnProperty.call(prefs.efforts, tool);
+      const visualBlocks = [el('div', { className: 'team-default-fields' }, ...fields)];
+      if (effortSelectable && efforts.length) {
+        const effortPills = el('div', { className: 'param-pills', role: 'group', 'aria-label': (defaults.TOOL_NAMES[tool] || tool) + ' 思考深度快捷选择' },
+          ...[['', '默认']].concat(efforts.map(level => [level, defaults.shortEffortLabel(level)])).map(([val, label]) =>
+            el('button', {
+              type: 'button', className: 'param-pill', textContent: label,
+              'aria-pressed': String(val === currentEffort),
+              onclick: () => { defaults.setEffortPref(tool, val); toast('已保存'); drawTeamDefaults(); }
+            })));
+        visualBlocks.push(el('div', { className: 'param-visual-row' }, el('span', { className: 'param-visual-label', textContent: '思考档位' }), effortPills));
+      }
+      if (tool !== 'agy' && has('chat-params')) {
+        const maxMode = (device && device.max_mode) || (told && told.settings && told.settings.rights) || '';
+        const savedMode = (prefs.modes && prefs.modes[tool]) || '';
+        const allowedModes = defaults.MODE_ORDER.filter(m => defaults.modeAllowed(m, maxMode));
+        const modePills = el('div', { className: 'param-pills', role: 'group', 'aria-label': (defaults.TOOL_NAMES[tool] || tool) + ' 默认权限模式' },
+          ...[['', '跟随电脑']].concat(allowedModes.map(m => [m, defaults.MODE_LABELS[m]])).map(([val, label]) =>
+            el('button', {
+              type: 'button', className: 'param-pill', textContent: label,
+              'aria-pressed': String(val === savedMode),
+              onclick: () => { defaults.setModePref(tool, val); toast('已保存'); drawTeamDefaults(); }
+            })));
+        visualBlocks.push(el('div', { className: 'param-visual-row' }, el('span', { className: 'param-visual-label', textContent: '权限模式' }), modePills));
+      }
+      const hasCustom = Object.prototype.hasOwnProperty.call(prefs.models, tool) || Object.prototype.hasOwnProperty.call(prefs.efforts, tool) || !!(prefs.modes && prefs.modes[tool]);
       const customTag = hasCustom
-        ? '已自定义 · 新建协作自动带入'
+        ? '已自定义 · 新建对话与协作自动带入'
         : (teamCatalog && effortSupported && !efforts.length
           ? (defaults.RECOMMENDED_HINTS[tool] || '推荐默认').replace(/\s*·\s*思考高$/, '') + ' · 当前目录未单独提供思考档位'
-          : (defaults.RECOMMENDED_HINTS[tool] || '新建协作自动带入'));
+          : (defaults.RECOMMENDED_HINTS[tool] || '新建对话与协作自动带入'));
       items.push(el('li', { className: 'team-default-item' },
         el('div', { className: 'team-default-head' },
           el('span', { className: 'team-default-badge ' + (TONE[tool] || 'n-cx'), textContent: SHORT[tool] || 'AI' }),
           el('div', { className: 'team-default-copy' },
             el('b', { textContent: defaults.TOOL_NAMES[tool] || tool }),
             el('small', { textContent: customTag }))),
-        el('div', { className: 'team-default-fields' }, ...fields)));
+        ...visualBlocks));
     });
     items.push(el('li', { className: 'team-default-actions' },
-      el('small', { textContent: '新建协作时可在「更多」中单次覆盖，不会改动这里保存的默认值。' }),
+      el('small', { textContent: '新建对话、终端与协作都会使用这里保存的参数；对话中也可点参数胶囊随时切换。' }),
       el('button', {
         type: 'button', id: 'team-defaults-reset', className: 'team-default-reset',
         textContent: '恢复推荐默认',

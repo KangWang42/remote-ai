@@ -244,4 +244,44 @@
     }
     return s;
   };
+  /* Keep fixed composers, sheets and full-screen dialogs inside the visible area when a mobile soft keyboard
+     opens or pans visualViewport (handles OEM Android WebView differences with adjustResize / interactive-widget). */
+  (() => {
+    const root = document.documentElement, vv = window.visualViewport;
+    if (!root || !vv) return;
+    let raf = 0;
+    const sync = () => {
+      raf = 0;
+      const vh = Math.round(vv.height);
+      const top = Math.max(0, Math.round(vv.offsetTop));
+      const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      if (vh > 120) root.style.setProperty('--vv-h', vh + 'px');
+      root.style.setProperty('--vv-top', top + 'px');
+      root.style.setProperty('--kb-h', kb + 'px');
+      const fixedFrame = window.ChatPage === true || !!document.getElementById('screen');
+      if (fixedFrame && (window.scrollY > 0 || root.scrollTop > 0 || (document.body && document.body.scrollTop > 0))) {
+        window.scrollTo(0, 0);
+        root.scrollTop = 0;
+        if (document.body) document.body.scrollTop = 0;
+      }
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(sync); };
+    vv.addEventListener('resize', schedule, { passive: true });
+    vv.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule, { passive: true });
+    document.addEventListener('focusin', event => {
+      const target = event.target;
+      if (!target || !target.matches || !target.matches('input, textarea')) return;
+      schedule();
+      setTimeout(() => {
+        sync();
+        const dialog = target.closest && target.closest('dialog[open]');
+        if (dialog && target.scrollIntoView) {
+          try { target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { /* ignore */ }
+        }
+      }, 180);
+    }, true);
+    document.addEventListener('focusout', () => setTimeout(schedule, 120), true);
+    sync();
+  })();
 })();

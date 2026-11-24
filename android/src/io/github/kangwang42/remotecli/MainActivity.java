@@ -324,13 +324,19 @@ public final class MainActivity extends Activity {
             root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
             incoming = scroll;
         }
-        if (!previous.isEmpty() && !previous.equals(name)) {
+        if (!previous.isEmpty() && !previous.equals(name) && Motion.enabled()) {
+            int fromTab = Tabs.index(previous), toTab = Tabs.index(name);
             boolean secondary = !Tabs.has(name);
             incoming.setAlpha(0f);
-            if (secondary) incoming.setTranslationX(kit.dp(18));
-            else incoming.setTranslationY(kit.dp(5));
-            incoming.animate().alpha(1f).translationX(0f).translationY(0f).setDuration(secondary ? 190 : 150)
-                .setInterpolator(new DecelerateInterpolator(2.0f)).start();
+            if (fromTab >= 0 && toTab >= 0) {
+                incoming.setTranslationX((toTab > fromTab ? 1 : -1) * kit.dp(14));
+            } else if (secondary) {
+                incoming.setTranslationX(kit.dp(22));
+            } else {
+                incoming.setTranslationX(-kit.dp(10));
+            }
+            incoming.animate().alpha(1f).translationX(0f).translationY(0f).setDuration(secondary ? 210 : 190)
+                .setInterpolator(Motion.EASE_OUT).start();
         }
         screen = name;
         if ("home".equals(name)) bench.restorePosition(scroll);
@@ -372,6 +378,8 @@ public final class MainActivity extends Activity {
     }
     /** One computer's own page of a tab: where what the app lists of it is seen whole and changed. */
     void computerPage(String url, String tab) { openPage(url, "", "/?tab=" + tab + ("me".equals(tab) ? "&stats=1" : "")); }
+    /** Opens a computer's settings page directly at a given section anchor (e.g. "part-team-defaults"). */
+    void computerSettings(String url, String anchor) { openPage(url, "", "/computer/" + (anchor != null && !anchor.isEmpty() ? "#" + anchor : "")); }
     /** That computer's page of 协作 with one of its sheets open: "team", "handoff", "many", "chain", "schedule" (web/together.js). */
     void together(String url, String what) { openPage(url, "", "/?tab=together&do=" + what); }
     void together(String url, String what, String item) { openPage(url, "", "/?tab=together&do=" + Uri.encode(what) + "&item=" + Uri.encode(item)); }

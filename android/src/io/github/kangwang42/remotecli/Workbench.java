@@ -295,6 +295,7 @@ final class Workbench {
                 LinearLayout.LayoutParams dotLp = (LinearLayout.LayoutParams) dot.getLayoutParams();
                 dotLp.rightMargin = kit.dp(6);
                 dot.setVisibility(View.GONE);
+                if (i == 0 || i == 1) Motion.pulse(dot, 0.35f, 1.3f, 1550);
                 labelRow.addView(dot, dotLp);
                 TextView lbl = kit.text(labels[i], 12.5f, kit.MUTED);
                 lbl.setSingleLine(true);
@@ -387,6 +388,7 @@ final class Workbench {
         pill.setPadding(kit.dp(12), kit.dp(6), kit.dp(12), kit.dp(6));
         pill.setBackground(kit.shape(kit.PANEL, kit.cardBorder(), 99));
         pillDotWrap = kit.haloDot(kit.MUTED, kit.RAISED);
+        Motion.pulse(pillDotWrap, 0.68f, 1.12f, 2200);
         LinearLayout.LayoutParams dotLp = (LinearLayout.LayoutParams) pillDotWrap.getLayoutParams();
         dotLp.rightMargin = kit.dp(8);
         pill.addView(pillDotWrap, dotLp);
@@ -414,6 +416,7 @@ final class Workbench {
             if (saved.length() == 1) activity.manage(saved.optJSONObject(0).optString("url"));
             else activity.appPage("projects");
         });
+        Motion.springPress(wrap, 0.96f);
         return wrap;
     }
 
@@ -426,6 +429,7 @@ final class Workbench {
         } else {
             searchOpen = true;
             searchBox.setVisibility(View.VISIBLE);
+            Motion.riseIn(searchBox, -kit.dp(8), 0);
             searchBox.requestFocus();
             android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager) activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
             if (imm != null) imm.showSoftInput(searchBox, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
@@ -715,7 +719,8 @@ final class Workbench {
             int[] counts = {total[0], total[2], total[1]};
             for (int i = 0; i < metrics.length; i++) {
                 boolean active = online > 0 && counts[i] > 0;
-                metrics[i].setText(online == 0 ? "—" : String.valueOf(counts[i]));
+                if (online == 0) metrics[i].setText("—");
+                else Motion.countTo(metrics[i], counts[i]);
                 if (i == 0) {
                     metricCells[i].setBackground(kit.shape(active ? kit.badSoft() : 0, 0, 16));
                     metricLabels[i].setTextColor(active ? kit.BAD : kit.MUTED);
@@ -930,6 +935,7 @@ final class Workbench {
         wrap.addView(pill, new FrameLayout.LayoutParams(-2, kit.dp(40), Gravity.CENTER_VERTICAL));
         wrap.setContentDescription(label + (on ? "，已选" : ""));
         kit.press(wrap, action);
+        Motion.springPress(wrap, 0.94f);
         LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-2, -2);
         gap.rightMargin = kit.dp(8);
         wrap.setLayoutParams(gap);
@@ -977,6 +983,7 @@ final class Workbench {
         LinearLayout stripTop = kit.row();
         View dot = kit.dot(dotColor, 8);
         ((LinearLayout.LayoutParams) dot.getLayoutParams()).rightMargin = kit.dp(8);
+        Motion.pulse(dot, 0.32f, 1.28f, 1500);
         stripTop.addView(dot);
         stripTop.addView(kit.semibold(closing ? "正在结束" : AggregateSessions.label(task.kind), 13, stripFg), new LinearLayout.LayoutParams(0, -2, 1));
         String when = AggregateSessions.ago(AggregateSessions.recent(entry), System.currentTimeMillis());
@@ -1011,6 +1018,7 @@ final class Workbench {
         openBtn.setMinHeight(kit.dp(48));
         openBtn.setBackground(kit.shape(confirm ? kit.BAD : kit.solidInk(), 0, 14));
         kit.press(openBtn, () -> openTask(task));
+        Motion.springPress(openBtn, 0.97f);
         actions.addView(openBtn, new LinearLayout.LayoutParams(0, kit.dp(48), 1));
 
         boolean canQuickSay = !entry.team && !confirm && ((entry.terminal && "running".equals(entry.state)) || (entry.reached && entry.canSay));
@@ -1020,6 +1028,7 @@ final class Workbench {
             sayBtn.addView(kit.icon(R.drawable.ic_say, kit.INK, 18), new FrameLayout.LayoutParams(kit.dp(18), kit.dp(18), Gravity.CENTER));
             sayBtn.setContentDescription("给“" + entry.shownTitle() + "”发消息");
             kit.press(sayBtn, () -> sayTask(task));
+            Motion.springPress(sayBtn, 0.93f);
             LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(kit.dp(48), kit.dp(48));
             sLp.leftMargin = kit.dp(8);
             actions.addView(sayBtn, sLp);
@@ -1032,6 +1041,7 @@ final class Workbench {
             stopBtn.setEnabled(!closing);
             stopBtn.setAlpha(closing ? .4f : 1f);
             kit.press(stopBtn, () -> stopTask(task));
+            Motion.springPress(stopBtn, 0.93f);
             LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(kit.dp(48), kit.dp(48));
             stLp.leftMargin = kit.dp(8);
             actions.addView(stopBtn, stLp);

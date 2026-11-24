@@ -907,6 +907,16 @@ class Relay:
                 chat = payload.get("form", "") == "chat"
                 if payload.get("form", "") not in ("", "chat") or "text" in payload and not chat:
                     raise RemoteError("终端选项无效")
+                if "model" in payload:
+                    raw_model = payload.get("model")
+                    if not isinstance(raw_model, str) or (raw_model.strip() and not _model.fullmatch(raw_model.strip())):
+                        raise RemoteError("模型名称无效")
+                if "effort" in payload:
+                    raw_effort = payload.get("effort")
+                    if not isinstance(raw_effort, str) or (raw_effort.strip() and not _effort.fullmatch(raw_effort.strip().lower())):
+                        raise RemoteError("思考深度无效")
+                if "mode" in payload and payload.get("mode") not in ("", "full", "edit", "read"):
+                    raise RemoteError("权限模式无效")
                 if chat:
                     features = self._device.get("features", [])
                     if tool not in CHAT_TOOLS or "chat" not in features or CHAT_FEATURES.get(tool, "chat") not in features:
@@ -951,6 +961,9 @@ class Relay:
                 term = {"id": terminal, "tool": tool, "dir": folder, "folder": where,
                         # one outside every project is called what its conversation is: the computer lists that conversation only while it is open
                         "title": (called[:60] if (apart or chat) and called else self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool]) + (" · 副本" if fork else ""), "session": "" if fork else session, "status": "",
+                        "model": (payload.get("model") or "").strip() if isinstance(payload.get("model"), str) else "",
+                        "effort": (payload.get("effort") or "").strip().lower() if isinstance(payload.get("effort"), str) else "",
+                        "mode": payload.get("mode") if payload.get("mode") in ("full", "edit", "read") else "",
                         "created": int(now * 1000), "state": "starting", "error": "", "seq": 0, "output": [], "size": 0, "cols": 80, "rows": 24,
                         "instance": self._device["instance"], "previous": previous, "history": bool(payload.get("history")), "touched": False}
                 if chat:
@@ -1703,7 +1716,8 @@ class Relay:
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
@@ -1780,6 +1794,14 @@ class Relay:
                     if team != term.get("team", ""):
                         term["team"] = team
                         dirty = True
+                    for k, check in (("model", lambda v: isinstance(v, str) and (not v or bool(_model.fullmatch(v)))),
+                                     ("effort", lambda v: isinstance(v, str) and (not v or bool(_effort.fullmatch(v.lower())))),
+                                     ("mode", lambda v: v in ("", "full", "edit", "read"))):
+                        if k in item and check(item[k]):
+                            val = item[k].strip().lower() if k == "effort" else item[k].strip()
+                            if val != term.get(k, ""):
+                                term[k] = val
+                                dirty = True
                     if term.get("form") == "chat":
                         # what it said last and what it asks, in the computer's words
                         said, asking = str(item.get("said") or "")[:200], str(item.get("ask") or "")[:2000]

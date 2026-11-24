@@ -7,7 +7,7 @@
   const page = window.RemoteCliPage, { $, el, TOOLS, api, newId } = page;
   const box = $('me'), kept = {};       // by how many days were asked for: when, and what the computer answered
   const METRIC = { prompts: '提问', active: '时长', tokens: 'token' }, WEEK = '日一二三四五六';
-  let span = 7, metric = 'prompts', picked = -1, asking = 0, tried = 0, wanted = false, failed = '', drawn = '', expanded = new URLSearchParams(location.search).has('stats');
+  let span = 7, metric = 'prompts', picked = -1, asking = 0, tried = 0, wanted = false, failed = '', drawn = '', expanded = new URLSearchParams(location.search).has('stats'), quotaAnimated = false;
   const expandedPools = {};
 
   // ---- numbers as they are read
@@ -94,17 +94,21 @@
     const minutes = Math.round(left / 60000);
     return (minutes < 60 ? minutes + ' 分钟' : minutes < 2880 ? Math.round(minutes / 60) + ' 小时' : Math.round(minutes / 1440) + ' 天') + '后重置';
   }
+  const quotaLeft = used => Math.max(0, Math.min(100, 100 - (Number(used) || 0)));
+  const quotaBar = used => { const left = quotaLeft(used); return left <= 0 ? 0 : Math.max(2, Math.min(100, left)); };
   const quotaLevel = used => used >= 80 ? 'high' : used > 50 ? 'elevated' : '';
-  function quotaRow(title, w) {
-    return el('li', { className: quotaLevel(w.used) },
+  function quotaRow(title, w, index) {
+    const left = quotaLeft(w.used), shown = Math.round(left);
+    return el('li', { className: quotaLevel(w.used), style: '--stagger:' + Math.min(index || 0, 8) },
       el('div', { className: 'line' }, el('b', { textContent: title }),
-        el('span', { textContent: Math.round(w.used) + '%' + (w.resets ? ' · ' + renews(w.resets) : '') })),
-      el('div', { className: 'track', role: 'img', ariaLabel: '已用 ' + Math.round(w.used) + '%' }, el('i', { style: 'width:' + Math.max(2, Math.min(100, w.used)).toFixed(1) + '%' })));
+        el('span', { textContent: '剩余 ' + shown + '%' + (w.resets ? ' · ' + renews(w.resets) : '') })),
+      el('div', { className: 'track', role: 'img', ariaLabel: '剩余 ' + shown + '%' }, el('i', { style: 'width:' + quotaBar(w.used).toFixed(1) + '%' })));
   }
   function quotas() {
     const known = (page.data.device.quotas || []).filter(q => q.windows.length || q.why || q.billing);
     if (!known.length) return '';
     const lines = [];
+    let rowIdx = 0;
     known.forEach(q => {
       const line = (title, detail) => el('li', null, el('div', { className: 'line' }, el('b', { textContent: title }), el('span', { textContent: detail })));
       if (q.billing?.type === 'api') lines.push(line('Codex · API 余额',
@@ -112,20 +116,22 @@
       if (q.billing?.type === 'credits') lines.push(line('Codex · 额外额度', q.billing.unlimited ? '不限量' : q.billing.balance + ' 点'));
       if (q.why && !q.windows.length) lines.push(line(TOOLS[q.tool] || q.tool, q.why));
       const main = q.windows.filter(w => !w.group), extra = main.length ? q.windows.filter(w => w.group) : [];
-      (main.length ? main : q.windows).forEach(w => lines.push(quotaRow((w.group || TOOLS[q.tool] || q.tool) + ' · ' + windowName(w.name), w)));
+      (main.length ? main : q.windows).forEach(w => lines.push(quotaRow((w.group || TOOLS[q.tool] || q.tool) + ' · ' + windowName(w.name), w, rowIdx++)));
       if (extra.length) {
         const open = !!expandedPools[q.tool], pools = new Set(extra.map(w => w.group)).size, warn = !open && extra.some(w => quotaLevel(w.used) === 'high');
         const toggle = el('button', { type: 'button', className: 'quota-more' + (warn ? ' warn' : ''), ariaExpanded: String(open),
           onclick: () => { expandedPools[q.tool] = !open; draw(); } },
           el('span', { textContent: '其他 ' + pools + ' 个池子' }),
-          el('b', { textContent: (warn ? '接近上限 · ' : '') + (open ? '收起 ▴' : '展开 ▾') }));
+          el('b', { textContent: (warn ? '余量不足 · ' : '') + (open ? '收起 ▴' : '展开 ▾') }));
         const wrap = el('li', { className: 'quota-extra-wrap' }, toggle);
-        if (open) wrap.append(el('ul', { className: 'quota-extra' }, ...extra.map(w => quotaRow(w.group + ' · ' + windowName(w.name), w))));
+        if (open) wrap.append(el('ul', { className: 'quota-extra' }, ...extra.map((w, idx) => quotaRow(w.group + ' · ' + windowName(w.name), w, idx))));
         lines.push(wrap);
       }
     });
     const newest = Math.max(...known.map(q => q.at));
-    return el('section', { id: 'quotas' }, head('额度', page.ago(newest) + '更新'), el('ul', { className: 'panel shares' }, ...lines));
+    const firstDraw = !quotaAnimated;
+    quotaAnimated = true;
+    return el('section', { id: 'quotas', className: firstDraw ? 'quota-reveal' : '' }, head('剩余额度', page.ago(newest) + '更新'), el('ul', { className: 'panel shares' }, ...lines));
   }
   function computer() {
     const device = page.data.device, tools = (device.tools || []).map(tool => TOOLS[tool]).join(' · ');
@@ -155,7 +161,7 @@
     deviceRows.push(row('look', 't-look', '外观与文字', '主题、字号与终端阅读方式', '', () => { location.href = 'computer/#part-look'; }));
     if (page.has('teams-models') || page.has('teams')) {
       const defSummary = window.RemoteTeamDefaults ? window.RemoteTeamDefaults.summary((page.data && page.data.device && page.data.device.tools) || []) : '';
-      deviceRows.push(row('computer', 't-agy', '协作默认模型', defSummary || 'Opus 5.5 · Astra 6.2 · Neon · 思考高', '', () => { location.href = 'computer/#part-team-defaults'; }));
+      deviceRows.push(row('computer', 't-agy', '模型与常用参数', defSummary || '可视化设置模型、思考深度与权限', '', () => { location.href = 'computer/#part-team-defaults'; }));
     }
     deviceRows.push(row('computer', 't-accent', '电脑设置', '连接线路、远程访问与工具', page.usable() ? '在线' : '离线', () => { location.href = 'computer/'; }, page.usable() ? 'on' : ''));
     const dataRows = [row('chart', 't-agy', '工作统计', '提问、对话与工作时长', expanded ? '收起' : '查看', () => { expanded = !expanded; draw(); })];

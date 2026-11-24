@@ -68,3 +68,14 @@ assert "teams-models" in teams_js and "team_models" in teams_js and "teams-effor
     "Teams UI must support teams-models, teams-effort, unified terminology, verify phase display and member_sessions history fallback"
 assert "do=team&item=" in bridge_js, "Member chat back button must return to the parent team detail"
 print("Collaboration parent card and model UI guards passed")
+motion = (ROOT / "android/src/io/github/kangwang42/remotecli/Motion.java").read_text(encoding="utf-8")
+quotas_java = (ROOT / "android/src/io/github/kangwang42/remotecli/QuotaLines.java").read_text(encoding="utf-8")
+chat_js = (ROOT / "web/chat/chat.js").read_text(encoding="utf-8")
+assert "areAnimatorsEnabled()" in motion and "FlowLineView" in motion, "Native motion helpers must respect animator scale and provide pipeline flow"
+assert "QuotaLines.remaining(" in app_pages and "剩余额度" in app_pages and "barShare(" in quotas_java, "Native quota UI must display remaining percentage and remaining bar share"
+assert "模型与常用参数" in app_pages and "params-btn" in chat_js and "RemoteRestart.paramsPage" in chat_js, "App and chat UI must expose visual model & parameter controls"
+skins_js = (ROOT / "web/terminal/skins.js").read_text(encoding="utf-8")
+chat_css = (ROOT / "web/chat/chat.css").read_text(encoding="utf-8")
+sheet_css = (ROOT / "web/ui/sheet.css").read_text(encoding="utf-8")
+assert "--vv-h" in skins_js and "--vv-top" in skins_js and "--kb-h" in skins_js and "--vv-h" in chat_css and "--kb-h" in sheet_css, "Soft-keyboard visualViewport sync must protect chat, sheets and modals"
+print("Remaining quota, native motion, visual parameter, and soft-keyboard viewport guards passed")

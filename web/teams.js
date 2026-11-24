@@ -252,13 +252,13 @@
     catch (error) { failure = error.message; return false; }
   }
 
-  const used = tool => {
+  const remaining = tool => {
     const q = ((page.data.device || {}).quotas || []).find(one => one.tool === tool);
     const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
-    const most = pool.length ? Math.max(...pool.map(w => w.used)) : null;
-    return most === null ? '' : ' · ' + Math.round(most) + '%';
+    const least = pool.length ? Math.min(...pool.map(w => Math.max(0, Math.min(100, 100 - (Number(w.used) || 0))))) : null;
+    return least === null ? '' : ' · 剩 ' + Math.round(least) + '%';
   };
-  const namedTools = tools => tools.map(tool => [tool, TOOLS[tool] + used(tool)]);
+  const namedTools = tools => tools.map(tool => [tool, TOOLS[tool] + remaining(tool)]);
 
   const RULES_KEY = 'remotecli.team.rules';
   const LEADER_KEY = 'remotecli.team.leader';

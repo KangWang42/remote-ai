@@ -28,6 +28,7 @@ final class Tabs {
     private static final int[] ICONS = {R.drawable.ic_tab_tasks, R.drawable.ic_folder, R.drawable.ic_tab_together, R.drawable.ic_tab_me};
 
     static boolean has(String key) { return at(KEYS, key) >= 0; }
+    static int index(String key) { return at(KEYS, key); }
     /** The screen of the tab a page names, or null for a name that is none. */
     static String key(String named) { int at = Math.max(at(NAMES, named), at(KEYS, named)); return at < 0 ? null : KEYS[at]; }
     private static int at(String[] list, String one) { for (int i = 0; i < list.length; i++) if (list[i].equals(one)) return i; return -1; }
@@ -71,7 +72,9 @@ final class Tabs {
 
             LinearLayout both = kit.column();
             both.setGravity(Gravity.CENTER_HORIZONTAL);
-            both.addView(kit.icon(ICONS[i], shade, 22), new LinearLayout.LayoutParams(kit.dp(22), kit.dp(22)));
+            View glyph = kit.icon(ICONS[i], shade, 22);
+            both.addView(glyph, new LinearLayout.LayoutParams(kit.dp(22), kit.dp(22)));
+            if (on) Motion.popTab(glyph);
             TextView label = kit.text(LABELS[i], 11, shade);
             label.setTextSize(TypedValue.COMPLEX_UNIT_SP, .7f * root());
             label.setTypeface(Build.VERSION.SDK_INT >= 28 ? Typeface.create(Typeface.DEFAULT, on ? 600 : 500, false) : (on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT));
@@ -97,6 +100,7 @@ final class Tabs {
             tab.setClickable(true); tab.setFocusable(true);
             tab.setSelected(on);
             tab.setContentDescription(LABELS[i] + (on ? "，已选中" : ""));
+            Motion.springPress(tab, 0.93f);
             tab.setOnClickListener(pressedTab -> { kit.haptic(pressedTab, HapticFeedbackConstants.CLOCK_TICK); picked.accept(key); });
             LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(0, -2, 1);
             if (i > 0) tabLp.leftMargin = kit.dp(4);

@@ -224,10 +224,11 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
                                      {"name": "gemini_argon_wtu_seven_day", "used": 80, "resets": soon + 5 * 86400, "group": "Gemini 4 Argon"}]}]
         browser.open(played.origin + "/?tab=me", "!!document.querySelector('#quotas li')", "the limits on 我的", **phone(390))
         lines = value("Array.from(document.querySelectorAll('#quotas > ul > li')).map(li => li.innerText.replace(/\\s+/g, ' ').trim())")
-        assert lines[0].startswith("Claude Code · 5 小时") and "38%" in lines[0] and "2 小时后重置" in lines[0], lines
-        assert "本周" in lines[1] and "93%" in lines[1] and lines[2] == "Codex · API 余额 0 USD", lines
-        assert lines[3].startswith("Antigravity CLI · 5 小时") and "2%" in lines[3] and lines[4].startswith("Antigravity CLI · 本周"), lines
-        assert "其他 2 个池子" in lines[5] and "接近上限" in lines[5] and "展开" in lines[5], lines
+        assert lines[0].startswith("Claude Code · 5 小时") and "剩余 62%" in lines[0] and "2 小时后重置" in lines[0], lines
+        assert "本周" in lines[1] and "剩余 7%" in lines[1] and lines[2] == "Codex · API 余额 0 USD", lines
+        assert lines[3].startswith("Antigravity CLI · 5 小时") and "剩余 98%" in lines[3] and lines[4].startswith("Antigravity CLI · 本周") and "剩余 99%" in lines[4], lines
+        assert "其他 2 个池子" in lines[5] and "余量不足" in lines[5] and "展开" in lines[5], lines
+        assert value("Array.from(document.querySelectorAll('#quotas > ul > li .track i')).slice(0, 2).map(bar => Math.round(parseFloat(bar.style.width) * 10) / 10)") == [62.0, 6.6], "bars show remaining share"
         assert value("document.querySelectorAll('#quotas .quota-extra li').length") == 0, "secondary pools start collapsed"
         assert value("Array.from(document.querySelectorAll('#quotas > ul > li')).slice(0, 3).map(li => li.classList.contains('high'))") == [False, True, False], "the one nearly used up stands out"
         assert value("document.querySelector('#me > section, #me > *:nth-child(2)').id") == "quotas", "the limits stand first"
@@ -236,7 +237,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         extra_lines = value("Array.from(document.querySelectorAll('#quotas .quota-extra li')).map(li => li.innerText.replace(/\\s+/g, ' ').trim())")
         assert value("Array.from(document.querySelectorAll('#quotas .quota-extra li'), li => li.className)") == ["", "elevated", "high"]
         assert value("new Set(Array.from(document.querySelectorAll('#quotas .quota-extra .track i'), bar => getComputedStyle(bar).backgroundColor)).size") == 3
-        assert extra_lines[0].startswith("Claude / GPT · 5 小时") and extra_lines[2].startswith("Gemini 4 Argon · 本周"), extra_lines
+        assert extra_lines[0].startswith("Claude / GPT · 5 小时") and "剩余 50%" in extra_lines[0] and extra_lines[2].startswith("Gemini 4 Argon · 本周") and "剩余 20%" in extra_lines[2], extra_lines
         seen = value("(() => { const q = document.getElementById('quotas').getBoundingClientRect(); return { right: q.right, inner: innerWidth, page: document.documentElement.scrollWidth }; })()")
         assert seen["right"] <= seen["inner"] and seen["page"] <= seen["inner"], seen
         browser.picture(out / "me-quotas.png")

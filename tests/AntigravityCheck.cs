@@ -17,6 +17,10 @@ internal static class AntigravityCheck {
         string sampleId = Guid.NewGuid().ToString();
         Check(TerminalAgent.Arguments("agy", sampleId, false, "read") == " --conversation " + sampleId, "agy resumes by --conversation without mode override");
         Check(TerminalAgent.Arguments("agy", sampleId, false, "edit") == " --conversation " + sampleId, "agy resume ignores mode override");
+        Check(TerminalAgent.Arguments("agy", "", false, "full", false, false, false, "gemini-4-neon", "high") == " --model gemini-4-neon --effort high", "agy terminal passes model and effort");
+        Check(TerminalAgent.Arguments("claude", "", false, "edit", false, false, false, "claude-opus-5-5", "high") == " --permission-mode acceptEdits --model claude-opus-5-5 --effort high", "claude terminal passes mode, model and effort");
+        Check(TerminalAgent.Arguments("codex", "", false, "read", false, false, false, "gpt-6.2-astra", "xhigh") == " -s read-only -m gpt-6.2-astra -c model_reasoning_effort=xhigh", "codex terminal passes mode, model and effort");
+        Check(TerminalAgent.ClampMode("", "edit") == "edit" && TerminalAgent.ClampMode("read", "full") == "read" && TerminalAgent.ClampMode("full", "read") == "read" && TerminalAgent.ClampMode("full", "edit") == "edit", "ClampMode respects computer ceiling");
         try {
             TerminalAgent.Arguments("agy", "", true, "read");
             throw new Exception("unexpected history selector");

@@ -220,6 +220,7 @@ final class Kit {
         else if (kind == 1) view.setBackground(shape(PANEL, cardBorder(), 14));
         else if (kind == 3) view.setBackground(shape(badSoft(), 0, 14));
         press(view, action);
+        Motion.springPress(view, 0.97f);
         return view;
     }
     void press(View view, Runnable action) {
@@ -388,6 +389,7 @@ final class Kit {
         box.setContentDescription(says);
         box.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         press(box, action);
+        Motion.springPress(box, 0.92f);
         return box;
     }
     /**
@@ -425,6 +427,7 @@ final class Kit {
         box.setContentDescription(says);
         box.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         press(box, action);
+        Motion.springPress(box, 0.92f);
         return box;
     }
     /** A small action on a card: its icon on a quiet rounded tile, with room around it for a thumb. */
@@ -437,6 +440,7 @@ final class Kit {
         box.setContentDescription(says);
         box.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         press(box, action);
+        Motion.springPress(box, 0.92f);
         return box;
     }
     View dot(int color, int size) {
@@ -500,7 +504,15 @@ final class Kit {
         return box;
     }
     private void raise(Dialog dialog, LinearLayout box, boolean typing) {
-        dialog.setContentView(box);
+        View content = box;
+        if (typing) {
+            android.widget.ScrollView scroller = new android.widget.ScrollView(activity);
+            scroller.setFillViewport(false);
+            scroller.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+            scroller.addView(box, new android.view.ViewGroup.LayoutParams(-1, -2));
+            content = scroller;
+        }
+        dialog.setContentView(content);
         Window window = dialog.getWindow();
         if (window != null && typing) window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE | android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         dialog.show();
@@ -508,9 +520,9 @@ final class Kit {
         window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         window.setDimAmount(0.36f);
         window.setLayout(-1, -2); window.setGravity(Gravity.BOTTOM);
-        box.setAlpha(0f);
-        box.setTranslationY(dp(36));
-        box.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(new DecelerateInterpolator(2.2f)).start();
+        content.setAlpha(0f);
+        content.setTranslationY(dp(36));
+        content.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(new DecelerateInterpolator(2.2f)).start();
     }
     /** A sheet with a box to write in and one button, which hands over what was written. */
     void write(String title, String note, String hint, String yes, java.util.function.Consumer<String> written) {

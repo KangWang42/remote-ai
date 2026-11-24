@@ -62,11 +62,11 @@
   };
   // Resolves with whether the page goes on with what began (a conversation's or a terminal's page), as everything
   // here does: where it does not, a page that the app opened for this is left for the app's list again.
-  async function begin(kind, tool, project) {
+  async function begin(kind, tool, project, params) {
     if (tool === viaShell) {
       return page.startAgyShell(project);
     }
-    return kind !== 'app' ? page.start(tool, project) : page.chatOk(tool) ? page.chat(tool, project) : inApp(tool, project);
+    return kind !== 'app' ? page.start(tool, project, undefined, false, false, undefined, params) : page.chatOk(tool) ? page.chat(tool, project, undefined, false, undefined, params) : inApp(tool, project);
   }
 
   // Keep the terminal entry visible on the default 应用 tab as well.
@@ -92,11 +92,26 @@
         : el('p', { className: 'none', textContent: '电脑上没有找到 Claude Code、Codex 或命令行终端' }));
   }
 
-  // ---- for every project: the kinds, the tools of the one that stands open, and the projects, the ones used last first.
+  // ---- model catalog cache for the visual parameter bar inside 新建对话
+  let modelCatalog = null, modelAsking = null;
+  function loadModels() {
+    const d = window.RemoteTeamDefaults;
+    if (!d || !page.has('teams-models') || !page.usable()) return Promise.resolve(modelCatalog);
+    if (modelCatalog) return Promise.resolve(modelCatalog);
+    if (!modelAsking) {
+      modelAsking = api('api/work', { id: newId(), action: 'team_models' })
+        .then(res => { modelCatalog = d.normalizeModels(res && res.models); return modelCatalog; })
+        .catch(() => null)
+        .finally(() => { modelAsking = null; });
+    }
+    return modelAsking;
+  }
+
+  // ---- for every project: the kinds, the tools of the one that stands open, optional visual parameters, and the projects.
   // The tool used last stays chosen, so that a press on a project begins.
   async function anywhere() {
     if (!page.usable()) { toast('电脑离线，暂时不能新建'); return false; }
-    const data = page.data, has = offered();
+    const data = page.data, has = offered(), d = window.RemoteTeamDefaults;
     const latest = name => Math.max(0, ...(data.terminals || []).filter(t => t.dir === name).map(t => t.created || 0), ...(data.sessions || []).filter(s => s.dir === name).map(s => s.updated || 0));
     const names = (data.device.workspaces || []).slice().sort((a, b) => latest(b) - latest(a));
     if (!has.app.length && !has.term.length) { toast('电脑上没有可用的工具'); return false; }
@@ -104,7 +119,79 @@
     if (!names.length) { toast('请先添加一个项目'); page.go('projects', true); return true; }
     const picked = await openSheet((form, finish) => {
       const tools = el('div', { className: 'tools', role: 'group', ariaLabel: '工具' });
-      let kind = kindOf('', has), tool = '';
+      const paramBox = el('div', { className: 'begin-params', hidden: true });
+      let kind = kindOf('', has), tool = '', paramsOpen = false;
+      const overrides = {};
+      const maxMode = (data.device && data.device.max_mode) || '';
+      const configurable = t => ['claude', 'codex', 'agy'].includes(t) && (page.has('teams-models') || page.has('chat-params'));
+      const stateFor = t => {
+        if (!overrides[t]) {
+          const base = d ? d.savedParams(t, maxMode) : {};
+          overrides[t] = { model: base.model || '', effort: base.effort || '', mode: base.mode || '' };
+        }
+        return overrides[t];
+      };
+      const drawParams = () => {
+        if (!d || !configurable(tool) || (kind === 'app' && !page.chatOk(tool))) { paramBox.hidden = true; return; }
+        paramBox.hidden = false;
+        const st = stateFor(tool);
+        const list = (modelCatalog && modelCatalog[tool]) || [];
+        const entry = d.modelEntry(tool, st.model, modelCatalog);
+        const efforts = entry && Array.isArray(entry.efforts) ? entry.efforts : [];
+        if (st.effort && efforts.length && !efforts.includes(st.effort)) st.effort = '';
+        const summary = [
+          st.model ? d.modelLabel(tool, st.model, modelCatalog) : '默认模型',
+          st.effort ? '思考 ' + d.shortEffortLabel(st.effort) : '',
+          st.mode && tool !== 'agy' ? d.modeLabel(st.mode, true) : ''
+        ].filter(Boolean).join(' · ');
+        const hasCustom = !!(st.model || st.effort || (st.mode && tool !== 'agy'));
+        const headBtn = el('button', {
+          type: 'button', className: 'begin-params-toggle' + (hasCustom ? ' active' : ''),
+          'aria-expanded': String(paramsOpen),
+          onclick: () => { paramsOpen = !paramsOpen; if (paramsOpen && !modelCatalog) loadModels().then(drawParams); drawParams(); }
+        }, el('span', { className: 'begin-params-label', textContent: '运行参数' }),
+          el('span', { className: 'begin-params-val', textContent: summary }),
+          el('span', { className: 'begin-params-chev', textContent: paramsOpen ? '收起 ▴' : '调整 ▾' }));
+        const parts = [headBtn];
+        if (paramsOpen) {
+          const panel = el('div', { className: 'begin-params-panel' });
+          if (list.length) {
+            const mChips = el('div', { className: 'begin-chips', role: 'group', ariaLabel: '模型' },
+              ...[['', '工具默认']].concat(list.map(m => [m.id, m.label])).map(([id, label]) =>
+                el('button', {
+                  type: 'button', className: 'begin-chip', 'aria-pressed': String(st.model === id),
+                  textContent: label,
+                  onclick: () => { st.model = id; st.effort = ''; drawParams(); }
+                })));
+            panel.append(el('div', { className: 'begin-param-row' }, el('span', { className: 'begin-param-k', textContent: '模型' }), mChips));
+          } else if (modelAsking) {
+            panel.append(el('p', { className: 'begin-param-hint', textContent: '正在读取电脑端可用模型…' }));
+          }
+          if (efforts.length && page.has('teams-effort')) {
+            const eChips = el('div', { className: 'begin-chips', role: 'group', ariaLabel: '思考深度' },
+              ...[['', '默认']].concat(efforts.map(e => [e, d.shortEffortLabel(e)])).map(([val, label]) =>
+                el('button', {
+                  type: 'button', className: 'begin-chip', 'aria-pressed': String(st.effort === val),
+                  textContent: label,
+                  onclick: () => { st.effort = val; drawParams(); }
+                })));
+            panel.append(el('div', { className: 'begin-param-row' }, el('span', { className: 'begin-param-k', textContent: '思考深度' }), eChips));
+          }
+          if (tool !== 'agy' && page.has('chat-params')) {
+            const allowed = d.MODE_ORDER.filter(m => d.modeAllowed(m, maxMode));
+            const mdChips = el('div', { className: 'begin-chips', role: 'group', ariaLabel: '权限模式' },
+              ...[['', '跟随电脑']].concat(allowed.map(m => [m, d.MODE_LABELS[m]])).map(([val, label]) =>
+                el('button', {
+                  type: 'button', className: 'begin-chip', 'aria-pressed': String(st.mode === val),
+                  textContent: label,
+                  onclick: () => { st.mode = val; drawParams(); }
+                })));
+            panel.append(el('div', { className: 'begin-param-row' }, el('span', { className: 'begin-param-k', textContent: '权限模式' }), mdChips));
+          }
+          parts.push(panel);
+        }
+        paramBox.replaceChildren(...parts);
+      };
       const show = now => {
         kind = now;
         const options = choices(kind, has);
@@ -112,15 +199,22 @@
         tools.replaceChildren(...options.map(one => tile(kindFor(kind, one), one, { ariaPressed: String(one === tool), onclick: event => {
           tool = one; page.keep('new' + kind, one);
           tools.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === event.currentTarget)));
+          drawParams();
         } })));
+        drawParams();
       };
       show(kind);
-      form.append(el('div', { className: 'head' }, el('h3', { textContent: '新建对话' }), switcher(kind, has, show)), tools,
+      if (page.has('teams-models') && !modelCatalog) loadModels().then(drawParams);
+      form.append(el('div', { className: 'head' }, el('h3', { textContent: '新建对话' }), switcher(kind, has, show)), tools, paramBox,
         el('p', { className: 'quiet', textContent: '选择项目后创建' }),
-        el('div', { className: 'anywhere folders' }, ...names.slice(0, 12).map(name => el('button', { type: 'button', className: 'choice', onclick: () => finish({ kind: kindFor(kind, tool), tool, name }) },
+        el('div', { className: 'anywhere folders' }, ...names.slice(0, 12).map(name => el('button', { type: 'button', className: 'choice', onclick: () => {
+          const st = configurable(tool) ? stateFor(tool) : null;
+          const params = st ? Object.assign({}, st.model ? { model: st.model } : {}, st.effort ? { effort: st.effort } : {}, st.mode && tool !== 'agy' ? { mode: st.mode } : {}) : undefined;
+          finish({ kind: kindFor(kind, tool), tool, name, params });
+        } },
           el('span', { className: 'tool folder', html: ICON.folder }), el('span', { textContent: name }), el('span', { className: 'chev', html: ICON.chev })))));
     });
-    return picked ? begin(picked.kind, picked.tool, picked.name) : false;
+    return picked ? begin(picked.kind, picked.tool, picked.name, picked.params) : false;
   }
 
   // ---- in an application

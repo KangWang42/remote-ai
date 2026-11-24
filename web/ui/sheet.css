@@ -1,7 +1,7 @@
 /* The sheet that rises from the foot of every page (sheet.js): one card with pages that slide in from the side,
    grouped rows, and the small controls they hold. Colours come from the page's skin (terminal/skins.js sets them
    on :root); every rule is scoped under .rs so that nothing here reaches the page beneath. */
-dialog.rs { position: fixed; inset: auto 0 0; width: 100%; max-width: 560px; max-height: none; margin: 0 auto; padding: 0; border: 0; background: transparent; color: var(--ink); overflow: visible; }
+dialog.rs { position: fixed; inset: auto 0 var(--kb-h, 0px); width: 100%; max-width: 560px; max-height: none; margin: 0 auto; padding: 0; border: 0; background: transparent; color: var(--ink); overflow: visible; }
 dialog.rs, dialog.rs[open] { animation: none; border-radius: 0; }
 dialog.rs::backdrop { background: rgb(0 0 0 / .42); animation: rs-fade .22s ease-out; }
 /* closed already, seen only as its card goes down */
@@ -14,7 +14,7 @@ dialog.rs.closing { display: block; z-index: 2147483000; pointer-events: none; }
 :where(.rs) svg { display: block; flex: none; }
 
 /* the card: the bar at its top, the page, and what is done on the page at its foot */
-.rs-card { display: flex; flex-direction: column; max-height: min(88vh, 88dvh); border-radius: 24px 24px 0 0; background: var(--bg);
+.rs-card { display: flex; flex-direction: column; max-height: min(calc(var(--vv-h, 100dvh) - 16px), 88dvh); border-radius: 24px 24px 0 0; background: var(--bg);
   box-shadow: 0 -10px 40px rgb(0 0 0 / .18); overflow: hidden; animation: rs-rise .3s cubic-bezier(.2, .9, .25, 1); will-change: transform; }
 .rs.closing .rs-card { transform: translateY(105%); transition: transform .2s cubic-bezier(.4, 0, 1, 1); }
 .rs.dragging .rs-card { transition: none; animation: none; }
@@ -183,7 +183,7 @@ button.rs-row:active, label.rs-row:active { background: var(--raised); }
 .rs-said:empty { display: none; }
 .rs-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; }
 
-dialog.rs.rs-full { inset: 0; width: 100%; height: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; overflow: hidden; }
+dialog.rs.rs-full { inset: var(--vv-top, 0px) 0 auto 0; width: 100%; height: 100%; height: var(--vv-h, 100dvh); max-width: none; max-height: none; margin: 0; overflow: hidden; }
 dialog.rs.rs-full::backdrop { background: var(--bg); animation: none; }
 dialog.rs.rs-full .rs-card { height: 100%; max-height: none; width: 100%; max-width: 100%; border-radius: 0; box-shadow: none; background: var(--bg); overflow: hidden; animation: rs-full-in .18s ease-out; }
 dialog.rs.rs-full.closing .rs-card { transform: translateX(14px); opacity: 0; transition: transform .15s ease-in, opacity .15s ease-in; }

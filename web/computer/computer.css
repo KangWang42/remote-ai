@@ -47,6 +47,12 @@ html[data-theme="dark"] .team-default-badge.n-ag { background: #261d4a; color: #
 .team-default-select:disabled { opacity: .6; cursor: not-allowed; }
 .team-default-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; }
 .team-default-actions small { color: var(--muted); font-size: .78rem; line-height: 1.4; }
-.team-default-reset { flex: none; min-height: 34px; padding: 0 12px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink, var(--accent)); font-size: .82rem; font-weight: 600; }
-.team-default-reset:active { opacity: .82; }
+.team-default-reset { flex: none; min-height: 34px; padding: 0 12px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink, var(--accent)); font-size: .82rem; font-weight: 600; transition: transform .12s ease, opacity .12s ease; }
+.team-default-reset:active { opacity: .82; transform: scale(.96); }
+.param-visual-row { display: grid; gap: 6px; }
+.param-visual-label { color: var(--muted); font-size: .74rem; font-weight: 600; padding-left: 2px; }
+.param-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.param-pill { min-height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--card-border, var(--line)); background: var(--surface-sub, var(--bg)); color: var(--ink); font-size: .8rem; font-weight: 550; transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .1s ease; }
+.param-pill:active { transform: scale(.95); }
+.param-pill[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 650; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 26%, transparent); }
 @media (max-width: 360px) { .team-default-fields { grid-template-columns: minmax(0, 1fr); } }

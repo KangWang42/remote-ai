@@ -264,6 +264,16 @@
     $('clock').textContent = kind === 'busy' && since ? lasted(Date.now() - since) : '';
     $('stop').hidden = !(kind === 'busy' || kind === 'confirm');
     $('again').hidden = !(ended && terminal.session);
+    const paramsBtn = $('params-btn');
+    if (paramsBtn) {
+      const canTune = !!terminal && !ended && kind !== 'busy' && kind !== 'confirm' && device.online && (work.has('teams-models') || work.has('chat-params'));
+      paramsBtn.hidden = !canTune;
+      if (canTune) {
+        const label = paramsSummary();
+        $('params-text').textContent = label || '模型与参数';
+        paramsBtn.classList.toggle('custom', !!label);
+      }
+    }
     $('write').hidden = !!ended;
     $('go').hidden = !(kind === 'idle' && (lastEnd === 'stopped' || lastEnd === 'failed') && !$('box').value.trim() && !(picker && picker.count));
     $('send').disabled = kind === 'off';
@@ -290,7 +300,28 @@
       if (terminal.team) $('team-bar-text').textContent = '协作任务进行中 · 当前对话已加入协作';
     }
     canPicture();
+    ensureModelCatalog();
     if (terminal.error && terminal.error !== lastError) { lastError = terminal.error; if (drawn) toast(terminal.error); }
+  }
+  let modelCatalog = null, modelCatalogAsked = false;
+  function ensureModelCatalog() {
+    if (modelCatalogAsked || !terminal) return;
+    modelCatalogAsked = true;
+    work.ensure().then(() => {
+      stands();
+      if (window.RemoteRestart && window.RemoteRestart.models && work.has('teams-models')) {
+        return window.RemoteRestart.models(work).then(cat => { modelCatalog = cat; stands(); });
+      }
+    }, () => { modelCatalogAsked = false; });
+  }
+  function paramsSummary() {
+    if (!terminal) return '';
+    const d = window.RemoteTeamDefaults;
+    const parts = [];
+    if (terminal.model) parts.push(d ? d.modelLabel(terminal.tool, terminal.model, modelCatalog) : terminal.model);
+    if (terminal.effort) parts.push('思考 ' + (d ? d.shortEffortLabel(terminal.effort) : terminal.effort));
+    if (terminal.mode && terminal.mode !== 'full' && terminal.tool !== 'agy') parts.push(d ? d.modeLabel(terminal.mode, true) : terminal.mode);
+    return parts.join(' · ');
   }
 
   // ---- reading: the stay at the end while one is there
@@ -376,6 +407,17 @@
     stands();
   };
   box.addEventListener('input', () => { draft.set(box.value); grow(); });
+  box.addEventListener('focus', () => {
+    const keepEnd = atEnd();
+    setTimeout(() => {
+      if (document.activeElement === box && keepEnd) toEnd();
+    }, 220);
+  });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+      if (document.activeElement === box && atEnd()) toEnd();
+    }, { passive: true });
+  }
   box.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('write').requestSubmit(); } });
   // The picture button, shown where the computer takes pictures with a message and the conversation is in a project.
   let sendingPictures = false, pictureAsked = false;
@@ -406,11 +448,16 @@
   $('again').onclick = () => bridge().again();
   $('back').onclick = () => bridge().close();
   $('files').onclick = () => { if (terminal && terminal.dir) location.href = '../files/?dir=' + encodeURIComponent(terminal.dir) + '&from=terminal'; };
+  if ($('params-btn')) $('params-btn').onclick = () => {
+    if (!terminal) return;
+    work.ensure();
+    RemoteSheet.open(RemoteRestart.paramsPage(work, of(), choice => reopen('chat', choice)), '模型与参数');
+  };
   if ($('team-bar')) $('team-bar').onclick = () => { if (terminal && terminal.team) openTeam(terminal.team); };
 
   // The same conversation in a new terminal of the phone's: closed here, and gone on with there once the computer has
-  // let it go. `form`: 'chat' to go on with it as a conversation (restarted: its tool started anew, `more` the model
-  // and effort it goes on with), '' in a terminal's screen.
+  // let it go. `form`: 'chat' to go on with it as a conversation (restarted: its tool started anew, `more` the model,
+  // effort and permission mode it goes on with), '' in a terminal's screen.
   async function reopen(form, more = {}) {
     const { tool, dir, session, id: was } = terminal;
     if (terminal.state !== 'closed') bridge().send({ action: 'close' });
@@ -418,12 +465,12 @@
       await new Promise(done => setTimeout(done, 500));
       try {
         const list = await (await fetch('../api/terminal', { credentials: 'same-origin', cache: 'no-store' })).json();
-        const listed = (list.sessions || []).find(s => s.id === session && s.tool === tool);
+        const listed = session ? (list.sessions || []).find(s => s.id === session && s.tool === tool) : null;
         const open = (list.terminals || []).some(t => t.id === was && (t.state === 'running' || t.state === 'starting'));
-        if (listed && !listed.live && !open) break;
+        if (!open && (!session || !listed || !listed.live)) break;
       } catch (error) { /* asked again */ }
     }
-    const start = Object.assign({ action: 'start', id: newId(), tool, dir, session, history: false }, form ? { form } : {}, more);
+    const start = Object.assign({ action: 'start', id: newId(), tool, dir, history: false }, session ? { session } : {}, form ? { form } : {}, more);
     const { status, body } = await bridge().post(start);
     if (status !== 200) throw new Error(body.error || '没有打开');
     const tail = bridge().teamQuery ? bridge().teamQuery() : (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : '');
@@ -447,7 +494,7 @@
     readline: ['行距', [['tight', '紧凑'], ['normal', '标准'], ['loose', '宽松']], 'normal'],
     readfont: ['字体', [['sans', '默认'], ['serif', '衬线'], ['mono', '等宽']], 'sans'] };
   const STATE = { busy: ['正在执行', 'var(--busy)'], confirm: ['等你确认', 'var(--bad)'], starting: ['正在启动', 'var(--accent)'], idle: ['等你的消息', 'var(--good)'], ended: ['已结束', 'var(--muted)'] };
-  const of = () => ({ id: terminal.session || '', tool: terminal.tool, title: terminal.title || TOOLS[terminal.tool], dir: terminal.dir || '', terminal: terminal.id });
+  const of = () => ({ id: terminal.session || '', tool: terminal.tool, title: terminal.title || TOOLS[terminal.tool], dir: terminal.dir || '', terminal: terminal.id, model: terminal.model || '', effort: terminal.effort || '', mode: terminal.mode || '' });
   function menuPage() {
     const { ui } = RemoteSheet;
     return { title: '对话', build(p) {
@@ -477,6 +524,9 @@
             p.sheet.push(work.promotePage(of(), team => { if (team && team.id) openTeam(team.id); }));
           }
         }));
+      }
+      if (!ended && (work.has('teams-models') || work.has('chat-params'))) {
+        rows.push(ui.row({ icon: 'sliders', tint: 'codex', id: 'menu-params', label: '模型与参数', value: paramsSummary() || '默认', go: () => p.sheet.push(RemoteRestart.paramsPage(work, of(), choice => reopen('chat', choice))) }));
       }
       rows.push(ui.row({ icon: 'pen', tint: 'muted', label: '重命名', value: terminal.title || '', go: () => p.sheet.push(renamePage()) }));
       if (terminal.session) rows.push(ui.row({ icon: 'refresh', tint: 'muted', label: '重启对话', go: () => p.sheet.push(RemoteRestart.page(work, of(), choice => reopen('chat', choice))) }));

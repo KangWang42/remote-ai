@@ -16,6 +16,16 @@
     max: '最高（max）',
     ultra: '极致（ultra）'
   };
+  const MODE_ORDER = ['full', 'edit', 'read'];
+  const MODE_LABELS = { '': '跟随电脑设置', full: '默认', edit: '自动改文件', read: '只读' };
+  const MODE_SHORT = { '': '默认权限', full: '默认', edit: '自动改文件', read: '只读' };
+  const MODE_HINTS = {
+    '': '沿用电脑端设置中的默认权限模式',
+    full: '按工具原本方式运行，高风险操作前会向你确认',
+    edit: '自动接受文件修改，执行命令等仍按工具规则确认',
+    read: '仅允许读取与分析，不修改文件也不执行改动操作'
+  };
+  const MODE_RANK = { read: 0, edit: 1, full: 2 };
   const RECOMMENDED_HINTS = {
     claude: '推荐 Opus 5.5 · 思考高',
     codex: '推荐 Astra 6.2 · 思考高',
@@ -45,18 +55,19 @@
   function readPrefs() {
     try {
       const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-      if (!raw || typeof raw !== 'object') return { models: {}, efforts: {} };
+      if (!raw || typeof raw !== 'object') return { models: {}, efforts: {}, modes: {} };
       const models = raw.models && typeof raw.models === 'object' ? Object.assign({}, raw.models) : {};
       const efforts = raw.efforts && typeof raw.efforts === 'object' ? Object.assign({}, raw.efforts) : {};
-      return { models, efforts };
+      const modes = raw.modes && typeof raw.modes === 'object' ? Object.assign({}, raw.modes) : {};
+      return { models, efforts, modes };
     } catch {
-      return { models: {}, efforts: {} };
+      return { models: {}, efforts: {}, modes: {} };
     }
   }
 
   function writePrefs(prefs) {
     try {
-      const clean = { models: {}, efforts: {} };
+      const clean = { models: {}, efforts: {}, modes: {} };
       if (prefs && prefs.models && typeof prefs.models === 'object') {
         Object.keys(prefs.models).forEach(k => {
           if (typeof prefs.models[k] === 'string') clean.models[k] = prefs.models[k].trim();
@@ -67,7 +78,13 @@
           if (typeof prefs.efforts[k] === 'string') clean.efforts[k] = prefs.efforts[k].trim().toLowerCase();
         });
       }
-      if (!Object.keys(clean.models).length && !Object.keys(clean.efforts).length) {
+      if (prefs && prefs.modes && typeof prefs.modes === 'object') {
+        Object.keys(prefs.modes).forEach(k => {
+          const val = typeof prefs.modes[k] === 'string' ? prefs.modes[k].trim().toLowerCase() : '';
+          if (val === '' || MODE_ORDER.includes(val)) clean.modes[k] = val;
+        });
+      }
+      if (!Object.keys(clean.models).length && !Object.keys(clean.efforts).length && !Object.keys(clean.modes).length) {
         localStorage.removeItem(STORAGE_KEY);
       } else {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
@@ -89,14 +106,54 @@
     return prefs;
   }
 
+  function setModePref(tool, mode) {
+    const prefs = readPrefs();
+    const clean = String(mode || '').trim().toLowerCase();
+    prefs.modes[tool] = MODE_ORDER.includes(clean) ? clean : '';
+    writePrefs(prefs);
+    return prefs;
+  }
+
   function resetPrefs() {
     try { localStorage.removeItem(STORAGE_KEY); } catch { }
-    return { models: {}, efforts: {} };
+    return { models: {}, efforts: {}, modes: {} };
   }
 
   function hasCustomPrefs(prefs) {
     const p = prefs || readPrefs();
-    return Object.keys(p.models || {}).length > 0 || Object.keys(p.efforts || {}).length > 0;
+    return Object.keys(p.models || {}).length > 0 || Object.keys(p.efforts || {}).length > 0 || Object.keys(p.modes || {}).length > 0;
+  }
+
+  function clampMode(requested, maxMode) {
+    const clean = String(requested || '').trim().toLowerCase();
+    if (!MODE_ORDER.includes(clean)) return '';
+    const cap = String(maxMode || '').trim().toLowerCase();
+    if (!MODE_ORDER.includes(cap)) return clean;
+    return MODE_RANK[clean] <= MODE_RANK[cap] ? clean : cap;
+  }
+
+  function modeAllowed(mode, maxMode) {
+    const clean = String(mode || '').trim().toLowerCase();
+    const cap = String(maxMode || '').trim().toLowerCase();
+    if (!clean || !MODE_ORDER.includes(cap)) return true;
+    return MODE_RANK[clean] <= MODE_RANK[cap];
+  }
+
+  function savedParams(tool, maxMode, prefs) {
+    const p = prefs || readPrefs();
+    const out = {};
+    const m = p.models && typeof p.models[tool] === 'string' ? p.models[tool].trim() : '';
+    const e = p.efforts && typeof p.efforts[tool] === 'string' ? p.efforts[tool].trim().toLowerCase() : '';
+    const md = p.modes && typeof p.modes[tool] === 'string' ? clampMode(p.modes[tool], maxMode) : '';
+    if (m) out.model = m;
+    if (e) out.effort = e;
+    if (md && tool !== 'agy') out.mode = md;
+    return out;
+  }
+
+  function modeLabel(mode, shortForm) {
+    const clean = String(mode || '').trim().toLowerCase();
+    return (shortForm ? MODE_SHORT : MODE_LABELS)[clean] || clean || (shortForm ? '默认权限' : '跟随电脑设置');
   }
 
   function matchItem(list, patterns) {
@@ -227,14 +284,23 @@
     TOOLS_ORDER,
     TOOL_NAMES,
     EFFORT_LABELS,
+    MODE_ORDER,
+    MODE_LABELS,
+    MODE_SHORT,
+    MODE_HINTS,
     RECOMMENDED_HINTS,
     normalizeModels,
     readPrefs,
     writePrefs,
     setModelPref,
     setEffortPref,
+    setModePref,
     resetPrefs,
     hasCustomPrefs,
+    clampMode,
+    modeAllowed,
+    savedParams,
+    modeLabel,
     recommendedModel,
     recommendedEffort,
     modelEntry,
