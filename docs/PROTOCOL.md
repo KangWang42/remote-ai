@@ -661,27 +661,35 @@ The tool of each conversation named is the one the computer listed it with, what
 counts as open when a program on the computer has it (`live`) or one of the phone's own terminals runs it.
 
 **The numbers** (`stats`) are read from the tools' own records on the computer (Claude Code's
-`projects/*/*.jsonl`, Codex's `sessions/**/rollout-*.jsonl`), each record anew only when it has changed. Nothing that
-was said leaves the computer: numbers, dates, and the names of folders.
+`projects/*/*.jsonl`, Codex's `sessions/**/rollout-*.jsonl`, and Antigravity CLI's
+`brain/*/.system_generated/logs/transcript.jsonl`), each record anew only when it has changed, and persisted in a
+local ledger (`<dataDir>/stats-ledger.json`) so updates, restarts, and tool log cleanups do not reset historical days.
+Nothing that was said leaves the computer: numbers, dates, and the names of folders.
 
 ```json
 {"ready": true,
- "days": [{"date": "2026-10-13", "prompts": 11, "sessions": 3, "active": 2280, "in": 51200, "out": 23900, "cached": 1100000, "wait": 2.6}],
- "tools": [{"name": "claude", "prompts": 58, "active": 18000, "tokens": 310000}],
- "projects": [{"name": "web-shop", "prompts": 45, "active": 13920, "tokens": 250000}],
- "hours": [0, 0, 0, 0, 0, 0, 0, 0, 3, 9, 12, 8, 4, 6, 14, 9, 7, 5, 2, 1, 0, 0, 0, 0], "wait": 3.4, "updated": 1791892800000}
+ "days": [{"date": "2026-10-13", "prompts": 11, "sessions": 3, "active": 2280, "in": 51200, "out": 23900, "cached": 1100000, "wait": 2.6,
+           "tools": {"claude": {"prompts": 7, "active": 1620, "tokens": 48000, "cached": 920000}, "codex": {"prompts": 4, "active": 660, "tokens": 27100, "cached": 180000}}}],
+ "tools": [{"name": "claude", "prompts": 58, "active": 18000, "tokens": 310000, "cached": 6200000}],
+ "projects": [{"name": "web-shop", "prompts": 45, "active": 13920, "tokens": 250000, "cached": 4800000}],
+ "hours": [0, 0, 0, 0, 0, 0, 0, 0, 3, 9, 12, 8, 4, 6, 14, 9, 7, 5, 2, 1, 0, 0, 0, 0], "wait": 3.4,
+ "streak": 5, "best_streak": 12, "first_date": "2026-09-20", "ledger_days": 21, "sources": ["claude", "codex", "agy"],
+ "updated": 1791892800000}
 ```
 
 - `days`: one for each day, today the last, by the computer's own calendar. `prompts`: what the owner asked (not
   what a tool gave back, not a helper's own conversation). `sessions`: the conversations something was asked in.
-  `active`: seconds the tools worked on it, from each prompt to the last thing of its turn, a turn counted for
-  three hours at most (Codex notes the length of each turn itself). `in`, `out`, `cached`: tokens the tools note
-  for their answers: fresh input, output, and input read from or written to the cache. `wait`: the middle value of
+  `active`: seconds the tools worked on it, from each prompt through its active steps (each inter-step gap capped at
+  ten minutes and a turn at three hours; Codex notes turn length via `duration_ms`). `in`, `out`, `cached`: tokens
+  the tools note for their answers: fresh input, output, and cached input read/created. `wait`: the middle value of
   the seconds from a prompt to the first thing that came back (null on a day with none; an answer later than ten
-  minutes is not counted).
-- `tools`, `projects`: the same summed over the whole span, the most worked on first (at most four and six). A
-  project goes by its name where the conversation's folder is one or lies in one, else by the folder's own name.
-- `hours`: prompts by the hour of the day, over the whole span. `wait`: the middle value over the whole span.
+  minutes is not counted). `tools`: optional per-tool daily breakdown (`prompts`, `active`, `tokens`, `cached`).
+- `tools`, `projects`: the same summed over the whole span, the most worked on first (at most four and six), each
+  with `prompts`, `active`, `tokens` (`in + out`), and `cached`. A project goes by its name where the conversation's
+  folder is one or lies in one, else by the folder's own name.
+- `hours`: prompts by the hour of the day, strictly within the requested span. `wait`: the middle value over the whole span.
+- `streak`, `best_streak`, `first_date`, `ledger_days`, `sources`: continuous active-day streak, longest historical streak,
+  earliest active date in the ledger, total active days preserved in the ledger, and configured tool sources.
 
 **A question asked at a time** as it is answered: what was set, with `tool`, `title` (the conversation's, as it was
 then), `next` (milliseconds; 0 when nothing is due), `runs`, and `last` (`{"at", "ok", "note"}`, or null), the note

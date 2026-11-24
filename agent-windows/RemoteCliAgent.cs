@@ -135,7 +135,7 @@ public sealed class TerminalAgent {
             Promote = PromoteFromMcp
         });
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += () => { sessionsDirty = true; Wake(); }; Reach.Outbox.Changed += () => { sessionsDirty = true; Wake(); };
-        Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home);
+        Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home, () => Antigravity.Home, Path.Combine(dataDir, "stats-ledger.json"));
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
         Chains = new Chains(Path.Combine(dataDir, "chains.json"));
         Worktrees = new Worktrees(Path.Combine(dataDir, "worktrees"));
@@ -2217,6 +2217,7 @@ public sealed class TerminalAgent {
         }
     }
     public async Task Run() {
+        Stats.WarmAsync(30);
         Task listening = Listen();
         for (;;) {
             try { await Tick(); } catch { /* Retry network and login failures without logging credentials or terminal input. */ }

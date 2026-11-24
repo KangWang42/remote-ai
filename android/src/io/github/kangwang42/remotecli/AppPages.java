@@ -24,16 +24,28 @@ final class AppPages {
     private final MainActivity activity;
     private final Kit kit;
     private final Workbench bench;
+    private final StatsStore statsStore;
     private final Map<String, LinearLayout> holders = new HashMap<>();
     private final Map<String, TextView> deviceSummaries = new HashMap<>();
     private final Map<String, JSONObject> stats = new HashMap<>();
-    private TextView metricPrompts, metricSessions, metricMinutes, coverage;
+    private final Map<String, Long> statsSavedAt = new HashMap<>();
+    private final java.util.Set<String> statsLive = new java.util.HashSet<>();
+    private TextView metricPrompts, metricSessions, metricMinutes, deltaPrompts, deltaSessions, deltaMinutes, coverage, streakBadge, chartInspector, weekFooter;
+    private StatsCharts.DailyBarsView dailyChart;
+    private LinearLayout toolLegend;
+    private StatsRollup.Summary currentSummary;
+    private int pickedDay = -1;
     private int generation, answered, expected;
 
-    AppPages(MainActivity activity, Kit kit, Workbench bench) { this.activity = activity; this.kit = kit; this.bench = bench; }
+    AppPages(MainActivity activity, Kit kit, Workbench bench) {
+        this.activity = activity;
+        this.kit = kit;
+        this.bench = bench;
+        this.statsStore = new StatsStore(activity);
+    }
 
     View build(String tab) {
-        generation++; holders.clear(); deviceSummaries.clear(); stats.clear(); answered = 0; quotaMark = "";
+        generation++; holders.clear(); deviceSummaries.clear(); stats.clear(); statsSavedAt.clear(); statsLive.clear(); answered = 0; quotaMark = ""; pickedDay = -1; currentSummary = null;
         boolean mine = "me".equals(tab);
         LinearLayout page = kit.page(16);
         final View[] refreshHolder = new View[1];
@@ -174,39 +186,88 @@ final class AppPages {
         drawQuotas();
         if (quotaCard.getVisibility() == View.VISIBLE) Motion.riseIn(quotaCard, kit.dp(10), 0);
 
-        // Compact 3-metric KPI summary card for today's work
-        LinearLayout summary = kit.cardBox(20);
-        summary.setPadding(kit.dp(16), kit.dp(14), kit.dp(16), kit.dp(14));
+        // Upgraded daily work statistics card with cached continuity + 7-day stacked trend chart
+        LinearLayout summary = kit.cardBox(22);
+        summary.setPadding(kit.dp(16), kit.dp(15), kit.dp(16), kit.dp(14));
         LinearLayout topRow = kit.row();
-        topRow.addView(kit.semibold("今日工作", 15, kit.INK), new LinearLayout.LayoutParams(0, -2, 1));
-        coverage = kit.text(expected == 0 ? "添加电脑后显示统计" : "正在读取…", 12, kit.MUTED);
-        topRow.addView(coverage);
+        topRow.addView(kit.semibold("工作统计", 15.5f, kit.INK));
+        streakBadge = kit.semibold("", 11, kit.goodInk());
+        streakBadge.setPadding(kit.dp(8), kit.dp(2), kit.dp(8), kit.dp(2));
+        streakBadge.setBackground(kit.shape(kit.goodSoft(), 0, 99));
+        streakBadge.setVisibility(View.GONE);
+        LinearLayout.LayoutParams streakLp = new LinearLayout.LayoutParams(-2, -2);
+        streakLp.leftMargin = kit.dp(8);
+        topRow.addView(streakBadge, streakLp);
+        topRow.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1));
+        if (expected > 0) {
+            TextView detailPill = kit.semibold("详情 ›", 12.5f, kit.accentInk());
+            detailPill.setGravity(Gravity.CENTER);
+            detailPill.setPadding(kit.dp(10), kit.dp(4), kit.dp(10), kit.dp(4));
+            detailPill.setBackground(kit.shape(kit.accentSoft(), 0, 99));
+            kit.press(detailPill, () -> {
+                java.util.List<String> urls = new java.util.ArrayList<>();
+                JSONArray saved = activity.computers();
+                for (int i = 0; i < saved.length(); i++) if (saved.optJSONObject(i) != null) urls.add(saved.optJSONObject(i).optString("url"));
+                activity.pick("查看哪台电脑的工作统计", urls, url -> activity.computerPage(url, "me"));
+            });
+            Motion.springPress(detailPill, 0.94f);
+            topRow.addView(detailPill);
+        }
         summary.addView(topRow);
 
+        coverage = kit.text(expected == 0 ? "添加电脑后显示统计" : "正在读取…", 12, kit.MUTED);
+        summary.addView(coverage, kit.below(3));
+
         LinearLayout metrics = kit.row();
-        metrics.setPadding(0, kit.dp(12), 0, kit.dp(2));
-        metricPrompts = metricCell(metrics, "提问", false);
-        metricSessions = metricCell(metrics, "对话", true);
-        metricMinutes = metricCell(metrics, "分钟", true);
+        metrics.setPadding(0, kit.dp(12), 0, kit.dp(4));
+        TextView[] pCell = metricCell(metrics, "今日提问", false);
+        metricPrompts = pCell[0]; deltaPrompts = pCell[1];
+        TextView[] sCell = metricCell(metrics, "活跃对话", true);
+        metricSessions = sCell[0]; deltaSessions = sCell[1];
+        TextView[] mCell = metricCell(metrics, "工作时长", true);
+        metricMinutes = mCell[0]; deltaMinutes = mCell[1];
         summary.addView(metrics);
 
-        if (expected == 1) {
-            JSONObject only = computers.optJSONObject(0);
-            if (only != null) {
-                String url = only.optString("url");
-                kit.press(summary, () -> activity.computerPage(url, "me"));
-                Motion.springPress(summary, 0.985f);
-            }
-        }
+        View chartDivider = new View(activity);
+        chartDivider.setBackgroundColor(kit.dividerColor());
+        summary.addView(chartDivider, new LinearLayout.LayoutParams(-1, kit.hairline()));
+        ((LinearLayout.LayoutParams) chartDivider.getLayoutParams()).topMargin = kit.dp(10);
+
+        chartInspector = kit.medium("近 7 天趋势", 12.5f, kit.INK);
+        chartInspector.setVisibility(View.GONE);
+        summary.addView(chartInspector, kit.below(10));
+
+        dailyChart = new StatsCharts.DailyBarsView(activity, kit);
+        dailyChart.setVisibility(View.GONE);
+        dailyChart.setOnPick(idx -> {
+            pickedDay = idx;
+            updateInspector();
+        });
+        LinearLayout.LayoutParams chartLp = new LinearLayout.LayoutParams(-1, kit.dp(116));
+        chartLp.topMargin = kit.dp(6);
+        summary.addView(dailyChart, chartLp);
+
+        LinearLayout footRow = kit.row();
+        footRow.setPadding(0, kit.dp(8), 0, 0);
+        toolLegend = kit.row();
+        footRow.addView(toolLegend, new LinearLayout.LayoutParams(0, -2, 1));
+        weekFooter = kit.text("", 11.5f, kit.MUTED);
+        footRow.addView(weekFooter);
+        footRow.setVisibility(View.GONE);
+        footRow.setTag("stats-footer");
+        summary.addView(footRow);
+
         page.addView(summary, kit.below(14));
         Motion.riseIn(summary, kit.dp(10), 45);
 
         // Unified "我的电脑" grouped list
         LinearLayout connections = kit.settingGroup(page, "我的电脑");
+        java.util.List<String> activeUrls = new java.util.ArrayList<>();
         for (int i = 0; i < computers.length(); i++) {
             JSONObject computer = computers.optJSONObject(i);
             if (computer == null) continue;
             final String url = computer.optString("url");
+            activeUrls.add(url);
             final String name = computer.optString("name", MainActivity.host(url));
             if (connections.getChildCount() > 0) connections.addView(kit.insetDivider(64));
             LinearLayout row = kit.row();
@@ -217,7 +278,14 @@ final class AppPages {
             row.addView(badge);
             LinearLayout copy = kit.column();
             copy.addView(kit.line(name, 15, kit.INK, true));
-            TextView sub = kit.line(MainActivity.host(url) + " · 正在读取统计…", 12.5f, kit.MUTED, false);
+            StatsStore.Entry cached = statsStore.load(url);
+            String initialSub = MainActivity.host(url) + " · 正在读取统计…";
+            if (cached != null) {
+                stats.put(url, cached.raw);
+                statsSavedAt.put(url, cached.savedAtMs);
+                initialSub = today(cached.raw);
+            }
+            TextView sub = kit.line(initialSub, 12.5f, kit.MUTED, false);
             copy.addView(sub, kit.below(2));
             deviceSummaries.put(url, sub);
             row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
@@ -233,6 +301,8 @@ final class AppPages {
             kit.press(row, () -> activity.manage(url));
             connections.addView(row);
         }
+        statsStore.prune(activeUrls);
+        if (!stats.isEmpty()) sum();
         kit.setting(connections, R.drawable.ic_plus, kit.accentInk(), "添加电脑", "扫描电脑端的连接二维码", "", kit.accentInk(), activity::scan);
 
         // Grouped settings
@@ -257,21 +327,25 @@ final class AppPages {
         kit.settingSwitch(updates, R.drawable.ic_update, kit.MUTED, "接收预发布版本", "关闭时只接收正式版", activity.previewUpdates(), activity::togglePreviewUpdates);
     }
 
-    private TextView metricCell(LinearLayout parent, String label, boolean withDivider) {
+    private TextView[] metricCell(LinearLayout parent, String label, boolean withDivider) {
         if (withDivider) {
             View divider = new View(activity);
             divider.setBackgroundColor(kit.dividerColor());
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(kit.hairline(), kit.dp(34));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(kit.hairline(), kit.dp(42));
             params.setMargins(kit.dp(6), 0, kit.dp(6), 0);
             parent.addView(divider, params);
         }
         LinearLayout cell = kit.column();
         cell.setPadding(kit.dp(4), 0, kit.dp(4), 0);
-        TextView value = kit.figure("—", 23, kit.MUTED);
+        TextView value = kit.figure("—", 21, kit.MUTED);
+        value.setSingleLine(true);
         cell.addView(value);
-        cell.addView(kit.text(label, 12.5f, kit.MUTED), kit.below(2));
+        cell.addView(kit.text(label, 12, kit.MUTED), kit.below(2));
+        TextView delta = kit.text("", 11, kit.MUTED);
+        delta.setSingleLine(true);
+        cell.addView(delta, kit.below(1));
         parent.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
-        return value;
+        return new TextView[] { value, delta };
     }
 
     private void buildTogether(LinearLayout page, JSONArray computers) {
@@ -378,7 +452,13 @@ final class AppPages {
 
     void refresh(String tab) {
         final int request = ++generation;
-        stats.clear(); answered = 0;
+        if ("me".equals(tab)) {
+            statsLive.clear();
+            answered = 0;
+        } else {
+            stats.clear();
+            answered = 0;
+        }
         Iterable<String> targets = "me".equals(tab) ? deviceSummaries.keySet() : holders.keySet();
         for (final String url : targets) {
             final String cookie = CookieManager.getInstance().getCookie(url);
@@ -404,9 +484,21 @@ final class AppPages {
                         drawQuotas();
                         TextView sub = deviceSummaries.get(url);
                         if (data == null || !problem.isEmpty()) {
-                            if (sub != null) { sub.setText("离线 · " + (problem.isEmpty() ? "请确认电脑在线" : problem)); sub.setTextColor(kit.MUTED); }
+                            JSONObject cached = stats.get(url);
+                            if (sub != null) {
+                                if (cached != null) {
+                                    sub.setText("离线缓存 · " + today(cached));
+                                } else {
+                                    sub.setText("离线 · " + (problem.isEmpty() ? "请确认电脑在线" : problem));
+                                }
+                                sub.setTextColor(kit.MUTED);
+                            }
                         } else {
+                            long nowMs = System.currentTimeMillis();
                             stats.put(url, data);
+                            statsSavedAt.put(url, nowMs);
+                            statsLive.add(url);
+                            statsStore.save(url, data, nowMs);
                             if (sub != null) { sub.setText(today(data)); sub.setTextColor(kit.MUTED); }
                         }
                         sum();
@@ -493,35 +585,116 @@ final class AppPages {
 
     private String today(JSONObject data) {
         JSONObject day = day(data);
-        return "今天 " + day.optLong("prompts") + " 次提问 · " + day.optLong("sessions") + " 段对话 · " + Math.round(day.optDouble("active", 0) / 60) + " 分钟";
+        return "今天 " + day.optLong("prompts") + " 次提问 · " + day.optLong("sessions") + " 段对话 · " + StatsRollup.formatDuration(Math.round(day.optDouble("active", 0)));
+    }
+
+    private void updateInspector() {
+        if (chartInspector == null || currentSummary == null || currentSummary.days.isEmpty()) return;
+        int idx = pickedDay >= 0 && pickedDay < currentSummary.days.size() ? pickedDay : currentSummary.days.size() - 1;
+        boolean isToday = idx == currentSummary.days.size() - 1;
+        chartInspector.setText(StatsRollup.dayInspector(currentSummary.days.get(idx), isToday));
     }
 
     private void sum() {
-        long prompts = 0, sessions = 0; double seconds = 0;
-        for (JSONObject data : stats.values()) {
-            JSONObject day = day(data);
-            prompts += day.optLong("prompts");
-            sessions += day.optLong("sessions");
-            seconds += day.optDouble("active", 0);
+        java.util.List<StatsRollup.ComputerSnapshot> snapshots = new java.util.ArrayList<>();
+        long newestSaved = 0;
+        for (Map.Entry<String, JSONObject> entry : stats.entrySet()) {
+            Long savedAt = statsSavedAt.get(entry.getKey());
+            long ts = savedAt != null ? savedAt : 0;
+            if (ts > newestSaved) newestSaved = ts;
+            snapshots.add(StatsStore.parse(entry.getValue(), ts));
         }
-        boolean hasData = !stats.isEmpty();
+        StatsRollup.Summary summary = StatsRollup.aggregate(snapshots, 7);
+        currentSummary = summary;
+        boolean hasData = !stats.isEmpty() && !summary.days.isEmpty();
+
         if (metricPrompts != null) {
-            if (hasData) Motion.countTo(metricPrompts, prompts); else metricPrompts.setText("—");
+            if (hasData) Motion.countTo(metricPrompts, summary.todayPrompts); else metricPrompts.setText("—");
             metricPrompts.setTextColor(hasData ? kit.INK : kit.MUTED);
         }
         if (metricSessions != null) {
-            if (hasData) Motion.countTo(metricSessions, sessions); else metricSessions.setText("—");
+            if (hasData) Motion.countTo(metricSessions, summary.todaySessions); else metricSessions.setText("—");
             metricSessions.setTextColor(hasData ? kit.INK : kit.MUTED);
         }
         if (metricMinutes != null) {
-            if (hasData) Motion.countTo(metricMinutes, Math.round(seconds / 60)); else metricMinutes.setText("—");
+            metricMinutes.setText(hasData ? StatsRollup.formatDuration(summary.todayActiveSec) : "—");
             metricMinutes.setTextColor(hasData ? kit.INK : kit.MUTED);
         }
+        if (deltaPrompts != null) {
+            deltaPrompts.setText(hasData ? StatsRollup.formatDelta(summary.todayPrompts, summary.yesterdayPrompts, summary.hasYesterday) : "");
+            deltaPrompts.setTextColor(hasData && summary.hasYesterday && summary.todayPrompts > summary.yesterdayPrompts ? kit.goodInk() : kit.MUTED);
+        }
+        if (deltaSessions != null) {
+            deltaSessions.setText(hasData ? StatsRollup.formatDelta(summary.todaySessions, summary.yesterdaySessions, summary.hasYesterday) : "");
+            deltaSessions.setTextColor(hasData && summary.hasYesterday && summary.todaySessions > summary.yesterdaySessions ? kit.goodInk() : kit.MUTED);
+        }
+        if (deltaMinutes != null) {
+            deltaMinutes.setText(hasData ? StatsRollup.formatDurationDelta(summary.todayActiveSec, summary.yesterdayActiveSec, summary.hasYesterday) : "");
+            deltaMinutes.setTextColor(hasData && summary.hasYesterday && summary.todayActiveSec > summary.yesterdayActiveSec ? kit.goodInk() : kit.MUTED);
+        }
+        if (streakBadge != null) {
+            if (hasData && summary.streak > 0) {
+                streakBadge.setText("连续 " + summary.streak + " 天");
+                streakBadge.setVisibility(View.VISIBLE);
+            } else {
+                streakBadge.setVisibility(View.GONE);
+            }
+        }
+        if (dailyChart != null && chartInspector != null) {
+            if (hasData) {
+                if (pickedDay < 0 || pickedDay >= summary.days.size()) pickedDay = summary.days.size() - 1;
+                chartInspector.setVisibility(View.VISIBLE);
+                dailyChart.setVisibility(View.VISIBLE);
+                dailyChart.setData(summary.days, summary.avgPrompts, pickedDay);
+                updateInspector();
+            } else {
+                chartInspector.setVisibility(View.GONE);
+                dailyChart.setVisibility(View.GONE);
+            }
+        }
+        if (toolLegend != null && weekFooter != null) {
+            View footRow = (View) toolLegend.getParent();
+            toolLegend.removeAllViews();
+            if (hasData) {
+                boolean light = Kit.light(kit.BG);
+                java.util.List<String> active = StatsRollup.activeTools(summary);
+                for (int i = 0; i < active.size(); i++) {
+                    String tool = active.get(i);
+                    int dotColor = "claude".equals(tool) ? (light ? 0xffd06135 : 0xfff0936b)
+                        : "codex".equals(tool) ? (light ? 0xff2563eb : 0xff6ea8fe)
+                        : "agy".equals(tool) ? (light ? 0xff7c3aed : 0xffb392f0)
+                        : kit.ACCENT;
+                    View dot = kit.dot(dotColor, 7);
+                    LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) dot.getLayoutParams();
+                    if (i > 0) dlp.leftMargin = kit.dp(10);
+                    dlp.rightMargin = kit.dp(4);
+                    toolLegend.addView(dot);
+                    toolLegend.addView(kit.text(StatsRollup.toolShortName(tool), 11.5f, kit.MUTED));
+                }
+                String weekText = "近 7 天 " + summary.spanPrompts + " 次";
+                if (summary.spanActiveSec > 0) weekText += " · " + StatsRollup.formatDuration(summary.spanActiveSec);
+                weekFooter.setText(weekText);
+                if (footRow != null) footRow.setVisibility(View.VISIBLE);
+            } else if (footRow != null) {
+                footRow.setVisibility(View.GONE);
+            }
+        }
         if (coverage != null) {
-            coverage.setText(expected == 0 ? "添加电脑后显示统计"
-                : answered < expected ? "读取中 " + stats.size() + "/" + expected
-                : stats.size() < expected ? "已汇总 " + stats.size() + "/" + expected + " 台 · 未连接电脑未计入"
-                : "已汇总 " + stats.size() + "/" + expected + " 台");
+            long nowMs = System.currentTimeMillis();
+            long refMs = summary.latestUpdatedMs > 0 ? summary.latestUpdatedMs : newestSaved;
+            String ago = refMs > 0 ? AggregateSessions.ago(refMs, nowMs) : "";
+            String suffix = ago.isEmpty() ? "" : " · " + ago + "更新";
+            if (expected == 0) {
+                coverage.setText("添加电脑后显示统计");
+            } else if (answered < expected) {
+                coverage.setText(hasData ? "显示上次统计 · 正在同步 " + statsLive.size() + "/" + expected : "读取中 " + statsLive.size() + "/" + expected);
+            } else if (statsLive.isEmpty() && hasData) {
+                coverage.setText("电脑离线 · 显示缓存数据" + suffix);
+            } else if (statsLive.size() < expected) {
+                coverage.setText("已汇总 " + stats.size() + "/" + expected + " 台" + (stats.size() > statsLive.size() ? "（含缓存）" : " · 未连接电脑未计入") + suffix);
+            } else {
+                coverage.setText("已汇总 " + statsLive.size() + "/" + expected + " 台" + suffix);
+            }
         }
     }
 

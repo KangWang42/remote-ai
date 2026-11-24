@@ -62,7 +62,51 @@ public static class WorkCheck {
         Require((long)tools["claude"]["prompts"] == 2 && (long)tools["codex"]["tokens"] == 1020 && String.Join(",", projects) == "web-shop:2:100,thesis:1:30", "by tool and by project, the project by its name: " + String.Join(",", projects));
         var hours = (int[])read["hours"];
         Require(hours[9] == 1 && hours[11] == 1 && hours[8] == 1 && hours.Sum() == 3, "by hour of the day");
-        Require(((object[])stats.Read(1, named)["days"]).Length == 1 && (int)((Dictionary<string, object>)((object[])stats.Read(1, named)["days"])[0])["prompts"] == 1, "one day: today only");
+        var oneDayRead = stats.Read(1, named);
+        var oneDayHours = (int[])oneDayRead["hours"];
+        Require(((object[])oneDayRead["days"]).Length == 1 && (int)((Dictionary<string, object>)((object[])oneDayRead["days"])[0])["prompts"] == 1 && oneDayHours[8] == 1 && oneDayHours.Sum() == 1, "one day: today only, and hours strictly scoped to the span");
+
+        // ---- Antigravity CLI, Codex duplicate token_count dedup, and persistent disk ledger continuity across restarts/file deletion
+        string agy = Path.Combine(root, "agy"), ledger = Path.Combine(root, "stats-ledger.json");
+        string agyId = "aaaa1111-bbbb-2222-cccc-333333333333";
+        string agyLogs = Path.Combine(agy, "brain", agyId, ".system_generated", "logs");
+        Directory.CreateDirectory(agyLogs);
+        File.WriteAllLines(Path.Combine(agy, "history.jsonl"), new[] {
+            "{\"display\":\"design stats\",\"timestamp\":1795516000000,\"workspace\":\"E:\\\\work\\\\shop\",\"conversationId\":\"" + agyId + "\"}"
+        }, new UTF8Encoding(false));
+        DateTime agyStart = today.AddHours(14);
+        File.WriteAllLines(Path.Combine(agyLogs, "transcript.jsonl"), new[] {
+            "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"" + Utc(agyStart) + "\",\"content\":\"hello\"}",
+            "{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"" + Utc(agyStart.AddSeconds(5)) + "\",\"input_tokens\":500,\"cache_read_tokens\":1200,\"output_tokens\":150}",
+            "{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"GENERIC\",\"status\":\"DONE\",\"created_at\":\"" + Utc(agyStart.AddSeconds(25)) + "\",\"content\":\"ok\"}",
+            "{\"step_index\":3,\"source\":\"SYSTEM\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"" + Utc(agyStart.AddSeconds(30)) + "\",\"content\":\"system note\"}",
+            "{\"step_index\":4,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"" + Utc(agyStart.AddSeconds(45)) + "\",\"input_tokens\":200,\"cache_read_tokens\":1800,\"output_tokens\":80}"
+        }, new UTF8Encoding(false));
+        // Append an exact duplicate token_count snapshot to Codex file and verify it is NOT double-counted
+        string codexFile = Path.Combine(codex, "sessions", "2026", "10", "13", "rollout-2026-10-13T08-00-00-66666666-7777-8888-9999-000000000000.jsonl");
+        File.AppendAllLines(codexFile, new[] {
+            "{\"timestamp\":\"" + Utc(b.AddSeconds(21)) + "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":9000,\"output_tokens\":900},\"last_token_usage\":{\"input_tokens\":2000,\"cached_input_tokens\":1500,\"output_tokens\":70,\"reasoning_output_tokens\":0,\"total_tokens\":2070},\"model_context_window\":1}}}"
+        }, new UTF8Encoding(false));
+
+        var persistent = new Stats(() => claude, () => codex, () => agy, ledger);
+        var full = persistent.Read(7, named);
+        Require(File.Exists(ledger), "stats ledger persisted to disk");
+        var fullDays = ((object[])full["days"]).Cast<Dictionary<string, object>>().ToList();
+        var todayFull = fullDays[6];
+        var todayTools = (Dictionary<string, object>)todayFull["tools"];
+        var agyDay = (Dictionary<string, object>)todayTools["agy"];
+        var codexDay = (Dictionary<string, object>)todayTools["codex"];
+        Require((int)todayFull["prompts"] == 2 && (int)todayFull["sessions"] == 2, "today combines Codex and Antigravity CLI: " + todayFull["prompts"] + "/" + todayFull["sessions"]);
+        Require((long)agyDay["prompts"] == 1 && (long)agyDay["active"] == 45 && (long)agyDay["tokens"] == 930 && (long)agyDay["cached"] == 3000, "Antigravity CLI day metrics: " + agyDay["prompts"] + " " + agyDay["active"] + " " + agyDay["tokens"] + " " + agyDay["cached"]);
+        Require((long)codexDay["tokens"] == 1020 && (long)codexDay["cached"] == 2100, "Codex duplicate token_count snapshot is deduplicated: " + codexDay["tokens"]);
+        Require((int)full["streak"] == 2 && (int)full["best_streak"] == 2 && (int)full["ledger_days"] == 2, "continuous 2-day streak across yesterday and today: " + full["streak"]);
+
+        // Simulate app update/restart AND tool log cleanup (delete raw Claude file from yesterday) -> ledger preserves history!
+        File.Delete(Path.Combine(claude, "projects", "C--work-shop", "11111111-2222-3333-4444-555555555555.jsonl"));
+        var afterRestart = new Stats(() => claude, () => codex, () => agy, ledger);
+        var resumed = afterRestart.Read(7, named);
+        var resumedDays = ((object[])resumed["days"]).Cast<Dictionary<string, object>>().ToList();
+        Require((int)resumedDays[5]["prompts"] == 2 && (long)resumedDays[5]["active"] == 100 && (int)resumed["streak"] == 2, "history survives restart and deleted raw transcript via ledger");
 
         // ---- questions asked at a time
         string kept = Path.Combine(root, "schedules.json");

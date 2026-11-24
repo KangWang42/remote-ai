@@ -200,8 +200,15 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         until("document.querySelectorAll('#me .day').length === 7 && document.querySelectorAll('#me .tile').length === 4", "today in figures and the last seven days")
         assert shown("#settings") and not shown("#new-task") and asked("work_stats")[-1]["days"] == 7
         assert "次提问" in value("document.querySelector('#me .at').textContent") and "Claude Code" in value("document.querySelector('#me .shares').textContent")
+        assert "连续 5 天" in value("document.querySelector('#me .stats-meta').textContent")
+        assert "缓存复用" in value("document.querySelector('#me .token-card').textContent")
+        assert value("document.querySelectorAll('#me .bar-seg').length") >= 7
+        assert value("!!document.querySelector('#me .avg-line')")
         assert value("document.querySelector('#computer').textContent").count("1.6.0") == 1
         browser.picture(out / "me.png")
+        value("Array.from(document.querySelectorAll('#period .section-head .seg button')).find(b => b.textContent === '14 天').click()")
+        until("document.querySelectorAll('#me .day').length === 14", "fourteen days")
+        assert asked("work_stats")[-1]["days"] == 14
         value("Array.from(document.querySelectorAll('#period .section-head .seg button')).find(b => b.textContent === '30 天').click()")
         until("document.querySelectorAll('#me .day').length === 30", "thirty days")
         assert asked("work_stats")[-1]["days"] == 30
@@ -210,6 +217,11 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-tabs-", ignore_cleanup_errors
         before = value("document.querySelector('#me .at').textContent")
         value("document.querySelectorAll('#me .day')[3].click()")
         until("document.querySelector('#me .at').textContent !== %s && document.querySelectorAll('#me .day')[3].getAttribute('aria-pressed') === 'true'" % json.dumps(before), "the day that was pressed")
+        # interactive 24-hour rhythm bar selection
+        value("document.querySelectorAll('#me .hour-bar')[14].click()")
+        until("document.querySelector('#me .hours-note').textContent.startsWith('14:00')", "picked hour bar updates header")
+        # continuity cache saved in localStorage
+        assert value("Object.keys(localStorage).some(k => k.startsWith('rcli:stats:v2:'))"), "stats cached in localStorage for continuity"
 
         # ---- the limits, first on 我的: a line for each window; one nearly used up stands out; why one is not known;
         # agy shows only its primary Gemini/Neon pool by default and expands secondary pools on click

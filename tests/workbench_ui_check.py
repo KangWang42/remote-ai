@@ -78,4 +78,11 @@ skins_js = (ROOT / "web/terminal/skins.js").read_text(encoding="utf-8")
 chat_css = (ROOT / "web/chat/chat.css").read_text(encoding="utf-8")
 sheet_css = (ROOT / "web/ui/sheet.css").read_text(encoding="utf-8")
 assert "--vv-h" in skins_js and "--vv-top" in skins_js and "--kb-h" in skins_js and "--vv-h" in chat_css and "--kb-h" in sheet_css, "Soft-keyboard visualViewport sync must protect chat, sheets and modals"
-print("Remaining quota, native motion, visual parameter, and soft-keyboard viewport guards passed")
+stats_cs = (ROOT / "agent-windows/Stats.cs").read_text(encoding="utf-8")
+stats_store = (ROOT / "android/src/io/github/kangwang42/remotecli/StatsStore.java").read_text(encoding="utf-8")
+stats_charts = (ROOT / "android/src/io/github/kangwang42/remotecli/StatsCharts.java").read_text(encoding="utf-8")
+me_js = (ROOT / "web/me.js").read_text(encoding="utf-8")
+assert "LedgerVersion" in stats_cs and "SaveLedger" in stats_cs and "Agy(" in stats_cs, "Stats.cs must persist continuous ledger and include Antigravity CLI"
+assert "StatsStore" in app_pages and "StatsCharts.DailyBarsView" in app_pages and "remote-ai-stats" in stats_store and "DailyBarsView" in stats_charts, "Android 我的 must cache stats continuously and render native 7-day chart"
+assert "rcli:stats:v2:" in me_js and "token-card" in me_js and "avg-line" in me_js, "Embedded me.js must cache stats and render token breakdown and stacked daily bars"
+print("Remaining quota, native motion, visual parameter, soft-keyboard viewport, and continuous stats guards passed")

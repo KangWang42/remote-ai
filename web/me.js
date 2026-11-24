@@ -1,89 +1,327 @@
-/* 我的: how much of each tool's usage limits is used, as the computer reads it from the tools (device.quotas,
-   agent-windows/Quotas.cs); the owner's work with the tools in numbers, as the computer reads it from Claude Code's
-   and Codex's own records (docs/PROTOCOL.md, `/api/work`, "stats"): today, and the last days by day, by tool, by
-   project and by hour; and what program the computer runs. Numbers and names of folders only: nothing that was said. */
+/* 我的: remaining usage limits per tool (device.quotas, agent-windows/Quotas.cs), continuous daily work statistics
+   across Claude Code, Codex, and Antigravity CLI (docs/PROTOCOL.md, `/api/work`, "stats"), and computer status.
+   Numbers and folder names only: nothing that was said leaves the computer. */
 (() => {
   'use strict';
   const page = window.RemoteCliPage, { $, el, TOOLS, api, newId } = page;
-  const box = $('me'), kept = {};       // by how many days were asked for: when, and what the computer answered
-  const METRIC = { prompts: '提问', active: '时长', tokens: 'token' }, WEEK = '日一二三四五六';
-  let span = 7, metric = 'prompts', picked = -1, asking = 0, tried = 0, wanted = false, failed = '', drawn = '', expanded = new URLSearchParams(location.search).has('stats'), quotaAnimated = false;
+  const box = $('me'), kept = {};       // by span days: { at, stats, cached }
+  const METRIC = { prompts: '提问', active: '时长', tokens: 'Token' }, WEEK = '日一二三四五六';
+  const TOOL_ORDER = ['claude', 'codex', 'agy'];
+  const TOOL_MONO = { claude: 'CC', codex: 'CX', agy: 'AG' };
+  const TOOL_SHORT = { claude: 'Claude', codex: 'Codex', agy: 'Antigravity' };
+  let span = 7, metric = 'prompts', picked = -1, pickedHour = -1, asking = 0, tried = 0, wanted = false, failed = '', drawn = '';
+  let expanded = new URLSearchParams(location.search).has('stats'), quotaAnimated = false, statsAnimated = false;
   const expandedPools = {};
 
-  // ---- numbers as they are read
+  // ---- persistent local continuity cache so updates/restarts never flash empty
+  function cacheKey(days) {
+    const id = (page.data && page.data.device && page.data.device.instance) || 'default';
+    return 'rcli:stats:v2:' + id + ':' + days;
+  }
+  function readCache(days) {
+    try {
+      const raw = localStorage.getItem(cacheKey(days));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.stats || !Array.isArray(parsed.stats.days)) return null;
+      return { at: Number(parsed.at) || 0, stats: parsed.stats, cached: true };
+    } catch { return null; }
+  }
+  function writeCache(days, stats, at) {
+    try { localStorage.setItem(cacheKey(days), JSON.stringify({ at, stats })); } catch { }
+  }
+  function ensureCached(days) {
+    if (!kept[days]) {
+      const hit = readCache(days);
+      if (hit) kept[days] = hit;
+    }
+    return kept[days] || null;
+  }
+
+  // ---- numbers & readable formatting
   const trim = value => value >= 100 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, '');
-  const count = n => n >= 1e8 ? trim(n / 1e8) + ' 亿' : n >= 1e4 ? trim(n / 1e4) + ' 万' : String(Math.round(n)).replace(/\B(?=(\d{3})+$)/g, ',');
-  const lasted = s => { const minutes = Math.round(s / 60); return s <= 0 ? '0 分钟' : minutes < 1 ? '不到 1 分钟' : minutes < 60 ? minutes + ' 分钟' : Math.floor(minutes / 60) + ' 小时' + (minutes % 60 ? ' ' + minutes % 60 + ' 分' : ''); };
+  const count = n => {
+    const v = Math.max(0, Number(n) || 0);
+    return v >= 1e8 ? trim(v / 1e8) + ' 亿' : v >= 1e4 ? trim(v / 1e4) + ' 万' : String(Math.round(v)).replace(/\B(?=(\d{3})+$)/g, ',');
+  };
+  const lasted = s => {
+    const sec = Math.max(0, Number(s) || 0);
+    const minutes = Math.round(sec / 60);
+    return sec <= 0 ? '0 分钟' : minutes < 1 ? '不到 1 分钟' : minutes < 60 ? minutes + ' 分钟' : Math.floor(minutes / 60) + ' 小时' + (minutes % 60 ? ' ' + minutes % 60 + ' 分' : '');
+  };
   const waited = s => s === null || s === undefined ? '暂无' : s < 60 ? trim(s) + ' 秒' : Math.floor(s / 60) + ' 分 ' + Math.round(s % 60) + ' 秒';
-  const tokens = day => day.in + day.out;
-  const of = (day, what) => what === 'tokens' ? tokens(day) : day[what];
+  const totalTokensOf = day => (Number(day.in) || 0) + (Number(day.out) || 0) + (Number(day.cached) || 0);
+  const toolTotalTokens = t => (Number(t.tokens) || 0) + (Number(t.cached) || 0);
+  const of = (day, what) => what === 'tokens' ? totalTokensOf(day) : (Number(day[what]) || 0);
   const said = (value, what) => what === 'prompts' ? value + ' 次提问' : what === 'active' ? lasted(value) : count(value) + ' token';
   const dated = key => { const [, month, day] = key.split('-').map(Number); return month + '月' + day + '日'; };
   const weekday = key => { const [year, month, day] = key.split('-').map(Number); return WEEK[new Date(year, month - 1, day).getDay()]; };
   // a figure with its units set smaller: "1 小时 20 分"
   const figure = text => /\d/.test(text) ? el('b', null, ...String(text).split(/(\d[\d.,]*)/).filter(Boolean).map(part => /^\d/.test(part) ? part : el('small', { textContent: part }))) : el('b', { className: 'none', textContent: text });
 
+  function deltaBadge(todayVal, beforeVal, kind) {
+    if (beforeVal === null || beforeVal === undefined) return { text: '', tone: '' };
+    if (kind === 'active') {
+      const tMin = Math.round((todayVal || 0) / 60), bMin = Math.round((beforeVal || 0) / 60), diff = tMin - bMin;
+      if (diff === 0) return { text: bMin === 0 ? '昨天 0 分钟' : '与昨持平', tone: '' };
+      return { text: diff > 0 ? '较昨 +' + diff + ' 分' : '较昨 ' + diff + ' 分', tone: diff > 0 ? 'up' : 'down' };
+    }
+    const diff = (todayVal || 0) - (beforeVal || 0);
+    if (diff === 0) return { text: beforeVal === 0 ? '昨天 0' : '与昨持平', tone: '' };
+    return { text: diff > 0 ? '较昨 +' + diff : '较昨 ' + diff, tone: diff > 0 ? 'up' : 'down' };
+  }
+
+  function computeStreak(stats) {
+    if (typeof stats.streak === 'number' && stats.streak >= 0) return stats.streak;
+    const days = stats.days || [];
+    let i = days.length - 1;
+    if (i > 0 && !(days[i].prompts > 0)) i--;
+    let run = 0;
+    while (i >= 0 && days[i].prompts > 0) { run++; i--; }
+    return run;
+  }
+
+  function hourSlotLabel(hours) {
+    const blocks = [
+      ['凌晨', hours.slice(0, 6).reduce((a, b) => a + b, 0)],
+      ['上午', hours.slice(6, 12).reduce((a, b) => a + b, 0)],
+      ['下午', hours.slice(12, 18).reduce((a, b) => a + b, 0)],
+      ['夜间', hours.slice(18, 24).reduce((a, b) => a + b, 0)]
+    ].sort((a, b) => b[1] - a[1]);
+    return blocks[0][1] > 0 ? blocks[0][0] + '为主' : '';
+  }
+
   async function load(days) {
     if (asking) return;
     asking = days; tried = Date.now(); wanted = false;
     draw();
-    try { kept[days] = { at: Date.now(), stats: await api('api/work', { id: newId(), action: 'stats', days }) }; failed = ''; }
-    catch (error) { failed = error.message; }
+    try {
+      const fresh = await api('api/work', { id: newId(), action: 'stats', days });
+      const now = Date.now();
+      kept[days] = { at: now, stats: fresh, cached: false };
+      writeCache(days, fresh, now);
+      failed = '';
+    } catch (error) {
+      failed = error.message;
+    }
     asking = 0;
     draw();
   }
 
-  // ---- the parts of the page
+  // ---- reusable UI helpers
   const head = (title, right) => el('div', { className: 'section-head' }, el('h2', { textContent: title }), typeof right === 'string' ? el('p', { textContent: right }) : right || '');
   function seg(label, choices, chosen, changed) {
     const group = el('span', { className: 'seg', role: 'group', ariaLabel: label });
     choices.forEach(([value, text]) => group.append(el('button', { type: 'button', textContent: text, ariaPressed: String(value === chosen), onclick: () => changed(value) })));
     return group;
   }
-  const tile = (name, value, fact) => el('div', { className: 'tile' }, el('span', { textContent: name }), figure(value), el('small', { textContent: fact }));
+  const tile = (name, value, fact, tone) => el('div', { className: 'tile' },
+    el('span', { textContent: name }),
+    figure(value),
+    el('small', { className: tone ? 'delta ' + tone : '', textContent: fact }));
+
+  function continuityStrip(have, online) {
+    const stats = have.stats, streak = computeStreak(stats);
+    const ledgerDays = Number(stats.ledger_days) || (stats.days || []).filter(d => d.prompts > 0).length;
+    const sources = Array.isArray(stats.sources) && stats.sources.length ? stats.sources : ['claude', 'codex'];
+    const left = el('div', { className: 'stats-badges' });
+    if (streak > 0) left.append(el('span', { className: 'stats-pill streak', textContent: '连续 ' + streak + ' 天' }));
+    if (ledgerDays > 0) left.append(el('span', { className: 'stats-pill', textContent: '累计活跃 ' + ledgerDays + ' 天' }));
+    const rightText = have.cached
+      ? (online ? '显示缓存 · 正在同步…' : '电脑离线 · 显示缓存')
+      : sources.map(s => TOOL_SHORT[s] || s).join(' · ') + ' · ' + page.ago(have.at) + '更新';
+    return el('div', { className: 'stats-meta' + (have.cached ? ' cached' : '') }, left, el('span', { className: 'stats-sync', textContent: rightText }));
+  }
+
   function today(stats) {
     const days = stats.days, now = days[days.length - 1], before = days.length > 1 ? days[days.length - 2] : null;
-    return el('section', { id: 'today' }, head('今天', dated(now.date) + ' 周' + weekday(now.date)), el('div', { className: 'tiles' },
-      tile('提问', now.prompts + ' 次', before ? '昨天 ' + before.prompts + ' 次' : ''), tile('对话', now.sessions + ' 段', before ? '昨天 ' + before.sessions + ' 段' : ''),
-      tile('工作时长', lasted(now.active), before ? '昨天 ' + lasted(before.active) : ''), tile('首次响应', waited(now.wait), '近 ' + days.length + ' 天 ' + waited(stats.wait))));
+    const dPrompts = deltaBadge(now.prompts, before ? before.prompts : null);
+    const dSessions = deltaBadge(now.sessions, before ? before.sessions : null);
+    const dActive = deltaBadge(now.active, before ? before.active : null, 'active');
+    return el('section', { id: 'today' },
+      head('今天', dated(now.date) + ' 周' + weekday(now.date)),
+      el('div', { className: 'tiles' },
+        tile('提问', now.prompts + ' 次', dPrompts.text, dPrompts.tone),
+        tile('对话', now.sessions + ' 段', dSessions.text, dSessions.tone),
+        tile('工作时长', lasted(now.active), dActive.text, dActive.tone),
+        tile('首次响应', waited(now.wait), '近 ' + days.length + ' 天 ' + waited(stats.wait))));
   }
-  // The days as bars, for one of three measures. A bar that is pressed says its day above them; today's is said at first.
+
+  function tokenCard(days) {
+    const freshIn = days.reduce((s, d) => s + (Number(d.in) || 0), 0);
+    const outTok = days.reduce((s, d) => s + (Number(d.out) || 0), 0);
+    const cachedTok = days.reduce((s, d) => s + (Number(d.cached) || 0), 0);
+    const total = freshIn + outTok + cachedTok;
+    if (total <= 0) return '';
+    const cacheDenom = freshIn + cachedTok;
+    const hitRate = cacheDenom > 0 ? Math.round(cachedTok / cacheDenom * 100) : 0;
+    const pct = v => (v / total * 100).toFixed(2) + '%';
+    const bar = el('div', { className: 'token-bar', role: 'img', ariaLabel: 'Token 构成：新输入、输出与缓存复用' },
+      freshIn > 0 ? el('i', { className: 'seg-in', style: 'width:' + pct(freshIn) }) : '',
+      outTok > 0 ? el('i', { className: 'seg-out', style: 'width:' + pct(outTok) }) : '',
+      cachedTok > 0 ? el('i', { className: 'seg-cache', style: 'width:' + pct(cachedTok) }) : '');
+    const legendItem = (cls, label, val) => el('div', { className: 'token-cell' },
+      el('span', null, el('i', { className: 't-dot ' + cls }), label),
+      figure(count(val)));
+    return el('div', { className: 'panel token-card' },
+      el('div', { className: 'token-head' },
+        el('div', null, el('b', { textContent: 'Token 吞吐' }), el('small', { textContent: count(total) + ' token' })),
+        cacheDenom > 0 ? el('span', { className: 'stats-pill cache', textContent: '缓存复用 ' + hitRate + '%' }) : ''),
+      bar,
+      el('div', { className: 'token-grid' },
+        legendItem('seg-in', '新输入', freshIn),
+        legendItem('seg-out', '输出', outTok),
+        legendItem('seg-cache', '缓存复用', cachedTok)));
+  }
+
+  function dayToolValue(toolObj, what) {
+    if (!toolObj) return 0;
+    return what === 'tokens' ? toolTotalTokens(toolObj) : (Number(toolObj[what]) || 0);
+  }
+
+  // Stacked multi-AI daily trend bars with average line and interactive selected-day inspector.
   function trend(stats) {
-    const days = stats.days, most = Math.max(1, ...days.map(day => of(day, metric))), at = picked >= 0 && picked < days.length ? picked : days.length - 1;
-    const bars = el('div', { className: 'bars' + (days.length > 10 ? ' many' : '') }, ...days.map((day, index) => el('button', { type: 'button', className: 'day', ariaPressed: String(index === at),
-      ariaLabel: dated(day.date) + '：' + said(of(day, metric), metric), onclick: () => { picked = index; draw(); } }, el('i', { style: 'height:' + (of(day, metric) / most * 100).toFixed(1) + '%' }))));
-    // under seven bars each has its day of the week; under thirty, a date now and then
+    const days = stats.days;
+    const values = days.map(day => of(day, metric));
+    const most = Math.max(1, ...values);
+    const avg = values.reduce((a, b) => a + b, 0) / Math.max(1, days.length);
+    const at = picked >= 0 && picked < days.length ? picked : days.length - 1;
+    const activeDay = days[at];
+    const hasTools = days.some(d => d.tools && Object.keys(d.tools).length > 0);
+    const seenTools = new Set();
+
+    const bars = el('div', { className: 'bars' + (days.length > 10 ? ' many' : '') }, ...days.map((day, index) => {
+      const total = of(day, metric);
+      const heightPct = total > 0 ? Math.max(3, total / most * 100) : 0;
+      const col = el('div', { className: 'bar-stack', style: 'height:' + heightPct.toFixed(1) + '%' });
+      if (total > 0 && hasTools && day.tools) {
+        let used = 0;
+        const present = [];
+        for (const key of TOOL_ORDER) {
+          const v = dayToolValue(day.tools[key], metric);
+          if (v > 0) { present.push([key, v]); used += v; seenTools.add(key); }
+        }
+        const rem = Math.max(0, total - used);
+        if (rem > 0) present.push(['other', rem]);
+        const sumParts = present.reduce((s, p) => s + p[1], 0) || total;
+        present.forEach(([key, v]) => col.append(el('span', { className: 'bar-seg t-' + key, style: 'flex:' + (v / sumParts).toFixed(4) })));
+      } else {
+        col.append(el('span', { className: 'bar-seg t-other', style: 'flex:1' }));
+      }
+      return el('button', {
+        type: 'button',
+        className: 'day' + (total <= 0 ? ' empty' : ''),
+        ariaPressed: String(index === at),
+        ariaLabel: dated(day.date) + '：' + said(total, metric),
+        onclick: () => { picked = index; draw(); }
+      }, col);
+    }));
+
+    const barsWrap = el('div', { className: 'bars-wrap' }, bars);
+    if (avg > 0) {
+      const avgPct = Math.min(96, Math.max(6, avg / most * 100));
+      const avgText = metric === 'prompts' ? trim(avg) + ' 次' : metric === 'active' ? lasted(avg) : count(avg);
+      barsWrap.append(el('div', { className: 'avg-line', style: 'bottom:' + avgPct.toFixed(1) + '%' },
+        el('span', { textContent: '日均 ' + avgText })));
+    }
+
     const axis = el('div', { className: 'axis' + (days.length > 10 ? ' few' : '') }, ...(days.length > 10
       ? [0, Math.floor((days.length - 1) / 2), days.length - 1].map(index => el('span', { textContent: index === days.length - 1 ? '今天' : dated(days[index].date) }))
       : days.map((day, index) => el('span', { textContent: index === days.length - 1 ? '今天' : weekday(day.date) }))));
-    return el('div', { className: 'panel chart' }, el('div', { className: 'chart-head' }, seg('指标', Object.keys(METRIC).map(key => [key, METRIC[key]]), metric, value => { metric = value; draw(); }),
-      el('p', { className: 'at', textContent: dated(days[at].date) + ' · ' + said(of(days[at], metric), metric) })), bars, axis);
+
+    const chips = el('div', { className: 'day-chips' });
+    if (activeDay.sessions > 0) chips.append(el('span', { className: 'day-chip', textContent: activeDay.sessions + ' 段对话' }));
+    if (activeDay.active > 0 && metric !== 'active') chips.append(el('span', { className: 'day-chip', textContent: lasted(activeDay.active) }));
+    if (activeDay.wait !== null && activeDay.wait !== undefined) chips.append(el('span', { className: 'day-chip', textContent: '首响 ' + waited(activeDay.wait) }));
+    if (activeDay.tools) {
+      for (const key of TOOL_ORDER) {
+        const v = dayToolValue(activeDay.tools[key], metric);
+        if (v > 0) {
+          const valText = metric === 'prompts' ? v + ' 次' : metric === 'active' ? lasted(v) : count(v);
+          chips.append(el('span', { className: 'day-chip tool-' + key }, el('i', { className: 't-dot t-' + key }), (TOOL_SHORT[key] || key) + ' ' + valText));
+        }
+      }
+    }
+
+    const legend = seenTools.size > 0
+      ? el('div', { className: 'chart-legend' }, ...TOOL_ORDER.filter(k => seenTools.has(k)).map(k =>
+        el('span', null, el('i', { className: 't-dot t-' + k }), TOOLS[k] || TOOL_SHORT[k] || k)))
+      : '';
+
+    return el('div', { className: 'panel chart' },
+      el('div', { className: 'chart-head' },
+        seg('指标', Object.keys(METRIC).map(key => [key, METRIC[key]]), metric, value => { metric = value; draw(); }),
+        el('div', { className: 'day-inspect' },
+          el('p', { className: 'at', textContent: (at === days.length - 1 ? '今天 · ' : dated(activeDay.date) + ' 周' + weekday(activeDay.date) + ' · ') + said(of(activeDay, metric), metric) }),
+          chips.childElementCount ? chips : '')),
+      barsWrap, axis, legend);
   }
-  // Who or what took how much of the time: a line each, with its share drawn under it.
-  function shares(list, name) {
-    const by = list.some(one => one.active > 0) ? 'active' : 'prompts', most = Math.max(1, ...list.map(one => one[by]));
-    return el('ul', { className: 'panel shares' }, ...list.map(one => el('li', null,
-      el('div', { className: 'line' }, el('b', { textContent: name(one.name) }), el('span', { textContent: lasted(one.active) + ' · ' + one.prompts + ' 次提问' })),
-      el('div', { className: 'track' }, el('i', { style: 'width:' + Math.max(2, one[by] / most * 100).toFixed(1) + '%' })))));
+
+  function shares(list, name, isTools) {
+    const by = list.some(one => one.active > 0) ? 'active' : 'prompts';
+    const sumBy = list.reduce((s, one) => s + (Number(one[by]) || 0), 0) || 1;
+    const most = Math.max(1, ...list.map(one => Number(one[by]) || 0));
+    return el('ul', { className: 'panel shares' }, ...list.map(one => {
+      const sharePct = Math.round((Number(one[by]) || 0) / sumBy * 100);
+      const tokTotal = toolTotalTokens(one);
+      const detail = lasted(one.active) + ' · ' + one.prompts + ' 次提问' + (tokTotal > 0 ? ' · ' + count(tokTotal) + ' token' : '');
+      const titleNode = isTools && TOOL_MONO[one.name]
+        ? el('span', { className: 'share-name' }, el('i', { className: 'share-badge t-' + one.name, textContent: TOOL_MONO[one.name] }), el('b', { textContent: name(one.name) }))
+        : el('span', { className: 'share-name' }, el('b', { textContent: name(one.name) }));
+      return el('li', null,
+        el('div', { className: 'line' }, titleNode, el('em', { className: 'share-pct', textContent: sharePct + '%' })),
+        el('div', { className: 'track' }, el('i', { className: isTools ? 't-' + one.name : '', style: 'width:' + Math.max(2, (Number(one[by]) || 0) / most * 100).toFixed(1) + '%' })),
+        el('div', { className: 'share-detail', textContent: detail }));
+    }));
   }
+
   function hours(stats) {
-    const most = Math.max(1, ...stats.hours);
-    return el('div', { className: 'panel chart' }, el('div', { className: 'bars hours', role: 'img', ariaLabel: '一天里各小时的提问次数' }, ...stats.hours.map(n => el('i', { style: 'height:' + (n / most * 100).toFixed(1) + '%' }))),
-      el('div', { className: 'axis few' }, ...[0, 6, 12, 18, 24].map(hour => el('span', { textContent: String(hour) }))));
+    const list = stats.hours || [];
+    const most = Math.max(1, ...list);
+    const peak = list.indexOf(Math.max(...list));
+    const shownHour = pickedHour >= 0 && pickedHour < 24 ? pickedHour : peak;
+    const hourNote = shownHour >= 0 ? String(shownHour).padStart(2, '0') + ':00–' + String((shownHour + 1) % 24).padStart(2, '0') + ':00 · ' + (list[shownHour] || 0) + ' 次提问' : '';
+    return el('div', { className: 'panel chart hours-panel' },
+      el('div', { className: 'hours-head' },
+        el('span', { className: 'hours-note', textContent: hourNote }),
+        el('span', { className: 'hours-slot', textContent: hourSlotLabel(list) })),
+      el('div', { className: 'bars hours', role: 'group', ariaLabel: '一天里各小时的提问次数' }, ...list.map((n, h) =>
+        el('button', {
+          type: 'button',
+          className: 'hour-bar' + (h === peak && n > 0 ? ' peak' : ''),
+          ariaPressed: String(h === shownHour),
+          ariaLabel: h + ' 点：' + n + ' 次提问',
+          onclick: () => { pickedHour = h; draw(); }
+        }, el('i', { style: 'height:' + (n > 0 ? Math.max(6, n / most * 100) : 0).toFixed(1) + '%' })))),
+      el('div', { className: 'axis few' }, ...[0, 6, 12, 18, 24].map(hour => el('span', { textContent: String(hour).padStart(2, '0') }))));
   }
+
   function period(stats) {
-    const days = stats.days, sum = what => days.reduce((total, day) => total + of(day, what), 0), worked = days.filter(day => day.prompts > 0).length;
-    const cell = (name, value) => el('div', null, el('span', { textContent: name }), figure(value));
-    const parts = [head('近 ' + span + ' 天', seg('时间范围', [[7, '7 天'], [30, '30 天']], span, value => { span = value; picked = -1; draw(); }))];
+    const days = stats.days;
+    const sum = what => days.reduce((total, day) => total + of(day, what), 0);
+    const worked = days.filter(day => day.prompts > 0).length;
+    const avgPrompts = trim(sum('prompts') / Math.max(1, days.length));
+    const streak = computeStreak(stats);
+    const bestStreak = Math.max(streak, Number(stats.best_streak) || 0);
+    const cell = (name, value, sub) => el('div', null, el('span', { textContent: name }), figure(value), sub ? el('small', { className: 'sum-sub', textContent: sub }) : '');
+    const parts = [head('近 ' + span + ' 天', seg('时间范围', [[7, '7 天'], [14, '14 天'], [30, '30 天']], span, value => { span = value; picked = -1; pickedHour = -1; draw(); }))];
     if (!sum('prompts') && !sum('tokens')) return el('section', { id: 'period' }, ...parts, el('p', { className: 'panel none', textContent: '这段时间没有记录' }));
-    parts.push(el('div', { className: 'panel sums' }, cell('提问', sum('prompts') + ' 次'), cell('工作时长', lasted(sum('active'))), cell('有记录的天数', worked + ' 天'),
-      cell('输入', count(sum('in'))), cell('输出', count(sum('out'))), cell('缓存', count(sum('cached')))), trend(stats));
-    if (stats.tools.length) parts.push(head('工具'), shares(stats.tools, name => TOOLS[name] || name));
-    if (stats.projects.length) parts.push(head('项目'), shares(stats.projects, name => name));
-    const peak = stats.hours.indexOf(Math.max(...stats.hours));
-    if (stats.hours.some(n => n > 0)) parts.push(head('时段', peak + ' 点最多'), hours(stats));
-    return el('section', { id: 'period' }, ...parts);
+    parts.push(
+      el('div', { className: 'panel sums' },
+        cell('提问', sum('prompts') + ' 次', '日均 ' + avgPrompts + ' 次'),
+        cell('工作时长', lasted(sum('active')), '活跃 ' + worked + '/' + days.length + ' 天'),
+        cell('连续活跃', streak + ' 天', bestStreak > streak ? '最长 ' + bestStreak + ' 天' : '保持连续')),
+      tokenCard(days),
+      trend(stats));
+    if (stats.tools && stats.tools.length) parts.push(head('工具分布'), shares(stats.tools, name => TOOLS[name] || name, true));
+    if (stats.projects && stats.projects.length) parts.push(head('项目分布'), shares(stats.projects, name => name, false));
+    const peak = (stats.hours || []).indexOf(Math.max(...(stats.hours || [0])));
+    if ((stats.hours || []).some(n => n > 0)) parts.push(head('活跃时段', peak + ' 点高峰'), hours(stats));
+    const firstStatsDraw = !statsAnimated;
+    statsAnimated = true;
+    return el('section', { id: 'period', className: firstStatsDraw ? 'stats-reveal' : '' }, ...parts);
   }
+
   // ---- the limits: primary pool shown directly per tool; secondary pools expand on tap
   const WINDOWS = { five_hour: '5 小时', seven_day: '本周' };
   const windowName = name => WINDOWS[name] || (/_five_hour$/.test(name) ? '5 小时' : /_seven_day$/.test(name) ? '本周' : /^\d+m$/.test(name) ? (parseInt(name, 10) >= 1440 ? Math.round(parseInt(name, 10) / 1440) + ' 天' : Math.round(parseInt(name, 10) / 60) + ' 小时') : name);
@@ -164,23 +402,23 @@
       deviceRows.push(row('computer', 't-agy', '模型与常用参数', defSummary || '可视化设置模型、思考深度与权限', '', () => { location.href = 'computer/#part-team-defaults'; }));
     }
     deviceRows.push(row('computer', 't-accent', '电脑设置', '连接线路、远程访问与工具', page.usable() ? '在线' : '离线', () => { location.href = 'computer/'; }, page.usable() ? 'on' : ''));
-    const dataRows = [row('chart', 't-agy', '工作统计', '提问、对话与工作时长', expanded ? '收起' : '查看', () => { expanded = !expanded; draw(); })];
+    const dataRows = [row('chart', 't-agy', '工作统计', '每日趋势、工具占比与 Token 吞吐', expanded ? '收起' : '查看', () => { expanded = !expanded; draw(); })];
     if (native && native.update) dataRows.push(row('update', 't-muted', '检查更新', 'Remote AI 手机端', native.version ? 'v' + native.version() : '', () => native.update()));
     return el('div', { className: 'settings-grid' }, group('偏好与设备', ...deviceRows), group('数据与版本', ...dataRows));
   }
   function draw() {
-    const data = page.data, supported = page.has('work'), online = page.usable(), have = kept[span];
-    // asked anew when the tab is opened, and once a minute while it stays open
-    const old = have ? Date.now() - have.at : Infinity;
+    const data = page.data, supported = page.has('work'), online = page.usable(), have = ensureCached(span);
+    // asked anew when the tab is opened, and once a minute while it stays open; cached stats stay visible while refreshing
+    const old = have ? (have.cached ? Infinity : Date.now() - have.at) : Infinity;
     if (expanded && supported && online && !asking && (old > 60000 || (wanted && old > 15000)) && Date.now() - tried > 8000) { load(span); return; }
-    const signature = JSON.stringify([expanded, Object.keys(expandedPools).filter(k => expandedPools[k]).sort(), span, metric, picked, have && have.at, asking, failed, supported, online, data.device.version, data.device.newer, data.device.tools, data.device.quotas, Math.floor(Date.now() / 60000)]);
+    const signature = JSON.stringify([expanded, Object.keys(expandedPools).filter(k => expandedPools[k]).sort(), span, metric, picked, pickedHour, have && have.at, have && have.cached, asking, failed, supported, online, data.device.version, data.device.newer, data.device.tools, data.device.quotas, Math.floor(Date.now() / 60000)]);
     if (signature === drawn) return;
     drawn = signature;
     const parts = [quotas(), el('p', { className: 'settings-intro', textContent: '设备连接与个人偏好' }), settings()];
     if (!expanded) { box.replaceChildren(...parts); return; }
     if (!supported) parts.push(el('section', { className: 'notice plain' }, el('b', { textContent: '需要更新电脑端' }), el('span', { textContent: '工作统计由电脑端读取，这台电脑的版本还没有这项功能。' })));
-    else if (have) parts.push(today(have.stats), period(have.stats),
-      el('p', { className: 'hint', textContent: '按这台电脑上 Claude Code 与 Codex 的记录统计 · ' + page.ago(have.at) + '更新' }));
+    else if (have) parts.push(continuityStrip(have, online), today(have.stats), period(have.stats),
+      el('p', { className: 'hint', textContent: '数据已本地持久化账本保存，更新或重启不会清零 · 仅统计数字与项目名' }));
     else if (asking) parts.push(el('div', { className: 'skeleton', ariaHidden: 'true' }, el('i'), el('i'), el('i')));
     else parts.push(el('section', { className: 'notice plain' }, el('b', { textContent: online ? '没有读到统计' : '电脑离线' }), el('span', { textContent: online ? failed || '请稍后再试。' : '电脑上线后显示工作统计。' })));
     parts.push(computer());

@@ -71,13 +71,28 @@ def numbers(days, now):
         date = today - datetime.timedelta(days=back)
         seed = date.toordinal() * 7919 % 97
         busy = 0 if date.weekday() == 6 and back else (seed % 23 + 6) // (3 if date.weekday() == 5 else 1)
-        out.append({"date": date.isoformat(), "prompts": busy, "sessions": min(busy, seed % 5 + 1), "active": busy * (190 + seed * 3), "in": busy * (4100 + seed * 40),
-                    "out": busy * (1900 + seed * 25), "cached": busy * (88000 + seed * 900), "wait": round(2.1 + seed % 30 / 10, 1) if busy else None})
+        active = busy * (190 + seed * 3)
+        fresh = busy * (4100 + seed * 40)
+        written = busy * (1900 + seed * 25)
+        cached = busy * (88000 + seed * 900)
+        c_p = busy * 52 // 100
+        x_p = busy * 28 // 100
+        a_p = max(0, busy - c_p - x_p)
+        day_tools = {}
+        if c_p:
+            day_tools["claude"] = {"prompts": c_p, "active": active * 52 // 100, "tokens": (fresh + written) * 52 // 100, "cached": cached * 60 // 100}
+        if x_p:
+            day_tools["codex"] = {"prompts": x_p, "active": active * 28 // 100, "tokens": (fresh + written) * 28 // 100, "cached": cached * 22 // 100}
+        if a_p:
+            day_tools["agy"] = {"prompts": a_p, "active": active * 20 // 100, "tokens": (fresh + written) * 20 // 100, "cached": cached * 18 // 100}
+        out.append({"date": date.isoformat(), "prompts": busy, "sessions": min(busy, seed % 5 + 1), "active": active, "in": fresh,
+                    "out": written, "cached": cached, "wait": round(2.1 + seed % 30 / 10, 1) if busy else None, "tools": day_tools})
         for n in range(busy):
             hours[(9 + (seed + n * 5) % 13) % 24] += 1
-    prompts, active, tokens = (sum(day[k] for day in out) for k in ("prompts", "active", "in"))
-    share = lambda names, parts: [{"name": name, "prompts": prompts * part // 100, "active": active * part // 100, "tokens": tokens * part // 100} for name, part in zip(names, parts)]
-    return {"ready": True, "days": out, "tools": share(["claude", "codex"], [62, 38]), "projects": share(["web-shop", "thesis", "data-tools"], [48, 33, 19]), "hours": hours, "wait": 3.4, "updated": now}
+    prompts, active, tokens, cached = (sum(day[k] for day in out) for k in ("prompts", "active", "in", "cached"))
+    share = lambda names, parts: [{"name": name, "prompts": prompts * part // 100, "active": active * part // 100, "tokens": tokens * part // 100, "cached": cached * part // 100} for name, part in zip(names, parts)]
+    return {"ready": True, "days": out, "tools": share(["claude", "codex", "agy"], [52, 28, 20]), "projects": share(["web-shop", "thesis", "data-tools"], [48, 33, 19]),
+            "hours": hours, "wait": 3.4, "streak": 5, "best_streak": 12, "first_date": out[0]["date"], "ledger_days": max(days, 18), "sources": ["claude", "codex", "agy"], "updated": now}
 
 
 class Played:
