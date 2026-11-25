@@ -1,17 +1,15 @@
-/* 新建对话: where a new conversation begins, and with what. As a conversation (应用: Claude Code or Codex, run by the
-   computer through the tool's structured mode and shown on the phone as a conversation, chat/; on a computer that
-   cannot, the desktop app of Codex or of Claude, which opens with the first words in its box), or in a terminal
-   (Claude Code, Codex, the shell, as a screen). These two are offered wherever a conversation is begun, and the kind
-   that stands open is the one its owner chose last: kept, in the app for every computer. A held press on a tool of
-   应用 on a project's page opens its desktop app on the computer instead, where the computer offers that.
-   A project's page offers them for that project (`draw`); 任务, and the app's own lists, for every project
-   (`anywhere`). */
+/* 新建对话: where a new conversation begins, and with which AI. One list: an AI the computer runs as a conversation
+   (Claude Code, Codex, Antigravity, through the tool's structured mode, shown as a conversation, chat/) is begun as
+   one, and can be shown on its tool's own screen later from the conversation's menu; on a computer that runs none,
+   the desktop app of Codex or of Claude, which opens with the first words in its box. The other tools, and the
+   shell, begin as terminals. A held press on a conversation's tool on a project's page opens its desktop app on the
+   computer instead, where the computer offers that. A project's page offers them for that project (`draw`); 任务, and
+   the app's own lists, for every project (`anywhere`). */
 (() => {
   'use strict';
   const page = window.RemoteCliPage, { $, el, ICON, TOOLS, api, newId, toast, openSheet } = page;
-  const KINDS = { app: '应用', term: '终端' };
   const APPS = { codex: 'Codex', claude: 'Claude', agy: 'Antigravity' };
-  // what the computer offers of each kind: conversations (应用) and terminals (终端). Where the computer runs no
+  // what the computer offers: conversations (app) and terminals (term). Where the computer runs no
   // conversation of a tool, 应用 opens that tool's desktop app on the computer instead.
   const desktop = tool => page.has(tool + '-desktop-open');
   const viaShell = 'agy-shell';
@@ -27,32 +25,10 @@
     const chatApps = ['codex', 'claude', 'agy'].filter(tool => page.chatOk(tool));
     return { app: chatApps.length ? chatApps : Object.keys(APPS).filter(tool => desktop(tool)), term };
   }
+  // a desktop app is named as one, beside the same tool's terminal
   function named(kind, tool) {
-    if (tool === 'agy' || tool === viaShell) return kind === 'app' && !page.chatOk('agy') && desktop('agy') ? APPS.agy : 'agy';
-    return kind === 'app' ? APPS[tool] : TOOLS[tool];
-  }
-  // The kind that stands open: the one chosen last. Before any choice: a terminal for a project whose folder has
-  // only been used in terminals, an application for any other.
-  function kindOf(project, has) {
-    const available = Object.keys(KINDS).filter(k => has[k] && has[k].length);
-    const kept = page.saved('newkind', '');
-    if (kept && has[kept] && has[kept].length) return kept;
-    if (available.length <= 1) return available[0] || 'term';
-    const folder = (page.data.device.projects || []).find(p => p.name === project), kinds = folder && folder.kinds || [];
-    if (has.term.length && kinds.length && kinds.every(kind => kind === '终端')) return 'term';
-    return has.app.length ? 'app' : available[0];
-  }
-  // the offered kinds side by side, where the computer offers more than one
-  function switcher(kind, has, changed) {
-    const keys = Object.keys(KINDS).filter(k => has[k] && has[k].length);
-    if (keys.length < 2) return '';
-    const group = el('span', { className: 'seg', role: 'group', ariaLabel: '对话开在哪里' });
-    keys.forEach(key => group.append(el('button', { type: 'button', textContent: KINDS[key], ariaPressed: String(key === kind), onclick: () => {
-      page.keep('newkind', key);
-      group.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.textContent === KINDS[key])));
-      changed(key);
-    } })));
-    return group;
+    if (tool === 'agy' || tool === viaShell) return kind === 'app' && !page.chatOk('agy') && desktop('agy') ? APPS.agy + ' 桌面版' : 'agy';
+    return kind !== 'app' ? TOOLS[tool] : page.chatOk(tool) ? APPS[tool] : APPS[tool] + ' 桌面版';
   }
   // (the tile of a tool of 应用 still opens its desktop app on a held press, where both are offered)
   const tile = (kind, tool, props, project) => {
@@ -69,26 +45,25 @@
     return kind !== 'app' ? page.start(tool, project, undefined, false, false, undefined, params) : page.chatOk(tool) ? page.chat(tool, project, undefined, false, undefined, params) : inApp(tool, project);
   }
 
-  // Keep the terminal entry visible on the default 应用 tab as well.
-  function choices(kind, has) {
-    if (kind === 'app') return has.app.concat(has.term.filter(tool => (tool === 'agy' || tool === viaShell) && !has.app.includes(tool)));
-    return has.term;
+  // What can be begun, one list: { tool, kind } with kind 'app' (a conversation, or the tool's desktop app) or 'term'.
+  // The conversations first, then the terminals, the shell last. A tool begun as a conversation has no terminal of
+  // its own here (the conversation can be shown on its screen); one whose desktop app is offered keeps its terminal.
+  function choices(has) {
+    const terms = has.term.filter(tool => !(has.app.includes(tool) && page.chatOk(tool)));
+    return has.app.map(tool => ({ tool, kind: 'app' })).concat(
+      terms.filter(tool => tool !== 'shell').map(tool => ({ tool, kind: 'term' })), terms.filter(tool => tool === 'shell').map(tool => ({ tool, kind: 'term' })));
   }
-  // agy under 应用 is a conversation or desktop app where offered, else its terminal
-  const kindFor = (kind, tool) => {
-    if (tool === viaShell) return 'term';
-    if (tool === 'agy' && kind === 'app' && !page.chatOk('agy') && !desktop('agy')) return 'term';
-    return kind;
-  };
+  const keyOf = one => one.kind + ':' + one.tool;
 
   // ---- on a project's page: the kinds, and a button for each tool of the one that stands open
   function draw(project) {
-    const box = $('begin'), has = offered(), ready = page.usable(), kind = kindOf(project, has);
-    const signature = JSON.stringify([project, has, ready, kind, TOOLS.shell]);
+    const box = $('begin'), has = offered(), ready = page.usable();
+    const signature = JSON.stringify([project, has, ready, TOOLS.shell]);
     if (box.dataset.signature === signature) return;
     box.dataset.signature = signature;
-    box.replaceChildren(el('div', { className: 'section-head' }, el('h2', { textContent: '新建对话' }), switcher(kind, has, () => draw(project))),
-      has[kind].length ? el('div', { id: 'launch' }, ...choices(kind, has).map(tool => tile(kindFor(kind, tool), tool, { disabled: !ready, onclick: () => begin(kindFor(kind, tool), tool, project) }, project)))
+    const list = choices(has);
+    box.replaceChildren(el('div', { className: 'section-head' }, el('h2', { textContent: '新建对话' })),
+      list.length ? el('div', { id: 'launch' }, ...list.map(one => tile(one.kind, one.tool, { disabled: !ready, onclick: () => begin(one.kind, one.tool, project) }, project)))
         : el('p', { className: 'none', textContent: '电脑上没有找到 Claude Code、Codex 或命令行终端' }));
   }
 
@@ -120,7 +95,7 @@
     const picked = await openSheet((form, finish) => {
       const tools = el('div', { className: 'tools', role: 'group', ariaLabel: '工具' });
       const paramBox = el('div', { className: 'begin-params', hidden: true });
-      let kind = kindOf('', has), tool = '', paramsOpen = false;
+      let tool = '', kind = 'app', paramsOpen = false;
       const overrides = {};
       const maxMode = (data.device && data.device.max_mode) || '';
       const configurable = t => ['claude', 'codex', 'agy'].includes(t) && (page.has('teams-models') || page.has('chat-params'));
@@ -192,25 +167,25 @@
         }
         paramBox.replaceChildren(...parts);
       };
-      const show = now => {
-        kind = now;
-        const options = choices(kind, has);
-        tool = options.includes(page.saved('new' + kind, '')) ? page.saved('new' + kind, '') : options[0];
-        tools.replaceChildren(...options.map(one => tile(kindFor(kind, one), one, { ariaPressed: String(one === tool), onclick: event => {
-          tool = one; page.keep('new' + kind, one);
+      const show = () => {
+        const options = choices(has), kept = page.saved('newtool', '');
+        const chosen = options.find(one => keyOf(one) === kept) || options[0];
+        tool = chosen.tool; kind = chosen.kind;
+        tools.replaceChildren(...options.map(one => tile(one.kind, one.tool, { ariaPressed: String(one === chosen), onclick: event => {
+          tool = one.tool; kind = one.kind; page.keep('newtool', keyOf(one));
           tools.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === event.currentTarget)));
           drawParams();
         } })));
         drawParams();
       };
-      show(kind);
+      show();
       if (page.has('teams-models') && !modelCatalog) loadModels().then(drawParams);
-      form.append(el('div', { className: 'head' }, el('h3', { textContent: '新建对话' }), switcher(kind, has, show)), tools, paramBox,
+      form.append(el('div', { className: 'head' }, el('h3', { textContent: '新建对话' })), tools, paramBox,
         el('p', { className: 'quiet', textContent: '选择项目后创建' }),
         el('div', { className: 'anywhere folders' }, ...names.slice(0, 12).map(name => el('button', { type: 'button', className: 'choice', onclick: () => {
           const st = configurable(tool) ? stateFor(tool) : null;
           const params = st ? Object.assign({}, st.model ? { model: st.model } : {}, st.effort ? { effort: st.effort } : {}, st.mode && tool !== 'agy' ? { mode: st.mode } : {}) : undefined;
-          finish({ kind: kindFor(kind, tool), tool, name, params });
+          finish({ kind, tool, name, params });
         } },
           el('span', { className: 'tool folder', html: ICON.folder }), el('span', { textContent: name }), el('span', { className: 'chev', html: ICON.chev })))));
     });

@@ -53,14 +53,17 @@
     <section id="asks" aria-label="等你确认" hidden></section>
     <div id="stands" class="idle">
       <span class="dot" aria-hidden="true"></span><span id="standing"></span><span id="clock"></span>
-      <button type="button" id="params-btn" hidden aria-label="模型与参数"><span id="params-text">参数</span><span class="params-chev" aria-hidden="true">▾</span></button>
-      <button type="button" id="stop" hidden>停止</button>
       <button type="button" id="again" hidden>继续这段对话</button>
     </div>
     <form id="write">
-      <button type="button" id="go" hidden>继续</button>
       <textarea id="box" rows="1" maxlength="8000" placeholder="发消息" spellcheck="false" autocapitalize="off" aria-label="消息"></textarea>
-      <button type="submit" id="send">发送</button>
+      <div id="write-row">
+        <button type="button" id="params-btn" hidden aria-label="模型与参数"><span id="params-text">参数</span><span class="params-chev" aria-hidden="true">▾</span></button>
+        <span class="write-gap"></span>
+        <button type="button" id="go" hidden>继续</button>
+        <button type="button" id="stop" hidden>停止</button>
+        <button type="submit" id="send">发送</button>
+      </div>
     </form>
   </main>
   <div id="toast" role="status" aria-live="polite" hidden></div>

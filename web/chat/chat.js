@@ -421,7 +421,7 @@
   box.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('write').requestSubmit(); } });
   // The picture button, shown where the computer takes pictures with a message and the conversation is in a project.
   let sendingPictures = false, pictureAsked = false;
-  const picker = new RemoteAttach.Picker({ form: $('write'), before: box, base: '../', dir: () => terminal ? terminal.dir : '', toast, changed: () => stands() });
+  const picker = new RemoteAttach.Picker({ form: $('write'), before: $('params-btn'), base: '../', dir: () => terminal ? terminal.dir : '', toast, changed: () => stands() });
   function canPicture() {
     if (pictureAsked || !terminal) return;
     pictureAsked = true;
@@ -460,6 +460,14 @@
   // effort and permission mode it goes on with), '' in a terminal's screen.
   async function reopen(form, more = {}) {
     const { tool, dir, session, id: was } = terminal;
+    const tail = () => bridge().teamQuery ? bridge().teamQuery() : (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : '');
+    // shown the other way as it is: the computer ends this one and goes on with it in one step (`reopen`)
+    if (!Object.keys(more).length && form !== 'chat' && session && terminal.state !== 'closed' && work.has('reopen') && (tool === 'claude' || tool === 'codex')) {
+      const { status, body } = await bridge().post({ action: 'start', id: newId(), tool, dir, reopen: was });
+      if (status !== 200) throw new Error(body.error || '没有打开');
+      location.replace('../terminal/?id=' + body.terminal + tail());
+      return;
+    }
     if (terminal.state !== 'closed') bridge().send({ action: 'close' });
     for (let n = 0; n < 40; n++) {
       await new Promise(done => setTimeout(done, 500));
@@ -473,8 +481,7 @@
     const start = Object.assign({ action: 'start', id: newId(), tool, dir, history: false }, session ? { session } : {}, form ? { form } : {}, more);
     const { status, body } = await bridge().post(start);
     if (status !== 200) throw new Error(body.error || '没有打开');
-    const tail = bridge().teamQuery ? bridge().teamQuery() : (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : '');
-    location.replace((form === 'chat' ? '?id=' : '../terminal/?id=') + body.terminal + tail);
+    location.replace((form === 'chat' ? '?id=' : '../terminal/?id=') + body.terminal + tail());
   }
   async function inTerminal() {
     toast('正在转到终端…');
@@ -530,7 +537,7 @@
       }
       rows.push(ui.row({ icon: 'pen', tint: 'muted', label: '重命名', value: terminal.title || '', go: () => p.sheet.push(renamePage()) }));
       if (terminal.session) rows.push(ui.row({ icon: 'refresh', tint: 'muted', label: '重启对话', go: () => p.sheet.push(RemoteRestart.page(work, of(), choice => reopen('chat', choice))) }));
-      if (terminal.session && terminal.dir && !ended) rows.push(ui.row({ icon: 'term', tint: 'muted', label: '在终端中打开', go: () => p.sheet.push(ui.confirm({ title: '在终端中打开', text: '这里的对话会关闭，在手机终端里继续同一段对话。', label: '在终端中打开', busy: '正在转到终端…', act: async sheet => { sheet.close(null, true); await inTerminal(); } })) }));
+      if (terminal.session && terminal.dir && !ended) rows.push(ui.row({ icon: 'term', tint: 'muted', label: '在终端界面中继续', go: () => p.sheet.push(ui.confirm({ title: '在终端界面中继续', text: '同一段对话改在 ' + (TOOLS[terminal.tool] || terminal.tool) + ' 自己的终端界面里继续，之后可以再换回对话。', label: '在终端界面中继续', busy: '正在转到终端…', act: async sheet => { sheet.close(null, true); await inTerminal(); } })) }));
       if (ended && terminal.session) rows.push(ui.row({ icon: 'play', tint: 'good', label: '继续这段对话', act: () => { p.sheet.close(null, true); bridge().again(); } }));
       p.body.append(ui.section('对话', ui.group(...rows)));
       const chosenSkin = saved('skin', 'paper');

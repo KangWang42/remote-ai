@@ -220,9 +220,10 @@ def main():
                 until("document.querySelector('#sheet[open] h3')?.textContent === '新建对话'")
 
             def composer():
-                # an application stands open first, with Codex chosen: a press on the project asks for the first words
+                # Codex's desktop app stands first and chosen (the computer runs no conversations): a press on the project asks for the first words
                 navigate()
-                assert value("Array.from(document.querySelectorAll('#sheet [aria-pressed=\"true\"]')).map(b => b.textContent)") == ['应用', 'Codex']
+                assert value("Array.from(document.querySelectorAll('#sheet .tools button')).map(b => b.textContent)") == ['Codex 桌面版', 'Codex', '终端']
+                assert value("Array.from(document.querySelectorAll('#sheet [aria-pressed=\"true\"]')).map(b => b.textContent)") == ['Codex 桌面版']
                 value("document.querySelector('#sheet .anywhere button.choice').click()")
                 until("document.querySelector('#desktop-draft') !== null")
                 assert value("document.querySelector('#sheet-form h3').textContent") == 'Codex · ' + info['workspaces'][0]
@@ -262,7 +263,7 @@ def main():
             picture('unknown.png')
             info['features'] = []
             navigate()
-            # a computer without the desktop entry offers its terminals, and no choice of kind
+            # a computer without the desktop entry offers its terminals
             assert value("document.querySelectorAll('#sheet .seg button').length") == 0
             assert value("Array.from(document.querySelectorAll('#sheet .tools button')).map(b => b.textContent)") == ['Codex', '终端']
             # The same real embedded reader, with native control capabilities relayed from the computer.
@@ -395,13 +396,13 @@ def main():
             for width in [320, 390]:
                 ask('Emulation.setDeviceMetricsOverride', width=width, height=900, deviceScaleFactor=1, mobile=True)
                 navigate()
-                assert value("Array.from(document.querySelectorAll('#sheet .seg button')).map(b => b.textContent)") == ['应用', '终端']
+                assert value("document.querySelectorAll('#sheet .seg button').length") == 0, "one list, no choice of kind"
                 shape = value("({width:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth})")
                 assert shape['width'] == width and shape['scroll'] <= width and shape['body'] <= width, shape
 
             def project_page():
                 ask('Page.navigate', url='http://127.0.0.1:%d/?project=%s' % (port, urllib.parse.quote(info['workspaces'][0])))
-                until("Array.from(document.querySelectorAll('#begin .seg button')).map(b => b.textContent).join(',') === '应用,终端' && document.querySelectorAll('#launch button').length === 3")
+                until("Array.from(document.querySelectorAll('#launch button')).map(b => b.textContent).join(',') === 'Codex,Claude,agy,终端'")
 
             def held(name):
                 value("Array.from(document.querySelectorAll('#launch button')).find(b => b.textContent === %s).dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))" % json.dumps(name))
@@ -445,7 +446,7 @@ def main():
             errors = [e for e in events if e['method'] == 'Log.entryAdded' and e['params']['entry']['level'] == 'error']
             assert len(errors) <= 4 and all('503' in e['params']['entry']['text'] for e in errors), errors
             (out / 'report.json').write_text(json.dumps({'layouts': shapes, 'requests': len(requests), 'uniqueOperations': len({r['id'] for r in requests}), 'agyOpenRequests': len(agy_open_requests), 'agyConvRequests': len(agy_conv_requests), 'injected503': len(errors)}, ensure_ascii=False, indent=2), encoding='utf-8')
-            print('desktop UI: 320/390/430/1440 layouts, keyboard, two kinds with desktop apps on a held press, Antigravity direct create & native send/stop, Codex native send/stop, receipt-only retry, busy draft, transcript refresh and legacy handoff passed')
+            print('desktop UI: 320/390/430/1440 layouts, keyboard, one list of AIs with desktop apps on a held press, Antigravity direct create & native send/stop, Codex native send/stop, receipt-only retry, busy draft, transcript refresh and legacy handoff passed')
         finally:
             if pipe: pipe.close()
             browser.terminate(); browser.wait(timeout=10)

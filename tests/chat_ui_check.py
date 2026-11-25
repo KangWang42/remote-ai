@@ -542,7 +542,7 @@ def main():
             value("document.getElementById('menu').click()")
             until("!!document.querySelector('dialog.rs[open]')", "the menu")
             rows = value("Array.from(document.querySelectorAll('dialog.rs .rs-row b, dialog.rs .rs-row.danger > span')).map(b => b.textContent)")
-            assert rows[:4] == ["转为协作", "重命名", "重启对话", "在终端中打开"] and rows[-1] == "结束对话", rows
+            assert rows[:4] == ["转为协作", "重命名", "重启对话", "在终端界面中继续"] and rows[-1] == "结束对话", rows
             value(sheet_button % json.dumps("结束对话") + ".click()")
             until("!!document.getElementById('rs-confirm') && document.getElementById('rs-confirm').classList.contains('danger')", "asked once")
             value("document.getElementById('rs-confirm').click()")
@@ -554,11 +554,11 @@ def main():
             again = [op for op in computer.seen if op["action"] == "start"][-1]
             assert again.get("form") == "chat" and again.get("session") == SESSION, again
 
-            # ---- the ways in. 应用 on a project's page begins a conversation at one press, and its page waits for the first words
+            # ---- the ways in. An AI on a project's page begins a conversation at one press, and its page waits for the first words
             texts = lambda selector: value("Array.from(document.querySelectorAll(%s)).map(n => n.textContent)" % json.dumps(selector))
             ask("Page.navigate", url=base + "?project=web-shop")
-            until("!document.getElementById('project').hidden && document.querySelectorAll('#launch button').length === 2", "the project's page with the tools of 应用")
-            assert texts("#begin .seg button") == ["应用", "终端"] and texts("#launch button") == ["Codex", "Claude"], texts("#launch button")
+            until("!document.getElementById('project').hidden && document.querySelectorAll('#launch button').length === 2", "the project's page with its AIs")
+            assert texts("#begin .seg button") == [] and texts("#launch button") == ["Codex", "Claude"], texts("#launch button")
             # a held press opens the desktop app on the computer instead, with the first words in its box
             value("document.querySelectorAll('#launch button')[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))")
             until("Array.from(document.querySelectorAll('#sheet[open] button')).some(b => b.textContent === '在 Claude 中打开')", "the desktop app's sheet at a held press")

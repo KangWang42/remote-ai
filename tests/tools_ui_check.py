@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
         played.info['tools'] = ['claude', 'codex', 'agy', 'opencode', 'qoder', 'cline', 'shell']
         played.info['agy_external'] = [int(time.time() * 1000)]
         played.relay.agent({'info': played.info, 'sessions': played.sessions})
-        browser.ask('Page.addScriptToEvaluateOnNewDocument', source="window.__errors=[];addEventListener('error',e=>__errors.push(e.message));addEventListener('unhandledrejection',e=>__errors.push(String(e.reason)));localStorage.setItem('newkind','term');")
+        browser.ask('Page.addScriptToEvaluateOnNewDocument', source="window.__errors=[];addEventListener('error',e=>__errors.push(e.message));addEventListener('unhandledrejection',e=>__errors.push(String(e.reason)));")
         report = []
         for width in (390, 1440, 320, 430):
             screen = dict(width=width, height=900, deviceScaleFactor=1, mobile=width < 500)
@@ -43,16 +43,15 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
             browser.picture(out / ('tasks-%d.png' % width))
             browser.value("document.getElementById('new-task').click()")
             browser.until("!!document.querySelector('#sheet-form .tools')", 'new task dialog')
-            browser.value("Array.from(document.querySelectorAll('#sheet-form .seg button')).find(b=>b.textContent==='终端').click()")
-            browser.until("document.querySelectorAll('#sheet-form .tools button').length===7", 'seven tools in new task')
+            # the two desktop apps, then the six tools' terminals and the shell, in one list
+            browser.until("document.querySelectorAll('#sheet-form .tools button').length===9", 'nine choices in new task')
             dialog = browser.value("(()=>{const f=document.getElementById('sheet-form'),r=f.getBoundingClientRect();return {client:f.clientWidth,scroll:f.scrollWidth,left:r.left,right:innerWidth-r.right}})()")
             assert dialog['scroll'] <= dialog['client'] and abs(dialog['left'] - dialog['right']) <= 1, dialog
             browser.value("Promise.all(document.getElementById('sheet').getAnimations().filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))).then(()=>true)")
             browser.picture(out / ('dialog-%d.png' % width))
             browser.open(played.origin + '/?project=web-shop', "document.querySelectorAll('#launch button').length>0", 'project tools', **screen)
-            browser.value("Array.from(document.querySelectorAll('#begin .seg button')).find(b=>b.textContent==='终端').click()")
-            browser.until("document.querySelectorAll('#launch button').length===7", 'seven tool buttons')
-            assert browser.value("Array.from(document.querySelectorAll('#launch button')).map(b=>b.textContent)") == ['Claude Code', 'Codex', 'agy', 'OpenCode', 'Qoder', 'Cline', 'PowerShell']
+            browser.until("document.querySelectorAll('#launch button').length===9", 'nine tool buttons')
+            assert browser.value("Array.from(document.querySelectorAll('#launch button')).map(b=>b.textContent)") == ['Codex 桌面版', 'Claude 桌面版', 'Claude Code', 'Codex', 'agy', 'OpenCode', 'Qoder', 'Cline', 'PowerShell']
             if width < 500:
                 assert browser.value("new Set(Array.from(document.querySelectorAll('#launch button'),b=>b.offsetTop)).size >= 2")
             geometry = browser.value("({inner:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth,errors:__errors})")
@@ -84,7 +83,6 @@ with tempfile.TemporaryDirectory(prefix='release-167-ui-', ignore_cleanup_errors
         played.info['tools'].remove('agy')
         played.relay.agent({'info': played.info, 'sessions': played.sessions})
         browser.open(played.origin + '/?tab=tasks&new=1', "!!document.querySelector('#sheet-form .tools')", 'old relay new task', **screen)
-        browser.value("Array.from(document.querySelectorAll('#sheet-form .seg button')).find(b=>b.textContent==='应用').click()")
         browser.value("Array.from(document.querySelectorAll('#sheet-form .tools button')).find(b=>b.textContent==='agy').click()")
         browser.value("Array.from(document.querySelectorAll('#sheet-form .folders button')).find(b=>b.textContent==='thesis').click()")
         browser.until("location.pathname.endsWith('/terminal/')", 'legacy PowerShell terminal')

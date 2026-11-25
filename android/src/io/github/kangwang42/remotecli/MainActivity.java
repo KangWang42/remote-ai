@@ -930,8 +930,8 @@ public final class MainActivity extends Activity {
         if (drawn) script.append("if(was!=='").append(skin).append("'&&!(window.RemoteCliNative&&RemoteCliNative.pref)&&!location.hash)location.reload();");
         return script.append("}catch(e){}})()").toString();
     }
-    // (and, kept the same way for every computer: the kind of conversation its owner begins, "newkind")
-    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "cursor", "renderer", "readfont", "readsize", "readline", "newkind");
+    // (and, kept the same way for every computer: the AI its owner begins a conversation with, "newtool")
+    private static final java.util.List<String> LOOK = java.util.Arrays.asList("skin", "termskin", "text", "font", "spacing", "cursor", "renderer", "readfont", "readsize", "readline", "newtool");
     private final Saver saver = new Saver(this);
     private final FilePicker filePicker = new FilePicker(this);
     private final class Bridge {

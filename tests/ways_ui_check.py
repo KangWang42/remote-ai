@@ -398,9 +398,9 @@ def main():
             ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
             until("document.querySelector('#sheet[open] h3')?.textContent === '新建对话'")
             texts = lambda selector: value("Array.from(document.querySelectorAll(%s)).map(b => b.textContent)" % json.dumps(selector))
-            assert texts('#sheet .seg button') == ['应用', '终端'] and texts('#sheet .tools button') == ['Codex', 'Claude'], (texts('#sheet .seg button'), texts('#sheet .tools button'))
+            assert texts('#sheet .seg button') == [] and texts('#sheet .tools button')[:2] == ['Codex 桌面版', 'Claude 桌面版'], texts('#sheet .tools button')
             picture('new-task.png')
-            value("Array.from(document.querySelectorAll('#sheet .tools button')).find(b => b.textContent === 'Claude').click()")
+            value("Array.from(document.querySelectorAll('#sheet .tools button')).find(b => b.textContent === 'Claude 桌面版').click()")
             value("document.querySelector('#sheet .anywhere button.choice').click()")
             until("document.querySelector('#desktop-draft') !== null")
             assert value("document.querySelector('#sheet-form h3').textContent") == 'Claude · ' + PROJECT and value("document.querySelector('#sheet button.solid').textContent") == '在 Claude 中打开'
@@ -418,7 +418,7 @@ def main():
             info['features'] = ['peek', 'reach', 'codex-desktop-open']
             ask('Page.navigate', url='http://127.0.0.1:%d/?new=1' % port)
             until("document.querySelector('#sheet[open] h3')?.textContent === '新建对话'")
-            assert texts('#sheet .tools button') == ['Codex'], 'only what the computer offers'
+            assert 'Codex 桌面版' in texts('#sheet .tools button') and 'Claude 桌面版' not in texts('#sheet .tools button'), 'only what the computer offers'
 
             # Settings remain useful without statistics or an online computer. Check real layout viewports.
             for width in (320, 390, 430, 1440):
@@ -541,18 +541,16 @@ def main():
             assert asked[-1]['allow'] is False and asked[-1]['transport'] == 'agy-desktop' and 'choice' not in asked[-1], asked[-1]
             assert forwarded[-1]['action'] == 'session_answer' and forwarded[-1]['allow'] is False and forwarded[-1]['transport'] == 'agy-desktop', forwarded[-1]
 
-            # Project page: two kinds (应用 / 终端) at 320px width; desktop apps open on a held press of a tool of 应用
+            # Project page at 320px width: one list of the AIs, each begun as a conversation (the computer runs them so)
             ask('Emulation.setDeviceMetricsOverride', width=320, height=900, deviceScaleFactor=1, mobile=True)
             ask('Page.navigate', url='http://127.0.0.1:%d/?project=%s' % (port, PROJECT))
-            until("document.querySelectorAll('#begin .seg button').length === 2")
-            assert texts('#begin .seg button') == ['应用', '终端']
-            value("Array.from(document.querySelectorAll('#begin .seg button')).find(b => b.textContent === '应用').click()")
-            until("document.querySelectorAll('#launch button').length === 3")
+            until("document.querySelectorAll('#launch button').length >= 3")
+            assert texts('#begin .seg button') == [] and texts('#launch button') == ['Codex', 'Claude', 'agy'], texts('#launch button')
             assert value("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
             picture('project-app-tab-320.png')
 
             assert not any(e['method'] == 'Runtime.exceptionThrown' for e in events), events
-            print('ways UI: Claude Code, Codex and Antigravity are told, stopped, answered (multi-choice & approval) and opened by the same controls; reasons shown; two kinds verified')
+            print('ways UI: Claude Code, Codex and Antigravity are told, stopped, answered (multi-choice & approval) and opened by the same controls; reasons shown; one list of AIs verified')
         finally:
             if pipe: pipe.close()
             browser.terminate(); browser.wait(timeout=10)

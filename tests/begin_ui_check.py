@@ -1,9 +1,9 @@
 """A new conversation, begun on the real pages (web/) through the real relay, with a computer that is played
-(tools/readme_pictures.py). In an application or in a terminal: both are offered on a project's page and in the
-sheet of 任务, the kind chosen last stays, a terminal is started with one press, an application is handed the first
-words and the conversation that comes of them is entered by itself; a computer without desktop apps offers
-terminals only; a project that was added is entered. And the tabs inside the app: they are the app's own, and what
-the app's lists opened leads back to them.
+(tools/readme_pictures.py). One list of the AIs, on a project's page and in the sheet of 任务: an AI the computer
+runs as a conversation is begun as one with one press, the shell as a terminal, the AI chosen last stays; a computer
+that runs no conversations offers the desktop apps (handed the first words, the conversation that comes of them
+entered by itself) beside the terminals; a project that was added is entered. And the tabs inside the app: they are
+the app's own, and what the app's lists opened leads back to them.
 
     python tests/begin_ui_check.py <chrome.exe> <folder for the pictures>
 """
@@ -44,35 +44,75 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         errors = lambda: value("JSON.stringify(window.__errors)")
         widths = "(() => { const b = document.getElementById('begin'); return { page: document.documentElement.scrollWidth, inner: innerWidth, right: Math.max(...Array.from(b.querySelectorAll('button')).map(n => n.getBoundingClientRect().right)), low: Math.min(...Array.from(b.querySelectorAll('#launch button')).map(n => n.getBoundingClientRect().height)) }; })()"
 
-        # ---- a project's page: the two kinds, an application first for a project nothing tells of
+        # ---- a project's page of a computer that runs conversations: one list, the AIs first, the shell last
+        played.info["features"] += ["chat"]
         browser.open(played.origin + "/?project=web-shop", project, "a project's page", **phone(390))
         assert value("document.querySelector('#begin h2').textContent") == "新建对话"
-        assert texts("#begin .seg button") == ["应用", "终端"] and pressed("#begin .seg button") == ["应用"], "both kinds, an application first"
-        assert texts("#launch button") == ["Codex", "Claude"], texts("#launch button")
-        browser.picture(out / "project-app.png")
+        assert texts("#begin .seg button") == [], "no choice of kind"
+        assert texts("#launch button") == ["Codex", "Claude", "PowerShell"], texts("#launch button")
+        browser.picture(out / "project-list.png")
         for width in (320, 390, 430):
             browser.open(played.origin + "/?project=web-shop", project, "a project's page", **phone(width))
             seen = value(widths)
             assert seen["page"] <= seen["inner"] and seen["right"] <= seen["inner"] and seen["low"] >= 48, (width, seen)
-        browser.open(played.origin + "/?project=web-shop", project, "a project's page", **phone(390))
-        press("#begin .seg button", "终端")
-        until("document.querySelectorAll('#launch button').length === 3", "the tools of a terminal")
-        assert texts("#launch button") == ["Claude Code", "Codex", "PowerShell"] and pressed("#begin .seg button") == ["终端"]
-        browser.picture(out / "project-terminal.png")
-        # the kind that was chosen stays, on this page opened again and for another project
+        # one press begins a conversation in the project, and the page goes on to it
         browser.open(played.origin + "/?project=thesis", project, "another project", **phone(390))
-        assert pressed("#begin .seg button") == ["终端"] and len(texts("#launch button")) == 3, "the kind chosen last stays"
-        # one press starts a terminal in the project, and the page goes on to it
         press("#launch button", "Codex")
+        until("location.pathname.endsWith('/chat/')", "the conversation's page")
+        op = asked("start")[-1]
+        assert (op["tool"], op["dir"], op.get("form")) == ("codex", "thesis", "chat") and not op.get("session"), op
+        # the shell begins as a terminal
+        browser.open(played.origin + "/?project=web-shop", project, "a project's page", **phone(390))
+        press("#launch button", "PowerShell")
         until("location.pathname.endsWith('/terminal/')", "the terminal's page")
         op = asked("start")[-1]
-        assert (op["tool"], op["dir"]) == ("codex", "thesis") and not op.get("session"), op
+        assert (op["tool"], op["dir"], op.get("form")) == ("shell", "web-shop", None), op
 
-        # ---- in an application: the first words are handed to its desktop app, and the conversation that comes of them is entered
+        # ---- from 任务: the same list, the AI chosen last, the projects
+        browser.open(played.origin + "/?tab=tasks", "document.body.innerText.includes('部署到测试环境')", "the first page", **phone(390))
+        assert value("document.getElementById('new-task').getAttribute('aria-label')") == "新建对话"
+        value("document.getElementById('new-task').click()")
+        until(sheet + " && " + sheet + ".querySelector('h3').textContent === '新建对话'", "the sheet of a new conversation")
+        assert texts("#sheet-form .seg button") == [] and texts("#sheet-form .tools button") == ["Codex", "Claude", "PowerShell"]
+        assert pressed("#sheet-form .tools button") == ["Codex"], "one AI stands chosen"
+        names = texts("#sheet-form .anywhere button.choice")
+        assert sorted(names) == ["data-tools", "thesis", "web-shop"] and names[0] == "web-shop", ("the projects, first the one a terminal was just started in", names)
+        time.sleep(0.5)
+        browser.picture(out / "new-sheet.png")
+        press("#sheet-form .tools button", "PowerShell")
+        assert pressed("#sheet-form .tools button") == ["PowerShell"]
+        for width in (320, 430):
+            browser.ask("Emulation.setDeviceMetricsOverride", **phone(width))
+            seen = value("(f => ({ client: f.clientWidth, scroll: f.scrollWidth, low: Math.min(...Array.from(f.querySelectorAll('.tools button, button.choice')).map(n => n.getBoundingClientRect().height)) }))(document.getElementById('sheet-form'))")
+            assert seen["scroll"] <= seen["client"] and seen["low"] >= 48, (width, seen)
+        browser.ask("Emulation.setDeviceMetricsOverride", **phone(390))
+        before = len(asked("start"))
+        press("#sheet-form .anywhere button.choice", "data-tools")
+        until("location.pathname.endsWith('/terminal/')", "the terminal's page")
+        op = asked("start")[-1]
+        assert len(asked("start")) == before + 1 and (op["tool"], op["dir"]) == ("shell", "data-tools"), op
+        # the AI chosen last stands chosen the next time
+        browser.open(played.origin + "/?tab=tasks&new=1", sheet + " && " + sheet + ".querySelector('h3').textContent === '新建对话'", "the sheet, by a link", **phone(390))
+        assert pressed("#sheet-form .tools button") == ["PowerShell"], "what was chosen last"
+        press("#sheet-form .tools button", "Claude")
+        press("#sheet-form .anywhere button.choice", "thesis")
+        until("location.pathname.endsWith('/chat/')", "Claude's conversation, in the project that was pressed")
+        op = asked("start")[-1]
+        assert (op["tool"], op["dir"], op.get("form")) == ("claude", "thesis", "chat"), op
+        assert errors() == "[]", errors()
+
+        # ---- a computer that runs no conversations: the desktop apps beside the terminals
+        played.info["features"].remove("chat")
         browser.open(played.origin + "/?project=web-shop", project, "a project's page", **phone(390))
-        press("#begin .seg button", "应用")
-        until("document.querySelectorAll('#launch button').length === 2", "the applications")
+        assert texts("#launch button") == ["Codex 桌面版", "Claude 桌面版", "Claude Code", "Codex", "PowerShell"], texts("#launch button")
+        browser.picture(out / "project-desktop.png")
         press("#launch button", "Codex")
+        until("location.pathname.endsWith('/terminal/')", "Codex's terminal")
+        op = asked("start")[-1]
+        assert (op["tool"], op["dir"], op.get("form")) == ("codex", "web-shop", None), op
+        # its desktop app is handed the first words, and the conversation that comes of them is entered
+        browser.open(played.origin + "/?project=web-shop", project, "a project's page", **phone(390))
+        press("#launch button", "Codex 桌面版")
         until(sheet + " && !!document.getElementById('desktop-draft')", "the sheet of the application")
         assert value(sheet + ".querySelector('h3').textContent") == "Codex · web-shop"
         assert texts("#sheet-form button") == ["在 Codex 中打开", "返回"], texts("#sheet-form button")
@@ -86,9 +126,6 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         assert (op["tool"], op["dir"], op["draft"]) == ("codex", "web-shop", "先看一下 README\n再列出要改的地方"), op
         assert "尚未发送" in value("document.querySelector('#sheet-form [role=status]').textContent") and value("document.querySelector('#sheet-form button.solid').disabled")
         assert len(asked("app_open")) == 1, "the application is opened once"
-        time.sleep(0.3)
-        browser.picture(out / "app-handed.png")
-        # it is sent on the computer: the conversation is there, and the phone goes into it
         began = pictures.uuid(21)
         played.sessions.append(dict(id=began, tool="codex", dir="web-shop", title="先看一下 README", origin="Codex 桌面版", kind="Codex 桌面版", host="shared", status="busy", now=True, live=True,
                                     updated=int(time.time() * 1000), can_takeover=False, ownership_known=True, opened=op["id"], reach=["say", "stop"], transport="codex-desktop", turn="turn-1",
@@ -99,57 +136,7 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         value("document.querySelector('#sheet-form .bar .icon').click()")
         until("!document.getElementById('sheet').open", "the window left")
         played.sessions[:] = [s for s in played.sessions if s["id"] != began]
-
-        # ---- from 任务: the same two kinds, the tools of the kind, the projects
-        browser.open(played.origin + "/?tab=tasks", "document.body.innerText.includes('部署到测试环境')", "the first page", **phone(390))
-        assert value("document.getElementById('new-task').getAttribute('aria-label')") == "新建对话"
-        value("document.getElementById('new-task').click()")
-        until(sheet + " && " + sheet + ".querySelector('h3').textContent === '新建对话'", "the sheet of a new conversation")
-        assert pressed("#sheet-form .seg button") == ["应用"] and texts("#sheet-form .tools button") == ["Codex", "Claude"], "the kind chosen last, here too"
-        assert pressed("#sheet-form .tools button") == ["Codex"], "one tool stands chosen"
-        names = texts("#sheet-form .anywhere button.choice")
-        assert sorted(names) == ["data-tools", "thesis", "web-shop"] and names[0] == "thesis", ("the projects, first the one a terminal was just started in", names)
-        time.sleep(0.5)
-        browser.picture(out / "new-app.png")
-        press("#sheet-form .seg button", "终端")
-        until("document.querySelectorAll('#sheet-form .tools button').length === 3", "the tools of a terminal")
-        assert texts("#sheet-form .tools button") == ["Claude Code", "Codex", "PowerShell"] and pressed("#sheet-form .tools button") == ["Claude Code"]
-        press("#sheet-form .tools button", "PowerShell")
-        assert pressed("#sheet-form .tools button") == ["PowerShell"]
-        time.sleep(0.3)
-        browser.picture(out / "new-terminal.png")
-        for width in (320, 430):
-            browser.ask("Emulation.setDeviceMetricsOverride", **phone(width))
-            seen = value("(f => ({ client: f.clientWidth, scroll: f.scrollWidth, low: Math.min(...Array.from(f.querySelectorAll('.tools button, button.choice')).map(n => n.getBoundingClientRect().height)) }))(document.getElementById('sheet-form'))")
-            assert seen["scroll"] <= seen["client"] and seen["low"] >= 48, (width, seen)
-        browser.ask("Emulation.setDeviceMetricsOverride", **phone(390))
-        before = len(asked("start"))
-        press("#sheet-form .anywhere button.choice", "data-tools")
-        until("location.pathname.endsWith('/terminal/')", "the terminal's page")
-        op = asked("start")[-1]
-        assert len(asked("start")) == before + 1 and (op["tool"], op["dir"]) == ("shell", "data-tools"), op
-        # the tool chosen last stands chosen the next time; an application from the sheet asks for the first words
-        browser.open(played.origin + "/?tab=tasks&new=1", sheet + " && " + sheet + ".querySelector('h3').textContent === '新建对话'", "the sheet, by a link", **phone(390))
-        assert pressed("#sheet-form .seg button") == ["终端"] and pressed("#sheet-form .tools button") == ["PowerShell"], "what was chosen last"
-        press("#sheet-form .seg button", "应用")
-        press("#sheet-form .tools button", "Claude")
-        press("#sheet-form .anywhere button.choice", "thesis")
-        until(sheet + " && !!document.getElementById('desktop-draft') && " + sheet + ".querySelector('h3').textContent === 'Claude · thesis'", "the sheet of the application, for the project that was pressed")
-        press("#sheet-form button", "在 Claude 中打开")
-        until("document.querySelector('#sheet-form button.solid').textContent === '在电脑上发送后开始'", "handed to the application")
-        op = asked("app_open")[-1]
-        assert (op["tool"], op["dir"], op["draft"]) == ("claude", "thesis", ""), op
-        press("#sheet-form button", "返回")
         assert errors() == "[]", errors()
-
-        # ---- a project whose folder has only been used in terminals: a terminal first, while nothing was chosen
-        played.info["projects"] = [{"name": "web-shop", "path": "D:\\work\\web-shop", "kinds": ["终端"]}, {"name": "thesis", "path": "D:\\work\\thesis", "kinds": ["Codex 桌面版", "终端"]},
-                                   {"name": "data-tools", "path": "D:\\work\\data-tools", "kinds": []}]
-        value("localStorage.removeItem('rcli-newkind')")
-        browser.open(played.origin + "/?project=web-shop", project, "a project of terminals", **phone(390))
-        assert pressed("#begin .seg button") == ["终端"], "a terminal for a project of terminals"
-        browser.open(played.origin + "/?project=thesis", project, "a project of both", **phone(390))
-        assert pressed("#begin .seg button") == ["应用"], "an application for any other"
 
         # ---- a project that is added is entered: what it was added for is there
         browser.open(played.origin + "/?tab=projects", "document.querySelectorAll('#project-list .card').length === 4", "the projects", **phone(390))
@@ -158,29 +145,27 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         value("document.getElementById('field-path').value = 'D:\\\\work\\\\notes'")
         press("#sheet-form button", "添加填写的路径")
         until("document.getElementById('heading').textContent === 'notes' && " + project, "the project that was added, entered")
-        assert asked("project_add")[-1]["path"] == "D:\\work\\notes" and texts("#begin .seg button") == ["应用", "终端"]
+        assert asked("project_add")[-1]["path"] == "D:\\work\\notes" and len(texts("#launch button")) == 5
         assert value("document.getElementById('empty').textContent") == "这个项目还没有对话"
 
-        # ---- a computer without the desktop apps: terminals, and no choice of kind
+        # ---- a computer without the desktop apps: terminals only
         played.info["features"] = [feature for feature in played.info["features"] if not feature.endswith("-desktop-open")]
         browser.open(played.origin + "/?project=web-shop", project, "a project's page", **phone(390))
-        assert texts("#begin .seg button") == [] and texts("#launch button") == ["Claude Code", "Codex", "PowerShell"], "terminals only"
+        assert texts("#launch button") == ["Claude Code", "Codex", "PowerShell"], "terminals only"
         browser.open(played.origin + "/?tab=tasks&new=1", sheet + " && " + sheet + ".querySelector('h3').textContent === '新建对话'", "the sheet", **phone(390))
-        assert texts("#sheet-form .seg button") == [] and len(texts("#sheet-form .tools button")) == 3
+        assert len(texts("#sheet-form .tools button")) == 3
         press("#sheet-form button", "取消")
         played.info["features"] += ["codex-desktop-open", "claude-desktop-open"]
         assert errors() == "[]", errors()
 
-        # ---- Antigravity CLI: a terminal, unless the computer runs it as a conversation (chat-agy); then under 应用
+        # ---- Antigravity CLI: a terminal, unless the computer runs it as a conversation (chat-agy)
         played.info["tools"] = played.info["tools"] + ["agy"]
         browser.open(played.origin + "/?project=web-shop", project, "a project's page, with agy", **phone(390))
-        press("#begin .seg button", "应用")
-        until("document.querySelectorAll('#launch button').length === 3", "the applications and agy's terminal")
-        assert texts("#launch button") == ["Codex", "Claude", "agy"], texts("#launch button")
+        assert "agy" in texts("#launch button"), texts("#launch button")
         played.info["features"] += ["chat", "chat-agy"]
         browser.open(played.origin + "/?project=web-shop", project, "a project's page, agy as a conversation", **phone(390))
-        until("document.querySelectorAll('#launch button').length === 3", "the applications with agy")
-        assert texts("#launch button") == ["Codex", "Claude", "agy"], texts("#launch button")
+        until("document.querySelectorAll('#launch button').length === 4", "the conversations with agy")
+        assert texts("#launch button") == ["Codex", "Claude", "agy", "PowerShell"], texts("#launch button")
         press("#launch button", "agy")
         until("location.pathname.endsWith('/chat/')", "agy's conversation page")
         op = asked("start")[-1]
@@ -200,14 +185,12 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
             value("document.querySelector('#tabs button[data-tab=\"%s\"]').click()" % name)
         assert noted() == [["appPage", "tasks"], ["appPage", "together"], ["appPage", "me"], ["appPage", "projects"]], noted()
         assert value("document.querySelector('#tabs button[aria-current]').dataset.tab") == "projects", "the page stays what it was opened for"
-        # the kind of a new conversation is kept by the app, for every computer
-        value("document.querySelector('#project-list .card button.open').click()")
-        until(project, "a project, in the app")
-        press("#begin .seg button", "终端")
-        assert value("localStorage.getItem('app-pref-newkind')") == "term"
-        # what the app's lists opened leads back to them: the sheet of a new conversation that is left
+        # what the app's lists opened leads back to them: the sheet of a new conversation that is left; the AI chosen
+        # in it is kept by the app, for every computer
         value("sessionStorage.removeItem('app-asked')")
         browser.open(played.origin + "/?tab=tasks&new=1", sheet + " && " + sheet + ".querySelector('h3').textContent === '新建对话'", "the sheet, opened by the app", **phone(390))
+        press("#sheet-form .tools button", "PowerShell")
+        assert value("localStorage.getItem('app-pref-newtool')") == "term:shell"
         press("#sheet-form button", "取消")
         until("sessionStorage.getItem('app-asked') === JSON.stringify([['home', '']])", "back to the app's list")
         # without a project there is nothing to begin in: the page shows its projects, where one is added, and is not left
@@ -256,4 +239,4 @@ with tempfile.TemporaryDirectory(prefix="remote-ai-begin-", ignore_cleanup_error
         assert errors() == "[]", errors()
     finally:
         browser.close(); played.close()
-print("begin: an application or a terminal on a project's page and from 任务, the kind and the tool chosen last stay; a terminal started with one press; an application handed the first words, its conversation entered; terminals only without the apps; an added project entered; the app's tabs")
+print("begin: one list of the AIs on a project's page and from 任务, the AI chosen last stays; a conversation begun with one press, the shell as a terminal; desktop apps handed the first words beside the terminals; terminals only without them; an added project entered; the app's tabs")

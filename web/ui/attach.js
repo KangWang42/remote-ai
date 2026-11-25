@@ -102,14 +102,14 @@
 
   // ---- the button in a composer, and the pictures picked to go with the next message
   class Picker {
-    /* form: the composer; before: what the button stands before in it; base: where api/ lies; dir(): the project */
+    /* form: the composer; before: what the button stands before (in the form, or in a row of it); base: where api/ lies; dir(): the project */
     constructor({ form, before, base = '', dir, toast, changed }) {
       Object.assign(this, { form, base, dir, toast, changed: changed || (() => {}) });
       this.items = [];
       this.input = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, ariaLabel: '选择图片' });
       this.button = el('button', { type: 'button', className: 'attach-pick', ariaLabel: '添加图片', html: PICTURE, hidden: true, onclick: () => this.pick() });
       this.tray = el('div', { className: 'attach-tray', ariaLabel: '要发送的图片', hidden: true });
-      form.insertBefore(this.button, before || null);
+      if (before) before.parentNode.insertBefore(this.button, before); else form.append(this.button);
       form.append(this.input);
       form.parentNode.insertBefore(this.tray, form);
       this.input.addEventListener('change', () => { this.add(Array.from(this.input.files || [])); this.input.value = ''; });

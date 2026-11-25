@@ -357,6 +357,17 @@
         { id: 'menu-copy', icon: 'copy', tint: 'copy', label: '复制画面', say, act: async () => { const text = ui().screenText(); p.sheet.close(null); if (!await window.RemoteSheet.copy(text)) ui().error('没能复制，请长按选择文字'); } }]));
       const rows = [kit.row({ icon: 'pen', tint: 'muted', label: '重命名', value: terminal.title || '', go: () => p.sheet.push(renamePage()) })];
       if (closed && talks()) rows.push(kit.row({ icon: 'play', tint: 'good', label: terminal.session ? '继续这个对话' : '重新新建对话', act: () => { p.sheet.close(null, true); again(); } }));
+      // the same conversation as a chat again: the computer ends this screen and goes on with it in one step (`reopen`)
+      if (!closed && (shown === 'claude' || shown === 'codex') && worker().has('reopen')) rows.push(kit.row({ icon: 'chat', tint: shown, label: '以对话方式继续',
+        detail: terminal.session ? '' : '对话开始后才能切换', act: async () => {
+          if (!terminal.session) return;
+          p.sheet.close(null, true);
+          try {
+            const { status, body } = await post({ action: 'start', id: newId(), tool: terminal.tool, dir: terminal.dir, form: 'chat', reopen: id });
+            if (status !== 200) throw new Error(body.error || '没有切换');
+            location.replace('../chat/?id=' + body.terminal + teamQuery());
+          } catch (error) { ui().error(error.message); }
+        } }));
       p.body.append(kit.section('终端', kit.group(...rows)));
       const skins = window.RemoteCliSkins, follows = !!(native && native.pref && native.setPref) && !native.pref('termskin');
       const storedSkin = store.get('skin', 'paper');
@@ -407,8 +418,9 @@
   function menu() {
     if (!terminal) return;
     if (!window.RemoteSheet) return;
-    if (talks()) worker().ensure();
-    window.RemoteSheet.open(menuPage(), '终端选项');
+    // what the computer offers decides some rows (`reopen`): its list is read first, once in a while
+    const open = () => window.RemoteSheet.open(menuPage(), '终端选项');
+    if (talks()) worker().ensure().then(open, open); else open();
   }
 
   // ---- speech: the app's system recognizer, else the browser's where it has one

@@ -13,7 +13,7 @@
   // The look belongs to the app, not to one computer: inside the app it is kept there, so every computer's pages
   // open in the same skin and text size. A browser keeps it per address, as it keeps everything else. So is the
   // kind of conversation its owner begins (begin.js): in an application, or in a terminal.
-  const LOOK = ['skin', 'text', 'readfont', 'readsize', 'readline', 'newkind'];
+  const LOOK = ['skin', 'text', 'readfont', 'readsize', 'readline', 'newtool'];
   const saved = (key, fallback) => {
     if (native && native.pref && LOOK.includes(key)) { const chosen = native.pref(key); if (chosen) return chosen; }
     try { return localStorage.getItem('rcli-' + key) || fallback; } catch (error) { return fallback; }
@@ -407,9 +407,9 @@
     if (result) open(result.terminal, 'chat', extra);
     return !!result;
   }
-  // A saved conversation is gone on with the way its owner begins conversations (begin.js): as a conversation, or in
-  // a terminal for one who chose terminals. The other way is behind a held press.
-  const asChat = s => chatOk(s.tool) && saved('newkind', '') !== 'term';
+  // A saved conversation is gone on with as a conversation where the computer runs its tool so (it can be shown on the
+  // tool's own screen from there), else in a terminal. The other way is behind a held press.
+  const asChat = s => chatOk(s.tool);
   const goOn = (s, extra) => asChat(s) ? chat(s.tool, s.dir, s.id, false, extra) : start(s.tool, s.dir, s.id, false, false, extra);
 
   const speakerOf = s => s && (/Antigravity 桌面版/.test(s.origin || s.kind || '') || s.transport === 'agy-desktop') ? 'Antigravity' : TOOLS[s.tool];
