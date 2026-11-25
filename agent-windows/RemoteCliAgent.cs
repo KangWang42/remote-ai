@@ -185,7 +185,7 @@ public sealed class TerminalAgent {
     /// terminals, so it answers at once and does what takes time elsewhere.
     public Func<Dictionary<string, object>, Dictionary<string, object>> Computer;
     static readonly string[] ComputerActions = { "settings_read", "settings_change", "line_switch", "line_take", "line_keep", "routes_read" };
-    static readonly string[] GitActions = { "git_status", "git_file_diff", "git_commit", "git_push", "git_worktree_list", "git_worktree_apply", "git_worktree_remove", "git_checkpoint" };
+    static readonly string[] GitActions = { "git_status", "git_file_diff", "git_commit", "git_push", "git_worktree_list", "git_worktree_apply", "git_worktree_remove", "git_checkpoint", "git_branches", "git_checkout", "git_checkpoints_list", "git_checkpoint_restore", "project_scripts" };
     readonly DesktopOperations Desktop;
     readonly Func<IDesktopConversation> OpenDesktopConversation;
     readonly CodexDesktopSessions NativeDesktop;
@@ -1341,8 +1341,22 @@ public sealed class TerminalAgent {
     internal static string FindTool(string name) {
         if (name == "shell") return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
         // where PATH does not name it, where each tool's own installer puts it (agy: %LOCALAPPDATA%gyin)
-        foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';').Concat(new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "OpenAI", "Codex", "bin"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "agy", "bin") }))
-            foreach (string ext in new[] { ".exe", ".cmd" }) { try { string path = Path.Combine(folder.Trim(), name + ext); if (File.Exists(path)) return path; } catch { } }
+        Tool kind = Tool.Of(name);
+        string[] binaries = kind != null ? kind.Binaries : new[] { name };
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var searchDirs = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';').Concat(new[] {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm"),
+            Path.Combine(profile, ".local", "bin"),
+            Path.Combine(profile, ".cargo", "bin"),
+            Path.Combine(profile, ".opencode", "bin"),
+            Path.Combine(localApp, "Programs", "OpenAI", "Codex", "bin"),
+            Path.Combine(localApp, "agy", "bin"),
+            Path.Combine(localApp, "Programs", "cursor", "resources", "app", "bin")
+        });
+        foreach (string bin in binaries)
+            foreach (string folder in searchDirs)
+                foreach (string ext in new[] { ".exe", ".cmd" }) { try { string path = Path.Combine(folder.Trim(), bin + ext); if (File.Exists(path)) return path; } catch { } }
         return null;
     }
     static Dictionary<string, string> Dirs(Dictionary<string, object> prefs) {

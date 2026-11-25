@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { bootstrapAuthFromHash, checkSession, fetchOverview, loginWithPassword } from './runtime/api';
+import {
+  bootstrapAuthFromHash,
+  checkSession,
+  fetchOverview,
+  loginWithPassword,
+  postDesktopMessage,
+  sendTerminalAction,
+} from './runtime/api';
 import type { DeviceInfo, SelectedItem, SessionEntry, TerminalEntry } from './runtime/types';
 import { ChatPane } from './components/ChatPane';
 import { CommandPalette } from './components/CommandPalette';
@@ -7,6 +14,23 @@ import { NewTaskModal } from './components/NewTaskModal';
 import { RightPanel, type RightTab } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { TerminalDrawer } from './components/TerminalDrawer';
+
+const VALID_SKINS = new Set(['auto', 'paper', 'dawn', 'night', 'slate', 'pine', 'dusk', 'pond']);
+
+function paintSkin(name: string) {
+  const chosen = VALID_SKINS.has(name) ? name : 'paper';
+  const win = window as any;
+  if (typeof win.RemoteCliPaint === 'function') {
+    const applied = win.RemoteCliPaint(chosen);
+    try {
+      if (win.RemoteCliNative?.chrome && applied?.bg) win.RemoteCliNative.chrome(applied.bg);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  document.documentElement.dataset.skin = chosen === 'auto' ? 'paper' : chosen;
+}
 
 export function App() {
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
@@ -23,35 +47,57 @@ export function App() {
   const [rightOpen, setRightOpen] = useState(() => window.innerWidth >= 1040);
   const [rightTab, setRightTab] = useState<RightTab>('diff');
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [activeDrawerTermId, setActiveDrawerTermId] = useState<string | null>(null);
   const [newTaskDir, setNewTaskDir] = useState<string | null>(null);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [manualProjectPath, setManualProjectPath] = useState('');
+  const [addProjectErr, setAddProjectErr] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
 
-  const [sidebarWidth, setSidebarWidth] = useState(280);
-  const [rightWidth, setRightWidth] = useState(420);
+  const [sidebarWidth, setSidebarWidth] = useState(286);
+  const [rightWidth, setRightWidth] = useState(430);
   const [mobilePane, setMobilePane] = useState<'sidebar' | 'chat' | 'right'>('sidebar');
   const [skin, setSkin] = useState(() => {
     try {
       const nativeSkin = (window as any).RemoteCliNative?.pref?.('skin');
-      if (nativeSkin && nativeSkin !== 'auto') return nativeSkin;
+      if (nativeSkin && VALID_SKINS.has(nativeSkin)) return nativeSkin;
+      const saved = localStorage.getItem('rcli-skin') || 'paper';
+      return VALID_SKINS.has(saved) ? saved : 'paper';
     } catch {
-      // ignore
+      return 'paper';
     }
-    return localStorage.getItem('rcli-skin') || 'paper';
   });
 
   const revRef = useRef(0);
   const triggerRefreshRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    document.documentElement.dataset.skin = skin;
+    paintSkin(skin);
     try {
       localStorage.setItem('rcli-skin', skin);
     } catch {
       // ignore
     }
+    try {
+      (window as any).RemoteCliNative?.setPref?.('skin', skin);
+    } catch {
+      // ignore
+    }
+    const resolved =
+      typeof (window as any).RemoteCliResolveSkin === 'function' ? (window as any).RemoteCliResolveSkin(skin) : skin;
+    postDesktopMessage(`skin:${resolved}`);
   }, [skin]);
 
-  // Global keyboard shortcuts (Ctrl+K command palette, Ctrl+J terminal drawer)
+  useEffect(() => {
+    const onSys = (window as any).RemoteCliOnSystemTheme;
+    if (typeof onSys !== 'function') return;
+    return onSys(() => {
+      if (skin === 'auto') paintSkin('auto');
+    });
+  }, [skin]);
+
+  // Global keyboard shortcuts: Ctrl+K palette, Ctrl+J terminal drawer, Ctrl+\ focus mode
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -60,6 +106,9 @@ export function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
         e.preventDefault();
         setTerminalOpen((v) => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
+        e.preventDefault();
+        setFocusMode((v) => !v);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -83,7 +132,7 @@ export function App() {
     })();
   }, []);
 
-  // Incremental long-poll loop using rev cursor (?rev=N&wait=20) so idle cycles cost ~40 bytes and updates arrive instantly.
+  // Incremental long-poll loop using rev cursor (?rev=N&wait=20)
   useEffect(() => {
     if (!signedIn) return;
     let alive = true;
@@ -94,6 +143,7 @@ export function App() {
       currentAbort?.abort();
     };
     triggerRefreshRef.current = wake;
+    (window as any).RemoteAiConsoleRefresh = wake;
 
     const loop = async () => {
       while (alive) {
@@ -129,11 +179,11 @@ export function App() {
       alive = false;
       currentAbort?.abort();
       triggerRefreshRef.current = null;
+      delete (window as any).RemoteAiConsoleRefresh;
     };
   }, [signedIn]);
 
-  // Honor ?open=<terminalId> and ?tab=<name> query parameters on initial load,
-  // and allow desktop WebView2 host to focus a terminal or panel without reloading.
+  // Honor ?open=<terminalId> and ?tab=<name> + desktop WebView2 zero-reload jump
   useEffect(() => {
     const applyTarget = (openId?: string | null, tab?: string | null) => {
       if (openId && /^[a-f0-9]{32}$/.test(openId)) {
@@ -171,6 +221,45 @@ export function App() {
   const activeProject = activeTerminal?.dir || activeSession?.dir || device?.workspaces?.[0] || '';
   const activeWorktree = activeTerminal?.worktree || '';
 
+  const handleAddProjectTrigger = () => {
+    // On Windows WebView2 desktop console, open the native FolderBrowserDialog directly.
+    if (postDesktopMessage('pick-folder')) return;
+    setAddProjectErr('');
+    setManualProjectPath('');
+    setAddProjectOpen(true);
+  };
+
+  const submitAddProject = async (path: string) => {
+    const clean = path.trim();
+    if (!clean) return;
+    setAddProjectErr('');
+    try {
+      await sendTerminalAction({ action: 'project_add', path: clean });
+      setAddProjectOpen(false);
+      setManualProjectPath('');
+      triggerRefreshRef.current?.();
+    } catch (err: any) {
+      setAddProjectErr(err?.message || '添加项目失败');
+    }
+  };
+
+  const handleRunScript = async (dir: string, command: string) => {
+    try {
+      const started = await sendTerminalAction({ action: 'start', tool: 'shell', dir, history: false });
+      const tid = started?.terminal;
+      if (tid) {
+        setActiveDrawerTermId(tid);
+        setTerminalOpen(true);
+        triggerRefreshRef.current?.();
+        window.setTimeout(() => {
+          sendTerminalAction({ action: 'input', terminal: tid, data: command + '\r' }).catch(() => {});
+        }, 700);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const handleLogin = async (e: Event) => {
     e.preventDefault();
     setLoginError('');
@@ -187,7 +276,7 @@ export function App() {
     e.preventDefault();
     const startX = e.clientX;
     const startW = sidebarWidth;
-    const onMove = (ev: MouseEvent) => setSidebarWidth(Math.max(220, Math.min(440, startW + (ev.clientX - startX))));
+    const onMove = (ev: MouseEvent) => setSidebarWidth(Math.max(232, Math.min(440, startW + (ev.clientX - startX))));
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -200,7 +289,7 @@ export function App() {
     e.preventDefault();
     const startX = e.clientX;
     const startW = rightWidth;
-    const onMove = (ev: MouseEvent) => setRightWidth(Math.max(300, Math.min(720, startW + (startX - ev.clientX))));
+    const onMove = (ev: MouseEvent) => setRightWidth(Math.max(310, Math.min(720, startW + (startX - ev.clientX))));
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -210,7 +299,14 @@ export function App() {
   };
 
   if (signedIn === null) {
-    return <div class="boot-screen">正在连接 Remote AI 总控台…</div>;
+    return (
+      <div class="boot-screen">
+        <div class="boot-pill">
+          <span class="conn-dot on" />
+          正在连接 Remote AI 总控台…
+        </div>
+      </div>
+    );
   }
 
   if (!signedIn) {
@@ -236,7 +332,7 @@ export function App() {
   }
 
   return (
-    <div class={`console-shell mobile-${mobilePane}`}>
+    <div class={`console-shell mobile-${mobilePane}${focusMode ? ' focus-mode' : ''}`}>
       <div class="col-sidebar" style={{ width: `${sidebarWidth}px` }}>
         <Sidebar
           device={device}
@@ -250,12 +346,15 @@ export function App() {
             setMobilePane('chat');
           }}
           onNewTask={(dir) => setNewTaskDir(dir ?? '')}
+          onAddProject={handleAddProjectTrigger}
           onOpenPalette={() => setPaletteOpen(true)}
           onOpenRightTab={(tab) => {
             setRightTab(tab);
             setRightOpen(true);
+            setFocusMode(false);
             setMobilePane('right');
           }}
+          onToggleFocus={() => setFocusMode((v) => !v)}
         />
       </div>
 
@@ -263,26 +362,34 @@ export function App() {
 
       <div class="col-center">
         <ChatPane
+          device={device}
           selected={selected}
           terminal={activeTerminal}
           session={activeSession}
-          terminalDrawerOpen={terminalOpen}
           onRefresh={() => triggerRefreshRef.current?.()}
           onToggleTerminal={() => setTerminalOpen((v) => !v)}
           onOpenDiff={() => {
             setRightTab('diff');
             setRightOpen(true);
+            setFocusMode(false);
             setMobilePane('right');
           }}
           onNewTask={() => setNewTaskDir(activeProject)}
+          onAddProject={handleAddProjectTrigger}
+          onRunScript={handleRunScript}
           onSelectTerminal={(id) => {
             setSelected({ kind: 'terminal', id });
             setMobilePane('chat');
           }}
+          onToggleFocus={() => setFocusMode((v) => !v)}
+          focusMode={focusMode}
+          terminalDrawerOpen={terminalOpen}
         />
+
         <TerminalDrawer
           open={terminalOpen}
           activeProject={activeProject}
+          selectedId={activeDrawerTermId || undefined}
           terminals={terminals}
           onClose={() => setTerminalOpen(false)}
           onRefresh={() => triggerRefreshRef.current?.()}
@@ -291,7 +398,7 @@ export function App() {
 
       {rightOpen && (
         <>
-          <div class="col-resizer" onMouseDown={dragRight} title="拖拽调整审阅面板宽度" />
+          <div class="col-resizer" onMouseDown={dragRight} title="拖拽调整右侧面板宽度" />
           <div class="col-right" style={{ width: `${rightWidth}px` }}>
             <RightPanel
               tab={rightTab}
@@ -301,20 +408,26 @@ export function App() {
               device={device}
               skin={skin}
               onSkinChange={setSkin}
-              onClose={() => {
-                setRightOpen(false);
-                setMobilePane('chat');
-              }}
+              onClose={() => setRightOpen(false)}
             />
           </div>
         </>
       )}
 
-      <nav class="mobile-nav" aria-label="手机导航">
-        <button type="button" class={mobilePane === 'sidebar' ? 'active' : ''} onClick={() => setMobilePane('sidebar')}>
-          任务与项目
+      {/* Mobile Bottom Tab Navigation (< 960px) */}
+      <nav class="mobile-nav" aria-label="移动端导航">
+        <button
+          type="button"
+          class={mobilePane === 'sidebar' ? 'active' : ''}
+          onClick={() => setMobilePane('sidebar')}
+        >
+          项目/任务
         </button>
-        <button type="button" class={mobilePane === 'chat' ? 'active' : ''} onClick={() => setMobilePane('chat')}>
+        <button
+          type="button"
+          class={mobilePane === 'chat' ? 'active' : ''}
+          onClick={() => setMobilePane('chat')}
+        >
           对话
         </button>
         <button
@@ -330,14 +443,14 @@ export function App() {
         </button>
         <button
           type="button"
-          class={mobilePane === 'right' && rightTab === 'connect' ? 'active' : ''}
+          class={mobilePane === 'right' && rightTab !== 'diff' ? 'active' : ''}
           onClick={() => {
-            setRightTab('connect');
+            setRightTab(rightTab === 'diff' ? 'connect' : rightTab);
             setRightOpen(true);
             setMobilePane('right');
           }}
         >
-          连接
+          更多
         </button>
       </nav>
 
@@ -353,6 +466,63 @@ export function App() {
         }}
       />
 
+      {addProjectOpen && (
+        <div class="modal-backdrop" onClick={() => setAddProjectOpen(false)}>
+          <form
+            class="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitAddProject(manualProjectPath);
+            }}
+          >
+            <div class="modal-head">
+              <h2>添加项目文件夹</h2>
+              <button type="button" class="icon-btn" onClick={() => setAddProjectOpen(false)}>
+                ✕
+              </button>
+            </div>
+            {(device?.candidates || []).length > 0 && (
+              <div class="nav-group">
+                <div class="group-title">已发现的会话文件夹</div>
+                {(device?.candidates || []).slice(0, 8).map((c) => (
+                  <button
+                    key={c.path}
+                    type="button"
+                    class="nav-row"
+                    onClick={() => submitAddProject(c.path)}
+                  >
+                    <span class="nav-row-main">
+                      <span class="nav-row-title">{c.name}</span>
+                      <span class="nav-row-sub">{c.path}</span>
+                    </span>
+                    <span class="chip">+ 添加</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <label class="field-label">
+              <span>或手动输入电脑上的文件夹路径</span>
+              <input
+                type="text"
+                placeholder="例如 E:\projects\my-app"
+                value={manualProjectPath}
+                onInput={(e) => setManualProjectPath((e.target as HTMLInputElement).value)}
+              />
+            </label>
+            {addProjectErr && <div class="panel-feedback is-error">{addProjectErr}</div>}
+            <div class="modal-foot">
+              <button type="button" class="ghost-btn" onClick={() => setAddProjectOpen(false)}>
+                取消
+              </button>
+              <button type="submit" class="primary-btn" disabled={!manualProjectPath.trim()}>
+                添加
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       <CommandPalette
         open={paletteOpen}
         terminals={terminals}
@@ -362,12 +532,13 @@ export function App() {
           setSelected(item);
           setMobilePane('chat');
         }}
-        onAction={(act) => {
-          if (act === 'new') setNewTaskDir(activeProject);
-          else if (act === 'terminal') setTerminalOpen((v) => !v);
-          else if (act === 'diff' || act === 'connect') {
-            setRightTab(act);
+        onAction={(action) => {
+          if (action === 'new') setNewTaskDir(activeProject);
+          else if (action === 'terminal') setTerminalOpen((v) => !v);
+          else if (action === 'diff' || action === 'connect') {
+            setRightTab(action);
             setRightOpen(true);
+            setFocusMode(false);
             setMobilePane('right');
           }
         }}

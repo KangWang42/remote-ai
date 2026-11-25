@@ -5,6 +5,7 @@ import type { TerminalEntry } from '../runtime/types';
 interface Props {
   open: boolean;
   activeProject: string;
+  selectedId?: string;
   terminals: TerminalEntry[];
   onClose: () => void;
   onRefresh: () => void;
@@ -17,12 +18,16 @@ const MAX_KEPT_TERMINALS = 4;
  * keeps up to 4 recently visited PTY iframes mounted while hidden so switching between shells
  * or collapsing the drawer never loses screen state or scrollback.
  */
-export function TerminalDrawer({ open, activeProject, terminals, onClose, onRefresh }: Props) {
+export function TerminalDrawer({ open, activeProject, selectedId, terminals, onClose, onRefresh }: Props) {
   const shellTerminals = terminals.filter((t) => t.form !== 'chat' && t.state !== 'closed');
   const [activeId, setActiveId] = useState<string>('');
   const [mountedIds, setMountedIds] = useState<string[]>([]);
   const [height, setHeight] = useState(280);
   const [starting, setStarting] = useState(false);
+
+  useEffect(() => {
+    if (selectedId) setActiveId(selectedId);
+  }, [selectedId]);
 
   useEffect(() => {
     if (activeId && shellTerminals.some((t) => t.id === activeId)) return;

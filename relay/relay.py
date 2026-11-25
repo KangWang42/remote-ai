@@ -81,7 +81,9 @@ DESKTOP_ACTIONS = ("app_open",)
 DESKTOP_TOOLS = ("codex", "claude", "agy")
 UPDATE_ACTION = "update"      # the program on the computer looks for a newer version of itself and installs it
 MAX_TERMINALS, MAX_HISTORY, OUTPUT_LIMIT, CLOSED_LIMIT = 16, 12, 2_000_000, 300_000
-LABELS = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity CLI", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi", "shell": "PowerShell"}
+LABELS = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity CLI", "gemini": "Gemini CLI",
+          "opencode": "OpenCode", "cursor": "Cursor Agent", "qoder": "Qoder", "cline": "Cline",
+          "pi": "Pi", "kiro": "Kiro CLI", "copilot": "Copilot CLI", "shell": "PowerShell"}
 OP_SECONDS = 120
 
 
@@ -209,7 +211,7 @@ def _folders(items, limit):
         if isinstance(item, dict) and _name(item.get("name"), 60) and _name(item.get("path"), 260):
             out.append({"name": item["name"], "path": item["path"], "fixed": item.get("fixed") is True, "exists": item.get("exists") is not False,
                         "updated": item["updated"] if type(item.get("updated")) is int else 0, "live": item.get("live") is True,
-                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex", "agy", "opencode", "qoder", "cline", "pi")],
+                        "tools": [t for t in str(item.get("tools", "")).split() if t in ("claude", "codex", "agy", "gemini", "opencode", "cursor", "qoder", "cline", "pi", "kiro", "copilot")],
                         # by what the folder is used on the computer, in the computer's words: a desktop app, an editor, a terminal
                         "kinds": [k[:20] for k in item.get("kinds", []) if isinstance(k, str) and k.strip()][:4] if isinstance(item.get("kinds"), list) else []})
     return out
@@ -449,7 +451,7 @@ def _routes(items):
 # What the program on the computer is asked about itself: a few of its settings, and the line it is reached by.
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep", "routes_read")
 # Workspace Git review, diff, commit/push, worktree management and turn checkpoints (agent-windows/GitReview.cs).
-GIT_ACTIONS = ("git_status", "git_file_diff", "git_commit", "git_push", "git_worktree_list", "git_worktree_apply", "git_worktree_remove", "git_checkpoint")
+GIT_ACTIONS = ("git_status", "git_file_diff", "git_commit", "git_push", "git_worktree_list", "git_worktree_apply", "git_worktree_remove", "git_checkpoint", "git_branches", "git_checkout", "git_checkpoints_list", "git_checkpoint_restore", "project_scripts")
 _GIT_REF = re.compile(r"^[A-Za-z0-9._/-]{1,120}$")
 _GIT_PATH = re.compile(r"^[^\x00-\x1f]{1,260}$")
 # What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
@@ -1488,6 +1490,18 @@ class Relay:
                 raise RemoteError("快照说明无效")
             if label:
                 question["label"] = label
+        elif action == "git_checkout":
+            branch = payload.get("branch", "")
+            if not isinstance(branch, str) or not _GIT_REF.fullmatch(branch) or ".." in branch or branch.startswith("-"):
+                raise RemoteError("分支名称无效")
+            question["branch"] = branch
+            if payload.get("create") is True:
+                question["create"] = True
+        elif action == "git_checkpoint_restore":
+            ref = payload.get("ref", "")
+            if not isinstance(ref, str) or not re.fullmatch(r"refs/remote-ai/checkpoints/[A-Za-z0-9._/-]{1,80}", ref) or ".." in ref:
+                raise RemoteError("快照引用无效")
+            question["ref"] = ref
         with self._changed:
             self._expire(now)
             if op_id in self._pending:

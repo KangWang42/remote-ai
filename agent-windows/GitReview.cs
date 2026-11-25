@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
+using System.Web.Script.Serialization;
 
 namespace RemoteCli {
 /// Two-stage workspace Git review engine:
@@ -83,6 +85,11 @@ public static class GitReview {
         if (action == "git_worktree_apply") return WorktreeApply(repoDir, wtId, true.Equals(op.ContainsKey("remove_after") ? op["remove_after"] : null), worktrees);
         if (action == "git_worktree_remove") return WorktreeRemove(repoDir, wtId, worktrees);
         if (action == "git_checkpoint") return worktrees.CaptureCheckpoint(targetDir, Str(op, "label"));
+        if (action == "git_branches") return Branches(targetDir);
+        if (action == "git_checkout") return Checkout(targetDir, Str(op, "branch"), true.Equals(op.ContainsKey("create") ? op["create"] : null));
+        if (action == "git_checkpoints_list") return ListCheckpoints(targetDir);
+        if (action == "git_checkpoint_restore") return RestoreCheckpoint(targetDir, Str(op, "ref"));
+        if (action == "project_scripts") return ProjectScripts(targetDir);
         throw new ArgumentException("不支持此 Git 操作");
     }
 
@@ -280,6 +287,114 @@ public static class GitReview {
         string wtPath = worktrees.ResolveSessionWorktreePath(repoDir, wtId);
         worktrees.SafeRemoveWorktree(repoDir, wtPath);
         return new Dictionary<string, object> { { "ok", true } };
+    }
+
+    public static Dictionary<string, object> Branches(string targetDir) {
+        var cur = Exec(targetDir, "rev-parse --abbrev-ref HEAD", 8000);
+        string current = cur.Code == 0 ? cur.Out.Trim() : "";
+        var list = new List<Dictionary<string, object>>();
+        var res = Exec(targetDir, "for-each-ref --sort=-committerdate --format=\"%(refname:short)%09%(objectname:short)%09%(committerdate:unix)%09%(subject)\" refs/heads", 12000);
+        if (res.Code == 0) {
+            foreach (string raw in (res.Out ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) {
+                string[] cols = raw.Split('\t');
+                if (cols.Length < 2) continue;
+                long ts = 0; if (cols.Length >= 3) Int64.TryParse(cols[2], out ts);
+                list.Add(new Dictionary<string, object> {
+                    { "name", cols[0] }, { "head", cols[1] }, { "updated", ts * 1000 },
+                    { "subject", cols.Length >= 4 ? cols[3] : "" },
+                    { "current", cols[0] == current }
+                });
+                if (list.Count >= 60) break;
+            }
+        }
+        return new Dictionary<string, object> { { "current", current }, { "branches", list.ToArray() } };
+    }
+
+    public static Dictionary<string, object> Checkout(string targetDir, string branch, bool create) {
+        if (String.IsNullOrWhiteSpace(branch) || branch.StartsWith("-", StringComparison.Ordinal) || branch.Contains(".."))
+            throw new ArgumentException("分支名称无效");
+        string args = create ? "checkout -b " + QuoteArg(branch.Trim()) : "checkout " + QuoteArg(branch.Trim());
+        var res = Exec(targetDir, args, 20000, retryLock: true);
+        if (res.Code != 0) throw new InvalidOperationException("切换分支失败：" + (res.Err.Length > 0 ? res.Err : res.Out));
+        var cur = Exec(targetDir, "rev-parse --abbrev-ref HEAD", 8000);
+        return new Dictionary<string, object> { { "ok", true }, { "branch", cur.Code == 0 ? cur.Out.Trim() : branch.Trim() } };
+    }
+
+    public static Dictionary<string, object> ListCheckpoints(string targetDir) {
+        var list = new List<Dictionary<string, object>>();
+        var res = Exec(targetDir, "for-each-ref --sort=-committerdate --format=\"%(refname)%09%(objectname:short)%09%(committerdate:unix)%09%(subject)\" refs/remote-ai/checkpoints", 12000);
+        if (res.Code == 0) {
+            foreach (string raw in (res.Out ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) {
+                string[] cols = raw.Split('\t');
+                if (cols.Length < 2) continue;
+                long ts = 0; if (cols.Length >= 3) Int64.TryParse(cols[2], out ts);
+                list.Add(new Dictionary<string, object> {
+                    { "ref", cols[0] }, { "commit", cols[1] }, { "at", ts * 1000 },
+                    { "label", cols.Length >= 4 ? cols[3] : cols[0] }
+                });
+                if (list.Count >= 40) break;
+            }
+        }
+        return new Dictionary<string, object> { { "checkpoints", list.ToArray() } };
+    }
+
+    public static Dictionary<string, object> RestoreCheckpoint(string targetDir, string checkpointRef) {
+        if (String.IsNullOrWhiteSpace(checkpointRef) || !checkpointRef.StartsWith("refs/remote-ai/checkpoints/", StringComparison.Ordinal) || checkpointRef.Contains(".."))
+            throw new ArgumentException("快照引用无效");
+        var res = Exec(targetDir, "checkout " + QuoteArg(checkpointRef) + " -- .", 20000, retryLock: true);
+        if (res.Code != 0) throw new InvalidOperationException("恢复快照失败：" + (res.Err.Length > 0 ? res.Err : res.Out));
+        return new Dictionary<string, object> { { "ok", true }, { "ref", checkpointRef } };
+    }
+
+    /// Reads runnable project scripts from package.json, Makefile, pyproject.toml or Cargo.toml (read-only).
+    public static Dictionary<string, object> ProjectScripts(string targetDir) {
+        var scripts = new List<Dictionary<string, object>>();
+        try {
+            string pkg = Path.Combine(targetDir, "package.json");
+            if (File.Exists(pkg)) {
+                string runner = File.Exists(Path.Combine(targetDir, "pnpm-lock.yaml")) ? "pnpm"
+                    : File.Exists(Path.Combine(targetDir, "bun.lockb")) || File.Exists(Path.Combine(targetDir, "bun.lock")) ? "bun"
+                    : File.Exists(Path.Combine(targetDir, "yarn.lock")) ? "yarn" : "npm";
+                var parsed = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(pkg, Encoding.UTF8));
+                var map = parsed != null && parsed.ContainsKey("scripts") ? parsed["scripts"] as Dictionary<string, object> : null;
+                if (map != null) {
+                    foreach (var kv in map.Take(16)) {
+                        string cmd = runner == "npm" ? "npm run " + kv.Key : runner + " " + kv.Key;
+                        scripts.Add(new Dictionary<string, object> {
+                            { "name", kv.Key }, { "command", cmd }, { "detail", Convert.ToString(kv.Value ?? "") }, { "source", "package.json" }
+                        });
+                    }
+                }
+            }
+        } catch { }
+        try {
+            string cargo = Path.Combine(targetDir, "Cargo.toml");
+            if (File.Exists(cargo)) {
+                scripts.Add(new Dictionary<string, object> { { "name", "cargo build" }, { "command", "cargo build" }, { "detail", "Rust 编译" }, { "source", "Cargo.toml" } });
+                scripts.Add(new Dictionary<string, object> { { "name", "cargo test" }, { "command", "cargo test" }, { "detail", "Rust 测试" }, { "source", "Cargo.toml" } });
+            }
+        } catch { }
+        try {
+            string pyproj = Path.Combine(targetDir, "pyproject.toml");
+            if (File.Exists(pyproj)) {
+                scripts.Add(new Dictionary<string, object> { { "name", "pytest" }, { "command", "pytest" }, { "detail", "Python 测试" }, { "source", "pyproject.toml" } });
+            }
+        } catch { }
+        try {
+            string mk = Path.Combine(targetDir, "Makefile");
+            if (File.Exists(mk)) {
+                foreach (string line in File.ReadLines(mk, Encoding.UTF8).Take(120)) {
+                    var m = Regex.Match(line, @"^([a-zA-Z0-9][a-zA-Z0-9_-]{0,30}):(?:\s|$)");
+                    if (m.Success && !m.Groups[1].Value.StartsWith(".", StringComparison.Ordinal)) {
+                        string target = m.Groups[1].Value;
+                        if (!scripts.Any(s => Convert.ToString(s["name"]) == target))
+                            scripts.Add(new Dictionary<string, object> { { "name", target }, { "command", "make " + target }, { "detail", "Makefile" }, { "source", "Makefile" } });
+                        if (scripts.Count >= 20) break;
+                    }
+                }
+            }
+        } catch { }
+        return new Dictionary<string, object> { { "scripts", scripts.ToArray() } };
     }
 }
 }

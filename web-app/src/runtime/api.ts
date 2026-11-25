@@ -1,9 +1,13 @@
 import type {
   ChatChunk,
   FileEntry,
+  GitBranchEntry,
+  GitCheckpointEntry,
   GitFileDiffResponse,
   GitStatusResponse,
   OverviewSnapshot,
+  ProjectScriptEntry,
+  ToolModelOption,
 } from './types';
 
 function resolveBase(): string {
@@ -155,6 +159,31 @@ export async function fetchRoutesInfo(): Promise<{ environment_id: string; route
   });
 }
 
+export async function fetchTeamModels(): Promise<Record<string, ToolModelOption[]>> {
+  const raw = await requestJson<any>('/api/work', {
+    method: 'POST',
+    body: JSON.stringify({ id: opId(), action: 'team_models' }),
+  });
+  const out: Record<string, ToolModelOption[]> = {};
+  const map = raw?.tools || raw?.models || raw || {};
+  for (const key of Object.keys(map)) {
+    const val = map[key];
+    const items = Array.isArray(val) ? val : Array.isArray(val?.models) ? val.models : [];
+    if (items.length > 0) {
+      out[key] = items.map((m: any) =>
+        typeof m === 'string'
+          ? { id: m, label: m }
+          : {
+              id: m.id || m.model || m.name || '',
+              label: m.label || m.name || m.id || '',
+              efforts: Array.isArray(m.efforts) ? m.efforts : undefined,
+            },
+      );
+    }
+  }
+  return out;
+}
+
 export async function gitStatus(dir: string, worktree = ''): Promise<GitStatusResponse> {
   return requestJson('/api/git', {
     method: 'POST',
@@ -167,6 +196,7 @@ export async function gitFileDiff(
   path: string,
   scope: 'working' | 'staged' | 'base' = 'working',
   worktree = '',
+  base = '',
 ): Promise<GitFileDiffResponse> {
   return requestJson('/api/git', {
     method: 'POST',
@@ -177,6 +207,7 @@ export async function gitFileDiff(
       path,
       scope,
       ...(worktree ? { worktree } : {}),
+      ...(base ? { base } : {}),
     }),
   });
 }
@@ -189,7 +220,7 @@ export async function gitCommit(dir: string, message: string, files?: string[], 
       action: 'git_commit',
       dir,
       message,
-      ...(files && files.length > 0 ? { files } : {}),
+      ...(files && files.length ? { files } : {}),
       ...(worktree ? { worktree } : {}),
     }),
   });
@@ -208,6 +239,20 @@ export async function gitPush(dir: string, setUpstream = false, worktree = ''): 
   });
 }
 
+export async function gitWorktreeApply(dir: string, worktree: string, removeAfter = false): Promise<any> {
+  return requestJson('/api/git', {
+    method: 'POST',
+    body: JSON.stringify({ id: opId(), action: 'git_worktree_apply', dir, worktree, remove_after: removeAfter }),
+  });
+}
+
+export async function gitWorktreeRemove(dir: string, worktree: string): Promise<any> {
+  return requestJson('/api/git', {
+    method: 'POST',
+    body: JSON.stringify({ id: opId(), action: 'git_worktree_remove', dir, worktree }),
+  });
+}
+
 export async function gitCheckpoint(dir: string, label = '', worktree = ''): Promise<any> {
   return requestJson('/api/git', {
     method: 'POST',
@@ -221,38 +266,137 @@ export async function gitCheckpoint(dir: string, label = '', worktree = ''): Pro
   });
 }
 
-export async function gitWorktreeApply(dir: string, worktree: string, removeAfter = true): Promise<any> {
+export async function gitBranches(dir: string, worktree = ''): Promise<{ current: string; branches: GitBranchEntry[] }> {
+  return requestJson('/api/git', {
+    method: 'POST',
+    body: JSON.stringify({ id: opId(), action: 'git_branches', dir, ...(worktree ? { worktree } : {}) }),
+  });
+}
+
+export async function gitCheckout(dir: string, branch: string, create = false, worktree = ''): Promise<any> {
   return requestJson('/api/git', {
     method: 'POST',
     body: JSON.stringify({
       id: opId(),
-      action: 'git_worktree_apply',
+      action: 'git_checkout',
       dir,
-      worktree,
-      remove_after: removeAfter,
+      branch,
+      create,
+      ...(worktree ? { worktree } : {}),
     }),
   });
 }
 
-export async function gitWorktreeRemove(dir: string, worktree: string): Promise<any> {
+export async function gitCheckpointsList(
+  dir: string,
+  worktree = '',
+): Promise<{ checkpoints: GitCheckpointEntry[] }> {
   return requestJson('/api/git', {
     method: 'POST',
-    body: JSON.stringify({
-      id: opId(),
-      action: 'git_worktree_remove',
-      dir,
-      worktree,
-    }),
+    body: JSON.stringify({ id: opId(), action: 'git_checkpoints_list', dir, ...(worktree ? { worktree } : {}) }),
   });
 }
 
-export async function listFiles(dir: string, path = ''): Promise<{ entries: FileEntry[] }> {
+export async function gitCheckpointRestore(dir: string, ref: string, worktree = ''): Promise<any> {
+  return requestJson('/api/git', {
+    method: 'POST',
+    body: JSON.stringify({ id: opId(), action: 'git_checkpoint_restore', dir, ref, ...(worktree ? { worktree } : {}) }),
+  });
+}
+
+export async function fetchProjectScripts(
+  dir: string,
+  worktree = '',
+): Promise<{ scripts: ProjectScriptEntry[] }> {
+  return requestJson('/api/git', {
+    method: 'POST',
+    body: JSON.stringify({ id: opId(), action: 'project_scripts', dir, ...(worktree ? { worktree } : {}) }),
+  });
+}
+
+export async function listFiles(dir: string, path = ''): Promise<{ path: string; entries: FileEntry[] }> {
   return requestJson('/api/files', {
     method: 'POST',
     body: JSON.stringify({ id: opId(), action: 'file_list', dir, path }),
   });
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return btoa(bin);
+}
+
+/** Uploads an image attachment into .remote-ai/attachments/ using the existing chunked /api/files protocol. */
+export async function uploadImageAttachment(dir: string, file: File): Promise<string> {
+  const mimeMap: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
+  const ext = mimeMap[file.type] || 'png';
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const hex = opId().slice(0, 6);
+  const relPath = `.remote-ai/attachments/${stamp}-${hex}.${ext}`;
+  const upload = opId();
+  const buf = new Uint8Array(await file.arrayBuffer());
+
+  await requestJson('/api/files', {
+    method: 'POST',
+    body: JSON.stringify({ id: opId(), action: 'file_upload_start', dir, path: relPath, upload, size: buf.byteLength }),
+  });
+  const chunkSize = 512 * 1024;
+  let offset = 0;
+  try {
+    while (offset < buf.byteLength) {
+      const slice = buf.subarray(offset, Math.min(buf.byteLength, offset + chunkSize));
+      await requestJson('/api/files', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: opId(),
+          action: 'file_upload_chunk',
+          dir,
+          path: relPath,
+          upload,
+          offset,
+          data: bytesToBase64(slice),
+        }),
+      });
+      offset += slice.byteLength;
+    }
+    await requestJson('/api/files', {
+      method: 'POST',
+      body: JSON.stringify({ id: opId(), action: 'file_upload_finish', dir, path: relPath, upload }),
+    });
+    return relPath;
+  } catch (err) {
+    requestJson('/api/files', {
+      method: 'POST',
+      body: JSON.stringify({ id: opId(), action: 'file_upload_cancel', dir, path: relPath, upload }),
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 export function terminalEmbedUrl(terminalId: string): string {
   return `${API_BASE}/terminal/?id=${encodeURIComponent(terminalId)}&embed=1`;
+}
+
+export function postDesktopMessage(msg: string): boolean {
+  try {
+    const fn = (window as any).chrome?.webview?.postMessage;
+    if (typeof fn === 'function') {
+      fn.call((window as any).chrome.webview, msg);
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
 }

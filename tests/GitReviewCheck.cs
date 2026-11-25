@@ -72,7 +72,26 @@ class GitReviewCheck {
         Require(File.Exists(Path.Combine(repo, "isolated.txt")), "main repo received worktree changes");
         Require(!Directory.Exists(created.Path), "worktree folder cleaned");
 
-        Console.WriteLine("GitReviewCheck: status, per-file diff, hidden checkpoints, commit and session worktree lifecycle passed");
+        // 6. Branches, checkout, checkpoint listing & restore, and project scripts detection
+        File.WriteAllText(Path.Combine(repo, "package.json"), "{\"scripts\":{\"dev\":\"vite\",\"test\":\"vitest\"}}\n", new UTF8Encoding(false));
+        var scriptsRes = GitReview.Handle(repo, new Dictionary<string, object> { { "action", "project_scripts" } }, wts);
+        var scriptsArr = (Dictionary<string, object>[])scriptsRes["scripts"];
+        Require(scriptsArr.Any(s => Convert.ToString(s["name"]) == "dev" && Convert.ToString(s["command"]) == "npm run dev"), "package.json scripts discovered");
+
+        var checkoutRes = GitReview.Handle(repo, new Dictionary<string, object> { { "action", "git_checkout" }, { "branch", "feat/ui-polish" }, { "create", true } }, wts);
+        Require(Convert.ToString(checkoutRes["branch"]) == "feat/ui-polish", "new branch created and checked out");
+        var branchesRes = GitReview.Handle(repo, new Dictionary<string, object> { { "action", "git_branches" } }, wts);
+        Require(Convert.ToString(branchesRes["current"]) == "feat/ui-polish", "branches lists active branch");
+
+        File.WriteAllText(Path.Combine(repo, "app.txt"), "overwritten-temporarily\n", new UTF8Encoding(false));
+        var cpListRes = GitReview.Handle(repo, new Dictionary<string, object> { { "action", "git_checkpoints_list" } }, wts);
+        var cps = (Dictionary<string, object>[])cpListRes["checkpoints"];
+        Require(cps.Any(c => Convert.ToString(c["ref"]) == cpRef), "saved checkpoint listed");
+        var restoreRes = GitReview.Handle(repo, new Dictionary<string, object> { { "action", "git_checkpoint_restore" }, { "ref", cpRef } }, wts);
+        Require(true.Equals(restoreRes["ok"]), "checkpoint restored");
+        Require(File.ReadAllText(Path.Combine(repo, "app.txt"), Encoding.UTF8).Contains("line2-edited"), "restored file matches checkpoint");
+
+        Console.WriteLine("GitReviewCheck: status, per-file diff, checkpoints+restore, branches, scripts, commit and worktree lifecycle passed");
         return 0;
     }
 }

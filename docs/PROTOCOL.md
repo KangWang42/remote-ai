@@ -1442,6 +1442,13 @@ Authenticated endpoint `POST /api/git` (requires agent feature `git`) dispatches
 | `git_worktree_apply` | `dir`, `worktree`, optional `squash` | Merges the session worktree branch into the main repository worktree |
 | `git_worktree_remove` | `dir`, `worktree`, optional `force` | Safely removes the session worktree and its branch |
 | `git_checkpoint` | `dir`, optional `worktree`, `label` | Captures the current working tree into a hidden Git ref `refs/remote-ai/checkpoints/<id>` via a scratch `GIT_INDEX_FILE` without modifying the real Git index or stash |
+| `git_branches` | `dir`, optional `worktree` | Lists local Git branches sorted by committer date (`current`, `branches: [{name, head, updated, subject, current}]`) |
+| `git_checkout` | `dir`, `branch`, optional `create`, `worktree` | Switches to an existing branch or creates a new branch (`create: true`) |
+| `git_checkpoints_list` | `dir`, optional `worktree` | Lists saved hidden-ref checkpoints (`checkpoints: [{ref, commit, at, label}]`) |
+| `git_checkpoint_restore` | `dir`, `ref`, optional `worktree` | Restores working tree files from a saved `refs/remote-ai/checkpoints/*` ref |
+| `project_scripts` | `dir`, optional `worktree` | Read-only discovery of runnable scripts from `package.json`, `Makefile`, `Cargo.toml` and `pyproject.toml` |
+
+Windows agents auto-detect installed CLI tools across `claude`, `codex`, `agy`, `gemini`, `opencode`, `cursor` (`cursor-agent` / `agent`), `qoder`, `cline`, `pi`, `kiro` (`kiro-cli` / `kiro`), `copilot`, and `shell`.
 
 ### Embedded Console Framing
 

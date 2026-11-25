@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { API_BASE, fetchRoutesInfo, listFiles } from '../runtime/api';
-import type { DeviceInfo, FileEntry, RouteEntry } from '../runtime/types';
+import { API_BASE, fetchRoutesInfo, listFiles, postDesktopMessage } from '../runtime/api';
+import { toolColor, toolLabel, type DeviceInfo, type FileEntry, type RouteEntry } from '../runtime/types';
 import { DiffPanel } from './DiffPanel';
 
 export type RightTab = 'diff' | 'files' | 'teams' | 'connect';
@@ -16,13 +16,15 @@ interface Props {
   onClose?: () => void;
 }
 
-const SKINS: Array<{ id: string; label: string }> = [
-  { id: 'paper', label: '纸白' },
-  { id: 'night', label: '夜航' },
-  { id: 'forest', label: '墨绿' },
-  { id: 'warm', label: '暖纸' },
-  { id: 'cobalt', label: '钴蓝' },
-  { id: 'dusk', label: '霞光' },
+const SKINS: Array<{ id: string; label: string; sub: string; bg: string; accent: string }> = [
+  { id: 'auto', label: '跟随系统', sub: '浅纸白 · 深夜航', bg: 'linear-gradient(135deg,#f2f3f7 50%,#1a1b26 50%)', accent: '#7aa2f7' },
+  { id: 'paper', label: '纸白', sub: '清透浅色', bg: '#f2f3f7', accent: '#2f54eb' },
+  { id: 'dawn', label: '晨光', sub: '暖纸浅色', bg: '#f3ede3', accent: '#286983' },
+  { id: 'night', label: '夜航', sub: 'Tokyo Night', bg: '#1a1b26', accent: '#7aa2f7' },
+  { id: 'slate', label: '墨岩', sub: '冷静灰黑', bg: '#17191e', accent: '#61afef' },
+  { id: 'pine', label: '松林', sub: '护眼森绿', bg: '#1e2427', accent: '#a7c080' },
+  { id: 'dusk', label: '暮紫', sub: '微光柔紫', bg: '#1e1e2e', accent: '#cba6f7' },
+  { id: 'pond', label: '锦鲤池塘', sub: '动态游鱼', bg: '#10191b', accent: '#edbb83' },
 ];
 
 const ROUTE_KIND_NAMES: Record<string, string> = {
@@ -70,6 +72,7 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
   }, [tab, device?.environment_id]);
 
   const shownRoutes = routesDetail?.routes || device?.routes || [];
+  const isDesktopWebView = typeof (window as any).chrome?.webview?.postMessage === 'function';
 
   return (
     <aside class="right-panel">
@@ -78,7 +81,7 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
           ['diff', 'Diff'],
           ['files', '文件'],
           ['teams', '协作'],
-          ['connect', '连接'],
+          ['connect', '外观/连接'],
         ] as Array<[RightTab, string]>).map(([id, label]) => (
           <button
             key={id}
@@ -192,7 +195,49 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
         {tab === 'connect' && (
           <div class="connect-panel">
             <section class="info-card">
-              <div class="info-title">本机身份与多路由状态</div>
+              <div class="info-title">外观主题（与手机端统一配色）</div>
+              <div class="skin-grid">
+                {SKINS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    class={`skin-card${skin === s.id ? ' active' : ''}`}
+                    onClick={() => onSkinChange(s.id)}
+                  >
+                    <span
+                      class="skin-swatch"
+                      style={{ background: s.bg, '--sw-accent': s.accent } as any}
+                    />
+                    <span class="skin-meta">
+                      <span class="skin-name">{s.label}</span>
+                      <span class="skin-sub">{s.sub}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section class="info-card">
+              <div class="info-title">已检测到的 AI 工具 ({(device?.tools || []).length})</div>
+              <div class="filter-chips">
+                {(device?.tools || []).map((t) => (
+                  <span key={t} class="meta-chip">
+                    <span class="tool-dot" style={{ background: toolColor(t) }} />
+                    {toolLabel(t)}
+                  </span>
+                ))}
+              </div>
+              {isDesktopWebView && (
+                <div class="panel-links">
+                  <button type="button" class="ghost-btn compact" onClick={() => postDesktopMessage('open-installer')}>
+                    安装更多 CLI 工具
+                  </button>
+                </div>
+              )}
+            </section>
+
+            <section class="info-card">
+              <div class="info-title">手机配对与多路由状态</div>
               <div class="info-kv">
                 <span>电脑端版本</span>
                 <strong>{device?.version ? `v${device.version}` : '未知'}</strong>
@@ -214,28 +259,17 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
                 )}
               </div>
               <div class="panel-links">
+                {isDesktopWebView && (
+                  <button type="button" class="primary-btn compact" onClick={() => postDesktopMessage('open-classic')}>
+                    打开扫码连接与设置
+                  </button>
+                )}
                 <a class="ghost-btn compact" href={`${API_BASE}/computer/`}>
-                  电脑设置与线路
+                  线路详情
                 </a>
                 <a class="ghost-btn compact" href={`${API_BASE}/`}>
-                  切换经典移动视图
+                  经典移动视图
                 </a>
-              </div>
-            </section>
-
-            <section class="info-card">
-              <div class="info-title">总控台外观主题</div>
-              <div class="skin-grid">
-                {SKINS.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    class={`chip${skin === s.id ? ' active' : ''}`}
-                    onClick={() => onSkinChange(s.id)}
-                  >
-                    {s.label}
-                  </button>
-                ))}
               </div>
             </section>
           </div>

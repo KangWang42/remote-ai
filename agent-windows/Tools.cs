@@ -10,8 +10,11 @@ namespace RemoteCli {
 /// One object per tool; the agent asks it and does not compare tool names. A tool that is added is one more class
 /// here and one entry in `All` (and its lines in `Ways.Of`, its reading of the lists, its chat driver).
 public abstract class Tool {
-    public static readonly Tool Claude = new ClaudeTool(), Codex = new CodexTool(), Agy = new AgyTool(), Shell = new ShellTool();
-    public static readonly Tool[] All = { Claude, Codex, Agy, Shell };
+    public static readonly Tool Claude = new ClaudeTool(), Codex = new CodexTool(), Agy = new AgyTool(),
+        Gemini = new GeminiTool(), OpenCode = new OpenCodeTool(), Cursor = new CursorTool(),
+        Qoder = new QoderTool(), Cline = new ClineTool(), Pi = new PiTool(),
+        Kiro = new KiroTool(), Copilot = new CopilotTool(), Shell = new ShellTool();
+    public static readonly Tool[] All = { Claude, Codex, Agy, Gemini, OpenCode, Cursor, Qoder, Cline, Pi, Kiro, Copilot, Shell };
 
     /// The tool by its name, null for one that is not known.
     public static Tool Of(string name) { return All.FirstOrDefault(t => t.Name == name); }
@@ -26,6 +29,8 @@ public abstract class Tool {
 
     public abstract string Name { get; }
     public abstract string Label { get; }
+    /// Executable base names to probe on PATH (without .exe/.cmd).
+    public virtual string[] Binaries { get { return new[] { Name }; } }
     /// Keeps conversations under an id that can be gone on with (a shell keeps none).
     public virtual bool Converses { get { return true; } }
     /// Runs as a conversation through its structured mode too (Chats.cs).
@@ -193,6 +198,77 @@ sealed class AgyTool : Tool {
         if (!owner.Known || owner.Live) throw new InvalidOperationException(held ?? "原 Antigravity CLI 对话仍被占用，请选择接管原对话，或在原终端结束后重试");
     }
     public override void End(string session, int[] roots, Dictionary<int, int> parents) { AgySessions.Takeover(session, roots, parents); }
+}
+
+sealed class GeminiTool : Tool {
+    public override string Name { get { return "gemini"; } }
+    public override string Label { get { return "Gemini CLI"; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") {
+        return (history ? " --resume" : "")
+            + (mode == "read" ? " --approval-mode plan" : mode == "edit" ? " --approval-mode auto_edit" : "")
+            + (!String.IsNullOrEmpty(model) ? " -m " + model : "");
+    }
+}
+
+sealed class OpenCodeTool : Tool {
+    public override string Name { get { return "opencode"; } }
+    public override string Label { get { return "OpenCode"; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") {
+        return (!String.IsNullOrEmpty(model) ? " -m " + model : "");
+    }
+}
+
+sealed class CursorTool : Tool {
+    public override string Name { get { return "cursor"; } }
+    public override string Label { get { return "Cursor Agent"; } }
+    public override string[] Binaries { get { return new[] { "cursor-agent", "agent" }; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") {
+        return (!String.IsNullOrEmpty(model) ? " --model " + model : "");
+    }
+}
+
+sealed class QoderTool : Tool {
+    public override string Name { get { return "qoder"; } }
+    public override string Label { get { return "Qoder"; } }
+    public override string[] Binaries { get { return new[] { "qodercli", "qoder" }; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") {
+        return (mode == "read" ? " --permission-mode plan" : mode == "edit" ? " --permission-mode accept_edits" : "");
+    }
+}
+
+sealed class ClineTool : Tool {
+    public override string Name { get { return "cline"; } }
+    public override string Label { get { return "Cline"; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") {
+        return mode == "read" ? " --plan" : "";
+    }
+}
+
+sealed class PiTool : Tool {
+    public override string Name { get { return "pi"; } }
+    public override string Label { get { return "Pi"; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") { return ""; }
+}
+
+sealed class KiroTool : Tool {
+    public override string Name { get { return "kiro"; } }
+    public override string Label { get { return "Kiro CLI"; } }
+    public override string[] Binaries { get { return new[] { "kiro-cli", "kiro" }; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") { return ""; }
+}
+
+sealed class CopilotTool : Tool {
+    public override string Name { get { return "copilot"; } }
+    public override string Label { get { return "Copilot CLI"; } }
+    public override bool Converses { get { return false; } }
+    public override string Arguments(string session, bool history, string mode, bool fork, bool noDaemon, bool fresh, string model = "", string effort = "") { return ""; }
 }
 
 sealed class ShellTool : Tool {

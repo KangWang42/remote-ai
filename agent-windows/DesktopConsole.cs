@@ -11,10 +11,13 @@ using Microsoft.Web.WebView2.WinForms;
 namespace RemoteCli {
 
 /// Native Windows desktop console window hosting the unified Preact/TS workspace inside Edge WebView2.
-/// Keeps the installer tiny (~780 KB of WebView2 loader/interop DLLs) by reusing the system Edge WebView2 Runtime.
+/// Opens directly as the primary window on launch while keeping installer overhead under 800 KB.
 internal sealed class DesktopConsole : Form {
     readonly string userDataDir;
     readonly Action openClassic;
+    readonly Action pickFolder;
+    readonly Action openInstaller;
+    readonly Action<string> onSkinChanged;
     readonly Action<Rectangle, FormWindowState> saveBounds;
     readonly Label loadingLabel;
     WebView2 webView;
@@ -33,12 +36,23 @@ internal sealed class DesktopConsole : Form {
         }
     }
 
-    internal DesktopConsole(string dataDir, Rectangle initialBounds, FormWindowState initialState, Action onOpenClassic, Action<Rectangle, FormWindowState> onSaveBounds) {
+    internal DesktopConsole(
+        string dataDir,
+        Rectangle initialBounds,
+        FormWindowState initialState,
+        Action onOpenClassic,
+        Action onPickFolder,
+        Action onOpenInstaller,
+        Action<string> onSkin,
+        Action<Rectangle, FormWindowState> onSaveBounds) {
         userDataDir = Path.Combine(dataDir, "webview2");
         openClassic = onOpenClassic ?? (() => { });
+        pickFolder = onPickFolder ?? (() => { });
+        openInstaller = onOpenInstaller ?? (() => { });
+        onSkinChanged = onSkin;
         saveBounds = onSaveBounds;
 
-        Text = "Remote AI 总控台";
+        Text = "Remote AI";
         Font = Theme.Text();
         BackColor = Theme.Bg;
         ForeColor = Theme.Ink;
@@ -51,11 +65,11 @@ internal sealed class DesktopConsole : Form {
             if (initialState == FormWindowState.Maximized) WindowState = FormWindowState.Maximized;
         } else {
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1320, 840);
+            ClientSize = new Size(1340, 860);
         }
 
         loadingLabel = new Label {
-            Text = "正在启动 Remote AI 桌面总控台…",
+            Text = "正在启动 Remote AI 总控台…",
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
             BackColor = Theme.Bg,
@@ -79,6 +93,8 @@ internal sealed class DesktopConsole : Form {
             }
         };
         ResizeEnd += (s, e) => PersistWindowGeometry();
+        // Start initializing WebView2 immediately when the window is created so first paint is instant.
+        Shown += async (s, e) => { await EnsureInitializedAsync(); };
     }
 
     protected override void OnHandleCreated(EventArgs e) {
@@ -92,6 +108,16 @@ internal sealed class DesktopConsole : Form {
         if (loadingLabel != null) { loadingLabel.BackColor = Theme.Bg; loadingLabel.ForeColor = Theme.Muted; }
         if (webView != null) webView.DefaultBackgroundColor = Theme.Bg;
         if (IsHandleCreated) Theme.Title(Handle);
+    }
+
+    internal void SetStatusText(string text) {
+        if (IsDisposed || loadingLabel == null || !loadingLabel.Visible) return;
+        loadingLabel.Text = text;
+    }
+
+    internal async void NotifyRefresh() {
+        if (!initialized || webView == null || webView.CoreWebView2 == null || IsDisposed) return;
+        try { await webView.ExecuteScriptAsync("window.RemoteAiConsoleRefresh && window.RemoteAiConsoleRefresh();"); } catch { }
     }
 
     internal void ForceClose() {
@@ -175,12 +201,23 @@ internal sealed class DesktopConsole : Form {
 
             core.WebMessageReceived += (s, args) => {
                 try {
-                    string msg = args.TryGetWebMessageAsString();
+                    string msg = args.TryGetWebMessageAsString() ?? "";
                     if (msg == "open-classic") BeginInvoke(new Action(openClassic));
+                    else if (msg == "pick-folder") BeginInvoke(new Action(pickFolder));
+                    else if (msg == "open-installer") BeginInvoke(new Action(openInstaller));
+                    else if (msg.StartsWith("skin:", StringComparison.Ordinal) && onSkinChanged != null) {
+                        string skin = msg.Substring(5).Trim();
+                        BeginInvoke(new Action(() => onSkinChanged(skin)));
+                    }
                 } catch { }
             };
 
             initialized = true;
+            if (!String.IsNullOrEmpty(pendingUrl)) {
+                string url = pendingUrl;
+                pendingUrl = "";
+                try { core.Navigate(url); } catch { }
+            }
         } catch (Exception error) {
             if (!IsDisposed && loadingLabel != null) {
                 loadingLabel.Text = "无法初始化 Edge WebView2 总控台：" + error.Message;

@@ -796,13 +796,53 @@ public sealed partial class App : Form {
     void SaveConsoleBounds(Rectangle rect, FormWindowState state) {
         Keep("ConsoleBounds", String.Format("{0},{1},{2},{3},{4}", rect.X, rect.Y, rect.Width, rect.Height, state == FormWindowState.Maximized ? "max" : "norm"));
     }
+    DesktopConsole EnsureDesktopConsoleVisible() {
+        if (desktopConsole == null || desktopConsole.IsDisposed) {
+            FormWindowState savedState;
+            Rectangle savedBounds = ReadConsoleBounds(out savedState);
+            desktopConsole = new DesktopConsole(
+                dataDir,
+                savedBounds,
+                savedState,
+                Reveal,
+                PickFolderFromConsole,
+                () => ToolInstaller.Show(desktopConsole != null && !desktopConsole.IsDisposed ? (Form)desktopConsole : (Form)this, dataDir),
+                SyncSkinFromConsole,
+                SaveConsoleBounds);
+        }
+        desktopConsole.Show();
+        if (desktopConsole.WindowState == FormWindowState.Minimized) desktopConsole.WindowState = FormWindowState.Normal;
+        desktopConsole.Activate();
+        return desktopConsole;
+    }
+    void PickFolderFromConsole() {
+        IWin32Window owner = desktopConsole != null && !desktopConsole.IsDisposed && desktopConsole.Visible ? (IWin32Window)desktopConsole : this;
+        using (var dialog = new FolderBrowserDialog { Description = "选择要添加到总控台的项目文件夹" }) {
+            if (dialog.ShowDialog(owner) == DialogResult.OK) {
+                AddProject(dialog.SelectedPath, true);
+                if (desktopConsole != null && !desktopConsole.IsDisposed) desktopConsole.NotifyRefresh();
+            }
+        }
+    }
+    void SyncSkinFromConsole(string skinName) {
+        if (String.IsNullOrEmpty(skinName)) return;
+        if (Array.IndexOf(Theme.Names, skinName) >= 0 && Theme.Skin != skinName) {
+            Keep("Skin", skinName);
+            Wear(skinName);
+        }
+    }
     void OpenConsole(string openId = "", string tab = "") {
         string origin = localRelayUp && localRelayPort > 0 ? "http://127.0.0.1:" + localRelayPort : Convert.ToString(config["Server"]).TrimEnd('/');
         string secret = localRelayUp && localRelayPort > 0 && localPassword.Length > 0 ? localPassword : password;
-        if (origin.Length == 0 || secret.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
         if (!CanUseDesktopConsole()) {
+            if (origin.Length == 0 || secret.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
             string q = !String.IsNullOrEmpty(openId) ? "?open=" + openId : !String.IsNullOrEmpty(tab) ? "?tab=" + tab : "";
             OpenWeb(q);
+            return;
+        }
+        var console = EnsureDesktopConsoleVisible();
+        if (origin.Length == 0 || secret.Length == 0) {
+            console.SetStatusText("正在启动本机服务，稍后自动进入总控台…");
             return;
         }
         Task.Run(() => {
@@ -811,15 +851,7 @@ public sealed partial class App : Form {
                 string ticket = Convert.ToString(Ask(origin + "/api/ticket", new Dictionary<string, object>(), token)["ticket"]);
                 BeginInvoke(new Action(() => {
                     if (quitting) return;
-                    if (desktopConsole == null || desktopConsole.IsDisposed) {
-                        FormWindowState savedState;
-                        Rectangle savedBounds = ReadConsoleBounds(out savedState);
-                        desktopConsole = new DesktopConsole(dataDir, savedBounds, savedState, Reveal, SaveConsoleBounds);
-                    }
-                    desktopConsole.Show();
-                    if (desktopConsole.WindowState == FormWindowState.Minimized) desktopConsole.WindowState = FormWindowState.Normal;
-                    desktopConsole.Activate();
-                    desktopConsole.NavigateTo(origin, ticket, openId, tab);
+                    EnsureDesktopConsoleVisible().NavigateTo(origin, ticket, openId, tab);
                 }));
             } catch (Exception error) {
                 BeginInvoke(new Action(() => Toast("桌面总控台没有打开：" + error.Message)));
@@ -1102,7 +1134,7 @@ public sealed partial class App : Form {
         toastTimer.Interval = 1600; toastTimer.Tick += (s, e) => { toastTimer.Stop(); toast.Visible = false; };
         activityTimer.Interval = 2000; activityTimer.Tick += (s, e) => { RefreshActivity(); if (pages.Count > 1 && pages[1].Visible && projectPick.Chosen != 0) ShowProjects(); };
         tray.Icon = Theme.TrayIcon(); tray.Visible = true; tray.Text = "Remote AI";
-        tray.DoubleClick += (s, e) => Reveal();
+        tray.DoubleClick += (s, e) => { if (CanUseDesktopConsole()) OpenConsole(); else Reveal(); };
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("打开桌面总控台", null, (s, e) => OpenConsole());
         tray.ContextMenuStrip.Items.Add("连接与扫码设置", null, (s, e) => Reveal());
@@ -1190,7 +1222,7 @@ public sealed partial class App : Form {
             routeCatalog.RefreshAsync(true);
             Task.Run(async () => {
                 await Connect();
-                if (!consoleAutoOpened && !offstage && !quitting && localRelayUp && Dirs().Count > 0 && CanUseDesktopConsole()
+                if (!consoleAutoOpened && !offstage && !quitting && localRelayUp && CanUseDesktopConsole()
                     && !Environment.GetCommandLineArgs().Contains("--classic")
                     && !Environment.GetCommandLineArgs().Contains("--hidden")
                     && String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTECLI_DATA"))) {
@@ -1379,6 +1411,19 @@ public sealed partial class App : Form {
             // --offstage: the program runs as usual where nobody sees it or can press it, for a test that plays the phone.
             if (args.Contains("--offstage")) { offstage = true; window.StartPosition = FormStartPosition.Manual; window.Location = new Point(-30000, -30000); window.ShowInTaskbar = false; window.tray.Visible = false; }
             if (args.Contains("--hidden")) { window.WindowState = FormWindowState.Minimized; window.ShowInTaskbar = false; window.Shown += (s, e) => { window.Hide(); window.ShowInTaskbar = true; }; }
+            else if (!args.Contains("--offstage") && !args.Contains("--classic") && String.IsNullOrWhiteSpace(elsewhere) && CanUseDesktopConsole()) {
+                // Direct desktop console launch: keep the legacy QR/settings dialog hidden until requested.
+                window.WindowState = FormWindowState.Minimized;
+                window.ShowInTaskbar = false;
+                window.Opacity = 0;
+                window.Shown += (s, e) => {
+                    window.Hide();
+                    window.ShowInTaskbar = true;
+                    window.Opacity = 1;
+                    window.WindowState = FormWindowState.Normal;
+                    window.EnsureDesktopConsoleVisible();
+                };
+            }
             Application.Run(window);
         }
         return 0;

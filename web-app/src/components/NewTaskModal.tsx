@@ -1,6 +1,6 @@
-import { useState } from 'preact/hooks';
-import { sendTerminalAction } from '../runtime/api';
-import type { DeviceInfo } from '../runtime/types';
+import { useEffect, useState } from 'preact/hooks';
+import { fetchTeamModels, sendTerminalAction } from '../runtime/api';
+import { TOOL_CATALOG, toolLabel, type DeviceInfo, type ToolModelOption } from '../runtime/types';
 
 interface Props {
   open: boolean;
@@ -12,28 +12,52 @@ interface Props {
 
 export function NewTaskModal({ open, device, defaultDir, onClose, onCreated }: Props) {
   const workspaces = device?.workspaces || [];
-  const tools = device?.tools || ['claude', 'codex', 'shell'];
+  const tools = device?.tools && device.tools.length > 0 ? device.tools : ['claude', 'codex', 'shell'];
   const supportsWorktree = (device?.features || []).includes('worktree');
+  const supportsParams = (device?.features || []).includes('chat-params');
 
   const [dir, setDir] = useState(defaultDir || workspaces[0] || '');
   const [tool, setTool] = useState(tools.includes('claude') ? 'claude' : tools[0] || 'shell');
   const [form, setForm] = useState<'chat' | 'terminal'>('chat');
+  const [mode, setMode] = useState<'full' | 'edit' | 'read'>('full');
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
+  const [modelCatalog, setModelCatalog] = useState<Record<string, ToolModelOption[]>>({});
   const [useWorktree, setUseWorktree] = useState(false);
   const [branch, setBranch] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
+  useEffect(() => {
+    if (open && defaultDir) setDir(defaultDir);
+  }, [open, defaultDir]);
+
+  useEffect(() => {
+    if (!open || !supportsParams || Object.keys(modelCatalog).length > 0) return;
+    fetchTeamModels()
+      .then((res) => setModelCatalog(res))
+      .catch(() => {});
+  }, [open, supportsParams]);
+
+  useEffect(() => {
+    setModel('');
+    setEffort('');
+  }, [tool]);
+
   if (!open) return null;
 
-  const canChat = tool === 'claude' || tool === 'codex' || tool === 'agy';
+  const canChat = !!TOOL_CATALOG[tool]?.supportsChat;
   const effectiveForm = canChat ? form : 'terminal';
+  const toolModels = modelCatalog[tool] || [];
+  const selectedModelMeta = toolModels.find((m) => m.id === model);
+  const efforts = selectedModelMeta?.efforts || (tool === 'codex' || tool === 'claude' ? ['low', 'medium', 'high'] : []);
 
   const submit = async (e: Event) => {
     e.preventDefault();
     const targetDir = dir || workspaces[0] || '';
     if (!targetDir) {
-      setErr('请先在电脑端添加项目文件夹');
+      setErr('请先添加一个项目文件夹');
       return;
     }
     setBusy(true);
@@ -48,6 +72,11 @@ export function NewTaskModal({ open, device, defaultDir, onClose, onCreated }: P
       if (effectiveForm === 'chat') {
         payload.form = 'chat';
         if (text.trim()) payload.text = text.trim();
+      }
+      if (tool !== 'shell' && supportsParams) {
+        if (mode) payload.mode = mode;
+        if (model) payload.model = model;
+        if (effort) payload.effort = effort;
       }
       if (useWorktree && supportsWorktree) {
         payload.worktree = true;
@@ -69,7 +98,7 @@ export function NewTaskModal({ open, device, defaultDir, onClose, onCreated }: P
     <div class="modal-backdrop" onClick={onClose}>
       <form class="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <div class="modal-head">
-          <h2>新建任务 / 对话</h2>
+          <h2>新建 AI 任务 / 终端</h2>
           <button type="button" class="icon-btn" onClick={onClose}>
             ✕
           </button>
@@ -88,17 +117,17 @@ export function NewTaskModal({ open, device, defaultDir, onClose, onCreated }: P
 
         <div class="field-row">
           <label class="field-label">
-            <span>工具</span>
+            <span>AI 工具（自动检测本机已安装）</span>
             <select value={tool} onChange={(e) => setTool((e.target as HTMLSelectElement).value)}>
               {tools.map((t) => (
                 <option key={t} value={t}>
-                  {t === 'claude' ? 'Claude Code' : t === 'codex' ? 'Codex' : t === 'agy' ? 'Antigravity CLI' : 'PowerShell 终端'}
+                  {toolLabel(t)}
                 </option>
               ))}
             </select>
           </label>
 
-          {canChat && (
+          {canChat ? (
             <label class="field-label">
               <span>运行形态</span>
               <select value={form} onChange={(e) => setForm((e.target as HTMLSelectElement).value as 'chat' | 'terminal')}>
@@ -106,8 +135,61 @@ export function NewTaskModal({ open, device, defaultDir, onClose, onCreated }: P
                 <option value="terminal">完整交互终端</option>
               </select>
             </label>
+          ) : (
+            <label class="field-label">
+              <span>运行形态</span>
+              <input type="text" value="交互式终端" disabled />
+            </label>
           )}
         </div>
+
+        {tool !== 'shell' && supportsParams && (
+          <div class="field-row">
+            <label class="field-label">
+              <span>权限 / 协作模式</span>
+              <select value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as 'full' | 'edit' | 'read')}>
+                <option value="full">默认 / 完整权限</option>
+                <option value="edit">自动编辑文件</option>
+                <option value="read">Plan 只读规划模式</option>
+              </select>
+            </label>
+
+            <label class="field-label">
+              <span>模型（可选）</span>
+              {toolModels.length > 0 ? (
+                <select value={model} onChange={(e) => setModel((e.target as HTMLSelectElement).value)}>
+                  <option value="">跟随工具默认</option>
+                  {toolModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label || m.id}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="留空使用默认模型"
+                  value={model}
+                  onInput={(e) => setModel((e.target as HTMLInputElement).value)}
+                />
+              )}
+            </label>
+          </div>
+        )}
+
+        {tool !== 'shell' && supportsParams && efforts.length > 0 && (
+          <label class="field-label">
+            <span>推理强度（可选）</span>
+            <select value={effort} onChange={(e) => setEffort((e.target as HTMLSelectElement).value)}>
+              <option value="">默认</option>
+              {efforts.map((ef) => (
+                <option key={ef} value={ef}>
+                  {ef}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         {supportsWorktree && (
           <div class="wt-opt-box">

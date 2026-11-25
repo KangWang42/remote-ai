@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   gitCheckpoint,
+  gitCheckpointRestore,
+  gitCheckpointsList,
   gitCommit,
   gitFileDiff,
   gitPush,
@@ -10,7 +12,7 @@ import {
 } from '../runtime/api';
 import { diffPool } from '../runtime/diffPool';
 import type { ParsedDiff } from '../runtime/diffWorker';
-import type { GitFileSummary, GitStatusResponse } from '../runtime/types';
+import type { GitCheckpointEntry, GitFileSummary, GitStatusResponse } from '../runtime/types';
 
 interface Props {
   project: string;
@@ -143,7 +145,7 @@ function FileDiffCard({ project, worktree, file, viewMode, eager, checked, onTog
                     {line.text}
                   </div>
                 ) : (
-                  <div key={idx} class={`diff-u-row cell-${line.kind}`}>
+                  <div key={idx} class={`diff-line kind-${line.kind}`}>
                     <span class="ln">{line.oldLine ?? ''}</span>
                     <span class="ln">{line.newLine ?? ''}</span>
                     <span class="sig">{line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}</span>
@@ -153,7 +155,7 @@ function FileDiffCard({ project, worktree, file, viewMode, eager, checked, onTog
               )}
             </div>
           )}
-          {truncated && <div class="diff-placeholder">差异较大，已按预算截断显示</div>}
+          {truncated && <div class="diff-truncated">单文件差异超过 256 KB，已截断后文。</div>}
         </div>
       )}
     </div>
@@ -163,133 +165,179 @@ function FileDiffCard({ project, worktree, file, viewMode, eager, checked, onTog
 export function DiffPanel({ project, initialWorktree = '' }: Props) {
   const [worktree, setWorktree] = useState(initialWorktree);
   const [status, setStatus] = useState<GitStatusResponse | null>(null);
-  const [viewMode, setViewMode] = useState<'unified' | 'split'>(() => (window.innerWidth >= 1280 ? 'split' : 'unified'));
+  const [checkpoints, setCheckpoints] = useState<GitCheckpointEntry[]>([]);
+  const [showCheckpoints, setShowCheckpoints] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [viewMode, setViewMode] = useState<'unified' | 'split'>('unified');
   const [selectedFiles, setSelectedFiles] = useState<Record<string, boolean>>({});
   const [commitMsg, setCommitMsg] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
   const [feedback, setFeedback] = useState('');
 
   useEffect(() => {
     setWorktree(initialWorktree);
   }, [initialWorktree, project]);
 
-  const reload = async (wt = worktree) => {
+  const refresh = async () => {
     if (!project) return;
     setLoading(true);
-    setFeedback('');
+    setErr('');
     try {
-      const resp = await gitStatus(project, wt);
-      setStatus(resp);
+      const [res, cpRes] = await Promise.all([
+        gitStatus(project, worktree),
+        gitCheckpointsList(project, worktree).catch(() => ({ checkpoints: [] })),
+      ]);
+      setStatus(res);
+      setCheckpoints(cpRes.checkpoints || []);
       const nextSel: Record<string, boolean> = {};
-      for (const f of resp.files || []) nextSel[f.path] = true;
+      for (const f of res.files || []) nextSel[f.path] = true;
       setSelectedFiles(nextSel);
     } catch (e: any) {
-      setFeedback(e?.message || '无法读取 Git 状态');
+      setErr(e?.message || '读取 Git 状态失败');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    reload(worktree);
+    refresh();
   }, [project, worktree]);
 
-  const chosenPaths = (status?.files || []).filter((f) => selectedFiles[f.path]).map((f) => f.path);
+  if (!project) {
+    return <div class="empty-hint">请先选择一个项目或会话，即可在此查看 Git 变更与 Worktree。</div>;
+  }
 
-  const runCommit = async (e: Event) => {
+  const files = status?.files || [];
+  const totalAdd = files.reduce((a, f) => a + f.additions, 0);
+  const totalDel = files.reduce((a, f) => a + f.deletions, 0);
+  const chosenPaths = files.filter((f) => selectedFiles[f.path]).map((f) => f.path);
+
+  const doCommit = async (e: Event) => {
     e.preventDefault();
-    if (!commitMsg.trim() || busyAction) return;
-    setBusyAction('commit');
+    if (!commitMsg.trim() || actionBusy) return;
+    setActionBusy(true);
     setFeedback('');
     try {
-      const res = await gitCommit(project, commitMsg.trim(), chosenPaths.length > 0 ? chosenPaths : undefined, worktree);
+      const res = await gitCommit(project, commitMsg.trim(), chosenPaths.length === files.length ? undefined : chosenPaths, worktree);
       setCommitMsg('');
-      setFeedback(`已提交 ${res.commit || ''} 到 ${res.branch || status?.branch || ''}`);
-      await reload(worktree);
-    } catch (err: any) {
-      setFeedback(err?.message || '提交失败');
+      setFeedback(`已提交 ${res.commit || ''} (${res.branch || ''})`);
+      await refresh();
+    } catch (e: any) {
+      setFeedback(e?.message || '提交失败');
     } finally {
-      setBusyAction('');
+      setActionBusy(false);
     }
   };
 
-  const runPush = async () => {
-    if (busyAction) return;
-    setBusyAction('push');
+  const doPush = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
     setFeedback('');
     try {
-      const res = await gitPush(project, true, worktree);
-      setFeedback(res.output || '推送完成');
-      await reload(worktree);
-    } catch (err: any) {
-      setFeedback(err?.message || '推送失败');
+      await gitPush(project, false, worktree);
+      setFeedback('已推送到远端');
+      await refresh();
+    } catch (e: any) {
+      setFeedback(e?.message || '推送失败');
     } finally {
-      setBusyAction('');
+      setActionBusy(false);
     }
   };
 
-  const runCheckpoint = async () => {
-    if (busyAction) return;
-    setBusyAction('cp');
+  const doCheckpoint = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
     setFeedback('');
     try {
-      const res = await gitCheckpoint(project, `review ${new Date().toLocaleTimeString()}`, worktree);
-      setFeedback(`已保存快照 ${res.id}`);
-    } catch (err: any) {
-      setFeedback(err?.message || '快照失败');
+      const res = await gitCheckpoint(project, `review-${new Date().toLocaleTimeString()}`, worktree);
+      setFeedback(`已保存隐藏快照 ${res.ref || res.commit}`);
+      await refresh();
+    } catch (e: any) {
+      setFeedback(e?.message || '保存快照失败');
     } finally {
-      setBusyAction('');
+      setActionBusy(false);
     }
   };
 
-  const runApplyWorktree = async () => {
-    if (!worktree || busyAction) return;
-    setBusyAction('apply');
+  const doRestoreCheckpoint = async (ref: string) => {
+    if (actionBusy || !window.confirm(`确定将当前工作区文件恢复到快照 ${ref.split('/').pop()} 吗？未保存的改动将被覆盖。`)) return;
+    setActionBusy(true);
     setFeedback('');
     try {
-      const res = await gitWorktreeApply(project, worktree, true);
-      setFeedback(`已合并回主分支并清理 Worktree：${res.stat || ''}`);
-      setWorktree('');
-      await reload('');
-    } catch (err: any) {
-      setFeedback(err?.message || '合并 Worktree 失败');
+      await gitCheckpointRestore(project, ref, worktree);
+      setFeedback(`已恢复到快照 ${ref.split('/').pop()}`);
+      await refresh();
+    } catch (e: any) {
+      setFeedback(e?.message || '恢复快照失败');
     } finally {
-      setBusyAction('');
+      setActionBusy(false);
     }
   };
 
-  const runRemoveWorktree = async () => {
-    if (!worktree || busyAction) return;
-    setBusyAction('remove');
+  const doApplyWorktree = async (removeAfter: boolean) => {
+    if (!worktree || actionBusy) return;
+    setActionBusy(true);
+    setFeedback('');
+    try {
+      const res = await gitWorktreeApply(project, worktree, removeAfter);
+      setFeedback(`已合并回主目录：${res.stat || '完成'}`);
+      if (removeAfter) setWorktree('');
+      await refresh();
+    } catch (e: any) {
+      setFeedback(e?.message || '合并 Worktree 失败');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const doRemoveWorktree = async () => {
+    if (!worktree || actionBusy || !window.confirm(`确定移除独立工作区 ${worktree} 吗？未合并改动将被清除。`)) return;
+    setActionBusy(true);
     setFeedback('');
     try {
       await gitWorktreeRemove(project, worktree);
-      setFeedback('已安全移除 Worktree');
       setWorktree('');
-      await reload('');
-    } catch (err: any) {
-      setFeedback(err?.message || '清理 Worktree 失败');
+      setFeedback('已清理独立工作区');
+      await refresh();
+    } catch (e: any) {
+      setFeedback(e?.message || '清理失败');
     } finally {
-      setBusyAction('');
+      setActionBusy(false);
     }
   };
-
-  if (!project) return <div class="empty-hint">选择一个项目或对话以查看 Git Diff 与变更</div>;
 
   return (
     <div class="diff-panel">
       <div class="diff-toolbar">
-        <div class="diff-branch-meta">
-          <span class="branch-chip">{status?.branch || '未检测分支'}</span>
-          {status?.head && <span class="muted-code">{status.head}</span>}
-          {status && (status.ahead > 0 || status.behind > 0) && (
-            <span class="muted-code">
-              ↑{status.ahead} ↓{status.behind}
-            </span>
+        <div class="diff-meta">
+          {status?.is_repo ? (
+            <>
+              <span class="meta-chip branch">{status.branch || 'HEAD'}</span>
+              {status.ahead > 0 && <span class="meta-chip">↑{status.ahead}</span>}
+              {status.behind > 0 && <span class="meta-chip">↓{status.behind}</span>}
+            </>
+          ) : (
+            <span class="meta-chip">非 Git 仓库</span>
           )}
         </div>
-        <div class="diff-tool-btns">
+        <div class="diff-controls">
+          {status?.worktrees && status.worktrees.length > 1 && (
+            <select
+              class="wt-select"
+              value={worktree}
+              onChange={(e) => setWorktree((e.target as HTMLSelectElement).value)}
+            >
+              <option value="">主工作区</option>
+              {status.worktrees
+                .filter((w) => !w.main)
+                .map((w) => (
+                  <option key={w.id} value={w.id}>
+                    WT: {w.branch || w.id}
+                  </option>
+                ))}
+            </select>
+          )}
           <button
             type="button"
             class={`chip${viewMode === 'unified' ? ' active' : ''}`}
@@ -302,92 +350,117 @@ export function DiffPanel({ project, initialWorktree = '' }: Props) {
             class={`chip${viewMode === 'split' ? ' active' : ''}`}
             onClick={() => setViewMode('split')}
           >
-            分栏
+            并排
           </button>
-          <button type="button" class="ghost-btn compact" disabled={!!busyAction} onClick={runCheckpoint}>
-            快照
+          <button
+            type="button"
+            class={`chip${showCheckpoints ? ' active' : ''}`}
+            onClick={() => setShowCheckpoints((v) => !v)}
+          >
+            快照 ({checkpoints.length})
           </button>
-          <button type="button" class="ghost-btn compact" disabled={loading} onClick={() => reload(worktree)}>
-            {loading ? '…' : '刷新'}
+          <button type="button" class="icon-btn" onClick={refresh} title="刷新变更">
+            ↻
           </button>
         </div>
       </div>
 
-      {status && status.worktrees.length > 1 && (
-        <div class="wt-bar">
-          <select value={worktree} onChange={(e) => setWorktree((e.target as HTMLSelectElement).value)}>
-            <option value="">主工作区 ({status.worktrees.find((w) => w.main)?.branch || 'main'})</option>
-            {status.worktrees
-              .filter((w) => w.managed)
-              .map((w) => (
-                <option key={w.id} value={w.id}>
-                  Worktree · {w.branch || w.id}
-                </option>
-              ))}
-          </select>
-          {worktree && (
-            <div class="wt-actions">
-              <button type="button" class="primary-btn compact" disabled={!!busyAction} onClick={runApplyWorktree}>
-                合并并清理
-              </button>
-              <button type="button" class="danger-btn compact" disabled={!!busyAction} onClick={runRemoveWorktree}>
-                丢弃
-              </button>
-            </div>
+      {showCheckpoints && (
+        <div class="checkpoints-box">
+          <div class="panel-head-row">
+            <strong style={{ fontSize: '12px' }}>隐藏快照历史</strong>
+            <button type="button" class="primary-btn compact" disabled={actionBusy} onClick={doCheckpoint}>
+              + 立即保存
+            </button>
+          </div>
+          {checkpoints.length === 0 ? (
+            <div class="muted-code">还没有保存过快照（写入 refs/remote-ai/checkpoints，不污染分支）</div>
+          ) : (
+            checkpoints.slice(0, 8).map((cp) => (
+              <div key={cp.ref} class="checkpoint-row">
+                <span class="muted-code" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {cp.commit} · {cp.label}
+                </span>
+                <button
+                  type="button"
+                  class="ghost-btn compact"
+                  disabled={actionBusy}
+                  onClick={() => doRestoreCheckpoint(cp.ref)}
+                >
+                  恢复
+                </button>
+              </div>
+            ))
           )}
         </div>
       )}
 
-      {feedback && <div class="panel-feedback">{feedback}</div>}
-
-      {status && !status.is_repo ? (
-        <div class="empty-hint">项目“{project}”不是 Git 仓库</div>
-      ) : (
-        <>
-          <form class="commit-box" onSubmit={runCommit}>
-            <input
-              type="text"
-              placeholder="输入提交说明（例如 feat: optimize route selection）"
-              value={commitMsg}
-              onInput={(e) => setCommitMsg((e.target as HTMLInputElement).value)}
-            />
-            <div class="commit-actions">
-              <span class="muted-code">已选 {chosenPaths.length} / {status?.files.length || 0} 文件</span>
-              <div class="commit-btns">
-                <button
-                  type="submit"
-                  class="primary-btn compact"
-                  disabled={!commitMsg.trim() || !status?.files.length || !!busyAction}
-                >
-                  {busyAction === 'commit' ? '提交中…' : 'Commit'}
-                </button>
-                <button type="button" class="ghost-btn compact" disabled={!!busyAction} onClick={runPush}>
-                  {busyAction === 'push' ? '推送中…' : 'Push'}
-                </button>
-              </div>
-            </div>
-          </form>
-
-          <div class="diff-list">
-            {!status || status.files.length === 0 ? (
-              <div class="empty-hint">{loading ? '正在读取变更…' : '工作区干净，没有未提交的改动'}</div>
-            ) : (
-              status.files.map((file, idx) => (
-                <FileDiffCard
-                  key={`${worktree}:${file.path}`}
-                  project={project}
-                  worktree={worktree}
-                  file={file}
-                  viewMode={viewMode}
-                  eager={idx < INITIAL_EAGER_FILES}
-                  checked={!!selectedFiles[file.path]}
-                  onToggleCheck={() => setSelectedFiles((prev) => ({ ...prev, [file.path]: !prev[file.path] }))}
-                />
-              ))
-            )}
-          </div>
-        </>
+      {worktree && (
+        <div class="wt-actions-bar">
+          <button type="button" class="primary-btn compact" disabled={actionBusy} onClick={() => doApplyWorktree(false)}>
+            合并到主目录
+          </button>
+          <button type="button" class="ghost-btn compact" disabled={actionBusy} onClick={() => doApplyWorktree(true)}>
+            合并并清理
+          </button>
+          <button type="button" class="danger-btn compact" disabled={actionBusy} onClick={doRemoveWorktree}>
+            丢弃 Worktree
+          </button>
+        </div>
       )}
+
+      {status?.is_repo && (
+        <div class="diff-stats-bar">
+          <span>{files.length} 个变更文件</span>
+          <em class="c-add">+{totalAdd}</em>
+          <em class="c-del">-{totalDel}</em>
+          <button type="button" class="ghost-btn compact" disabled={actionBusy} onClick={doCheckpoint}>
+            保存快照
+          </button>
+        </div>
+      )}
+
+      {status?.is_repo && files.length > 0 && (
+        <form class="commit-box" onSubmit={doCommit}>
+          <input
+            type="text"
+            placeholder="输入 commit message…"
+            value={commitMsg}
+            onInput={(e) => setCommitMsg((e.target as HTMLInputElement).value)}
+          />
+          <div class="commit-actions">
+            <button type="submit" class="primary-btn compact" disabled={actionBusy || !commitMsg.trim() || chosenPaths.length === 0}>
+              提交 ({chosenPaths.length})
+            </button>
+            <button type="button" class="ghost-btn compact" disabled={actionBusy} onClick={doPush}>
+              推送
+            </button>
+          </div>
+        </form>
+      )}
+
+      {feedback && <div class="panel-feedback">{feedback}</div>}
+      {err && <div class="panel-feedback is-error">{err}</div>}
+      {loading && !status && <div class="empty-hint">正在检查工作区变更…</div>}
+
+      {status?.is_repo && files.length === 0 && !loading && (
+        <div class="empty-hint">当前工作区干净，没有未提交修改。</div>
+      )}
+
+      <div class="diff-files">
+        {files.map((file, idx) => (
+          <FileDiffCard
+            key={`${worktree}:${file.path}`}
+            project={project}
+            worktree={worktree}
+            file={file}
+            viewMode={viewMode}
+            eager={idx < INITIAL_EAGER_FILES}
+            checked={!!selectedFiles[file.path]}
+            onToggleCheck={() => setSelectedFiles((p) => ({ ...p, [file.path]: !p[file.path] }))}
+          />
+        ))}
+      </div>
     </div>
   );
 }
