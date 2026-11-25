@@ -13,6 +13,7 @@ import {
   uploadImageAttachment,
 } from '../runtime/api';
 import { parseChatChunks, parseTranscriptMessages } from '../runtime/chatParser';
+import { formatExactTime, formatRelativeTime, normalizeMs } from '../runtime/time';
 import {
   toolBadgeStyle,
   toolLabel,
@@ -85,6 +86,12 @@ export function ChatPane({
   const [currentBranch, setCurrentBranch] = useState('');
   const [newBranchName, setNewBranchName] = useState('');
   const [branchBusy, setBranchBusy] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -457,6 +464,13 @@ export function ChatPane({
     terminal?.state === 'starting' ||
     session?.status === 'busy';
   const shownBranch = terminal?.branch || currentBranch || (worktreeId ? `wt:${worktreeId}` : '');
+  const lastWorkAt = Math.max(
+    normalizeMs(terminal?.phase_at),
+    normalizeMs(terminal?.created),
+    normalizeMs(session?.updated),
+  );
+  const lastWorkAgo = formatRelativeTime(lastWorkAt, nowMs);
+  const lastWorkExact = formatExactTime(lastWorkAt);
 
   return (
     <main class="main-pane">
@@ -548,6 +562,11 @@ export function ChatPane({
           {terminal?.model && <span class="meta-chip">{terminal.model}</span>}
           {terminal?.mode && <span class="meta-chip">{terminal.mode === 'read' ? 'Plan 只读' : terminal.mode === 'edit' ? '自动编辑' : '完整权限'}</span>}
           {session?.origin && <span class="meta-chip">{session.origin}</span>}
+          {lastWorkAgo && (
+            <span class="meta-chip time-chip" title={lastWorkExact ? `上次工作时间：${lastWorkExact}` : undefined}>
+              {isBusy ? `活跃 · ${lastWorkAgo}` : `上次工作 ${lastWorkAgo}`}
+            </span>
+          )}
         </div>
         <div class="pane-actions">
           <button

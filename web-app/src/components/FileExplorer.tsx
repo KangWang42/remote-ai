@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { fileViewerUrl, listFiles, readFileBytes } from '../runtime/api';
+import { formatRelativeTime } from '../runtime/time';
 import type { FileEntry, FilePreviewTarget } from '../runtime/types';
 import { MarkdownView } from './MarkdownView';
 import { SelectPopover } from './SelectPopover';
@@ -57,17 +58,6 @@ function formatSize(bytes?: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatAgo(ms?: number): string {
-  if (!ms) return '';
-  const sec = Math.max(0, (Date.now() - ms) / 1000);
-  if (sec < 90) return '刚刚';
-  if (sec < 3600) return `${Math.round(sec / 60)} 分钟前`;
-  if (sec < 86400) return `${Math.round(sec / 3600)} 小时前`;
-  if (sec < 30 * 86400) return `${Math.round(sec / 86400)} 天前`;
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function looksBinary(bytes: Uint8Array): boolean {
@@ -505,7 +495,7 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
                   <span class="file-row-text">
                     <span class="file-name">{entry.name}</span>
                     <span class="file-sub">
-                      {entry.dir ? formatAgo(entry.modified) || '文件夹' : [formatSize(entry.size), formatAgo(entry.modified)].filter(Boolean).join(' · ')}
+                      {entry.dir ? formatRelativeTime(entry.modified) || '文件夹' : [formatSize(entry.size), formatRelativeTime(entry.modified)].filter(Boolean).join(' · ')}
                     </span>
                   </span>
                   {entry.dir && <span class="file-chev">›</span>}

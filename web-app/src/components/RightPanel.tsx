@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { API_BASE, fetchRoutesInfo, postDesktopMessage } from '../runtime/api';
+import { formatExactTime, formatRelativeTime } from '../runtime/time';
 import {
   toolBadgeStyle,
   toolLabel,
@@ -143,6 +144,11 @@ export function RightPanel({
                     <span class={`state-pill pill-${card.confirm ? 'confirm' : card.state === 'running' ? 'busy' : 'idle'}`}>
                       {card.confirm ? '待确认' : card.state}
                     </span>
+                    {card.updated ? (
+                      <span class="nav-row-time" style={{ marginLeft: 'auto' }} title={`上次更新：${formatExactTime(card.updated)}`}>
+                        {formatRelativeTime(card.updated)}
+                      </span>
+                    ) : null}
                   </div>
                   <div class="team-goal">{card.goal}</div>
                   {card.note && <div class="team-note">{card.note}</div>}

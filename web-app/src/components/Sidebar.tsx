@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { postDesktopMessage } from '../runtime/api';
+import { formatExactTime, formatRelativeTime, normalizeMs } from '../runtime/time';
 import {
   toolBadgeStyle,
   toolColor,
@@ -56,6 +57,12 @@ export function Sidebar({
   const [toolFilter, setToolFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<'all' | 'confirm' | 'busy' | 'open'>('all');
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const q = query.trim().toLowerCase();
 
@@ -66,7 +73,7 @@ export function Sidebar({
   };
 
   const { confirmItems, activeItems, openItems, projectGroups, recentSessions } = useMemo(() => {
-    const confirm: Array<{ key: string; title: string; sub: string; tool: string; branch?: string; item: SelectedItem }> = [];
+    const confirm: Array<{ key: string; title: string; sub: string; tool: string; branch?: string; at: number; item: SelectedItem }> = [];
     const active: typeof confirm = [];
     const opened: typeof confirm = [];
     const byProject = new Map<string, typeof confirm>();
@@ -76,16 +83,28 @@ export function Sidebar({
       byProject.set(p.name, []);
     }
 
+    const sessionTimeById = new Map<string, number>();
+    for (const s of sessions) {
+      const ts = normalizeMs(s.updated);
+      if (ts > 0) sessionTimeById.set(s.id, ts);
+    }
+
     const attachedSessionIds = new Set<string>();
     for (const t of terminals) {
       if (t.session && t.state !== 'closed') attachedSessionIds.add(t.session);
       if (!matches(t.title || t.tool, t.dir || t.folder, t.tool)) continue;
+      const at = Math.max(
+        normalizeMs(t.phase_at),
+        normalizeMs(t.created),
+        t.session ? sessionTimeById.get(t.session) || 0 : 0,
+      );
       const entry = {
         key: `t:${t.id}`,
         title: t.title || toolShort(t.tool),
         sub: t.dir || t.folder || '终端',
         tool: t.tool,
         branch: t.branch || (t.worktree ? `wt:${t.worktree}` : undefined),
+        at,
         item: { kind: 'terminal' as const, id: t.id },
       };
       if (t.state === 'running' || t.state === 'starting') {
@@ -108,6 +127,7 @@ export function Sidebar({
         title: s.title,
         sub: s.dir || s.folder || s.origin || '会话',
         tool: s.tool,
+        at: normalizeMs(s.updated),
         item: { kind: 'session' as const, tool: s.tool, id: s.id, dir: s.dir, folder: s.folder },
       };
       if (s.live) {
@@ -124,6 +144,13 @@ export function Sidebar({
         byProject.set(s.dir, list);
       }
     }
+
+    const byLatest = (a: { at: number }, b: { at: number }) => b.at - a.at;
+    confirm.sort(byLatest);
+    active.sort(byLatest);
+    opened.sort(byLatest);
+    recent.sort(byLatest);
+    for (const list of byProject.values()) list.sort(byLatest);
 
     return {
       confirmItems: confirm,
@@ -144,8 +171,10 @@ export function Sidebar({
     return selected.id === item.id;
   };
 
-  const renderRow = (row: { key: string; title: string; sub: string; tool: string; branch?: string; item: SelectedItem }, badge?: string) => {
+  const renderRow = (row: { key: string; title: string; sub: string; tool: string; branch?: string; at: number; item: SelectedItem }, badge?: string) => {
     const meta = toolMeta(row.tool);
+    const ago = formatRelativeTime(row.at, nowMs);
+    const exact = formatExactTime(row.at);
     return (
       <button
         key={row.key}
@@ -157,9 +186,16 @@ export function Sidebar({
           {meta.mono}
         </span>
         <span class="nav-row-main">
-          <span class="nav-row-title">{row.title}</span>
+          <span class="nav-row-top">
+            <span class="nav-row-title">{row.title}</span>
+            {ago && (
+              <span class="nav-row-time" title={exact ? `上次工作：${exact}` : undefined}>
+                {ago}
+              </span>
+            )}
+          </span>
           <span class="nav-row-sub">
-            {row.sub}
+            <span>{row.sub}</span>
             {row.branch ? <span class="branch-chip">{row.branch}</span> : null}
           </span>
         </span>
