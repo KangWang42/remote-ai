@@ -124,6 +124,7 @@ set_up() {
     cp -r "$source/web" "$root/releases/$release.new/web"
     mkdir "$root/releases/$release.new/relay"
     cp "$source/relay/server.py" "$source/relay/relay.py" "$source/relay/screen.py" "$source/relay/websocket.py" "$root/releases/$release.new/relay/"
+    [ ! -f "$source/relay/auto_update.py" ] || cp "$source/relay/auto_update.py" "$root/releases/$release.new/relay/"
     rm -rf "$root/releases/$release"
     mv "$root/releases/$release.new" "$root/releases/$release"
     ln -sfn "$root/releases/$release" "$root/current"

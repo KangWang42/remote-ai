@@ -235,6 +235,15 @@ curl -fsSL https://raw.githubusercontent.com/KangWang42/remote-ai/main/relay/ins
 
 这样更新用的是最新的安装脚本，它对服务本身的改进（例如 1.2.1 对启动失败的处理）会一并生效。服务器不能访问 GitHub 时，按安装时的方法把源码包和其中的 `install.sh` 传上去，运行 `sudo bash install.sh update --source /root/remote-cli.tar.gz`。
 
+### 自动更新（可选）
+
+如果希望中转服务器在每次发布新的正式版后自动跟进，可以启用 `relay/auto_update.py` 配合 `systemd` 定时器（`remote-cli-relay-update.timer`）：
+
+- 仅跟踪 GitHub Latest 正式版标签（忽略预发布与草稿）；
+- 发现新版本后先解压校验 `VERSION`、`web/console/` 并运行 `py_compile`，原子切换 `/opt/remote-cli/current`；
+- 重启本机所有已启用的中转服务并核验本地 `/api/session` 正常，任一检查失败自动回滚到上一版本；
+- 自动保留最近 3 个版本目录。
+
 ## 安全
 
 - 访问密码是唯一的门：能访问到中转地址并知道密码的人，可以操作电脑上的终端。密码由安装脚本随机生成，不要换成容易猜到的。
