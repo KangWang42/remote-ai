@@ -17,7 +17,7 @@ namespace RemoteCli {
 ///   --quiet            no questions and no start afterwards
 ///   --dir <folder>     where to install (default: the folder of an earlier installation, else %LOCALAPPDATA%\Programs\RemoteCli)
 public static class Setup {
-    const string Version = "1.20.0", Name = "Remote AI";
+    const string Version = "1.21.0", Name = "Remote AI";
     // The names it had before. Their shortcuts are taken away when this one is installed or removed; the folder, the
     // registry keys and the files keep their names, so that an installation is found and replaced whatever it was called.
     static readonly string[] EarlierNames = { "Remote CLI" };
@@ -28,7 +28,7 @@ public static class Setup {
     static string LinkName { get { return Name + (Sandbox ? " sandbox" : "") + ".lnk"; } }
     // What the installer puts into its folder; nothing else in that folder is ever touched.
     static readonly string[] OwnFolders = { "python", "relay", "web" };
-    static readonly string[] OwnFiles = { "RemoteCli.exe", "RemoteCliAgent.exe", "Uninstall.exe", "LICENSE", "THIRD_PARTY.md", "README.md" };
+    static readonly string[] OwnFiles = { "RemoteCli.exe", "RemoteCliAgent.exe", "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll", "Uninstall.exe", "LICENSE", "THIRD_PARTY.md", "README.md" };
     static string Data { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RemoteCli"); } }
     static string[] Shortcuts { get { return new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), LinkName), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), LinkName) }; } }
     static string[] EarlierShortcuts { get { return EarlierNames.Select(name => name + (Sandbox ? " sandbox" : "") + ".lnk").SelectMany(link => new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), link), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), link) }).ToArray(); } }

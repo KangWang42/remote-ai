@@ -12,7 +12,7 @@ import winreg
 from pathlib import Path
 
 KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RemoteCli-Sandbox"
-OWN = {"python", "relay", "web", "RemoteCli.exe", "RemoteCliAgent.exe", "Uninstall.exe", "LICENSE", "THIRD_PARTY.md", "README.md"}
+OWN = {"python", "relay", "web", "RemoteCli.exe", "RemoteCliAgent.exe", "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll", "Uninstall.exe", "LICENSE", "THIRD_PARTY.md", "README.md"}
 
 
 def location():
