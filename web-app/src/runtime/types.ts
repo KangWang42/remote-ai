@@ -79,7 +79,9 @@ export interface TerminalEntry {
   seq: number;
   created: number;
   phase_at?: number;
+  done?: boolean;
   said?: string;
+  ask?: string;
   asks?: string[];
   error?: string;
   exit_code?: number;

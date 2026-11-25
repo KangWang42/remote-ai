@@ -47,6 +47,10 @@ interface Props {
   focusMode: boolean;
   terminalDrawerOpen: boolean;
   pendingCite?: { nonce: number; text: string } | null;
+  isSplitPane?: boolean;
+  onBackToMission?: () => void;
+  onSplitCurrent?: () => void;
+  onCloseSplit?: () => void;
 }
 
 function draftKey(selected: SelectedItem | null): string {
@@ -71,6 +75,10 @@ export function ChatPane({
   focusMode,
   terminalDrawerOpen,
   pendingCite,
+  isSplitPane,
+  onBackToMission,
+  onSplitCurrent,
+  onCloseSplit,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -748,6 +756,21 @@ export function ChatPane({
           {projectDir && (
             <button type="button" class="ghost-btn compact" title="保存隐藏 Git 快照（不污染分支或 stash）" onClick={handleCheckpoint}>
               快照
+            </button>
+          )}
+          {!isSplitPane && onBackToMission && (
+            <button type="button" class="ghost-btn compact" title="返回多对话监管总览墙 (Ctrl+0)" onClick={onBackToMission}>
+              总览
+            </button>
+          )}
+          {!isSplitPane && onSplitCurrent && (
+            <button type="button" class="ghost-btn compact" title="把另一个对话拖到右侧分屏对比" onClick={onSplitCurrent}>
+              分屏
+            </button>
+          )}
+          {isSplitPane && onCloseSplit && (
+            <button type="button" class="ghost-btn compact" title="关闭此分屏" onClick={onCloseSplit}>
+              关闭分屏
             </button>
           )}
         </div>

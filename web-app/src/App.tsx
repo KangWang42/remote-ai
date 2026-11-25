@@ -8,9 +8,19 @@ import {
   sendTerminalAction,
 } from './runtime/api';
 import type { DeviceInfo, FilePreviewTarget, SelectedItem, SessionEntry, TerminalEntry } from './runtime/types';
+import {
+  buildSupervisionModel,
+  keyForSelected,
+  loadPinnedProjects,
+  loadSeenMap,
+  savePinnedProjects,
+  saveSeenMap,
+  type SupervisionItem,
+} from './runtime/supervision';
 import { ChatPane } from './components/ChatPane';
 import { CommandPalette } from './components/CommandPalette';
 import { FilePreviewBody } from './components/FileExplorer';
+import { MissionGrid } from './components/MissionGrid';
 import { QuickSpawnStage } from './components/QuickSpawnStage';
 import { RightPanel, type RightTab } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
@@ -49,6 +59,9 @@ export function App() {
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
   const [selected, setSelected] = useState<SelectedItem | null>(null);
+  const [splitTarget, setSplitTarget] = useState<SelectedItem | null>(null);
+  const [seenMap, setSeenMap] = useState<Record<string, number>>(() => loadSeenMap());
+  const [pinnedProjects, setPinnedProjects] = useState<Record<string, boolean>>(() => loadPinnedProjects());
   const [rightOpen, setRightOpen] = useState(() => window.innerWidth >= 1040);
   const [rightTab, setRightTab] = useState<RightTab>('files');
   const [browseProject, setBrowseProject] = useState<string>('');
@@ -108,7 +121,7 @@ export function App() {
     });
   }, [skin]);
 
-  // Global keyboard shortcuts: Ctrl+K palette, Ctrl+N new AI, Ctrl+J terminal drawer, Ctrl+\ focus mode
+  // Global keyboard shortcuts: Ctrl+K palette, Ctrl+N new AI, Ctrl+J terminal drawer, Ctrl+\ focus mode, Ctrl+0 mission grid
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -125,6 +138,13 @@ export function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
         e.preventDefault();
         setFocusMode((v) => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        e.preventDefault();
+        setSelected(null);
+        setSplitTarget(null);
+        setSpawnDir(null);
+        setExpandedFile(null);
+        setMobilePane('chat');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -224,6 +244,93 @@ export function App() {
     };
   }, []);
 
+  const supervision = useMemo(
+    () => buildSupervisionModel(device, terminals, sessions, seenMap, pinnedProjects),
+    [device, terminals, sessions, seenMap, pinnedProjects],
+  );
+
+  const markItemSeenByKey = (key: string, at: number, terminalId?: string) => {
+    if (!key) return;
+    const stamp = Math.max(at || 0, Date.now());
+    setSeenMap((prev) => {
+      if ((prev[key] || 0) >= stamp) return prev;
+      const next = { ...prev, [key]: stamp };
+      saveSeenMap(next);
+      return next;
+    });
+    if (terminalId && typeof (window as any).RemoteCliNative?.seen === 'function') {
+      try {
+        (window as any).RemoteCliNative.seen(terminalId, String(stamp));
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const markItemSeen = (entry: SupervisionItem) => {
+    markItemSeenByKey(entry.key, entry.at, entry.kind === 'terminal' ? entry.id : undefined);
+  };
+
+  const markAllDoneSeen = () => {
+    const targets = [...supervision.done, ...supervision.failed];
+    if (targets.length === 0) return;
+    const now = Date.now();
+    setSeenMap((prev) => {
+      const next = { ...prev };
+      for (const item of targets) {
+        next[item.key] = Math.max(item.at || 0, now);
+        if (item.kind === 'terminal' && typeof (window as any).RemoteCliNative?.seen === 'function') {
+          try {
+            (window as any).RemoteCliNative.seen(item.id, String(next[item.key]));
+          } catch {
+            // ignore
+          }
+        }
+      }
+      saveSeenMap(next);
+      return next;
+    });
+  };
+
+  const togglePinProject = (name: string) => {
+    setPinnedProjects((prev) => {
+      const next = { ...prev, [name]: !prev[name] };
+      if (!next[name]) delete next[name];
+      savePinnedProjects(next);
+      return next;
+    });
+  };
+
+  const selectPrimary = (item: SelectedItem) => {
+    const k = keyForSelected(item);
+    const found = supervision.all.find((x) => x.key === k);
+    if (found) markItemSeen(found);
+    if (splitTarget && keyForSelected(splitTarget) === k) setSplitTarget(null);
+    setSelected(item);
+    setSpawnDir(null);
+    setExpandedFile(null);
+    setBrowseProject('');
+    setMobilePane('chat');
+  };
+
+  const openSplitFor = (item: SelectedItem) => {
+    const k = keyForSelected(item);
+    const found = supervision.all.find((x) => x.key === k);
+    if (found) markItemSeen(found);
+    if (!selected) {
+      setSelected(item);
+      setSpawnDir(null);
+      setExpandedFile(null);
+      setMobilePane('chat');
+      return;
+    }
+    if (keyForSelected(selected) === k) return;
+    setSplitTarget(item);
+    setSpawnDir(null);
+    setExpandedFile(null);
+    setMobilePane('chat');
+  };
+
   const activeTerminal = useMemo(
     () => (selected?.kind === 'terminal' ? terminals.find((t) => t.id === selected.id) || null : null),
     [selected, terminals],
@@ -232,6 +339,16 @@ export function App() {
   const activeSession = useMemo(
     () => (selected?.kind === 'session' ? sessions.find((s) => s.id === selected.id && s.tool === selected.tool) || null : null),
     [selected, sessions],
+  );
+
+  const splitTerminal = useMemo(
+    () => (splitTarget?.kind === 'terminal' ? terminals.find((t) => t.id === splitTarget.id) || null : null),
+    [splitTarget, terminals],
+  );
+
+  const splitSession = useMemo(
+    () => (splitTarget?.kind === 'session' ? sessions.find((s) => s.id === splitTarget.id && s.tool === splitTarget.tool) || null : null),
+    [splitTarget, sessions],
   );
 
   const activeProject = activeTerminal?.dir || activeSession?.dir || device?.workspaces?.[0] || '';
@@ -380,16 +497,18 @@ export function App() {
       <div class="col-sidebar" style={{ width: `${sidebarWidth}px` }}>
         <Sidebar
           device={device}
-          terminals={terminals}
-          sessions={sessions}
+          model={supervision}
           selected={selected}
+          splitTarget={splitTarget}
           connected={connected}
           latencyMs={latencyMs}
-          onSelect={(item) => {
-            setSelected(item);
+          onSelect={selectPrimary}
+          onSplit={openSplitFor}
+          onOpenMission={() => {
+            setSelected(null);
+            setSplitTarget(null);
             setSpawnDir(null);
             setExpandedFile(null);
-            setBrowseProject('');
             setMobilePane('chat');
           }}
           onNewTask={(dir) => openSpawnFor(dir)}
@@ -403,6 +522,9 @@ export function App() {
             setMobilePane('right');
           }}
           onToggleFocus={() => setFocusMode((v) => !v)}
+          onMarkSeen={markItemSeen}
+          onMarkAllDoneSeen={markAllDoneSeen}
+          onTogglePinProject={togglePinProject}
           onRefresh={() => triggerRefreshRef.current?.()}
         />
       </div>
@@ -439,34 +561,85 @@ export function App() {
               onCiteFile={handleCiteFile}
             />
           </main>
-        ) : (
-          <ChatPane
+        ) : selected === null ? (
+          <MissionGrid
             device={device}
-            selected={selected}
-            terminal={activeTerminal}
-            session={activeSession}
-            onRefresh={() => triggerRefreshRef.current?.()}
-            onToggleTerminal={() => setTerminalOpen((v) => !v)}
-            onOpenDiff={() => {
-              setBrowseProject('');
-              setRightTab('diff');
-              setRightOpen(true);
-              setFocusMode(false);
-              setMobilePane('right');
-            }}
-            onOpenFiles={(dir) => openFilesFor(dir)}
+            model={supervision}
+            onSelect={selectPrimary}
+            onSplit={openSplitFor}
             onNewTask={(dir) => openSpawnFor(dir)}
+            onOpenFiles={(dir) => openFilesFor(dir)}
             onAddProject={handleAddProjectTrigger}
-            onRunScript={handleRunScript}
-            onSelectTerminal={(id) => {
-              setSelected({ kind: 'terminal', id });
-              setMobilePane('chat');
-            }}
-            onToggleFocus={() => setFocusMode((v) => !v)}
-            focusMode={focusMode}
-            terminalDrawerOpen={terminalOpen}
-            pendingCite={pendingCite}
+            onToggleTerminal={() => setTerminalOpen((v) => !v)}
+            onMarkSeen={markItemSeen}
+            onMarkAllDoneSeen={markAllDoneSeen}
+            onTogglePinProject={togglePinProject}
+            onRefresh={() => triggerRefreshRef.current?.()}
           />
+        ) : (
+          <div class={splitTarget ? 'split-workspace' : 'single-workspace'}>
+            <ChatPane
+              device={device}
+              selected={selected}
+              terminal={activeTerminal}
+              session={activeSession}
+              onRefresh={() => triggerRefreshRef.current?.()}
+              onToggleTerminal={() => setTerminalOpen((v) => !v)}
+              onOpenDiff={() => {
+                setBrowseProject('');
+                setRightTab('diff');
+                setRightOpen(true);
+                setFocusMode(false);
+                setMobilePane('right');
+              }}
+              onOpenFiles={(dir) => openFilesFor(dir)}
+              onNewTask={(dir) => openSpawnFor(dir)}
+              onAddProject={handleAddProjectTrigger}
+              onRunScript={handleRunScript}
+              onSelectTerminal={(id) => selectPrimary({ kind: 'terminal', id })}
+              onToggleFocus={() => setFocusMode((v) => !v)}
+              focusMode={focusMode}
+              terminalDrawerOpen={terminalOpen}
+              pendingCite={pendingCite}
+              onBackToMission={() => {
+                setSelected(null);
+                setSplitTarget(null);
+              }}
+              onSplitCurrent={() => {
+                const other = supervision.active.find((x) => x.key !== keyForSelected(selected));
+                if (other) openSplitFor(other.item);
+              }}
+            />
+            {splitTarget && (
+              <div class="split-secondary">
+                <ChatPane
+                  device={device}
+                  selected={splitTarget}
+                  terminal={splitTerminal}
+                  session={splitSession}
+                  onRefresh={() => triggerRefreshRef.current?.()}
+                  onToggleTerminal={() => setTerminalOpen((v) => !v)}
+                  onOpenDiff={() => {
+                    setBrowseProject('');
+                    setRightTab('diff');
+                    setRightOpen(true);
+                    setFocusMode(false);
+                    setMobilePane('right');
+                  }}
+                  onOpenFiles={(dir) => openFilesFor(dir)}
+                  onNewTask={(dir) => openSpawnFor(dir)}
+                  onAddProject={handleAddProjectTrigger}
+                  onRunScript={handleRunScript}
+                  onSelectTerminal={(id) => setSplitTarget({ kind: 'terminal', id })}
+                  onToggleFocus={() => setFocusMode((v) => !v)}
+                  focusMode={focusMode}
+                  terminalDrawerOpen={terminalOpen}
+                  isSplitPane
+                  onCloseSplit={() => setSplitTarget(null)}
+                />
+              </div>
+            )}
+          </div>
         )}
 
         <TerminalDrawer

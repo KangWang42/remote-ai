@@ -34,8 +34,9 @@ final class AggregateSessions {
          * A conversation that a program on the computer has open, of which its tool tells (the relay's `reach`): it
          * is at work there like a terminal, and stands among the tasks by how it stands. canSay: a message can be left for it.
          */
-        boolean reached, canSay, canTakeover;
+        boolean reached, canSay, canTakeover, canAnswer;
         String endWay;          // null for older computers without per-action capabilities
+        String askId = "", askText = "", answerWay = "";
         /** Collaboration task parent card fields (`device.team_cards`), and child membership (`team`). */
         boolean team, teamConfirm;
         String teamId = "", teamMode = "", teamPhase = "", teamNote = "";

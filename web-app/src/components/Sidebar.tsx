@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { postDesktopMessage, sendTerminalAction } from '../runtime/api';
-import { formatExactTime, formatRelativeTime, normalizeMs } from '../runtime/time';
+import { postDesktopMessage } from '../runtime/api';
+import {
+  archiveSupervisionItem,
+  endSupervisionItem,
+  keyForSelected,
+  stopSupervisionItem,
+  type SupervisionItem,
+  type SupervisionModel,
+} from '../runtime/supervision';
+import { formatExactTime, formatRelativeTime } from '../runtime/time';
 import {
   toolBadgeStyle,
   toolColor,
@@ -8,22 +16,25 @@ import {
   toolShort,
   type DeviceInfo,
   type SelectedItem,
-  type SessionEntry,
-  type TerminalEntry,
 } from '../runtime/types';
 
 interface Props {
   device: DeviceInfo | null;
-  terminals: TerminalEntry[];
-  sessions: SessionEntry[];
+  model: SupervisionModel;
   selected: SelectedItem | null;
+  splitTarget: SelectedItem | null;
   onSelect: (item: SelectedItem) => void;
+  onSplit: (item: SelectedItem) => void;
+  onOpenMission: () => void;
   onNewTask: (defaultDir?: string) => void;
   onOpenProjectFiles: (dir: string) => void;
   onAddProject: () => void;
   onOpenPalette: () => void;
   onOpenRightTab: (tab: 'files' | 'diff' | 'teams' | 'connect') => void;
   onToggleFocus: () => void;
+  onMarkSeen: (item: SupervisionItem) => void;
+  onMarkAllDoneSeen: () => void;
+  onTogglePinProject: (name: string) => void;
   onRefresh: () => void;
   connected: boolean;
   latencyMs: number | null;
@@ -41,27 +52,33 @@ function routeBadge(device: DeviceInfo | null): string {
 
 export function Sidebar({
   device,
-  terminals,
-  sessions,
+  model,
   selected,
+  splitTarget,
   onSelect,
+  onSplit,
+  onOpenMission,
   onNewTask,
   onOpenProjectFiles,
   onAddProject,
   onOpenPalette,
   onOpenRightTab,
   onToggleFocus,
+  onMarkSeen,
+  onMarkAllDoneSeen,
+  onTogglePinProject,
   onRefresh,
   connected,
   latencyMs,
 }: Props) {
+  const [viewMode, setViewMode] = useState<'duty' | 'projects'>('duty');
   const [query, setQuery] = useState('');
   const [toolFilter, setToolFilter] = useState<string>('all');
-  const [stateFilter, setStateFilter] = useState<'all' | 'confirm' | 'busy' | 'open'>('all');
+  const [stateFilter, setStateFilter] = useState<'all' | 'confirm' | 'busy' | 'done' | 'open'>('all');
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
   const [recentLimit, setRecentLimit] = useState(16);
   const [batchMode, setBatchMode] = useState(false);
-  const [pickedIds, setPickedIds] = useState<Record<string, boolean>>({});
+  const [pickedKeys, setPickedKeys] = useState<Record<string, boolean>>({});
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchNote, setBatchNote] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -72,197 +89,169 @@ export function Sidebar({
   }, []);
 
   const q = query.trim().toLowerCase();
-
-  const matches = (title: string, dir: string, tool: string) => {
-    if (toolFilter !== 'all' && tool !== toolFilter) return false;
+  const matches = (entry: SupervisionItem) => {
+    if (toolFilter !== 'all' && entry.tool !== toolFilter) return false;
     if (!q) return true;
-    return title.toLowerCase().includes(q) || dir.toLowerCase().includes(q) || tool.toLowerCase().includes(q);
+    return (
+      entry.title.toLowerCase().includes(q) ||
+      entry.project.toLowerCase().includes(q) ||
+      entry.folder.toLowerCase().includes(q) ||
+      entry.tool.toLowerCase().includes(q) ||
+      entry.preview.toLowerCase().includes(q)
+    );
   };
 
-  const { confirmItems, activeItems, openItems, projectGroups, recentSessions } = useMemo(() => {
-    const confirm: Array<{ key: string; title: string; sub: string; tool: string; branch?: string; at: number; item: SelectedItem }> = [];
-    const active: typeof confirm = [];
-    const opened: typeof confirm = [];
-    const byProject = new Map<string, typeof confirm>();
-    const recent: typeof confirm = [];
-
-    for (const p of device?.projects || []) {
-      byProject.set(p.name, []);
-    }
-
-    const sessionTimeById = new Map<string, number>();
-    for (const s of sessions) {
-      const ts = normalizeMs(s.updated);
-      if (ts > 0) sessionTimeById.set(s.id, ts);
-    }
-
-    const attachedSessionIds = new Set<string>();
-    for (const t of terminals) {
-      if (t.session && t.state !== 'closed') attachedSessionIds.add(t.session);
-      if (!matches(t.title || t.tool, t.dir || t.folder, t.tool)) continue;
-      const at = Math.max(
-        normalizeMs(t.phase_at),
-        normalizeMs(t.created),
-        t.session ? sessionTimeById.get(t.session) || 0 : 0,
-      );
-      const entry = {
-        key: `t:${t.id}`,
-        title: t.title || toolShort(t.tool),
-        sub: t.dir || t.folder || '终端',
-        tool: t.tool,
-        branch: t.branch || (t.worktree ? `wt:${t.worktree}` : undefined),
-        at,
-        item: { kind: 'terminal' as const, id: t.id },
-      };
-      if (t.state === 'running' || t.state === 'starting') {
-        if (t.phase === 'confirm' || t.status === 'confirm') confirm.push(entry);
-        else if (t.phase === 'busy' || t.status === 'busy' || t.state === 'starting') active.push(entry);
-        else opened.push(entry);
-      }
-      if (t.dir) {
-        const list = byProject.get(t.dir) || [];
-        list.push(entry);
-        byProject.set(t.dir, list);
-      }
-    }
-
-    for (const s of sessions) {
-      if (s.hidden || attachedSessionIds.has(s.id)) continue;
-      if (!matches(s.title, s.dir || s.folder, s.tool)) continue;
-      const entry = {
-        key: `s:${s.tool}:${s.id}`,
-        title: s.title,
-        sub: s.dir || s.folder || s.origin || '会话',
-        tool: s.tool,
-        at: normalizeMs(s.updated),
-        item: { kind: 'session' as const, tool: s.tool, id: s.id, dir: s.dir, folder: s.folder },
-      };
-      if (s.live) {
-        if (s.status === 'confirm' || s.ask) confirm.push(entry);
-        else if (s.status === 'busy') active.push(entry);
-        else if (s.now) opened.push(entry);
-        else recent.push(entry);
-      } else {
-        recent.push(entry);
-      }
-      if (s.dir && (s.live || (byProject.get(s.dir)?.length || 0) < 6)) {
-        const list = byProject.get(s.dir) || [];
-        list.push(entry);
-        byProject.set(s.dir, list);
-      }
-    }
-
-    const byLatest = (a: { at: number }, b: { at: number }) => b.at - a.at;
-    confirm.sort(byLatest);
-    active.sort(byLatest);
-    opened.sort(byLatest);
-    recent.sort(byLatest);
-    for (const list of byProject.values()) list.sort(byLatest);
-
+  const filtered = useMemo(() => {
     return {
-      confirmItems: confirm,
-      activeItems: active,
-      openItems: opened,
-      projectGroups: Array.from(byProject.entries()),
-      recentSessions: recent,
+      confirm: model.confirm.filter(matches),
+      failed: model.failed.filter(matches),
+      done: model.done.filter(matches),
+      busy: model.busy.filter(matches),
+      open: model.open.filter(matches),
+      history: model.history.filter(matches),
+      projects: model.projects
+        .map((p) => ({ ...p, items: p.items.filter(matches) }))
+        .filter((p) => !q || p.name.toLowerCase().includes(q) || p.items.length > 0),
     };
-  }, [device, terminals, sessions, q, toolFilter]);
+  }, [model, q, toolFilter]);
 
   const filterTools = useMemo(() => {
     const detected = device?.tools || ['claude', 'codex', 'agy', 'shell'];
     return Array.from(new Set(['all', ...detected])).slice(0, 8);
   }, [device?.tools]);
 
-  const runningTerminalIds = useMemo(
-    () => terminals.filter((t) => t.state === 'running' || t.state === 'starting').map((t) => t.id),
-    [terminals],
-  );
-  const closedTerminalIds = useMemo(
-    () => terminals.filter((t) => t.state === 'closed').map((t) => t.id),
-    [terminals],
-  );
-  const pickedList = useMemo(
-    () => terminals.filter((t) => pickedIds[t.id]).map((t) => t.id),
-    [terminals, pickedIds],
+  const pickedItems = useMemo(
+    () => model.all.filter((entry) => pickedKeys[entry.key]),
+    [model.all, pickedKeys],
   );
 
-  const runBatchAction = async (action: 'stop' | 'close', ids: string[]) => {
-    if (ids.length === 0 || batchBusy) return;
+  const selectedKey = keyForSelected(selected);
+  const splitKey = keyForSelected(splitTarget);
+  const reviewCount = model.done.length + model.failed.length;
+
+  const runBatchAction = async (kind: 'stop' | 'end' | 'seen' | 'archive') => {
+    if (pickedItems.length === 0 || batchBusy) return;
+    if (kind === 'seen') {
+      for (const item of pickedItems) onMarkSeen(item);
+      setBatchNote(`已标记 ${pickedItems.length} 个对话为已读`);
+      setPickedKeys({});
+      return;
+    }
     setBatchBusy(true);
     setBatchNote('');
     let ok = 0;
     try {
+      const targets = pickedItems.filter((item) => {
+        if (kind === 'stop') return item.canStop;
+        if (kind === 'end') return item.canEnd;
+        return item.canArchive;
+      });
       await Promise.all(
-        ids.map((id) =>
-          sendTerminalAction({ action, terminal: id })
+        targets.map((item) =>
+          (kind === 'stop'
+            ? stopSupervisionItem(item)
+            : kind === 'end'
+              ? endSupervisionItem(item)
+              : archiveSupervisionItem(item)
+          )
             .then(() => {
               ok++;
             })
             .catch(() => {}),
         ),
       );
-      setBatchNote(action === 'stop' ? `已发送停止至 ${ok} 个会话` : `已关闭 ${ok} 个会话`);
-      setPickedIds({});
+      setBatchNote(
+        kind === 'stop'
+          ? `已发送停止至 ${ok} 个会话`
+          : kind === 'end'
+            ? `已结束 ${ok} 个会话`
+            : `已归档隐藏 ${ok} 段历史`,
+      );
+      setPickedKeys({});
       onRefresh();
     } finally {
       setBatchBusy(false);
     }
   };
 
-  const isSelected = (item: SelectedItem) => {
-    if (!selected || selected.kind !== item.kind) return false;
-    return selected.id === item.id;
-  };
+  const renderRow = (entry: SupervisionItem) => {
+    const meta = toolMeta(entry.tool);
+    const ago = formatRelativeTime(entry.at, nowMs);
+    const exact = formatExactTime(entry.at);
+    const checked = !!pickedKeys[entry.key];
+    const isActive = !batchMode && selectedKey === entry.key;
+    const isSplit = !batchMode && splitKey === entry.key;
+    const pillLabel =
+      entry.status === 'confirm'
+        ? '确认'
+        : entry.status === 'failed'
+          ? '异常'
+          : entry.status === 'done'
+            ? '待验'
+            : entry.status === 'busy'
+              ? '运行'
+              : '';
 
-  const renderRow = (row: { key: string; title: string; sub: string; tool: string; branch?: string; at: number; item: SelectedItem }, badge?: string) => {
-    const meta = toolMeta(row.tool);
-    const ago = formatRelativeTime(row.at, nowMs);
-    const exact = formatExactTime(row.at);
-    const isTerm = row.item.kind === 'terminal';
-    const checked = isTerm && !!pickedIds[row.item.id];
     return (
-      <button
-        key={row.key}
-        type="button"
-        class={`nav-row${!batchMode && isSelected(row.item) ? ' active' : ''}${checked ? ' is-picked' : ''}`}
-        onClick={() => {
-          if (batchMode && isTerm) {
-            setPickedIds((prev) => ({ ...prev, [row.item.id]: !prev[row.item.id] }));
-            return;
-          }
-          onSelect(row.item);
-        }}
-      >
-        {batchMode && isTerm && (
-          <span class={`batch-check${checked ? ' checked' : ''}`} aria-hidden="true">
-            {checked ? '✓' : ''}
+      <div key={entry.key} class={`nav-row-wrap${isActive ? ' active' : ''}${isSplit ? ' is-split' : ''}`}>
+        <button
+          type="button"
+          class={`nav-row${isActive ? ' active' : ''}${checked ? ' is-picked' : ''}`}
+          onClick={() => {
+            if (batchMode) {
+              setPickedKeys((prev) => ({ ...prev, [entry.key]: !prev[entry.key] }));
+              return;
+            }
+            onSelect(entry.item);
+          }}
+        >
+          {batchMode && (
+            <span class={`batch-check${checked ? ' checked' : ''}`} aria-hidden="true">
+              {checked ? '✓' : ''}
+            </span>
+          )}
+          <span class="tool-squircle" style={toolBadgeStyle(entry.tool)} title={meta.label}>
+            {meta.mono}
           </span>
+          <span class="nav-row-main">
+            <span class="nav-row-top">
+              <span class="nav-row-title">{entry.title}</span>
+              {ago && (
+                <span class="nav-row-time" title={exact ? `上次工作：${exact}` : undefined}>
+                  {ago}
+                </span>
+              )}
+            </span>
+            <span class="nav-row-sub">
+              <span>{entry.project || entry.origin}</span>
+              {entry.branch ? <span class="branch-chip">{entry.branch}</span> : null}
+              {isSplit ? <span class="branch-chip">分屏中</span> : null}
+            </span>
+          </span>
+          {pillLabel ? <span class={`state-pill pill-${entry.status}`}>{pillLabel}</span> : null}
+        </button>
+        {!batchMode && (
+          <button
+            type="button"
+            class="row-split-btn"
+            title="在右侧分屏打开对比监工"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSplit(entry.item);
+            }}
+          >
+            ⊞
+          </button>
         )}
-        <span class="tool-squircle" style={toolBadgeStyle(row.tool)} title={meta.label}>
-          {meta.mono}
-        </span>
-        <span class="nav-row-main">
-          <span class="nav-row-top">
-            <span class="nav-row-title">{row.title}</span>
-            {ago && (
-              <span class="nav-row-time" title={exact ? `上次工作：${exact}` : undefined}>
-                {ago}
-              </span>
-            )}
-          </span>
-          <span class="nav-row-sub">
-            <span>{row.sub}</span>
-            {row.branch ? <span class="branch-chip">{row.branch}</span> : null}
-          </span>
-        </span>
-        {badge ? <span class={`state-pill pill-${badge}`}>{badge === 'confirm' ? '确认' : '运行'}</span> : null}
-      </button>
+      </div>
     );
   };
 
   const primaryQuotas = (device?.quotas || []).filter((q) => q.windows && q.windows.length > 0).slice(0, 3);
   const teamCount = (device?.team_cards || []).filter((c) => c.state === 'running' || c.confirm).length;
   const isDesktopWebView = typeof (window as any).chrome?.webview?.postMessage === 'function';
+  const allProjectsCollapsed =
+    filtered.projects.length > 0 && filtered.projects.every((p) => collapsedDirs[p.name]);
 
   return (
     <aside class="sidebar">
@@ -289,6 +278,19 @@ export function Sidebar({
             </button>
           </div>
           <div class="head-actions">
+            <button
+              type="button"
+              class={`circle-btn${selected === null ? ' solid' : ''}`}
+              title="多对话监控总览墙 (Ctrl+0)"
+              onClick={onOpenMission}
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <rect x="3.5" y="3.5" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.9" />
+                <rect x="13.5" y="3.5" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.9" />
+                <rect x="3.5" y="13.5" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.9" />
+                <rect x="13.5" y="13.5" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.9" />
+              </svg>
+            </button>
             {isDesktopWebView ? (
               <button
                 type="button"
@@ -296,7 +298,7 @@ export function Sidebar({
                 title="手机扫码连接与设置"
                 onClick={() => postDesktopMessage('open-classic')}
               >
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
                   <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2h2v2h-2zm4-2h2v6h-4v-2h2z" fill="currentColor" />
                 </svg>
               </button>
@@ -304,10 +306,10 @@ export function Sidebar({
             <button
               type="button"
               class={`circle-btn${batchMode ? ' solid' : ''}`}
-              title={batchMode ? '退出批量管理' : '批量管理多个会话'}
+              title={batchMode ? '退出批量管理' : '批量管理会话（停止/结束/已读/归档）'}
               onClick={() => {
                 setBatchMode((v) => !v);
-                setPickedIds({});
+                setPickedKeys({});
                 setBatchNote('');
               }}
             >
@@ -321,7 +323,7 @@ export function Sidebar({
                 <path d="m16 16 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
               </svg>
             </button>
-            <button type="button" class="circle-btn solid" title="新建 AI 任务" onClick={() => onNewTask()}>
+            <button type="button" class="circle-btn solid" title="新建 AI 任务 (Ctrl+N)" onClick={() => onNewTask()}>
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
                 <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
               </svg>
@@ -329,64 +331,123 @@ export function Sidebar({
           </div>
         </div>
 
-        {/* Interactive 3-column KPI Monitor Card matching mobile app */}
-        <div class="kpi-card">
+        {/* 4-column Supervision KPI Card */}
+        <div class="kpi-card kpi-4">
           <button
             type="button"
-            class={`kpi-cell${confirmItems.length > 0 ? ' is-confirm' : ''}${stateFilter === 'confirm' ? ' is-selected' : ''}`}
-            title="点击仅看等待确认的任务"
-            onClick={() => setStateFilter((v) => (v === 'confirm' ? 'all' : 'confirm'))}
+            class={`kpi-cell${model.confirm.length > 0 ? ' is-confirm' : ''}${stateFilter === 'confirm' ? ' is-selected' : ''}`}
+            title="点击仅看等待确认"
+            onClick={() => {
+              setViewMode('duty');
+              setStateFilter((v) => (v === 'confirm' ? 'all' : 'confirm'));
+            }}
           >
             <span>待确认</span>
-            <strong>{confirmItems.length}</strong>
+            <strong>{model.confirm.length}</strong>
           </button>
           <button
             type="button"
-            class={`kpi-cell${activeItems.length > 0 ? ' is-busy' : ''}${stateFilter === 'busy' ? ' is-selected' : ''}`}
-            title="点击仅看正在执行的任务"
-            onClick={() => setStateFilter((v) => (v === 'busy' ? 'all' : 'busy'))}
+            class={`kpi-cell${model.busy.length > 0 ? ' is-busy' : ''}${stateFilter === 'busy' ? ' is-selected' : ''}`}
+            title="点击仅看正在执行"
+            onClick={() => {
+              setViewMode('duty');
+              setStateFilter((v) => (v === 'busy' ? 'all' : 'busy'));
+            }}
           >
             <span>执行中</span>
-            <strong>{activeItems.length}</strong>
+            <strong>{model.busy.length}</strong>
           </button>
           <button
             type="button"
-            class={`kpi-cell${openItems.length > 0 ? ' is-open' : ''}${stateFilter === 'open' ? ' is-selected' : ''}`}
-            title="点击仅看已打开的会话"
-            onClick={() => setStateFilter((v) => (v === 'open' ? 'all' : 'open'))}
+            class={`kpi-cell${reviewCount > 0 ? ' is-done' : ''}${stateFilter === 'done' ? ' is-selected' : ''}`}
+            title="刚完成未读或异常退出"
+            onClick={() => {
+              setViewMode('duty');
+              setStateFilter((v) => (v === 'done' ? 'all' : 'done'));
+            }}
+          >
+            <span>待验收</span>
+            <strong>{reviewCount}</strong>
+          </button>
+          <button
+            type="button"
+            class={`kpi-cell${model.open.length > 0 ? ' is-open' : ''}${stateFilter === 'open' ? ' is-selected' : ''}`}
+            title="已打开空闲会话"
+            onClick={() => {
+              setViewMode('duty');
+              setStateFilter((v) => (v === 'open' ? 'all' : 'open'));
+            }}
           >
             <span>已打开</span>
-            <strong>{openItems.length}</strong>
+            <strong>{model.open.length}</strong>
+          </button>
+        </div>
+
+        {/* View Mode Switcher: Duty Queue (zero-dup) vs Project Tree */}
+        <div class="sidebar-mode-seg" role="tablist" aria-label="侧栏视图切换">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'duty'}
+            class={viewMode === 'duty' ? 'active' : ''}
+            onClick={() => setViewMode('duty')}
+          >
+            值班队列 {model.active.length > 0 ? `(${model.active.length})` : ''}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'projects'}
+            class={viewMode === 'projects' ? 'active' : ''}
+            onClick={() => {
+              setViewMode('projects');
+              setStateFilter('all');
+            }}
+          >
+            按项目 ({model.projects.length})
           </button>
         </div>
 
         {batchMode && (
           <div class="batch-bar">
             <div class="batch-bar-top">
-              <strong>批量管理 · 已选 {pickedList.length}</strong>
+              <strong>批量管理 · 已选 {pickedItems.length}</strong>
               <div class="batch-picks">
                 <button
                   type="button"
                   class="crumb-btn"
                   onClick={() => {
                     const next: Record<string, boolean> = {};
-                    for (const id of runningTerminalIds) next[id] = true;
-                    setPickedIds(next);
+                    for (const item of model.busy) next[item.key] = true;
+                    setPickedKeys(next);
                   }}
                 >
-                  运行中({runningTerminalIds.length})
+                  运行中({model.busy.length})
                 </button>
-                {closedTerminalIds.length > 0 && (
+                {reviewCount > 0 && (
                   <button
                     type="button"
                     class="crumb-btn"
                     onClick={() => {
                       const next: Record<string, boolean> = {};
-                      for (const id of closedTerminalIds) next[id] = true;
-                      setPickedIds(next);
+                      for (const item of [...model.done, ...model.failed]) next[item.key] = true;
+                      setPickedKeys(next);
                     }}
                   >
-                    已结束({closedTerminalIds.length})
+                    待验收({reviewCount})
+                  </button>
+                )}
+                {model.history.length > 0 && (
+                  <button
+                    type="button"
+                    class="crumb-btn"
+                    onClick={() => {
+                      const next: Record<string, boolean> = {};
+                      for (const item of model.history.slice(0, 20)) if (item.canArchive) next[item.key] = true;
+                      setPickedKeys(next);
+                    }}
+                  >
+                    历史
                   </button>
                 )}
               </div>
@@ -395,29 +456,35 @@ export function Sidebar({
               <button
                 type="button"
                 class="ghost-btn compact"
-                disabled={batchBusy || pickedList.length === 0}
-                onClick={() => runBatchAction('stop', pickedList)}
+                disabled={batchBusy || !pickedItems.some((x) => x.canStop)}
+                onClick={() => runBatchAction('stop')}
               >
-                批量停止
+                停止
               </button>
               <button
                 type="button"
                 class="danger-btn compact"
-                disabled={batchBusy || pickedList.length === 0}
-                onClick={() => runBatchAction('close', pickedList)}
+                disabled={batchBusy || !pickedItems.some((x) => x.canEnd)}
+                onClick={() => runBatchAction('end')}
               >
-                批量关闭
+                结束
               </button>
-              {closedTerminalIds.length > 0 && (
-                <button
-                  type="button"
-                  class="ghost-btn compact"
-                  disabled={batchBusy}
-                  onClick={() => runBatchAction('close', closedTerminalIds)}
-                >
-                  清理已结束
-                </button>
-              )}
+              <button
+                type="button"
+                class="ghost-btn compact"
+                disabled={batchBusy || pickedItems.length === 0}
+                onClick={() => runBatchAction('seen')}
+              >
+                标已读
+              </button>
+              <button
+                type="button"
+                class="ghost-btn compact"
+                disabled={batchBusy || !pickedItems.some((x) => x.canArchive)}
+                onClick={() => runBatchAction('archive')}
+              >
+                隐藏归档
+              </button>
             </div>
             {batchNote && <div class="batch-note">{batchNote}</div>}
           </div>
@@ -426,7 +493,7 @@ export function Sidebar({
         <input
           type="search"
           class="search-input"
-          placeholder="搜索对话、终端和项目…"
+          placeholder="搜索标题、项目、摘要或工具…"
           value={query}
           onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
         />
@@ -464,105 +531,170 @@ export function Sidebar({
       </div>
 
       <div class="sidebar-scroll">
-        {(stateFilter === 'all' || stateFilter === 'confirm') && confirmItems.length > 0 && (
-          <section class="nav-section">
-            <div class="group-title danger">等待确认 · {confirmItems.length}</div>
-            <div class="card-group">{confirmItems.map((r) => renderRow(r, 'confirm'))}</div>
-          </section>
-        )}
+        {viewMode === 'duty' ? (
+          <>
+            {(stateFilter === 'all' || stateFilter === 'confirm') && filtered.confirm.length > 0 && (
+              <section class="nav-section">
+                <div class="group-title danger">等待确认 · {filtered.confirm.length}</div>
+                <div class="card-group">{filtered.confirm.map(renderRow)}</div>
+              </section>
+            )}
 
-        {(stateFilter === 'all' || stateFilter === 'busy') && activeItems.length > 0 && (
-          <section class="nav-section">
-            <div class="group-title busy">正在执行 · {activeItems.length}</div>
-            <div class="card-group">{activeItems.map((r) => renderRow(r, 'busy'))}</div>
-          </section>
-        )}
+            {(stateFilter === 'all' || stateFilter === 'done') && filtered.failed.length > 0 && (
+              <section class="nav-section">
+                <div class="group-title danger">异常中断 · {filtered.failed.length}</div>
+                <div class="card-group">{filtered.failed.map(renderRow)}</div>
+              </section>
+            )}
 
-        {(stateFilter === 'all' || stateFilter === 'open') && openItems.length > 0 && (
-          <section class="nav-section">
-            <div class="group-title">已打开 · {openItems.length}</div>
-            <div class="card-group">{openItems.map((r) => renderRow(r))}</div>
-          </section>
-        )}
+            {(stateFilter === 'all' || stateFilter === 'done') && filtered.done.length > 0 && (
+              <section class="nav-section">
+                <div class="group-head-row">
+                  <div class="group-title done">刚完成待验收 · {filtered.done.length}</div>
+                  <button type="button" class="crumb-btn" onClick={onMarkAllDoneSeen}>
+                    全部已读
+                  </button>
+                </div>
+                <div class="card-group">{filtered.done.map(renderRow)}</div>
+              </section>
+            )}
 
-        {stateFilter !== 'all' && (
-          <button type="button" class="ghost-btn compact wide" onClick={() => setStateFilter('all')}>
-            显示全部项目与对话
-          </button>
-        )}
+            {(stateFilter === 'all' || stateFilter === 'busy') && filtered.busy.length > 0 && (
+              <section class="nav-section">
+                <div class="group-title busy">正在执行 · {filtered.busy.length}</div>
+                <div class="card-group">{filtered.busy.map(renderRow)}</div>
+              </section>
+            )}
 
-        {stateFilter === 'all' && (
-        <section class="nav-section">
-          <div class="group-head-row">
-            <div class="group-title">项目工作区 · {projectGroups.length}</div>
-            <button type="button" class="mini-add" title="添加项目文件夹" onClick={onAddProject}>
-              +
-            </button>
-          </div>
-          {projectGroups.length === 0 ? (
-            <button type="button" class="ghost-btn wide" onClick={onAddProject}>
-              + 添加第一个项目文件夹
-            </button>
-          ) : (
-            <div class="card-group">
-              {projectGroups.map(([dir, items]) => {
-                const collapsed = !!collapsedDirs[dir];
-                return (
-                  <div key={dir} class="project-block">
-                    <div class="project-head">
-                      <button
-                        type="button"
-                        class="project-toggle"
-                        onClick={() => setCollapsedDirs((prev) => ({ ...prev, [dir]: !prev[dir] }))}
-                      >
-                        <span class="caret" style={{ color: 'var(--muted)' }}>{collapsed ? '▸' : '▾'}</span>
-                        <span class="project-name">{dir}</span>
-                        <span class="project-count">{items.length}</span>
-                      </button>
-                      <div class="project-actions">
-                        <button
-                          type="button"
-                          class="mini-add"
-                          title={`预览 ${dir} 项目文件`}
-                          onClick={() => onOpenProjectFiles(dir)}
-                        >
-                          <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-                            <path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h3.5l1.6 1.8H16A1.5 1.5 0 0 1 17.5 7.3v7.2A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          class="mini-add"
-                          title={`在 ${dir} 中新建 AI 对话`}
-                          onClick={() => onNewTask(dir)}
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                    {!collapsed && items.length > 0 && (
-                      <div class="project-items">{items.map((r) => renderRow(r))}</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-        )}
+            {(stateFilter === 'all' || stateFilter === 'open') && filtered.open.length > 0 && (
+              <section class="nav-section">
+                <div class="group-title">已打开 · {filtered.open.length}</div>
+                <div class="card-group">{filtered.open.map(renderRow)}</div>
+              </section>
+            )}
 
-        {stateFilter === 'all' && recentSessions.length > 0 && (
-          <section class="nav-section">
-            <div class="group-title">最近对话 · {recentSessions.length}</div>
-            <div class="card-group">{recentSessions.slice(0, recentLimit).map((r) => renderRow(r))}</div>
-            {recentSessions.length > recentLimit && (
-              <button
-                type="button"
-                class="ghost-btn compact wide load-more-btn"
-                onClick={() => setRecentLimit((n) => n + 24)}
-              >
-                加载更多历史（还有 {recentSessions.length - recentLimit} 条）
+            {stateFilter !== 'all' && (
+              <button type="button" class="ghost-btn compact wide" onClick={() => setStateFilter('all')}>
+                显示全部状态
               </button>
+            )}
+
+            {stateFilter === 'all' && filtered.history.length > 0 && (
+              <section class="nav-section">
+                <div class="group-title">最近历史 · {filtered.history.length}</div>
+                <div class="card-group">{filtered.history.slice(0, recentLimit).map(renderRow)}</div>
+                {filtered.history.length > recentLimit && (
+                  <button
+                    type="button"
+                    class="ghost-btn compact wide load-more-btn"
+                    onClick={() => setRecentLimit((n) => n + 24)}
+                  >
+                    加载更多历史（还有 {filtered.history.length - recentLimit} 条）
+                  </button>
+                )}
+              </section>
+            )}
+          </>
+        ) : (
+          <section class="nav-section">
+            <div class="group-head-row">
+              <div class="group-title">项目工作区 · {filtered.projects.length}</div>
+              <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                {filtered.projects.length > 1 && (
+                  <button
+                    type="button"
+                    class="crumb-btn"
+                    onClick={() => {
+                      const next: Record<string, boolean> = {};
+                      if (!allProjectsCollapsed) {
+                        for (const p of filtered.projects) next[p.name] = true;
+                      }
+                      setCollapsedDirs(next);
+                    }}
+                  >
+                    {allProjectsCollapsed ? '全部展开' : '全部折叠'}
+                  </button>
+                )}
+                <button type="button" class="mini-add" title="添加项目文件夹" onClick={onAddProject}>
+                  +
+                </button>
+              </div>
+            </div>
+            {filtered.projects.length === 0 ? (
+              <button type="button" class="ghost-btn wide" onClick={onAddProject}>
+                + 添加第一个项目文件夹
+              </button>
+            ) : (
+              <div class="card-group">
+                {filtered.projects.map((p) => {
+                  const collapsed = !!collapsedDirs[p.name];
+                  return (
+                    <div key={p.name} class="project-block">
+                      <div class="project-head">
+                        <button
+                          type="button"
+                          class="project-toggle"
+                          onClick={() => setCollapsedDirs((prev) => ({ ...prev, [p.name]: !prev[p.name] }))}
+                        >
+                          <span class="caret" style={{ color: 'var(--muted)' }}>{collapsed ? '▸' : '▾'}</span>
+                          <span class="project-name">{p.name}</span>
+                          <span class="project-health-dots">
+                            {p.confirm + p.failed > 0 && (
+                              <span class="mini-dot is-confirm" title={`${p.confirm + p.failed} 项需处理`}>
+                                {p.confirm + p.failed}
+                              </span>
+                            )}
+                            {p.busy > 0 && (
+                              <span class="mini-dot is-busy" title={`${p.busy} 项执行中`}>
+                                {p.busy}
+                              </span>
+                            )}
+                            {p.done > 0 && (
+                              <span class="mini-dot is-done" title={`${p.done} 项待验收`}>
+                                {p.done}
+                              </span>
+                            )}
+                            {p.confirm + p.failed + p.busy + p.done === 0 && (
+                              <span class="project-count">{p.items.length}</span>
+                            )}
+                          </span>
+                        </button>
+                        <div class="project-actions">
+                          <button
+                            type="button"
+                            class={`mini-add${p.pinned ? ' pinned' : ''}`}
+                            title={p.pinned ? '取消置顶项目' : '置顶项目'}
+                            onClick={() => onTogglePinProject(p.name)}
+                          >
+                            {p.pinned ? '★' : '☆'}
+                          </button>
+                          <button
+                            type="button"
+                            class="mini-add"
+                            title={`预览 ${p.name} 项目文件`}
+                            onClick={() => onOpenProjectFiles(p.name)}
+                          >
+                            <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true">
+                              <path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h3.5l1.6 1.8H16A1.5 1.5 0 0 1 17.5 7.3v7.2A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            class="mini-add"
+                            title={`在 ${p.name} 中新建 AI 对话`}
+                            onClick={() => onNewTask(p.name)}
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                      {!collapsed && p.items.length > 0 && (
+                        <div class="project-items">{p.items.slice(0, 10).map(renderRow)}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </section>
         )}
