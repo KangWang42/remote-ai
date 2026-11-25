@@ -124,10 +124,28 @@ export async function fetchTerminalChunks(
   return requestJson('/api/terminal?' + qs.toString(), { signal });
 }
 
-export async function sendTerminalAction(payload: Record<string, unknown>): Promise<any> {
-  return requestJson('/api/terminal', {
+/**
+ * A terminal operation, asked again under the same number until the computer has carried it out: the relay first
+ * answers "queued", and only the computer's answer says whether it worked. Resolves with the relay's last answer
+ * (`terminal` is the new terminal of a `start`), rejects with the computer's reason.
+ */
+export async function terminalOp(payload: Record<string, unknown>): Promise<any> {
+  const body = JSON.stringify({ id: opId(), ...payload });
+  let result: any = await requestJson('/api/terminal', { method: 'POST', body });
+  for (let n = 0; n < 62 && result?.state === 'queued'; n++) {
+    await new Promise((r) => window.setTimeout(r, n < 3 ? 150 : 400));
+    result = await requestJson('/api/terminal', { method: 'POST', body });
+  }
+  if (result?.error) throw new ApiError(400, result.error);
+  if (result?.state === 'queued') throw new ApiError(504, '电脑没有响应，请确认电脑端程序在运行');
+  return result;
+}
+
+/** The owner's work on the computer (`/api/work`): hand-overs, collaboration tasks, schedules. */
+export async function workAction<T = any>(action: string, more: Record<string, unknown> = {}): Promise<T> {
+  return requestJson('/api/work', {
     method: 'POST',
-    body: JSON.stringify({ id: opId(), ...payload }),
+    body: JSON.stringify({ id: opId(), action, ...more }),
   });
 }
 

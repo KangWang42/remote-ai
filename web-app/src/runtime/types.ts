@@ -238,9 +238,6 @@ export interface FilePreviewTarget {
   name: string;
 }
 
-export type SelectedItem =
-  | { kind: 'terminal'; id: string }
-  | { kind: 'session'; tool: string; id: string; dir: string; folder: string };
 
 export interface ToolMeta {
   id: string;

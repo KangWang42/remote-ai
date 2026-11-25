@@ -1,51 +1,47 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import * as act from './runtime/actions';
+import { bootstrapAuthFromHash, checkSession, fetchOverview, loginWithPassword, postDesktopMessage, terminalOp } from './runtime/api';
 import {
-  bootstrapAuthFromHash,
-  checkSession,
-  fetchOverview,
-  loginWithPassword,
-  postDesktopMessage,
-  sendTerminalAction,
-} from './runtime/api';
-import type { DeviceInfo, FilePreviewTarget, SelectedItem, SessionEntry, TerminalEntry } from './runtime/types';
-import {
-  buildSupervisionModel,
-  keyForSelected,
-  loadPinnedProjects,
-  loadSeenMap,
-  savePinnedProjects,
-  saveSeenMap,
-  type SupervisionItem,
-} from './runtime/supervision';
-import { ChatPane } from './components/ChatPane';
+  buildThreads,
+  canArchive,
+  canEnd,
+  canHandOff,
+  canReopen,
+  canStop,
+  canTakeOver,
+  loadPinned,
+  loadSeen,
+  savePinned,
+  saveSeen,
+  type Thread,
+} from './runtime/threads';
+import type { DeviceInfo, FilePreviewTarget, SessionEntry, TeamCardEntry, TerminalEntry } from './runtime/types';
+import type { DiffTarget } from './components/ChangesPanel';
 import { CommandPalette } from './components/CommandPalette';
+import { ContextMenu, SEP, type MenuItem, type MenuState } from './components/ContextMenu';
+import { Dialog } from './components/Dialog';
+import { DiffView } from './components/DiffView';
 import { FilePreviewBody } from './components/FileExplorer';
-import { MissionGrid } from './components/MissionGrid';
-import { QuickSpawnStage } from './components/QuickSpawnStage';
-import { RightPanel, type RightTab } from './components/RightPanel';
+import { HandoffDialog } from './components/HandoffDialog';
+import { Home } from './components/Home';
+import { Inspector, type InspectorTab } from './components/Inspector';
+import { NewThread } from './components/NewThread';
+import { SettingsDialog } from './components/SettingsDialog';
 import { Sidebar } from './components/Sidebar';
-import { TerminalDrawer } from './components/TerminalDrawer';
+import { TeamView } from './components/TeamView';
+import { TerminalPanel } from './components/TerminalPanel';
+import { ThreadView } from './components/ThreadView';
 
-const VALID_SKINS = new Set(['auto', 'paper', 'dawn', 'night', 'slate', 'pine', 'dusk', 'pond']);
+/** What the middle of the window shows. */
+type Center =
+  | { kind: 'home' }
+  | { kind: 'thread' }
+  | { kind: 'new'; dir: string }
+  | { kind: 'team'; id: string }
+  | { kind: 'diff'; target: DiffTarget }
+  | { kind: 'file'; target: FilePreviewTarget };
 
-function paintSkin(name: string) {
-  const chosen = VALID_SKINS.has(name) ? name : 'paper';
-  const win = window as any;
-  if (typeof win.RemoteCliPaint === 'function') {
-    const applied = win.RemoteCliPaint(chosen);
-    try {
-      if (applied?.bg) {
-        const meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.setAttribute('content', applied.bg);
-      }
-      if (win.RemoteCliNative?.chrome && applied?.bg) win.RemoteCliNative.chrome(applied.bg);
-    } catch {
-      // ignore
-    }
-    return;
-  }
-  document.documentElement.dataset.skin = chosen === 'auto' ? 'paper' : chosen;
-}
+const SKINS = new Set(['auto', 'paper', 'dawn', 'night', 'slate', 'pine', 'dusk', 'pond']);
 
 export function App() {
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
@@ -54,104 +50,57 @@ export function App() {
 
   const [device, setDevice] = useState<DeviceInfo | null>(null);
   const [terminals, setTerminals] = useState<TerminalEntry[]>([]);
-  const [sessions, setSessions] = useState<SessionEntry[]>([]);
+  const [records, setRecords] = useState<SessionEntry[]>([]);
   const [connected, setConnected] = useState(false);
-  const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
-  const [selected, setSelected] = useState<SelectedItem | null>(null);
-  const [splitTarget, setSplitTarget] = useState<SelectedItem | null>(null);
-  const [seenMap, setSeenMap] = useState<Record<string, number>>(() => loadSeenMap());
-  const [pinnedProjects, setPinnedProjects] = useState<Record<string, boolean>>(() => loadPinnedProjects());
-  const [rightOpen, setRightOpen] = useState(() => window.innerWidth >= 1040);
-  const [rightTab, setRightTab] = useState<RightTab>('files');
-  const [browseProject, setBrowseProject] = useState<string>('');
-  const [expandedFile, setExpandedFile] = useState<FilePreviewTarget | null>(null);
-  const [pendingCite, setPendingCite] = useState<{ nonce: number; text: string } | null>(null);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [activeDrawerTermId, setActiveDrawerTermId] = useState<string | null>(null);
-  const [spawnDir, setSpawnDir] = useState<string | null>(null);
-  const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [manualProjectPath, setManualProjectPath] = useState('');
-  const [addProjectErr, setAddProjectErr] = useState('');
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [focusMode, setFocusMode] = useState(false);
+  const [seen, setSeen] = useState<Record<string, number>>(loadSeen);
+  const [pinned, setPinned] = useState<Record<string, boolean>>(loadPinned);
 
-  const [sidebarWidth, setSidebarWidth] = useState(308);
-  const [rightWidth, setRightWidth] = useState(430);
-  const [mobilePane, setMobilePane] = useState<'sidebar' | 'chat' | 'right'>('sidebar');
-  const [skin, setSkin] = useState(() => {
-    try {
-      const qSkin = new URLSearchParams(window.location.search).get('skin');
-      if (qSkin && VALID_SKINS.has(qSkin)) return qSkin;
-      const nativeSkin = (window as any).RemoteCliNative?.pref?.('skin');
-      if (nativeSkin && VALID_SKINS.has(nativeSkin)) return nativeSkin;
-      const saved = localStorage.getItem('rcli-skin') || 'dawn';
-      return VALID_SKINS.has(saved) ? saved : 'dawn';
-    } catch {
-      return 'dawn';
-    }
-  });
+  const [center, setCenter] = useState<Center>({ kind: 'home' });
+  // the conversation in view: by its key, and by its terminal while its tool has not named it yet
+  const [sel, setSel] = useState<{ key: string; terminal: string }>({ key: '', terminal: '' });
+  const [split, setSplit] = useState('');
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [lastPick, setLastPick] = useState('');
 
-  const revRef = useRef(0);
-  const activeProjectRef = useRef('');
-  const triggerRefreshRef = useRef<(() => void) | null>(null);
+  const [inspector, setInspector] = useState(() => window.innerWidth >= 1180);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('changes');
+  const [browse, setBrowse] = useState('');
+  const [termOpen, setTermOpen] = useState(false);
+  const [termFocus, setTermFocus] = useState('');
+  const [insert, setInsert] = useState<{ nonce: number; text: string } | null>(null);
 
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [handoff, setHandoff] = useState('');
+  const [settings, setSettings] = useState(false);
+  const [palette, setPalette] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [narrowList, setNarrowList] = useState(true);
+  const [sideWidth, setSideWidth] = useState(() => Number(localStorage.getItem('rcli-side-w')) || 284);
+  const [inspWidth, setInspWidth] = useState(() => Number(localStorage.getItem('rcli-insp-w')) || 380);
+  const [skin, setSkin] = useState(initialSkin);
+
+  const rev = useRef(0);
+  const wake = useRef<() => void>(() => {});
+  const refresh = useCallback(() => wake.current(), []);
+
+  // ---- appearance
   useEffect(() => {
     paintSkin(skin);
     try {
       localStorage.setItem('rcli-skin', skin);
-    } catch {
-      // ignore
-    }
-    try {
       (window as any).RemoteCliNative?.setPref?.('skin', skin);
     } catch {
-      // ignore
+      // kept for this page only
     }
-    const resolved =
-      typeof (window as any).RemoteCliResolveSkin === 'function' ? (window as any).RemoteCliResolveSkin(skin) : skin;
+    const resolved = typeof (window as any).RemoteCliResolveSkin === 'function' ? (window as any).RemoteCliResolveSkin(skin) : skin;
     postDesktopMessage(`skin:${resolved}`);
+    const onSystem = (window as any).RemoteCliOnSystemTheme;
+    return typeof onSystem === 'function' ? onSystem(() => skin === 'auto' && paintSkin('auto')) : undefined;
   }, [skin]);
 
-  useEffect(() => {
-    const onSys = (window as any).RemoteCliOnSystemTheme;
-    if (typeof onSys !== 'function') return;
-    return onSys(() => {
-      if (skin === 'auto') paintSkin('auto');
-    });
-  }, [skin]);
-
-  // Global keyboard shortcuts: Ctrl+K palette, Ctrl+N new AI, Ctrl+J terminal drawer, Ctrl+\ focus mode, Ctrl+0 mission grid
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
-        e.preventDefault();
-        setExpandedFile(null);
-        setSpawnDir(activeProjectRef.current || '');
-        setMobilePane('chat');
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
-        e.preventDefault();
-        setTerminalOpen((v) => !v);
-      } else if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
-        e.preventDefault();
-        setFocusMode((v) => !v);
-      } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
-        e.preventDefault();
-        setSelected(null);
-        setSplitTarget(null);
-        setSpawnDir(null);
-        setExpandedFile(null);
-        setMobilePane('chat');
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  // Auth bootstrap (#t=<ticket> for desktop WebView2 or #p=<password> for mobile)
+  // ---- signing in (#t=<ticket> from the desktop window, #p=<password> from a scanned link)
   useEffect(() => {
     (async () => {
       try {
@@ -160,640 +109,655 @@ export function App() {
         setLoginError(e?.message || '自动登录失败');
       }
       try {
-        const s = await checkSession();
-        setSignedIn(!!s.signed_in);
+        setSignedIn(!!(await checkSession()).signed_in);
       } catch {
         setSignedIn(false);
       }
     })();
   }, []);
 
-  // Incremental long-poll loop using rev cursor (?rev=N&wait=20)
+  // ---- the computer's list, long-polled by revision
   useEffect(() => {
     if (!signedIn) return;
     let alive = true;
-    let currentAbort: AbortController | null = null;
-
-    const wake = () => {
-      revRef.current = 0;
-      currentAbort?.abort();
+    let abort: AbortController | null = null;
+    wake.current = () => {
+      rev.current = 0;
+      abort?.abort();
     };
-    triggerRefreshRef.current = wake;
-    (window as any).RemoteAiConsoleRefresh = wake;
-
-    const loop = async () => {
+    (window as any).RemoteAiConsoleRefresh = wake.current;
+    (async () => {
       while (alive) {
-        currentAbort = new AbortController();
-        const started = performance.now();
+        abort = new AbortController();
         try {
-          const snap = await fetchOverview(revRef.current, revRef.current > 0 ? 20 : 0, currentAbort.signal);
+          const snap = await fetchOverview(rev.current, rev.current > 0 ? 20 : 0, abort.signal);
           if (!alive) return;
           setConnected(true);
-          if (revRef.current === 0) setLatencyMs(Math.max(1, Math.round(performance.now() - started)));
-          if (typeof snap.rev === 'number' && snap.rev > 0) revRef.current = snap.rev;
+          if (typeof snap.rev === 'number' && snap.rev > 0) rev.current = snap.rev;
           if (!snap.unchanged && snap.device) {
             setDevice(snap.device);
             setTerminals(snap.terminals || []);
-            setSessions(snap.sessions || []);
+            setRecords(snap.sessions || []);
           }
         } catch (err: any) {
           if (!alive) return;
           if (err?.name === 'AbortError') continue;
-          if (err?.status === 401) {
-            setSignedIn(false);
-            return;
-          }
+          if (err?.status === 401) return setSignedIn(false);
           setConnected(false);
-          revRef.current = 0;
+          rev.current = 0;
           await new Promise((r) => window.setTimeout(r, 2000));
         }
       }
-    };
-
-    loop();
+    })();
     return () => {
       alive = false;
-      currentAbort?.abort();
-      triggerRefreshRef.current = null;
+      abort?.abort();
       delete (window as any).RemoteAiConsoleRefresh;
     };
   }, [signedIn]);
 
-  // Honor ?open=<terminalId> and ?tab=<name> + desktop WebView2 zero-reload jump
+  const model = useMemo(() => buildThreads(device, terminals, records, seen, pinned), [device, terminals, records, seen, pinned]);
+  const features = device?.features || [];
+
+  const findThread = (key: string, terminal: string): Thread | null =>
+    model.byKey.get(key) || (terminal ? model.all.find((t) => t.terminal?.id === terminal) || null : null);
+  const current = center.kind === 'thread' ? findThread(sel.key, sel.terminal) : null;
+  const splitThread = split && current ? model.byKey.get(split) || null : null;
+
+  // a conversation that got its name (or moved to another terminal) is followed under its new key
   useEffect(() => {
-    const applyTarget = (openId?: string | null, tab?: string | null) => {
-      if (openId && /^[a-f0-9]{32}$/.test(openId)) {
-        setSelected({ kind: 'terminal', id: openId });
-        setMobilePane('chat');
+    if (current && current.key !== sel.key) setSel({ key: current.key, terminal: current.terminal?.id || '' });
+  }, [current?.key]);
+
+  const project =
+    browse ||
+    current?.project ||
+    (center.kind === 'new' ? center.dir : '') ||
+    (center.kind === 'diff' ? center.target.project : '') ||
+    device?.workspaces?.[0] ||
+    '';
+
+  // ---- seen
+  const markSeen = (list: Thread[]) => {
+    if (!list.length) return;
+    const now = Date.now();
+    setSeen((prev) => {
+      const next = { ...prev };
+      for (const t of list) {
+        next[t.key] = Math.max(t.at || 0, now);
+        if (t.terminal) (window as any).RemoteCliNative?.seen?.(t.terminal.id, String(next[t.key]));
       }
-      if (tab === 'together' || tab === 'teams') {
-        setRightTab('teams');
-        setRightOpen(true);
-        setMobilePane('right');
-      } else if (tab === 'diff' || tab === 'files' || tab === 'connect') {
-        setRightTab(tab);
-        setRightOpen(true);
-        setMobilePane('right');
+      saveSeen(next);
+      return next;
+    });
+  };
+
+  const say = (text: string, bad = false) => {
+    setToast({ text, bad });
+    window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), 3200);
+  };
+
+  // ---- going places
+  const open = (t: Thread) => {
+    markSeen([t]);
+    setSel({ key: t.key, terminal: t.terminal?.id || '' });
+    if (split === t.key) setSplit('');
+    setCenter({ kind: 'thread' });
+    setBrowse('');
+    setPicked({});
+    setNarrowList(false);
+  };
+  const openTerminal = (terminal: string) => {
+    setSel({ key: `t:${terminal}`, terminal });
+    setCenter({ kind: 'thread' });
+    setBrowse('');
+    setNarrowList(false);
+    refresh();
+  };
+  const goHome = () => {
+    setCenter({ kind: 'home' });
+    setSplit('');
+    setNarrowList(true);
+  };
+  const newThread = (dir?: string) => {
+    setCenter({ kind: 'new', dir: dir ?? current?.project ?? '' });
+    setNarrowList(false);
+  };
+  const openTeam = (card: TeamCardEntry | string) => {
+    setCenter({ kind: 'team', id: typeof card === 'string' ? card : card.id });
+    setNarrowList(false);
+  };
+
+  // ---- adding a project
+  const addProject = () => {
+    if (postDesktopMessage('pick-folder')) return;
+    setAdding(true);
+  };
+
+  // ---- what is done from menus
+  const attempt = async (work: () => Promise<unknown>, done?: string) => {
+    try {
+      await work();
+      if (done) say(done);
+      refresh();
+    } catch (err: any) {
+      say(err?.message || '没有完成', true);
+    }
+  };
+
+  const reopenThread = async (t: Thread, to: 'chat' | 'screen') => {
+    const id = await act.reopen(t, to);
+    setSel({ key: t.key, terminal: id });
+    refresh();
+  };
+
+  const threadMenu = (t: Thread): MenuItem[] => {
+    const many = model.all.filter((x) => picked[x.key]);
+    if (many.length > 1 && picked[t.key]) return manyMenu(many);
+    const reopen = canReopen(t, features);
+    const stop = canStop(t);
+    const end = canEnd(t);
+    const handOff = canHandOff(t, features);
+    const archive = canArchive(t);
+    const items: MenuItem[] = [{ label: '打开', run: () => open(t) }];
+    if (current && current.key !== t.key) items.push({ label: '在右侧分屏打开', run: () => setSplit(t.key) });
+    items.push(SEP, { label: '交给另一个 AI…', disabled: handOff.ok ? false : handOff.why, run: () => setHandoff(t.key) });
+    if (['claude', 'codex'].includes(t.tool) && t.runtime !== 'elsewhere') {
+      const to = reopen.to || (t.runtime === 'chat' ? 'screen' : 'chat');
+      items.push({
+        label: to === 'screen' ? '在终端界面中继续' : '以对话方式继续',
+        disabled: reopen.ok ? false : reopen.why,
+        run: () => attempt(() => (open(t), reopenThread(t, to))),
+      });
+    }
+    if (t.runtime === 'elsewhere') {
+      const take = canTakeOver(t);
+      items.push({
+        label: '接管到这里',
+        hint: '结束电脑上的窗口',
+        disabled: take.ok ? false : take.why,
+        run: () => attempt(async () => openTerminal(await act.takeOver(t))),
+      });
+    }
+    items.push(SEP);
+    items.push({ label: '停止这一轮', disabled: stop.ok ? false : stop.why, run: () => attempt(() => act.stop(t), '已请求停止') });
+    items.push({
+      label: '结束',
+      hint: '记录会保留',
+      danger: true,
+      disabled: end.ok ? false : end.why,
+      run: () => window.confirm(`结束“${t.title}”？对话记录会保留，之后可以接着聊。`) && attempt(() => act.end(t), '已结束'),
+    });
+    items.push(SEP);
+    if (t.record) items.push({ label: t.pinned ? '取消置顶' : '置顶', run: () => attempt(() => act.mark(t, { pinned: !t.pinned })) });
+    if (t.needs === 'done' || t.needs === 'failed') items.push({ label: '标为已读', run: () => markSeen([t]) });
+    items.push({ label: '归档', disabled: archive.ok ? false : archive.why, run: () => attempt(() => act.mark(t, { hidden: true, pinned: false }), '已归档') });
+    if (t.session) items.push(SEP, { label: '复制会话编号', run: () => navigator.clipboard?.writeText(t.session).then(() => say('已复制')) });
+    return items;
+  };
+
+  const manyMenu = (many: Thread[]): MenuItem[] => {
+    const stoppable = many.filter((t) => canStop(t).ok);
+    const endable = many.filter((t) => canEnd(t).ok);
+    const archivable = many.filter((t) => canArchive(t).ok);
+    const all = (list: Thread[], work: (t: Thread) => Promise<unknown>, done: string) =>
+      attempt(async () => {
+        const results = await Promise.allSettled(list.map(work));
+        const failed = results.filter((r) => r.status === 'rejected').length;
+        setPicked({});
+        if (failed) throw new Error(`${list.length - failed} 个完成，${failed} 个没有完成`);
+      }, done);
+    return [
+      { label: `已选 ${many.length} 个对话`, disabled: ' ' },
+      SEP,
+      { label: `停止 ${stoppable.length} 个`, disabled: stoppable.length ? false : '没有在执行的', run: () => all(stoppable, act.stop, '已请求停止') },
+      {
+        label: `结束 ${endable.length} 个`,
+        danger: true,
+        disabled: endable.length ? false : '没有可以结束的',
+        run: () => window.confirm(`结束 ${endable.length} 个对话？记录会保留。`) && all(endable, act.end, '已结束'),
+      },
+      { label: '标为已读', run: () => (markSeen(many), setPicked({})) },
+      { label: `归档 ${archivable.length} 个`, disabled: archivable.length ? false : '只能归档没有运行的', run: () => all(archivable, (t) => act.mark(t, { hidden: true, pinned: false }), '已归档') },
+      SEP,
+      { label: '取消选择', run: () => setPicked({}) },
+    ];
+  };
+
+  const projectMenu = (name: string): MenuItem[] => {
+    const info = device?.projects?.find((p) => p.name === name);
+    return [
+      { label: '新建对话', run: () => newThread(name) },
+      { label: '打开终端', run: () => attempt(async () => {
+          const id = await act.openShell(name);
+          setTermFocus(id);
+          setTermOpen(true);
+        }) },
+      SEP,
+      { label: '查看改动', run: () => (setBrowse(name), setInspectorTab('changes'), setInspector(true)) },
+      { label: '浏览文件', run: () => (setBrowse(name), setInspectorTab('files'), setInspector(true)) },
+      SEP,
+      {
+        label: pinned[name] ? '取消置顶' : '置顶',
+        run: () =>
+          setPinned((prev) => {
+            const next = { ...prev, [name]: !prev[name] };
+            if (!next[name]) delete next[name];
+            savePinned(next);
+            return next;
+          }),
+      },
+      {
+        label: '从列表移除',
+        hint: '不删除文件',
+        danger: true,
+        disabled: info?.fixed && !features.includes('projects') ? '写在电脑端配置文件里' : false,
+        run: () => window.confirm(`把“${name}”从项目列表里移除？文件夹和对话记录都不会删除。`) && attempt(() => terminalOp({ action: 'project_remove', name }), '已移除'),
+      },
+    ];
+  };
+
+  const showMenu = (items: MenuItem[], e: MouseEvent) => setMenu({ x: e.clientX, y: e.clientY, items });
+
+  const pick = (t: Thread, range: boolean) => {
+    if (range && lastPick) {
+      const order = model.all.map((x) => x.key);
+      const [a, b] = [order.indexOf(lastPick), order.indexOf(t.key)].sort((x, y) => x - y);
+      if (a >= 0 && b >= 0) {
+        setPicked((prev) => ({ ...prev, ...Object.fromEntries(order.slice(a, b + 1).map((k) => [k, true])) }));
+        return;
       }
+    }
+    setLastPick(t.key);
+    setPicked((prev) => {
+      const next = { ...prev };
+      if (next[t.key]) delete next[t.key];
+      else next[t.key] = true;
+      return next;
+    });
+  };
+
+  // ---- the desktop window's own requests: open a terminal, show a tab
+  useEffect(() => {
+    const navigate = (openId?: string | null) => {
+      if (openId && /^[a-f0-9]{32}$/.test(openId)) openTerminal(openId);
     };
-    const params = new URLSearchParams(window.location.search);
-    applyTarget(params.get('open'), params.get('tab'));
-    (window as any).RemoteAiConsoleNavigate = applyTarget;
+    navigate(new URLSearchParams(window.location.search).get('open'));
+    (window as any).RemoteAiConsoleNavigate = navigate;
     return () => {
       delete (window as any).RemoteAiConsoleNavigate;
     };
   }, []);
 
-  const supervision = useMemo(
-    () => buildSupervisionModel(device, terminals, sessions, seenMap, pinnedProjects),
-    [device, terminals, sessions, seenMap, pinnedProjects],
-  );
+  // ---- keys
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'k') setPalette((v) => !v);
+      else if (k === 'n') newThread();
+      else if (k === 'j') setTermOpen((v) => !v);
+      else if (k === 'b') setInspector((v) => !v);
+      else if (k === '0') goHome();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
-  const markItemSeenByKey = (key: string, at: number, terminalId?: string) => {
-    if (!key) return;
-    const stamp = Math.max(at || 0, Date.now());
-    setSeenMap((prev) => {
-      if ((prev[key] || 0) >= stamp) return prev;
-      const next = { ...prev, [key]: stamp };
-      saveSeenMap(next);
-      return next;
-    });
-    if (terminalId && typeof (window as any).RemoteCliNative?.seen === 'function') {
+  const dragWidth = (e: MouseEvent, side: 'left' | 'right') => {
+    e.preventDefault();
+    const x0 = e.clientX;
+    const w0 = side === 'left' ? sideWidth : inspWidth;
+    let w = w0;
+    const move = (ev: MouseEvent) => {
+      w = side === 'left' ? Math.max(220, Math.min(420, w0 + ev.clientX - x0)) : Math.max(300, Math.min(720, w0 + x0 - ev.clientX));
+      (side === 'left' ? setSideWidth : setInspWidth)(w);
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
       try {
-        (window as any).RemoteCliNative.seen(terminalId, String(stamp));
+        localStorage.setItem(side === 'left' ? 'rcli-side-w' : 'rcli-insp-w', String(Math.round(w)));
       } catch {
-        // ignore
+        // kept for this page only
       }
-    }
-  };
-
-  const markItemSeen = (entry: SupervisionItem) => {
-    markItemSeenByKey(entry.key, entry.at, entry.kind === 'terminal' ? entry.id : undefined);
-  };
-
-  const markAllDoneSeen = () => {
-    const targets = [...supervision.done, ...supervision.failed];
-    if (targets.length === 0) return;
-    const now = Date.now();
-    setSeenMap((prev) => {
-      const next = { ...prev };
-      for (const item of targets) {
-        next[item.key] = Math.max(item.at || 0, now);
-        if (item.kind === 'terminal' && typeof (window as any).RemoteCliNative?.seen === 'function') {
-          try {
-            (window as any).RemoteCliNative.seen(item.id, String(next[item.key]));
-          } catch {
-            // ignore
-          }
-        }
-      }
-      saveSeenMap(next);
-      return next;
-    });
-  };
-
-  const togglePinProject = (name: string) => {
-    setPinnedProjects((prev) => {
-      const next = { ...prev, [name]: !prev[name] };
-      if (!next[name]) delete next[name];
-      savePinnedProjects(next);
-      return next;
-    });
-  };
-
-  const selectPrimary = (item: SelectedItem) => {
-    const k = keyForSelected(item);
-    const found = supervision.all.find((x) => x.key === k);
-    if (found) markItemSeen(found);
-    if (splitTarget && keyForSelected(splitTarget) === k) setSplitTarget(null);
-    setSelected(item);
-    setSpawnDir(null);
-    setExpandedFile(null);
-    setBrowseProject('');
-    setMobilePane('chat');
-  };
-
-  const openSplitFor = (item: SelectedItem) => {
-    const k = keyForSelected(item);
-    const found = supervision.all.find((x) => x.key === k);
-    if (found) markItemSeen(found);
-    if (!selected) {
-      setSelected(item);
-      setSpawnDir(null);
-      setExpandedFile(null);
-      setMobilePane('chat');
-      return;
-    }
-    if (keyForSelected(selected) === k) return;
-    setSplitTarget(item);
-    setSpawnDir(null);
-    setExpandedFile(null);
-    setMobilePane('chat');
-  };
-
-  const activeTerminal = useMemo(
-    () => (selected?.kind === 'terminal' ? terminals.find((t) => t.id === selected.id) || null : null),
-    [selected, terminals],
-  );
-
-  const activeSession = useMemo(
-    () => (selected?.kind === 'session' ? sessions.find((s) => s.id === selected.id && s.tool === selected.tool) || null : null),
-    [selected, sessions],
-  );
-
-  const splitTerminal = useMemo(
-    () => (splitTarget?.kind === 'terminal' ? terminals.find((t) => t.id === splitTarget.id) || null : null),
-    [splitTarget, terminals],
-  );
-
-  const splitSession = useMemo(
-    () => (splitTarget?.kind === 'session' ? sessions.find((s) => s.id === splitTarget.id && s.tool === splitTarget.tool) || null : null),
-    [splitTarget, sessions],
-  );
-
-  const activeProject = activeTerminal?.dir || activeSession?.dir || device?.workspaces?.[0] || '';
-  activeProjectRef.current = activeProject;
-  const inspectorProject = browseProject || activeProject;
-  const activeWorktree = activeTerminal?.worktree || '';
-
-  const openFilesFor = (dir?: string) => {
-    if (dir) setBrowseProject(dir);
-    setRightTab('files');
-    setRightOpen(true);
-    setFocusMode(false);
-    setMobilePane('right');
-  };
-
-  const openSpawnFor = (dir?: string) => {
-    setExpandedFile(null);
-    setSpawnDir(dir ?? activeProject ?? '');
-    setMobilePane('chat');
-  };
-
-  const handleCiteFile = (relPath: string, projectDir: string) => {
-    const token = `@${relPath}`;
-    if (selected) {
-      setExpandedFile(null);
-      setSpawnDir(null);
-      setPendingCite({ nonce: Date.now(), text: token });
-      setMobilePane('chat');
-    } else {
-      openSpawnFor(projectDir);
-    }
-  };
-
-  const handleAddProjectTrigger = () => {
-    // On Windows WebView2 desktop console, open the native FolderBrowserDialog directly.
-    if (postDesktopMessage('pick-folder')) return;
-    setAddProjectErr('');
-    setManualProjectPath('');
-    setAddProjectOpen(true);
-  };
-
-  const submitAddProject = async (path: string) => {
-    const clean = path.trim();
-    if (!clean) return;
-    setAddProjectErr('');
-    try {
-      await sendTerminalAction({ action: 'project_add', path: clean });
-      setAddProjectOpen(false);
-      setManualProjectPath('');
-      triggerRefreshRef.current?.();
-    } catch (err: any) {
-      setAddProjectErr(err?.message || '添加项目失败');
-    }
-  };
-
-  const handleRunScript = async (dir: string, command: string) => {
-    try {
-      const started = await sendTerminalAction({ action: 'start', tool: 'shell', dir, history: false });
-      const tid = started?.terminal;
-      if (tid) {
-        setActiveDrawerTermId(tid);
-        setTerminalOpen(true);
-        triggerRefreshRef.current?.();
-        window.setTimeout(() => {
-          sendTerminalAction({ action: 'input', terminal: tid, data: command + '\r' }).catch(() => {});
-        }, 700);
-      }
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleLogin = async (e: Event) => {
-    e.preventDefault();
-    setLoginError('');
-    try {
-      await loginWithPassword(password.trim());
-      setPassword('');
-      setSignedIn(true);
-    } catch (err: any) {
-      setLoginError(err?.message || '密码不正确');
-    }
-  };
-
-  const dragSidebar = (e: MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = sidebarWidth;
-    const onMove = (ev: MouseEvent) => setSidebarWidth(Math.max(232, Math.min(440, startW + (ev.clientX - startX))));
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
   };
 
-  const dragRight = (e: MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = rightWidth;
-    const onMove = (ev: MouseEvent) => setRightWidth(Math.max(310, Math.min(720, startW + (startX - ev.clientX))));
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  if (signedIn === null) {
-    return (
-      <div class="boot-screen">
-        <div class="boot-pill">
-          <span class="conn-dot on" />
-          正在连接 Remote AI 总控台…
-        </div>
-      </div>
-    );
-  }
-
+  if (signedIn === null) return <div class="boot">正在连接电脑…</div>;
   if (!signedIn) {
     return (
-      <div class="login-screen">
-        <form class="login-card" onSubmit={handleLogin}>
-          <h1>Remote AI 总控台</h1>
-          <p>输入电脑端窗口中显示的访问密码。</p>
-          <input
-            type="password"
-            placeholder="访问密码"
-            value={password}
-            onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
-            required
-          />
-          {loginError && <div class="panel-feedback is-error">{loginError}</div>}
-          <button type="submit" class="primary-btn wide">
-            进入总控台
+      <div class="boot">
+        <form
+          class="login"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setLoginError('');
+            try {
+              await loginWithPassword(password.trim());
+              setPassword('');
+              setSignedIn(true);
+            } catch (err: any) {
+              setLoginError(err?.message || '密码不正确');
+            }
+          }}
+        >
+          <h1>Remote AI</h1>
+          <p>输入电脑端窗口里显示的访问密码。</p>
+          <input type="password" placeholder="访问密码" value={password} onInput={(e) => setPassword((e.target as HTMLInputElement).value)} required />
+          {loginError && <div class="banner bad">{loginError}</div>}
+          <button type="submit" class="btn primary">
+            进入
           </button>
         </form>
       </div>
     );
   }
 
+  const handoffThread = handoff ? model.byKey.get(handoff) || null : null;
+  const threadView = (t: Thread, isSplit: boolean) => (
+    <ThreadView
+      key={isSplit ? `split:${t.key}` : t.key}
+      thread={t}
+      features={features}
+      inspectorOpen={inspector}
+      terminalOpen={termOpen}
+      insert={isSplit ? null : insert}
+      split={isSplit}
+      onMenu={(e) => showMenu(threadMenu(t), e)}
+      onReopen={(to) => reopenThread(t, to)}
+      onTakeOver={async (text) => openTerminal(await act.takeOver(t, text))}
+      onHandOff={() => setHandoff(t.key)}
+      onOpenFiles={() => (setBrowse(''), setInspectorTab('files'), setInspector(true))}
+      onToggleInspector={() => setInspector((v) => !v)}
+      onToggleTerminal={() => setTermOpen((v) => !v)}
+      onCloseSplit={() => setSplit('')}
+      onChanged={refresh}
+    />
+  );
+
+  let middle;
+  if (center.kind === 'new') {
+    middle = (
+      <NewThread
+        device={device}
+        dir={center.dir}
+        onCancel={goHome}
+        onAddProject={addProject}
+        onStarted={openTerminal}
+        onTeamStarted={(id) => (openTeam(id), refresh())}
+      />
+    );
+  } else if (center.kind === 'team') {
+    middle = (
+      <TeamView
+        id={center.id}
+        features={features}
+        onGone={goHome}
+        onChanged={refresh}
+        onOpenMember={(tool, session, terminal) => {
+          const t = (session && model.byKey.get(`${tool}:${session}`)) || model.all.find((x) => x.terminal?.id === terminal);
+          if (t) open(t);
+        }}
+      />
+    );
+  } else if (center.kind === 'diff') {
+    middle = <DiffView target={center.target} onClose={() => setCenter(current ? { kind: 'thread' } : { kind: 'home' })} />;
+  } else if (center.kind === 'file') {
+    middle = (
+      <main class="file-view">
+        <FilePreviewBody
+          target={center.target}
+          expanded
+          onBack={() => setCenter(current || sel.key ? { kind: 'thread' } : { kind: 'home' })}
+          onToggleExpand={() => {
+            setCenter(sel.key ? { kind: 'thread' } : { kind: 'home' });
+            setInspectorTab('files');
+            setInspector(true);
+          }}
+          onCiteFile={(path) => (setInsert({ nonce: Date.now(), text: `@${path}` }), setCenter({ kind: 'thread' }))}
+        />
+      </main>
+    );
+  } else if (current) {
+    middle = splitThread ? (
+      <div class="split">
+        {threadView(current, false)}
+        {threadView(splitThread, true)}
+      </div>
+    ) : (
+      threadView(current, false)
+    );
+  } else {
+    middle = (
+      <Home
+        device={device}
+        model={model}
+        onOpen={open}
+        onMenu={(t, e) => showMenu(threadMenu(t), e)}
+        onNew={() => newThread()}
+        onAddProject={addProject}
+      />
+    );
+  }
+
   return (
-    <div class={`console-shell mobile-${mobilePane}${focusMode ? ' focus-mode' : ''}`}>
-      <div class="col-sidebar" style={{ width: `${sidebarWidth}px` }}>
+    <div class={`shell${narrowList ? ' show-list' : ' show-main'}`}>
+      <div class="col-side" style={{ width: `${sideWidth}px` }}>
         <Sidebar
           device={device}
-          model={supervision}
-          selected={selected}
-          splitTarget={splitTarget}
+          model={model}
+          selectedKey={center.kind === 'thread' ? current?.key || '' : ''}
+          teamOpen={center.kind === 'team' ? center.id : ''}
+          picked={picked}
           connected={connected}
-          latencyMs={latencyMs}
-          onSelect={selectPrimary}
-          onSplit={openSplitFor}
-          onOpenMission={() => {
-            setSelected(null);
-            setSplitTarget(null);
-            setSpawnDir(null);
-            setExpandedFile(null);
-            setMobilePane('chat');
-          }}
-          onNewTask={(dir) => openSpawnFor(dir)}
-          onOpenProjectFiles={(dir) => openFilesFor(dir)}
-          onAddProject={handleAddProjectTrigger}
-          onOpenPalette={() => setPaletteOpen(true)}
-          onOpenRightTab={(tab) => {
-            setRightTab(tab);
-            setRightOpen(true);
-            setFocusMode(false);
-            setMobilePane('right');
-          }}
-          onToggleFocus={() => setFocusMode((v) => !v)}
-          onMarkSeen={markItemSeen}
-          onMarkAllDoneSeen={markAllDoneSeen}
-          onTogglePinProject={togglePinProject}
-          onRefresh={() => triggerRefreshRef.current?.()}
+          route={routeName(device)}
+          onOpen={open}
+          onPick={pick}
+          onThreadMenu={(t, e) => showMenu(threadMenu(t), e)}
+          onProjectMenu={(name, e) => showMenu(projectMenu(name), e)}
+          onOpenTeam={openTeam}
+          onNew={newThread}
+          onAddProject={addProject}
+          onSeenAll={() => markSeen(model.attention.filter((t) => t.needs === 'done' || t.needs === 'failed'))}
+          onSettings={() => setSettings(true)}
+          onHome={goHome}
         />
       </div>
+      <div class="col-grip" onMouseDown={(e) => dragWidth(e, 'left')} />
 
-      <div class="col-resizer" onMouseDown={dragSidebar} title="拖拽调整侧边栏宽度" />
-
-      <div class="col-center">
-        {spawnDir !== null ? (
-          <QuickSpawnStage
-            device={device}
-            defaultDir={spawnDir || activeProject}
-            contextTitle={activeTerminal?.title || activeSession?.title}
-            onBack={() => setSpawnDir(null)}
-            onAddProject={handleAddProjectTrigger}
-            onCreated={(id) => {
-              setSpawnDir(null);
-              setExpandedFile(null);
-              setSelected({ kind: 'terminal', id });
-              setMobilePane('chat');
-              triggerRefreshRef.current?.();
-            }}
+      <div class="col-main">
+        <button type="button" class="back-to-list" onClick={() => setNarrowList(true)}>
+          ← 对话列表
+        </button>
+        <div class="main-area">{middle}</div>
+        {termOpen && (
+          <TerminalPanel
+            project={project}
+            worktree={current?.worktree || ''}
+            shells={model.shells}
+            focus={termFocus}
+            onClose={() => setTermOpen(false)}
+            onChanged={refresh}
           />
-        ) : expandedFile !== null ? (
-          <main class="main-pane">
-            <FilePreviewBody
-              target={expandedFile}
-              expanded
-              onBack={() => setExpandedFile(null)}
-              onToggleExpand={() => {
-                const dir = expandedFile.dir;
-                setExpandedFile(null);
-                openFilesFor(dir);
-              }}
-              onCiteFile={handleCiteFile}
-            />
-          </main>
-        ) : selected === null ? (
-          <MissionGrid
-            device={device}
-            model={supervision}
-            onSelect={selectPrimary}
-            onSplit={openSplitFor}
-            onNewTask={(dir) => openSpawnFor(dir)}
-            onOpenFiles={(dir) => openFilesFor(dir)}
-            onAddProject={handleAddProjectTrigger}
-            onToggleTerminal={() => setTerminalOpen((v) => !v)}
-            onMarkSeen={markItemSeen}
-            onMarkAllDoneSeen={markAllDoneSeen}
-            onTogglePinProject={togglePinProject}
-            onRefresh={() => triggerRefreshRef.current?.()}
-          />
-        ) : (
-          <div class={splitTarget ? 'split-workspace' : 'single-workspace'}>
-            <ChatPane
-              device={device}
-              selected={selected}
-              terminal={activeTerminal}
-              session={activeSession}
-              onRefresh={() => triggerRefreshRef.current?.()}
-              onToggleTerminal={() => setTerminalOpen((v) => !v)}
-              onOpenDiff={() => {
-                setBrowseProject('');
-                setRightTab('diff');
-                setRightOpen(true);
-                setFocusMode(false);
-                setMobilePane('right');
-              }}
-              onOpenFiles={(dir) => openFilesFor(dir)}
-              onNewTask={(dir) => openSpawnFor(dir)}
-              onAddProject={handleAddProjectTrigger}
-              onRunScript={handleRunScript}
-              onSelectTerminal={(id) => selectPrimary({ kind: 'terminal', id })}
-              onToggleFocus={() => setFocusMode((v) => !v)}
-              focusMode={focusMode}
-              terminalDrawerOpen={terminalOpen}
-              pendingCite={pendingCite}
-              onBackToMission={() => {
-                setSelected(null);
-                setSplitTarget(null);
-              }}
-              onSplitCurrent={() => {
-                const other = supervision.active.find((x) => x.key !== keyForSelected(selected));
-                if (other) openSplitFor(other.item);
-              }}
-            />
-            {splitTarget && (
-              <div class="split-secondary">
-                <ChatPane
-                  device={device}
-                  selected={splitTarget}
-                  terminal={splitTerminal}
-                  session={splitSession}
-                  onRefresh={() => triggerRefreshRef.current?.()}
-                  onToggleTerminal={() => setTerminalOpen((v) => !v)}
-                  onOpenDiff={() => {
-                    setBrowseProject('');
-                    setRightTab('diff');
-                    setRightOpen(true);
-                    setFocusMode(false);
-                    setMobilePane('right');
-                  }}
-                  onOpenFiles={(dir) => openFilesFor(dir)}
-                  onNewTask={(dir) => openSpawnFor(dir)}
-                  onAddProject={handleAddProjectTrigger}
-                  onRunScript={handleRunScript}
-                  onSelectTerminal={(id) => setSplitTarget({ kind: 'terminal', id })}
-                  onToggleFocus={() => setFocusMode((v) => !v)}
-                  focusMode={focusMode}
-                  terminalDrawerOpen={terminalOpen}
-                  isSplitPane
-                  onCloseSplit={() => setSplitTarget(null)}
-                />
-              </div>
-            )}
-          </div>
         )}
-
-        <TerminalDrawer
-          open={terminalOpen}
-          activeProject={activeProject}
-          selectedId={activeDrawerTermId || undefined}
-          terminals={terminals}
-          onClose={() => setTerminalOpen(false)}
-          onRefresh={() => triggerRefreshRef.current?.()}
-        />
       </div>
 
-      {rightOpen && (
+      {inspector && center.kind !== 'new' && (
         <>
-          <div class="col-resizer" onMouseDown={dragRight} title="拖拽调整右侧面板宽度" />
-          <div class="col-right" style={{ width: `${rightWidth}px` }}>
-            <RightPanel
-              tab={rightTab}
-              onTabChange={setRightTab}
-              project={inspectorProject}
+          <div class="col-grip" onMouseDown={(e) => dragWidth(e, 'right')} />
+          <div class="col-insp" style={{ width: `${inspWidth}px` }}>
+            <Inspector
+              tab={inspectorTab}
+              project={project}
+              worktree={browse ? '' : current?.worktree || ''}
               workspaces={device?.workspaces || []}
-              worktree={activeWorktree}
-              device={device}
-              skin={skin}
-              onSkinChange={setSkin}
-              onExpandPreview={(target) => {
-                setSpawnDir(null);
-                setExpandedFile(target);
-                setMobilePane('chat');
+              openDiff={center.kind === 'diff' ? center.target.file.path : ''}
+              onTab={setInspectorTab}
+              onOpenDiff={(target) => setCenter({ kind: 'diff', target })}
+              onExpandFile={(target) => setCenter({ kind: 'file', target })}
+              onCiteFile={(path) => {
+                if (current) {
+                  setInsert({ nonce: Date.now(), text: `@${path}` });
+                  setCenter({ kind: 'thread' });
+                } else newThread(project);
               }}
-              onCiteFile={handleCiteFile}
-              onClose={() => setRightOpen(false)}
+              onClose={() => setInspector(false)}
             />
           </div>
         </>
       )}
 
-      {/* Mobile Bottom Tab Navigation (< 960px) */}
-      <nav class="mobile-nav" aria-label="移动端导航">
-        <button
-          type="button"
-          class={mobilePane === 'sidebar' ? 'active' : ''}
-          onClick={() => setMobilePane('sidebar')}
-        >
-          项目/任务
-        </button>
-        <button
-          type="button"
-          class={mobilePane === 'chat' ? 'active' : ''}
-          onClick={() => setMobilePane('chat')}
-        >
-          对话
-        </button>
-        <button
-          type="button"
-          class={mobilePane === 'right' && rightTab === 'files' ? 'active' : ''}
-          onClick={() => {
-            setRightTab('files');
-            setRightOpen(true);
-            setMobilePane('right');
+      {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+      {handoffThread && (
+        <HandoffDialog
+          from={handoffThread}
+          device={device}
+          threads={model.all}
+          onClose={() => setHandoff('')}
+          onStarted={(terminal) => {
+            setHandoff('');
+            openTerminal(terminal);
+            say('已交给新的对话');
           }}
-        >
-          文件
-        </button>
-        <button
-          type="button"
-          class={mobilePane === 'right' && rightTab !== 'files' ? 'active' : ''}
-          onClick={() => {
-            setRightTab(rightTab === 'files' ? 'diff' : rightTab);
-            setRightOpen(true);
-            setMobilePane('right');
+          onDone={(text) => {
+            setHandoff('');
+            say(text);
+            refresh();
           }}
-        >
-          检查/更多
-        </button>
-      </nav>
-
-      {addProjectOpen && (
-        <div class="modal-backdrop" onClick={() => setAddProjectOpen(false)}>
-          <form
-            class="modal-card"
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitAddProject(manualProjectPath);
-            }}
-          >
-            <div class="modal-head">
-              <h2>添加项目文件夹</h2>
-              <button type="button" class="icon-btn" onClick={() => setAddProjectOpen(false)}>
-                ✕
-              </button>
-            </div>
-            {(device?.candidates || []).length > 0 && (
-              <div class="nav-group">
-                <div class="group-title">已发现的会话文件夹</div>
-                {(device?.candidates || []).slice(0, 8).map((c) => (
-                  <button
-                    key={c.path}
-                    type="button"
-                    class="nav-row"
-                    onClick={() => submitAddProject(c.path)}
-                  >
-                    <span class="nav-row-main">
-                      <span class="nav-row-title">{c.name}</span>
-                      <span class="nav-row-sub">{c.path}</span>
-                    </span>
-                    <span class="chip">+ 添加</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <label class="field-label">
-              <span>或手动输入电脑上的文件夹路径</span>
-              <input
-                type="text"
-                placeholder="例如 E:\projects\my-app"
-                value={manualProjectPath}
-                onInput={(e) => setManualProjectPath((e.target as HTMLInputElement).value)}
-              />
-            </label>
-            {addProjectErr && <div class="panel-feedback is-error">{addProjectErr}</div>}
-            <div class="modal-foot">
-              <button type="button" class="ghost-btn" onClick={() => setAddProjectOpen(false)}>
-                取消
-              </button>
-              <button type="submit" class="primary-btn" disabled={!manualProjectPath.trim()}>
-                添加
-              </button>
-            </div>
-          </form>
-        </div>
+        />
       )}
-
-      <CommandPalette
-        open={paletteOpen}
-        terminals={terminals}
-        sessions={sessions}
-        onClose={() => setPaletteOpen(false)}
-        onSelect={(item) => {
-          setSelected(item);
-          setMobilePane('chat');
-        }}
-        onAction={(action) => {
-          if (action === 'new') openSpawnFor(activeProject);
-          else if (action === 'terminal') setTerminalOpen((v) => !v);
-          else if (action === 'diff' || action === 'connect') {
-            setRightTab(action);
-            setRightOpen(true);
-            setFocusMode(false);
-            setMobilePane('right');
-          }
-        }}
-      />
+      {settings && <SettingsDialog device={device} skin={skin} onSkin={setSkin} onClose={() => setSettings(false)} />}
+      {palette && (
+        <CommandPalette
+          threads={model.all}
+          onOpen={open}
+          onClose={() => setPalette(false)}
+          commands={[
+            { label: '新建对话', keys: 'Ctrl+N', run: () => newThread() },
+            { label: '总览', keys: 'Ctrl+0', run: goHome },
+            { label: '项目终端', keys: 'Ctrl+J', run: () => setTermOpen((v) => !v) },
+            { label: '变更与文件', keys: 'Ctrl+B', run: () => setInspector((v) => !v) },
+            { label: '添加项目文件夹', run: addProject },
+            { label: '设置', run: () => setSettings(true) },
+          ]}
+        />
+      )}
+      {adding && (
+        <AddProject
+          device={device}
+          onClose={() => setAdding(false)}
+          onAdded={() => {
+            setAdding(false);
+            refresh();
+          }}
+        />
+      )}
+      {toast && <div class={`toast${toast.bad ? ' bad' : ''}`}>{toast.text}</div>}
     </div>
   );
+}
+
+function AddProject({ device, onClose, onAdded }: { device: DeviceInfo | null; onClose: () => void; onAdded: () => void }) {
+  const [path, setPath] = useState('');
+  const [problem, setProblem] = useState('');
+  const [busy, setBusy] = useState(false);
+  const add = async (folder: string) => {
+    if (!folder.trim() || busy) return;
+    setBusy(true);
+    setProblem('');
+    try {
+      await terminalOp({ action: 'project_add', path: folder.trim() });
+      onAdded();
+    } catch (err: any) {
+      setProblem(err?.message || '没有添加');
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title="添加项目文件夹"
+      onClose={onClose}
+      foot={
+        <>
+          <span class="grow" />
+          <button type="button" class="btn quiet" onClick={onClose}>
+            取消
+          </button>
+          <button type="button" class="btn primary" disabled={busy || !path.trim()} onClick={() => add(path)}>
+            添加
+          </button>
+        </>
+      }
+    >
+      {(device?.candidates || []).length > 0 && (
+        <div class="pick-list">
+          {(device?.candidates || []).slice(0, 8).map((c) => (
+            <button key={c.path} type="button" class="pick" onClick={() => add(c.path)}>
+              <span class="pick-text">
+                <strong>{c.name}</strong>
+                <span>{c.path}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      <label class="field">
+        <span>电脑上的文件夹路径</span>
+        <input
+          type="text"
+          placeholder="例如 E:\projects\my-app"
+          value={path}
+          onInput={(e) => setPath((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => e.key === 'Enter' && add(path)}
+        />
+      </label>
+      {problem && <div class="banner bad">{problem}</div>}
+    </Dialog>
+  );
+}
+
+function initialSkin(): string {
+  try {
+    const asked = new URLSearchParams(window.location.search).get('skin');
+    if (asked && SKINS.has(asked)) return asked;
+    const native = (window as any).RemoteCliNative?.pref?.('skin');
+    if (native && SKINS.has(native)) return native;
+    const saved = localStorage.getItem('rcli-skin') || 'dawn';
+    return SKINS.has(saved) ? saved : 'dawn';
+  } catch {
+    return 'dawn';
+  }
+}
+
+function paintSkin(name: string) {
+  const chosen = SKINS.has(name) ? name : 'paper';
+  const win = window as any;
+  if (typeof win.RemoteCliPaint === 'function') {
+    const applied = win.RemoteCliPaint(chosen);
+    if (applied?.bg) {
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', applied.bg);
+      try {
+        win.RemoteCliNative?.chrome?.(applied.bg);
+      } catch {
+        // not in the app
+      }
+    }
+    return;
+  }
+  document.documentElement.dataset.skin = chosen === 'auto' ? 'paper' : chosen;
+}
+
+function routeName(device: DeviceInfo | null): string {
+  const host = window.location.hostname;
+  if (host === '127.0.0.1' || host === 'localhost') return '本机';
+  if (host.endsWith('.ts.net') || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return 'Tailscale';
+  if (host.endsWith('.trycloudflare.com')) return '公网隧道';
+  if (/^\/c\/[a-f0-9]{20}\//.test(window.location.pathname)) return '公共中转';
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return '局域网';
+  return device?.routes?.length ? '中转' : '已连接';
 }

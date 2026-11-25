@@ -53,7 +53,7 @@ const TimelineRow = memo(function TimelineRow({
       <div class={`tool-card status-${item.status || 'done'}`}>
         <button type="button" class="tool-card-head" onClick={() => onToggleTool(item.id)}>
           <span class="tool-step-icon" aria-hidden="true">
-            {item.status === 'error' ? '!' : '✓'}
+            {item.status === 'error' ? '!' : item.status === 'running' ? '…' : '✓'}
           </span>
           <span class="tool-card-title">{item.title || '工具调用'}</span>
           <span class="tool-card-summary">{item.text}</span>
@@ -83,6 +83,8 @@ const TimelineRow = memo(function TimelineRow({
     );
   } else if (item.role === 'note' || item.role === 'error') {
     content = <div class={`timeline-note${item.role === 'error' ? ' is-error' : ''}`}>{item.text}</div>;
+  } else if (item.role === 'thought') {
+    content = <div class="msg-thought">{item.text}</div>;
   } else {
     content = (
       <div class="msg msg-assistant">
