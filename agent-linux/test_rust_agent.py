@@ -37,6 +37,10 @@ class RustAgentContract(test_agent.EndToEnd):
     def test_close_kills_what_the_program_left_behind(self):
         pass
 
+    @unittest.skip("the Rust agent runs shell only and does not offer `reopen`; the Python agent's")
+    def test_a_conversation_is_reopened_the_other_way(self):
+        pass
+
     def test_end_to_end(self):
         # 0. the binary under test is the Rust agent
         started = self.op({"action": "start", "tool": "shell", "dir": "项目"})
