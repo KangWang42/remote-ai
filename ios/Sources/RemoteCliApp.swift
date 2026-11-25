@@ -233,8 +233,12 @@ struct HomeView: View {
     private func open(_ computer: ComputerRecord, path: String) {
         openingId = computer.id
         Task {
-            let picked = await store.selectBestOrigin(for: computer)
-            _ = await store.ensureAuthenticated(origin: picked.origin, record: computer, isLocal: picked.isLocal)
+            var picked = await store.selectBestOrigin(for: computer)
+            let token = await store.ensureAuthenticated(origin: picked.origin, record: computer, isLocal: picked.isLocal)
+            if token == nil && picked.origin.caseInsensitiveCompare(computer.url) != .orderedSame {
+                picked = (computer.url, computer.displayHost, nil, false)
+                _ = await store.ensureAuthenticated(origin: picked.origin, record: computer, isLocal: false)
+            }
             let pw = store.password(for: computer, isLocalDirect: picked.isLocal)
             openingId = nil
             activeTarget = ActiveSessionTarget(computer: computer, origin: picked.origin, path: path, password: pw)

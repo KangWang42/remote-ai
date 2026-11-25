@@ -210,6 +210,7 @@ public final class MainActivity extends Activity {
         computerManagement = new ComputerManagement(this, kit, bench);
         uuRemote = new UuRemote(this, kit);
         routes = new RouteCoordinator(this, net);
+        routes.setNetworkChangeListener(() -> reprobeRoutes(true));
         routes.startMonitoring();
         appPages = new AppPages(this, kit, bench);
         tabs = new Tabs(this, kit);
@@ -241,6 +242,29 @@ public final class MainActivity extends Activity {
     JSONObject computerById(String id) { JSONArray list = computers(); for (int i = 0; i < list.length(); i++) { JSONObject item = list.optJSONObject(i); if (item != null && DesktopProtocol.validId(id) && id.equals(item.optString("id"))) return item; } return null; }
     String recordIdByUrl(String url) { JSONObject c = computerByUrl(url); return c == null ? "" : c.optString("id"); }
     String activeOrigin(String savedUrl) { return routes == null ? savedUrl : routes.activeOrigin(recordIdByUrl(savedUrl), savedUrl); }
+    String failoverOrigin(String savedUrl, String failedOrigin) {
+        if (routes == null) return savedUrl;
+        String id = recordIdByUrl(savedUrl);
+        return id.isEmpty() ? savedUrl : routes.failover(id, savedUrl, failedOrigin);
+    }
+    void reprobeRoutes(boolean refreshAfter) {
+        if (routes == null) return;
+        JSONArray list = computers();
+        java.util.List<String[]> pairs = new java.util.ArrayList<>();
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject c = list.optJSONObject(i);
+            if (c != null) pairs.add(new String[]{ c.optString("id"), c.optString("url") });
+        }
+        if (pairs.isEmpty()) return;
+        routes.reprobeAll(pairs, () -> {
+            if (!refreshAfter) return;
+            runOnUiThread(() -> {
+                if (!foreground) return;
+                if (Tabs.has(screen) && bench != null) bench.refresh();
+                if ("computer".equals(screen) && computerManagement != null) computerManagement.refresh();
+            });
+        });
+    }
     String routeSummary(String savedUrl) { return routes == null ? host(savedUrl) : routes.activeRouteSummary(recordIdByUrl(savedUrl), savedUrl); }
     void desktop(String url) { uuRemote.menu(url); }
     private boolean external(Intent intent, boolean cold) {
@@ -1082,6 +1106,6 @@ public final class MainActivity extends Activity {
         super.onBackPressed();
     }
     @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
-    @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("computer".equals(screen)) computerManagement.refresh(); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
+    @Override protected void onResume() { super.onResume(); foreground = true; reprobeRoutes(true); if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("computer".equals(screen)) computerManagement.refresh(); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
     @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); if (routes != null) routes.stopMonitoring(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { detachWeb(); web.destroy(); web = null; } super.onDestroy(); }
 }

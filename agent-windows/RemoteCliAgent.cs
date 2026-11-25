@@ -988,7 +988,10 @@ public sealed class TerminalAgent {
     DateTime lastInput = DateTime.MinValue, lastScan = DateTime.MinValue, toolsAt = DateTime.MinValue;
     string[] tools = new string[0];
     long[] externalAgy = new long[0];
-    void Wake() { try { if (wake.CurrentCount == 0) wake.Release(); } catch (SemaphoreFullException) { } catch (ObjectDisposedException) { } }
+    void Wake() {
+        try { if (wake.CurrentCount == 0) wake.Release(); } catch (SemaphoreFullException) { } catch (ObjectDisposedException) { }
+        foreach (var link in ActiveLinks()) link.WakeReport();
+    }
     DateTime nextScan = DateTime.MinValue, lastActivity = DateTime.MinValue;
     const string Uuid = @"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z";
 
@@ -1512,13 +1515,25 @@ public sealed class TerminalAgent {
     public static string First(string back) { return Transcripts.First(back); }
     public static string Begins(string row, int from) { return Transcripts.Begins(row, from); }
     public static List<Dictionary<string, object>> Talk(List<Dictionary<string, object>> said, int most, int runs) { return Transcripts.Talk(said, most, runs); }
+    static readonly Regex ValidSessionId = new Regex(@"\A[a-zA-Z0-9._:-]{4,128}\z", RegexOptions.Compiled);
+    static bool IsValidSessionId(string session) {
+        return !String.IsNullOrEmpty(session) && ValidSessionId.IsMatch(session) && session.IndexOf("..", StringComparison.Ordinal) < 0;
+    }
     Dictionary<string, object> ReadConversation(Dictionary<string, object> op, Dictionary<string, object> prefs) {
         string session = Get(op, "session"), tool = Get(op, "tool"), dir = Get(op, "dir"), root;
-        var saved = sessions.FirstOrDefault(s => s.Id == session && s.Tool == tool && s.Dir == dir);
-        if (saved == null || !Regex.IsMatch(session, Uuid)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
-        // one that is open in a folder that is no project is read where it is
-        if (dir.Length == 0 && (saved.Folder.Length > 0 || AgyAppSession(saved))) root = saved.Folder;
-        else if (!AllDirs(prefs).TryGetValue(dir, out root)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+        SessionInfo saved;
+        lock (work) {
+            saved = sessions.FirstOrDefault(s => String.Equals(s.Id, session, StringComparison.OrdinalIgnoreCase) && s.Tool == tool && s.Dir == dir)
+                ?? sessions.FirstOrDefault(s => String.Equals(s.Id, session, StringComparison.OrdinalIgnoreCase) && s.Tool == tool);
+        }
+        if (saved == null || !IsValidSessionId(session)) throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
+        // Fall back to the saved session's directory or folder if the client sent a stale or empty dir.
+        string effectiveDir = dir.Length > 0 ? dir : saved.Dir;
+        var allowedDirs = AllDirs(prefs);
+        if (effectiveDir.Length > 0 && allowedDirs.TryGetValue(effectiveDir, out root)) { }
+        else if (saved.Dir.Length > 0 && allowedDirs.TryGetValue(saved.Dir, out root)) { }
+        else if (saved.Folder.Length > 0 || AgyAppSession(saved)) root = saved.Folder;
+        else throw new ArgumentException("电脑上没有找到这个对话，请刷新后重试");
         try {
             string title = Organizer.Title(saved.Tool, saved.Id, saved.Title, saved.Named);
             if (AgyAppSession(saved)) {
@@ -1528,6 +1543,13 @@ public sealed class TerminalAgent {
                 return read;
             }
             string file = ConversationFile(tool, session, root);
+            if (file == null && !Tool.Named(tool).Converses) {
+                return new Dictionary<string, object> {
+                    { "messages", new object[0] }, { "more", false }, { "stamp", "0.0" },
+                    { "title", title }, { "status", WaysOf(saved, Reach.Of(tool, session)).Status },
+                    { "unsupported", true }
+                };
+            }
             if (file == null && tool == "claude" && saved.Live && ClaudeSessions.LiveSessions().Any(owner => owner.Session == session && SamePath(root, owner.Dir)))
                 return new Dictionary<string, object> { { "messages", new object[0] }, { "more", false }, { "stamp", "0.0" },
                     { "title", title }, { "status", WaysOf(saved, Reach.Of(tool, session)).Status } };
@@ -1701,7 +1723,7 @@ public sealed class TerminalAgent {
             links.AddRange(keep);
         }
         foreach (var old in removed) old.Dispose();
-        if (running) foreach (var created in added) StartLinkListener(created);
+        if (running) foreach (var created in added) StartLinkWorkers(created);
         sessionsDirty = true;
         soon = true;
         Wake();
@@ -1729,7 +1751,18 @@ public sealed class TerminalAgent {
             }
         }
         foreach (var old in removed) old.Dispose();
-        if (running && created != null) StartLinkListener(created);
+        if (running && created != null) StartLinkWorkers(created);
+    }
+
+    /// Drops stale HTTP sockets/backoffs across all links (used after Windows sleep/resume or network change).
+    public void RefreshConnections() {
+        sessionsDirty = true;
+        foreach (var link in ActiveLinks()) {
+            link.ResetAuth();
+            link.WakeReport();
+        }
+        soon = true;
+        Wake();
     }
 
     // The address or the password changed: sign in again at once instead of after the usual pause.
@@ -1881,7 +1914,7 @@ public sealed class TerminalAgent {
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
             if (!ownWork && action.StartsWith("work_", StringComparison.Ordinal)) throw new ArgumentException("这台电脑的电脑端版本不支持这项操作，请更新电脑端");
             if (!project && !file && !update && !peek && !computer && !ownWork && !git && !desktop && !organize && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z")) throw new ArgumentException("操作编号无效");
-            double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
+            double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 300) throw new ArgumentException("操作已过期（请检查电脑与服务器时间是否同步）");
             if (Get(prefs, "RemoteEnabled") != "True") throw new InvalidOperationException("电脑远控已关闭");
             if (op.ContainsKey("receipt") && (!(op["receipt"] is bool) || true.Equals(op["receipt"]) && !nativeControl && !agyControl))
                 throw new ArgumentException("回执查询无效");
@@ -2008,11 +2041,13 @@ public sealed class TerminalAgent {
                 result = new Dictionary<string, object> { { "status", "asked" }, { "transport", Ways.Hook } };
             }
             else if (action == "session_read") {
-                if (Get(op, "tool") == "agy" && sessions.Any(s => s.Id == Get(op, "session") && AgyAppSession(s))) {
-                    RunAsync(id, () => ReadConversation(op, prefs), DesktopError);
-                    return;
-                }
-                result = ReadConversation(op, prefs);
+                // Always read transcripts off `lock (work)` so large JSONL files or slow disks never stall heartbeats.
+                var opCopy = new Dictionary<string, object>(op);
+                bool isAgy = Get(opCopy, "tool") == "agy" && sessions.Any(s => s.Id == Get(opCopy, "session") && AgyAppSession(s));
+                RunAsync(id, () => ReadConversation(opCopy, prefs),
+                    isAgy ? (Func<Exception, string>)DesktopError : (problem => problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "读不到这个对话的内容"),
+                    limited: false);
+                return;
             }
             else if (action == "session_mark") {
                 // pinned or hidden, or no longer: of a conversation this computer listed
@@ -2140,7 +2175,10 @@ public sealed class TerminalAgent {
                 string launcher = FindTool(tool);
                 if (launcher == null) throw new ArgumentException("电脑未安装这个工具");
                 if (session.Length > 0) {
-                    if (!Scan(dirs).Any(s => s.Id == session && s.Tool == tool && s.Dir == dir && (dir.Length > 0 || SamePath(s.Folder, folder)))) throw new ArgumentException("电脑上没有找到这个对话");
+                    var scanned = Scan(dirs);
+                    bool found = scanned.Any(s => String.Equals(s.Id, session, StringComparison.OrdinalIgnoreCase) && s.Tool == tool
+                        && (s.Dir == dir || (dir.Length == 0 && SamePath(s.Folder, folder)) || (dir.Length > 0 && dirs.ContainsKey(dir) && SamePath(s.Folder, dirs[dir]))));
+                    if (!found) throw new ArgumentException("电脑上没有找到这个对话");
                     // a copy leaves the original where it is
                     if (!fork) kind.Exclusive(session, Get(op, "takeover") == "True", OwnRoots(), Parents(), null);
                 } else if (previous.Length > 0) {
@@ -2230,17 +2268,27 @@ public sealed class TerminalAgent {
         lastActivity = DateTime.UtcNow; soon = true; if (action == "start" || action == "close") nextScan = DateTime.UtcNow.AddSeconds(1.5);
         if (action.StartsWith("project_", StringComparison.Ordinal)) nextScan = DateTime.MinValue;
     }
+    sealed class LinkSnapshot {
+        public Dictionary<string, object> Prefs;
+        public object Info;
+        public object[] TerminalList;
+        public object[] Listed;
+        public string ListedText;
+        public DateTime At;
+    }
+    volatile LinkSnapshot latestSnapshot;
     object[] cachedListed = new object[0];
     string cachedListedText = "[]";
 
-    async Task<bool> ReportLinkAsync(RelayLink link, Dictionary<string, object> prefs, object info, object[] terminalList, object[] listed, string listedText, DateTime nowUtc) {
-        if (!link.Active) return false;
-        if (link.Client == null && !await link.EnsureLoginAsync(json).ConfigureAwait(false)) return false;
+    async Task<bool> ReportLinkAsync(RelayLink link, LinkSnapshot snap, JavaScriptSerializer linkJson) {
+        if (!link.Active || snap == null) return false;
+        if (link.Client == null && !await link.EnsureLoginAsync(linkJson).ConfigureAwait(false)) return false;
         HttpClient current = link.Client;
         if (current == null) return false;
         string body;
         bool listing;
         Dictionary<string, object>[] acknowledgments;
+        DateTime nowUtc = DateTime.UtcNow;
         lock (work) {
             List<Dictionary<string, object>> output;
             lock (gate) output = OutputBatch(terminals.Values.Concat(ended).SelectMany(t => link.SelectChunks(t, 30)));
@@ -2256,61 +2304,99 @@ public sealed class TerminalAgent {
                 return taken++ == 0 || room >= 0;
             }).ToArray();
             var payload = new Dictionary<string, object> {
-                { "info", info },
-                { "terminals", terminalList },
+                { "info", snap.Info },
+                { "terminals", snap.TerminalList },
                 { "output", output },
                 { "acks", acknowledgments }
             };
-            listing = link.NeedsSessions(listedText, nowUtc);
-            if (listing) payload["sessions"] = listed;
-            body = json.Serialize(payload);
+            listing = link.NeedsSessions(snap.ListedText, nowUtc);
+            if (listing) payload["sessions"] = snap.Listed;
+            body = linkJson.Serialize(payload);
         }
         var request = new HttpRequestMessage(HttpMethod.Post, link.Origin + "/api/terminal/agent");
         request.Headers.TryAddWithoutValidation("Origin", link.Origin);
         request.Content = JsonBody(body, link.AcceptsGzip);
         try {
-            using (request) using (var response = await current.SendAsync(request, link.Token).ConfigureAwait(false)) {
-                if ((int)response.StatusCode == 401) { link.ResetAuth(); await link.EnsureLoginAsync(json).ConfigureAwait(false); return false; }
-                if (!response.IsSuccessStatusCode) return false;
-                IEnumerable<string> acceptEnc;
-                if (!link.AcceptsGzip && response.Headers.TryGetValues("X-RemoteCli-Accept-Encoding", out acceptEnc) && acceptEnc.Any(v => v.IndexOf("gzip", StringComparison.OrdinalIgnoreCase) >= 0))
-                    link.AcceptsGzip = true;
-                string answer = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                lock (work) {
-                    var result = json.Deserialize<Dictionary<string, object>>(answer);
-                    foreach (var a in acknowledgments) {
-                        string opId = Convert.ToString(a["id"]);
-                        link.MarkReported(opId);
-                        reported.Add(opId);
-                        if (a.Remove("result") && Convert.ToString(a["error"]).Length == 0) a["error"] = "电脑的回答没有送到，请重试";
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(link.Token)) {
+                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                using (request) using (var response = await current.SendAsync(request, timeout.Token).ConfigureAwait(false)) {
+                    if ((int)response.StatusCode == 401) { link.ResetAuth(); await link.EnsureLoginAsync(linkJson).ConfigureAwait(false); return false; }
+                    if (!response.IsSuccessStatusCode) { link.RecordFailure(); return false; }
+                    IEnumerable<string> acceptEnc;
+                    if (!link.AcceptsGzip && response.Headers.TryGetValues("X-RemoteCli-Accept-Encoding", out acceptEnc) && acceptEnc.Any(v => v.IndexOf("gzip", StringComparison.OrdinalIgnoreCase) >= 0))
+                        link.AcceptsGzip = true;
+                    string answer = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    bool morePending = false;
+                    lock (work) {
+                        var result = linkJson.Deserialize<Dictionary<string, object>>(answer);
+                        foreach (var a in acknowledgments) {
+                            string opId = Convert.ToString(a["id"]);
+                            link.MarkReported(opId);
+                            reported.Add(opId);
+                            if (a.Remove("result") && Convert.ToString(a["error"]).Length == 0) a["error"] = "电脑的回答没有送到，请重试";
+                        }
+                        if (listing) link.MarkSessionsSent(snap.ListedText, DateTime.UtcNow);
+                        var ack = result != null && result.ContainsKey("output_ack") ? result["output_ack"] as Dictionary<string, object> : null;
+                        if (ack != null) link.NoteOutputAck(ack);
+                        var named = result != null && result.ContainsKey("titles") ? result["titles"] as Dictionary<string, object> : null;
+                        if (named != null) foreach (var t in terminals.Values.Concat(ended)) { object title; if (named.TryGetValue(t.Id, out title)) t.Title = Convert.ToString(title); }
+                        foreach (object item in List(result, "operations")) {
+                            var op = item as Dictionary<string, object>;
+                            if (op == null) continue;
+                            string opId = Get(op, "id");
+                            if (opId.Length > 0 && !opSource.ContainsKey(opId)) opSource[opId] = link.Key;
+                            Execute(op, snap.Prefs);
+                            morePending = true;
+                        }
                     }
-                    if (listing) link.MarkSessionsSent(listedText, DateTime.UtcNow);
-                    var ack = result != null && result.ContainsKey("output_ack") ? result["output_ack"] as Dictionary<string, object> : null;
-                    if (ack != null) link.NoteOutputAck(ack);
-                    var named = result != null && result.ContainsKey("titles") ? result["titles"] as Dictionary<string, object> : null;
-                    if (named != null) foreach (var t in terminals.Values.Concat(ended)) { object title; if (named.TryGetValue(t.Id, out title)) t.Title = Convert.ToString(title); }
-                    foreach (object item in List(result, "operations")) {
-                        var op = item as Dictionary<string, object>;
-                        if (op == null) continue;
-                        string opId = Get(op, "id");
-                        if (opId.Length > 0 && !opSource.ContainsKey(opId)) opSource[opId] = link.Key;
-                        Execute(op, prefs);
-                    }
+                    link.RecordSuccess(DateTime.UtcNow);
+                    SettleHealthyLinks();
+                    if (morePending) Wake();
+                    return true;
                 }
-                return true;
             }
         } catch (Exception) {
+            if (link.Active) link.RecordFailure();
             return false;
         }
     }
 
-    async Task Tick() {
+    void SettleHealthyLinks() {
+        var currentLinks = ActiveLinks();
+        DateTime nowUtc = DateTime.UtcNow;
+        var healthyLinks = currentLinks.Where(l => l.Active && l.RecentlyHealthy(nowUtc)).ToList();
+        if (healthyLinks.Count == 0) return;
+
+        lock (work) {
+            lock (gate) {
+                foreach (var t in terminals.Values.Concat(ended)) {
+                    long have = RelayLink.MinimumAck(healthyLinks, t.Id, t.Seq);
+                    if (Settle(t, have, t.Pty.Closed ? KeepEnded : KeepRunning)) soon = true;
+                }
+            }
+            if (completed.Count > 4000) foreach (string key in completed.Keys.Take(1000).ToArray()) { completed.Remove(key); reported.Remove(key); opSource.Remove(key); }
+            // A terminal is forgotten only after its last output has been read from the program and stored by the relay.
+            foreach (var t in terminals.Values.Where(t => t.Pty.Closed && t.ClosedSeen == DateTime.MinValue)) t.ClosedSeen = DateTime.UtcNow;
+            string[] finished; lock (gate) finished = terminals.Where(t => t.Value.Pty.Closed && (t.Value.Pty.Drained || DateTime.UtcNow - t.Value.ClosedSeen > TimeSpan.FromSeconds(15)) && t.Value.Output.Count == 0 && t.Value.Pending.Length == 0).Select(t => t.Key).ToArray();
+            foreach (string key in finished) {
+                var over = terminals[key]; over.Pty.Dispose(); terminals.Remove(key);
+                ended.RemoveAll(e => e.Session.Length > 0 && e.Tool == over.Tool && e.Session == over.Session);
+                lock (gate) Settle(over, over.Seq, KeepEnded);
+                ended.Add(over); if (ended.Count > EndedMost) {
+                    var dropped = ended[0]; ended.RemoveAt(0);
+                    foreach (var link in currentLinks) link.ForgetTerminal(dropped.Id);
+                }
+            }
+        }
+    }
+
+    Task Tick() {
         uploads.Expire();
         Dictionary<string, object> prefs = Preferences();
         if (Get(prefs, "RemoteEnabled") == "True") Organizer.Tick();
         SyncDefaultLink();
         var currentLinks = ActiveLinks();
-        if (currentLinks.Length == 0) return;
+        if (currentLinks.Length == 0) return Task.FromResult(0);
         object info;
         object[] terminalList;
         object[] listed;
@@ -2384,38 +2470,36 @@ public sealed class TerminalAgent {
             listed = cachedListed;
             listedText = cachedListedText;
         }
+        latestSnapshot = new LinkSnapshot {
+            Prefs = prefs, Info = info, TerminalList = terminalList, Listed = listed, ListedText = listedText, At = nowUtc
+        };
+        foreach (var link in currentLinks) link.WakeReport();
+        return Task.FromResult(0);
+    }
 
-        var tasks = currentLinks.Select(link => ReportLinkAsync(link, prefs, info, terminalList, listed, listedText, nowUtc)).ToArray();
-        bool[] outcomes = await Task.WhenAll(tasks).ConfigureAwait(false);
-        var healthyLinks = new List<RelayLink>();
-        for (int i = 0; i < currentLinks.Length; i++) if (outcomes[i] && currentLinks[i].Active) healthyLinks.Add(currentLinks[i]);
-        if (healthyLinks.Count == 0) return;
+    void StartLinkWorkers(RelayLink link) {
+        Task.Run(() => ReportLinkLoop(link));
+        Task.Run(() => ListenLink(link));
+    }
 
-        lock (work) {
-            lock (gate) {
-                foreach (var t in terminals.Values.Concat(ended)) {
-                    long have = RelayLink.MinimumAck(healthyLinks, t.Id, t.Seq);
-                    if (Settle(t, have, t.Pty.Closed ? KeepEnded : KeepRunning)) soon = true;
-                }
-            }
-            if (completed.Count > 4000) foreach (string key in completed.Keys.Take(1000).ToArray()) { completed.Remove(key); reported.Remove(key); opSource.Remove(key); }
-            // A terminal is forgotten only after its last output has been read from the program and stored by the relay.
-            foreach (var t in terminals.Values.Where(t => t.Pty.Closed && t.ClosedSeen == DateTime.MinValue)) t.ClosedSeen = DateTime.UtcNow;
-            string[] finished; lock (gate) finished = terminals.Where(t => t.Value.Pty.Closed && (t.Value.Pty.Drained || DateTime.UtcNow - t.Value.ClosedSeen > TimeSpan.FromSeconds(15)) && t.Value.Output.Count == 0 && t.Value.Pending.Length == 0).Select(t => t.Key).ToArray();
-            foreach (string key in finished) {
-                var over = terminals[key]; over.Pty.Dispose(); terminals.Remove(key);
-                ended.RemoveAll(e => e.Session.Length > 0 && e.Tool == over.Tool && e.Session == over.Session);
-                lock (gate) Settle(over, over.Seq, KeepEnded);
-                ended.Add(over); if (ended.Count > EndedMost) {
-                    var dropped = ended[0]; ended.RemoveAt(0);
-                    foreach (var link in currentLinks) link.ForgetTerminal(dropped.Id);
-                }
+    /// Runs an isolated heartbeat/report loop per relay link so a slow or broken remote relay never stalls local/LAN links.
+    async Task ReportLinkLoop(RelayLink link) {
+        var linkJson = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
+        while (link.Active) {
+            bool ok = false;
+            try {
+                var snap = latestSnapshot;
+                if (snap != null) ok = await ReportLinkAsync(link, snap, linkJson).ConfigureAwait(false);
+            } catch { }
+            if (!link.Active) break;
+            int pause = !ok ? 1000 : soon ? 25 : DateTime.UtcNow - lastActivity < TimeSpan.FromSeconds(20) ? 250 : 900;
+            bool woken = await link.WaitReportAsync(pause).ConfigureAwait(false);
+            if (woken && DateTime.UtcNow - lastInput > TimeSpan.FromMilliseconds(150)) {
+                try { await Task.Delay(12, link.Token).ConfigureAwait(false); } catch { break; }
             }
         }
     }
-    void StartLinkListener(RelayLink link) {
-        Task.Run(() => ListenLink(link));
-    }
+
     // A request the relay holds open until the phone asks for something. What it brings is carried out at once, so
     // a key press does not wait for the next report; the report then only takes the result back.
     async Task ListenLink(RelayLink link) {
@@ -2429,7 +2513,10 @@ public sealed class TerminalAgent {
                     request.Headers.TryAddWithoutValidation("Origin", link.Origin);
                     request.Content = new StringContent(reader.Serialize(new Dictionary<string, object> { { "instance", instance }, { "wait", 12 } }), Encoding.UTF8, "application/json");
                     using (request) using (var response = await current.SendAsync(request, link.Token).ConfigureAwait(false)) {
-                        if (response.IsSuccessStatusCode) {
+                        if ((int)response.StatusCode == 401) {
+                            link.ResetAuth();
+                            link.WakeReport();
+                        } else if (response.IsSuccessStatusCode) {
                             var result = reader.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
                             waiting = true;
                             var operations = List(result, "operations").OfType<Dictionary<string, object>>().ToArray();
@@ -2446,7 +2533,9 @@ public sealed class TerminalAgent {
                         }
                     }
                 }
-            } catch { }
+            } catch {
+                if (link.Active) link.RecordFailure();
+            }
             if (!link.Active) break;
             if (!waiting || (!brought && DateTime.UtcNow - started < TimeSpan.FromMilliseconds(40))) {
                 try { await Task.Delay(waiting ? 40 : 2000, link.Token).ConfigureAwait(false); } catch { break; }
@@ -2456,7 +2545,7 @@ public sealed class TerminalAgent {
     public async Task Run() {
         Stats.WarmAsync(30);
         running = true;
-        foreach (var link in ActiveLinks()) StartLinkListener(link);
+        foreach (var link in ActiveLinks()) StartLinkWorkers(link);
         for (;;) {
             try { await Tick(); } catch { /* Retry network and login failures without logging credentials or terminal input. */ }
             int pause = soon ? 20 : DateTime.UtcNow - lastActivity < TimeSpan.FromSeconds(20) ? 250 : 700;

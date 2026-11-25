@@ -73,6 +73,11 @@ class RevAndGitRelayTests(unittest.TestCase):
         term = self.relay.overview(now=1005)["terminals"][0]
         self.assertEqual((term["branch"], term["worktree"]), ("feat/fast-ui", "wt-1234"))
 
+    def test_online_grace_window_tolerates_brief_heartbeat_jitter(self):
+        # Agent reported at t=1000; still online at t=1024 (24s jitter), offline at t=1025.
+        self.assertTrue(self.relay.overview(now=1024)["device"]["online"])
+        self.assertFalse(self.relay.overview(now=1025)["device"]["online"])
+
 
 if __name__ == "__main__":
     unittest.main()

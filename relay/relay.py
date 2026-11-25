@@ -702,7 +702,7 @@ class Relay:
         return self._kept
 
     def _view(self, now):
-        return {**self._device, "online": now - self._device["seen"] < 15}
+        return {**self._device, "online": now - self._device["seen"] < 25}
 
     def _adopt(self, state, item, instance):
         """A terminal the computer has and this relay does not know: the computer was using another relay when it was

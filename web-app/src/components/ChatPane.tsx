@@ -292,6 +292,11 @@ export function ChatPane({
         try {
           const reply = await readConversation(selected.tool, selected.id, selected.dir, selected.folder);
           if (cancelled) return;
+          if (reply?.unsupported) {
+            setMessages([]);
+            setNotice('该工具暂不支持在线预览历史记录，可直接发消息续聊或在终端中打开');
+            return;
+          }
           const nextMsgs = parseTranscriptMessages(reply);
           cache.upsert(threadKey, { messages: nextMsgs });
           setMessages(nextMsgs);
@@ -350,6 +355,49 @@ export function ChatPane({
     }
   };
 
+  const CHAT_CAPABLE_TOOLS = new Set(['claude', 'codex', 'agy']);
+  const FORK_CAPABLE_TOOLS = new Set(['claude', 'codex']);
+  const liveSessionCanSay =
+    !session?.live ||
+    (Array.isArray(session.reach) && session.reach.includes('say')) ||
+    Boolean(session.ways?.say);
+  const liveSayWay =
+    session?.ways?.say ||
+    (session?.transport === 'codex-desktop' || session?.transport === 'agy-desktop' ? session.transport : '');
+  const liveStopWay = session?.ways?.stop || session?.transport || 'hook';
+  const liveAnswerWay = session?.ways?.answer || (session?.transport === 'agy-desktop' ? 'agy-desktop' : '');
+  const liveSayBlocked =
+    selected?.kind === 'session' && session?.live && !liveSessionCanSay
+      ? session.why?.say || '电脑上的原对话当前无法直接接收手机消息，可接管到当前界面或新开副本继续'
+      : '';
+
+  const handleTakeoverSession = async (fork: boolean, firstText = '') => {
+    if (!selected || selected.kind !== 'session' || sending) return;
+    setSending(true);
+    setNotice('');
+    try {
+      const useChat = !fork && CHAT_CAPABLE_TOOLS.has(selected.tool);
+      const payload: Record<string, unknown> = {
+        action: 'start',
+        tool: selected.tool,
+        dir: selected.dir,
+        ...(selected.dir === '' && selected.folder ? { folder: selected.folder } : {}),
+        session: selected.id,
+        ...(fork ? { fork: true } : { takeover: true }),
+        ...(useChat ? { form: 'chat' } : {}),
+        ...(firstText ? { text: firstText } : {}),
+      };
+      const started = await sendTerminalAction(payload);
+      if (firstText) updateDraft('');
+      if (started?.terminal) onSelectTerminal(started.terminal);
+      onRefresh();
+    } catch (err: any) {
+      setNotice(err?.message || (fork ? '新开副本失败' : '接管对话失败'));
+    } finally {
+      setSending(false);
+    }
+  };
+
   const handleSend = async (e?: Event) => {
     e?.preventDefault();
     const text = draft.trim();
@@ -368,23 +416,33 @@ export function ChatPane({
         setAttachments([]);
       } else if (selected.kind === 'session') {
         if (session?.live) {
-          await conversationAction({
+          if (!liveSessionCanSay) {
+            setNotice(liveSayBlocked);
+            return;
+          }
+          const payload: Record<string, unknown> = {
             action: 'say',
             tool: selected.tool,
             session: selected.id,
             dir: selected.dir,
             folder: selected.folder,
             text,
-          });
+          };
+          if (liveSayWay === 'codex-desktop' || liveSayWay === 'agy-desktop') {
+            payload.transport = liveSayWay;
+          }
+          await conversationAction(payload);
           updateDraft('');
           setNotice('已发送给电脑上的原对话');
         } else {
+          const useChat = CHAT_CAPABLE_TOOLS.has(selected.tool);
           const started = await sendTerminalAction({
             action: 'start',
             tool: selected.tool,
             dir: selected.dir,
+            ...(selected.dir === '' && selected.folder ? { folder: selected.folder } : {}),
             session: selected.id,
-            form: 'chat',
+            ...(useChat ? { form: 'chat' } : {}),
             text,
           });
           updateDraft('');
@@ -404,13 +462,18 @@ export function ChatPane({
       if (isChatTerminal && terminal) {
         await sendTerminalAction({ action: 'stop', terminal: terminal.id });
       } else if (selected?.kind === 'session' && session?.live) {
-        await conversationAction({
+        const payload: Record<string, unknown> = {
           action: 'stop',
           tool: selected.tool,
           session: selected.id,
           dir: selected.dir,
           folder: selected.folder,
-        });
+          transport: liveStopWay,
+        };
+        if (liveStopWay === 'codex-desktop' && session.turn) {
+          payload.turn = session.turn;
+        }
+        await conversationAction(payload);
       }
       setNotice('已发送停止请求');
     } catch (err: any) {
@@ -423,7 +486,7 @@ export function ChatPane({
       if (isChatTerminal && terminal) {
         await sendTerminalAction({ action: 'answer', terminal: terminal.id, ask: askId, decision });
       } else if (selected?.kind === 'session') {
-        await conversationAction({
+        const payload: Record<string, unknown> = {
           action: 'answer',
           tool: selected.tool,
           session: selected.id,
@@ -432,7 +495,14 @@ export function ChatPane({
           ask: askId,
           allow: decision !== 'deny',
           scope: decision === 'always' ? 'always' : 'once',
-        });
+        };
+        if (liveAnswerWay === 'agy-desktop') {
+          payload.transport = 'agy-desktop';
+          if (decision.startsWith('choice:') || decision === 'deny') {
+            payload.choice = decision;
+          }
+        }
+        await conversationAction(payload);
       }
       setNotice('已提交确认');
       onRefresh();
@@ -773,6 +843,33 @@ export function ChatPane({
 
           <form class="composer" onSubmit={handleSend}>
             <div class="composer-inner">
+              {liveSayBlocked && selected?.kind === 'session' && (
+                <div class="composer-notice" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                  <span>{liveSayBlocked}</span>
+                  <span style={{ display: 'inline-flex', gap: '6px' }}>
+                    {session?.can_takeover !== false && (
+                      <button
+                        type="button"
+                        class="ghost-btn compact"
+                        disabled={sending}
+                        onClick={() => handleTakeoverSession(false, draft.trim())}
+                      >
+                        接管到当前界面
+                      </button>
+                    )}
+                    {FORK_CAPABLE_TOOLS.has(selected.tool) && (
+                      <button
+                        type="button"
+                        class="ghost-btn compact"
+                        disabled={sending}
+                        onClick={() => handleTakeoverSession(true)}
+                      >
+                        新开副本继续
+                      </button>
+                    )}
+                  </span>
+                </div>
+              )}
               {notice && <div class="composer-notice">{notice}</div>}
               {attachments.length > 0 && (
                 <div class="attach-strip">

@@ -35,11 +35,16 @@ final class RouteCoordinator {
     private final Set<String> learning = new HashSet<>();
     private final Set<String> upgrading = new HashSet<>();
     private ConnectivityManager.NetworkCallback networkCallback;
+    private volatile Runnable networkListener;
 
     RouteCoordinator(Context context, ExecutorService net) {
         this.context = context.getApplicationContext();
         this.store = new RouteStore(this.context);
         this.net = net;
+    }
+
+    void setNetworkChangeListener(Runnable listener) {
+        this.networkListener = listener;
     }
 
     void startMonitoring() {
@@ -66,8 +71,30 @@ final class RouteCoordinator {
         networkCallback = null;
     }
 
-    synchronized void onNetworkChanged() {
-        for (RouteSelector selector : selectors.values()) selector.onNetworkChanged();
+    void onNetworkChanged() {
+        synchronized (this) {
+            for (RouteSelector selector : selectors.values()) selector.onNetworkChanged();
+        }
+        Runnable listener = networkListener;
+        if (listener != null) listener.run();
+    }
+
+    /** Re-probes all multi-route computers in the background and runs `onSwitched` when any active route changes. */
+    void reprobeAll(final List<String[]> records, final Runnable onSwitched) {
+        if (records == null || records.isEmpty()) return;
+        net.execute(() -> {
+            boolean changed = false;
+            for (String[] pair : records) {
+                if (pair == null || pair.length < 2) continue;
+                String id = pair[0], savedUrl = pair[1];
+                if (id == null || id.isEmpty() || savedUrl == null || savedUrl.isEmpty()) continue;
+                if (store.routes(id, savedUrl).size() <= 1) continue;
+                String before = activeOrigin(id, savedUrl);
+                String after = resolveBestOrigin(id, savedUrl, true);
+                if (!after.equals(before)) changed = true;
+            }
+            if (changed && onSwitched != null) onSwitched.run();
+        });
     }
 
     private synchronized RouteSelector selectorFor(String recordId) {
@@ -145,9 +172,15 @@ final class RouteCoordinator {
 
         final List<RouteSelector.Route> learned = RouteStore.parseWireRoutes(rawRoutes);
         boolean hasDirect = false;
-        for (RouteSelector.Route r : learned) if (r.localAuth) { hasDirect = true; break; }
+        java.util.List<RouteSelector.Route> safeRoutes = new java.util.ArrayList<>();
+        for (RouteSelector.Route r : learned) {
+            if (r.localAuth) hasDirect = true;
+            else safeRoutes.add(r);
+        }
 
         if (hasDirect && !store.hasLocalPassword(recordId)) {
+            // Always persist non-local-auth routes (e.g. updated tunnel/relay URLs) right away.
+            if (!safeRoutes.isEmpty()) store.saveRoutes(recordId, savedUrl, safeRoutes);
             boolean shouldFetch;
             synchronized (this) { shouldFetch = learning.add(recordId); }
             if (shouldFetch) {

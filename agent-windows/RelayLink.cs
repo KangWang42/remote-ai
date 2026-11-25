@@ -33,9 +33,13 @@ public sealed class RelayLink : IDisposable {
     readonly Dictionary<string, long> ackSeq = new Dictionary<string, long>();
     readonly HashSet<string> reported = new HashSet<string>();
     readonly CancellationTokenSource cancel = new CancellationTokenSource();
+    readonly SemaphoreSlim reportWake = new SemaphoreSlim(0, 1);
 
     HttpClient client;
     DateTime nextLogin = DateTime.MinValue;
+    DateTime lastSuccessUtc = DateTime.MinValue;
+    int loginFailures;
+    int transportFailures;
     volatile bool acceptsGzip;
     string sentSessions = "";
     DateTime sessionsSent = DateTime.MinValue;
@@ -46,6 +50,45 @@ public sealed class RelayLink : IDisposable {
     public CancellationToken Token { get { return cancel.Token; } }
     public bool Active { get { return !disposed && !cancel.IsCancellationRequested; } }
     public HttpClient Client { get { lock (stateGate) return client; } }
+    public DateTime LastSuccessUtc { get { lock (stateGate) return lastSuccessUtc; } }
+
+    public bool RecentlyHealthy(DateTime nowUtc, int windowSeconds = 25) {
+        lock (stateGate) return lastSuccessUtc != DateTime.MinValue && (nowUtc - lastSuccessUtc).TotalSeconds <= windowSeconds;
+    }
+
+    public void WakeReport() {
+        try { if (!disposed && reportWake.CurrentCount == 0) reportWake.Release(); }
+        catch (SemaphoreFullException) { } catch (ObjectDisposedException) { }
+    }
+
+    public async Task<bool> WaitReportAsync(int milliseconds) {
+        if (disposed || cancel.IsCancellationRequested) return false;
+        try { return await reportWake.WaitAsync(milliseconds, cancel.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return false; }
+        catch (ObjectDisposedException) { return false; }
+    }
+
+    public void RecordSuccess(DateTime nowUtc) {
+        lock (stateGate) {
+            lastSuccessUtc = nowUtc;
+            loginFailures = 0;
+            transportFailures = 0;
+        }
+    }
+
+    /// Records a transport timeout or network error; drops the HttpClient pool after 2 consecutive failures
+    /// so half-open TCP sockets after sleep or Wi-Fi roaming recover cleanly.
+    public void RecordFailure() {
+        bool dropPool = false;
+        lock (stateGate) {
+            transportFailures++;
+            if (transportFailures >= 2) {
+                transportFailures = 0;
+                dropPool = true;
+            }
+        }
+        if (dropPool) ResetAuth();
+    }
 
     public RelayLink(RelayEndpoint endpoint) {
         Name = endpoint.Name ?? "primary";
@@ -161,6 +204,8 @@ public sealed class RelayLink : IDisposable {
         HttpClient old;
         lock (stateGate) {
             nextLogin = DateTime.MinValue;
+            loginFailures = 0;
+            transportFailures = 0;
             acceptsGzip = false;
             sentSessions = "";
             sessionsSent = DateTime.MinValue;
@@ -175,7 +220,9 @@ public sealed class RelayLink : IDisposable {
         lock (stateGate) {
             if (client != null) return true;
             if (DateTime.UtcNow < nextLogin) return false;
-            nextLogin = DateTime.UtcNow.AddSeconds(15);
+            int backoff = loginFailures == 0 ? 2 : loginFailures == 1 ? 4 : loginFailures == 2 ? 8 : 15;
+            loginFailures = Math.Min(loginFailures + 1, 4);
+            nextLogin = DateTime.UtcNow.AddSeconds(backoff);
         }
         var next = new HttpClient(new HttpClientHandler {
             AllowAutoRedirect = false,
@@ -187,10 +234,13 @@ public sealed class RelayLink : IDisposable {
             endpoint.UseNagleAlgorithm = false;
             endpoint.Expect100Continue = false;
             var content = new StringContent(json.Serialize(new Dictionary<string, object> { { "password", Password } }), Encoding.UTF8, "application/json");
-            using (var r = await next.PostAsync(Origin + "/api/login", content, Token).ConfigureAwait(false)) {
-                if (!r.IsSuccessStatusCode) {
-                    next.Dispose();
-                    return false;
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(Token)) {
+                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                using (var r = await next.PostAsync(Origin + "/api/login", content, timeout.Token).ConfigureAwait(false)) {
+                    if (!r.IsSuccessStatusCode) {
+                        next.Dispose();
+                        return false;
+                    }
                 }
             }
             HttpClient old = null;
@@ -199,6 +249,9 @@ public sealed class RelayLink : IDisposable {
                 old = client;
                 client = next;
                 acceptsGzip = false;
+                loginFailures = 0;
+                transportFailures = 0;
+                nextLogin = DateTime.MinValue;
             }
             if (old != null) try { old.Dispose(); } catch { }
             return true;
@@ -217,6 +270,7 @@ public sealed class RelayLink : IDisposable {
             client = null;
         }
         try { cancel.Cancel(); } catch { }
+        try { reportWake.Dispose(); } catch { }
         try { cancel.Dispose(); } catch { }
         if (old != null) try { old.Dispose(); } catch { }
     }

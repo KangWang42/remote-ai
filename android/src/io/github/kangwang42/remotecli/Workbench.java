@@ -1281,9 +1281,8 @@ final class Workbench {
                 // one at a time: each computer takes its operations in order, and an ended terminal frees its place first
                 for (int i = 0; i < asks.size(); i++) {
                     AggregateSessions.Thing task = things.get(i);
-                    String origin = activity.activeOrigin(task.url);
                     try {
-                        JSONObject result = post(origin + asks.get(i)[0], CookieManager.getInstance().getCookie(origin), new JSONObject(asks.get(i)[1]), 40000);
+                        JSONObject result = postWithFailover(task.url, asks.get(i)[0], new JSONObject(asks.get(i)[1]), 40000);
                         if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error"));
                         done++;
                     } catch (Exception error) {
@@ -1309,14 +1308,12 @@ final class Workbench {
     }
     private interface Filled { void fill(JSONObject op) throws org.json.JSONException; }
     private void ask(String url, String path, String done, String failed, Filled filled) {
-        final String origin = activity.activeOrigin(url);
-        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 JSONObject op = new JSONObject().put("id", UUID.randomUUID().toString().replace("-", ""));
                 filled.fill(op);
-                JSONObject result = post(origin + path, cookie, op);
+                JSONObject result = postWithFailover(url, path, op, 8000);
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", failed));
             } catch (Exception error) {
                 String said = error.getMessage();
@@ -1327,14 +1324,12 @@ final class Workbench {
         });
     }
     private void markRemote(AggregateSessions.Thing task, boolean pin, boolean on) {
-        final String origin = activity.activeOrigin(task.url);
-        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 JSONObject op = new JSONObject().put("action", "mark").put("id", UUID.randomUUID().toString().replace("-", "")).put("session", task.entry.conversation());
                 if (pin) op.put("pinned", on); else { op.put("hidden", on); if (on) op.put("pinned", false); }
-                post(origin + "/api/conversation", cookie, op);
+                postWithFailover(task.url, "/api/conversation", op, 8000);
             } catch (Exception error) {
                 String said = error.getMessage();
                 problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持置顶和隐藏，请更新后再试" : said == null ? "没有改成，请稍后重试" : said;
@@ -1349,8 +1344,6 @@ final class Workbench {
         });
     }
     private void followUpRemote(AggregateSessions.Thing task, boolean on) {
-        final String origin = activity.activeOrigin(task.url);
-        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             boolean effective = on;
@@ -1361,7 +1354,7 @@ final class Workbench {
                     .put("tool", task.entry.tool)
                     .put("session", task.entry.conversation())
                     .put("follow_up", on);
-                JSONObject result = post(origin + "/api/organize", cookie, op);
+                JSONObject result = postWithFailover(task.url, "/api/organize", op, 8000);
                 JSONObject item = result.optJSONObject("item");
                 if (item != null && item.has("follow_up")) effective = item.optBoolean("follow_up", on);
             } catch (Exception error) {
@@ -1381,13 +1374,11 @@ final class Workbench {
         });
     }
     private void addFolder(AggregateSessions.Thing task) {
-        final String origin = activity.activeOrigin(task.url);
-        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 JSONObject op = new JSONObject().put("action", "project_add").put("id", UUID.randomUUID().toString().replace("-", "")).put("path", task.entry.folder).put("name", "").put("create", false);
-                JSONObject result = post(origin + "/api/terminal", cookie, op);
+                JSONObject result = postWithFailover(task.url, "/api/terminal", op, 8000);
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "没有加上，请稍后重试"));
             } catch (Exception error) { problem = error.getMessage() == null ? "没有加上，请稍后重试" : error.getMessage(); }
             final String message = problem.isEmpty() ? "已加为项目" : problem;
@@ -1422,8 +1413,6 @@ final class Workbench {
             "发送消息", "发送", text -> sayRemote(task, text));
     }
     private void sayRemote(AggregateSessions.Thing task, String text) {
-        final String origin = activity.activeOrigin(task.url);
-        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
@@ -1431,7 +1420,7 @@ final class Workbench {
                 op.put(task.entry.terminal ? "terminal" : "session", task.entry.id);
                 JSONObject result = null;
                 for (int attempt = 0; result == null && attempt < 3; attempt++) {
-                    try { result = post(origin + (task.entry.terminal ? "/api/terminal" : "/api/conversation"), cookie, op, task.entry.terminal ? 8000 : 95000); }
+                    try { result = postWithFailover(task.url, task.entry.terminal ? "/api/terminal" : "/api/conversation", op, task.entry.terminal ? 8000 : 95000); }
                     catch (IOException unreachable) { Thread.sleep(500); }
                 }
                 if (result == null) throw new Exception("连不上这台电脑，消息没有发出");
@@ -1463,20 +1452,18 @@ final class Workbench {
             which -> { if (which == 0 && ending.add(key)) { redraw(); closeRemote(task, key); } });
     }
     private void closeRemote(AggregateSessions.Thing task, String key) {
-        final String origin = activity.activeOrigin(task.url);
-        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 if (!task.entry.terminal) {
                     JSONObject op = new JSONObject().put("action", "end").put("id", UUID.randomUUID().toString().replace("-", "")).put("session", task.entry.id);
-                    post(origin + "/api/conversation", cookie, op, 40000);
+                    postWithFailover(task.url, "/api/conversation", op, 40000);
                 } else {
                 JSONObject op = new JSONObject().put("action", "close").put("id", UUID.randomUUID().toString().replace("-", "")).put("terminal", task.entry.id);
                 JSONObject result = null;
                 long deadline = System.nanoTime() + 30_000_000_000L;
                 for (int attempt = 0; attempt < 60 && System.nanoTime() < deadline; attempt++) {
-                    try { result = post(origin + "/api/terminal", cookie, op); }
+                    try { result = postWithFailover(task.url, "/api/terminal", op, 8000); }
                     catch (IOException unreachable) { Thread.sleep(400); continue; }
                     String state = result.optString("state");
                     if ("done".equals(state)) break;
@@ -1490,6 +1477,19 @@ final class Workbench {
             final String message = problem;
             activity.runOnUiThread(() -> { ending.remove(key); if (!message.isEmpty()) android.widget.Toast.makeText(activity, message, android.widget.Toast.LENGTH_SHORT).show(); redraw(); refresh(); });
         });
+    }
+    /** Posts to the active origin and retries once on an alternate route if the current origin fails with a transport IOException. */
+    private JSONObject postWithFailover(String computerUrl, String path, JSONObject payload, int patience) throws Exception {
+        String origin = activity.activeOrigin(computerUrl);
+        try {
+            return post(origin + path, CookieManager.getInstance().getCookie(origin), payload, patience);
+        } catch (IOException unreachable) {
+            String alternate = activity.failoverOrigin(computerUrl, origin);
+            if (alternate != null && !alternate.isEmpty() && !alternate.equals(origin)) {
+                return post(alternate + path, CookieManager.getInstance().getCookie(alternate), payload, patience);
+            }
+            throw unreachable;
+        }
     }
     JSONObject post(String address, String cookie, JSONObject payload) throws Exception { return post(address, cookie, payload, 8000); }
     private JSONObject post(String address, String cookie, JSONObject payload, int patience) throws Exception {

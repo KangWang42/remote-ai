@@ -10,6 +10,7 @@ struct RouteEntry: Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case kind, url, priority
+        case localAuth = "local_auth"
         case requiresLocalAuth = "requires_local_auth"
     }
 
@@ -25,7 +26,19 @@ struct RouteEntry: Codable, Hashable {
         kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "relay"
         url = RouteNormalizer.clean(try c.decodeIfPresent(String.self, forKey: .url) ?? "")
         priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 50
-        requiresLocalAuth = try c.decodeIfPresent(Bool.self, forKey: .requiresLocalAuth) ?? false
+        let localFlag = try c.decodeIfPresent(Bool.self, forKey: .localAuth)
+        let legacyFlag = try c.decodeIfPresent(Bool.self, forKey: .requiresLocalAuth)
+        requiresLocalAuth = localFlag ?? legacyFlag ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(url, forKey: .url)
+        try c.encode(priority, forKey: .priority)
+        if requiresLocalAuth {
+            try c.encode(true, forKey: .localAuth)
+        }
     }
 
     var isDirect: Bool {
@@ -255,9 +268,12 @@ final class ComputerStore: ObservableObject {
 
     /// Concurrent multi-route selection with 500ms direct head-start and environment_id verification.
     func selectBestOrigin(for record: ComputerRecord) async -> (origin: String, label: String, latencyMs: Int?, isLocal: Bool) {
+        let hasLocalSecret = !(KeychainStore.load(forKey: "local:\(record.id)") ?? "").isEmpty
         var candidates: [RouteEntry] = []
         var seen = Set<String>()
         for r in record.routes where !r.url.isEmpty {
+            // Do not pick a local-auth-only direct route until the local direct password has been synced.
+            if r.requiresLocalAuth && !hasLocalSecret { continue }
             if seen.insert(r.url.lowercased()).inserted {
                 candidates.append(r)
             }
@@ -387,8 +403,13 @@ final class ComputerStore: ObservableObject {
     }
 
     func refresh(_ record: ComputerRecord) async {
-        let picked = await selectBestOrigin(for: record)
-        let token = await ensureAuthenticated(origin: picked.origin, record: record, isLocal: picked.isLocal)
+        var picked = await selectBestOrigin(for: record)
+        var token = await ensureAuthenticated(origin: picked.origin, record: record, isLocal: picked.isLocal)
+        if token == nil && picked.origin.caseInsensitiveCompare(record.url) != .orderedSame {
+            // Direct route auth failed (e.g. rotated local password or stale LAN host): fall back to primary route.
+            picked = (record.url, record.displayHost, nil, false)
+            token = await ensureAuthenticated(origin: picked.origin, record: record, isLocal: false)
+        }
         var state = states[record.id] ?? ComputerLiveState()
         state.activeOrigin = picked.origin
         state.activeRouteLabel = picked.label
@@ -438,11 +459,12 @@ final class ComputerStore: ObservableObject {
                         if let u = item["url"] as? String {
                             let clean = RouteNormalizer.clean(u)
                             if !clean.isEmpty {
+                                let localAuthFlag = (item["local_auth"] as? Bool) ?? (item["requires_local_auth"] as? Bool) ?? false
                                 parsed.append(RouteEntry(
                                     kind: (item["kind"] as? String) ?? "relay",
                                     url: clean,
                                     priority: (item["priority"] as? Int) ?? 50,
-                                    requiresLocalAuth: (item["requires_local_auth"] as? Bool) ?? false
+                                    requiresLocalAuth: localAuthFlag
                                 ))
                             }
                         }
@@ -455,7 +477,7 @@ final class ComputerStore: ObservableObject {
                 if changed { save() }
             }
 
-            // Also fetch local direct password if routes include requires_local_auth and we don't have it yet
+            // Also fetch local direct password if routes include local_auth and we don't have it yet
             if let token, KeychainStore.load(forKey: "local:\(record.id)") == nil {
                 await fetchLocalRouteSecret(origin: picked.origin, token: token, recordId: record.id)
             }

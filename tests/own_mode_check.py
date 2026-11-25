@@ -76,7 +76,7 @@ def main():
             assert looked["field"].startswith("添加") and looked["new_password_button"] == "False" and "尚未添加中转" in looked["about"], looked
             assert looked["config"]["Mode"] == "cloud" and looked["skin"] == "paper", looked
             broken = press(folder, "broken-tunnel", broken_tunnel=True)
-            assert broken["status"].startswith("启动失败") and broken["own_relay"] == "stopped" and broken["code"] == "False", "a failed tunnel launch must release the relay and clear its QR code"
+            assert broken["status"].startswith("启动失败") and broken["own_relay"] == "running" and broken["code"] == "False", "a failed tunnel launch must keep the local relay alive for LAN/console while clearing its QR code"
             # a password the relay refuses: said so, nothing switched or saved, the program's own relay still there
             refused = press(folder, "refused", address, "not-the-password")
             assert (refused["mode"], refused["own_relay"], refused["saved"]) == ("cloud", "running", "0") and "密码" in refused["about"] and "未改变" in refused["about"], refused

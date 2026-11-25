@@ -22,7 +22,7 @@ namespace RemoteCli {
 /// The program on the computer: a small window and a tray icon around the relay, the optional tunnel and the
 /// terminal agent. Everything it starts ends when it exits.
 public sealed partial class App : Form {
-    const string Version = "1.25.0";
+    const string Version = "1.26.0";
     // cloudflared pinned to one release, checked against the sha256 Cloudflare publishes
     // for the artifact (the digest field of the release API, cross-checked 2026-10-12).
     const string TunnelDownload = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-windows-amd64.exe";
@@ -42,6 +42,10 @@ public sealed partial class App : Form {
     readonly System.Windows.Forms.Timer tunnelHealthTimer = new System.Windows.Forms.Timer { Interval = 30 * 1000 };
     bool localRelayUp;
     int localRelayPort;
+    int tunnelRetries;
+    DateTime nextTunnelRetry = DateTime.MinValue;
+    DateTime lastEnvWake = DateTime.MinValue;
+    bool systemEventsHooked;
 
     readonly StatusLine status = new StatusLine(), sideStatus = new StatusLine(), sideAbove = new StatusLine();
     // What the side of the window says: how the phone's access stands and, when a tool is connected, which.
@@ -311,9 +315,57 @@ public sealed partial class App : Form {
         return process;
     }
     // What is said when the tunnel in use ends by itself. `mine` is the generation it belongs to: one that was
-    // stopped on purpose belongs to an earlier one.
+    // stopped on purpose belongs to an earlier one. Schedules automatic exponential-backoff recovery while
+    // keeping the local relay (LAN / Tailscale / desktop console) running.
     EventHandler Lost(int mine) {
-        return (s, e) => { if (mine == generation && !quitting) { ShowAddress(""); Say("公网隧道断开了，点“重新连接”。经常断开时到“设置”把隧道协议改为 HTTP/2", true); } };
+        return (s, e) => {
+            if (mine != generation || quitting || Mode != "cloud" || Changing) return;
+            int waitSec = Math.Min(30, 3 * (1 << Math.Min(tunnelRetries, 3)));
+            tunnelRetries++;
+            nextTunnelRetry = DateTime.UtcNow.AddSeconds(waitSec);
+            ShowAddress("");
+            Say("公网隧道断开，" + waitSec + " 秒后自动重连（本机与局域网直连仍可用）", true);
+            Task.Delay(waitSec * 1000).ContinueWith(_ => {
+                if (mine == generation && !quitting && Mode == "cloud" && !Changing) Reconnect();
+            });
+        };
+    }
+
+    void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e) {
+        if (e.Mode == PowerModes.Resume) HandleEnvironmentWake();
+    }
+
+    void OnNetworkAddressChanged(object sender, EventArgs e) {
+        HandleEnvironmentWake();
+    }
+
+    void HandleEnvironmentWake() {
+        if (quitting || Changing) return;
+        DateTime now = DateTime.UtcNow;
+        if ((now - lastEnvWake).TotalSeconds < 2.5) return;
+        lastEnvWake = now;
+        Task.Run(() => {
+            try {
+                routeCatalog.RefreshAsync(true);
+                if (agent != null) agent.RefreshConnections();
+                if (quitting || Changing) return;
+                string mode = Mode;
+                if (mode == "lan" && localRelayUp) {
+                    string ip = LanAddress();
+                    if (ip.Length > 0) {
+                        string nextAddr = "http://" + ip + ":" + (localRelayPort > 0 ? localRelayPort : Port);
+                        if (!String.Equals(address, nextAddr, StringComparison.OrdinalIgnoreCase)) ShowAddress(nextAddr);
+                    }
+                } else if (mode == "cloud") {
+                    tunnelRetries = 0;
+                    nextTunnelRetry = DateTime.MinValue;
+                    bool needTunnel = tunnel == null || tunnel.HasExited || (address.Length > 0 && Gone(address));
+                    if (needTunnel && File.Exists(TunnelFile)) Reconnect();
+                } else if ((mode == "own" || mode == "public") && (relay == null || relay.HasExited)) {
+                    Reconnect();
+                }
+            } catch { }
+        });
     }
 
     // Starts what the chosen way of connecting needs. Runs off the window's thread.
@@ -358,22 +410,35 @@ public sealed partial class App : Form {
                 Say(wrong.Length > 0 ? wrong : mode == "public" ? "已连上公共中转“" + name + "”，地址固定不变" + directHint + "。手机 App 扫码连接" : "已连上中转“" + name + "”，地址固定不变" + directHint + "。手机 App 扫码或输入地址连接", wrong.Length > 0);
                 return;
             }
-            StopChildren();
-            if (!File.Exists(Python)) { Say("安装不完整：缺少 " + Python, true); return; }
-            if (Listening(port)) { Say("端口 " + port + " 已被别的程序占用，请到“设置”里换一个端口", true); return; }
-            string ip = mode == "lan" ? LanAddress() : "";
-            if (mode == "lan" && ip.Length == 0) { Say("未找到局域网地址，请先连接 Wi-Fi 或网线", true); return; }
-            WriteLocalPassword(password);
-            // Listen on LAN too so phones on the same Wi-Fi/Tailscale can upgrade from tunnel to direct automatically.
-            relay = StartRelay(true, port, localPassword);
-            Remember();
-            bool up = await Up(relay, port);
-            if (mine != generation) return;
-            if (!up) { StopChildren(); Say("本机服务没有启动成功", true); return; }
-            localRelayUp = true; localRelayPort = port;
-            Keep("Server", "http://127.0.0.1:" + port);
-            SyncAgentLinks();
-            if (mode == "lan") {
+            if (mode == "cloud") {
+                StopTunnelOnly();
+                if (!File.Exists(Python)) { Say("安装不完整：缺少 " + Python, true); return; }
+                WriteLocalPassword(password);
+                bool relayReady = await EnsureLocalRelay(port, true);
+                if (mine != generation) return;
+                if (!relayReady) {
+                    if (Listening(port)) { Say("端口 " + port + " 已被别的程序占用，请到“设置”里换一个端口", true); return; }
+                    Say("本机服务没有启动成功", true);
+                    return;
+                }
+                Keep("Server", "http://127.0.0.1:" + port);
+                SyncAgentLinks();
+            } else {
+                StopChildren();
+                if (!File.Exists(Python)) { Say("安装不完整：缺少 " + Python, true); return; }
+                if (Listening(port)) { Say("端口 " + port + " 已被别的程序占用，请到“设置”里换一个端口", true); return; }
+                string ip = LanAddress();
+                if (ip.Length == 0) { Say("未找到局域网地址，请先连接 Wi-Fi 或网线", true); return; }
+                WriteLocalPassword(password);
+                // Listen on LAN too so phones on the same Wi-Fi/Tailscale can upgrade from tunnel to direct automatically.
+                relay = StartRelay(true, port, localPassword);
+                Remember();
+                bool up = await Up(relay, port);
+                if (mine != generation) return;
+                if (!up) { StopChildren(); Say("本机服务没有启动成功", true); return; }
+                localRelayUp = true; localRelayPort = port;
+                Keep("Server", "http://127.0.0.1:" + port);
+                SyncAgentLinks();
                 ShowAddress("http://" + ip + ":" + port);
                 Say("局域网直连已就绪，用 App 扫码。连接失败可点“连接诊断”");
                 return;
@@ -383,6 +448,7 @@ public sealed partial class App : Form {
             if (held != null && !held.HasExited && !Gone(keptUrl)) {
                 if (mine != generation) return;
                 tunnel = held; tunnel.Exited += lost; tunnel.EnableRaisingEvents = true;
+                tunnelRetries = 0; nextTunnelRetry = DateTime.MinValue;
                 Remember();
                 ShowAddress(keptUrl);
                 Say("公网隧道已就绪，地址和上次相同，手机不用重新扫码");
@@ -397,16 +463,21 @@ public sealed partial class App : Form {
             if (mine != generation) return;
             if (url.Length == 0) {
                 tunnel.Exited -= lost;
-                StopChildren();
-                Say("公网隧道没有建立成功，请检查网络后重试", true);
+                StopTunnelOnly();
+                int waitSec = Math.Min(30, 5 * (1 << Math.Min(tunnelRetries, 2)));
+                tunnelRetries++;
+                nextTunnelRetry = DateTime.UtcNow.AddSeconds(waitSec);
+                Say("公网隧道暂时不可用，" + waitSec + " 秒后自动重试（本机与局域网直连仍可用）", true);
                 return;
             }
+            tunnelRetries = 0; nextTunnelRetry = DateTime.MinValue;
             Keep(url, port);
             ShowAddress(url);
             Say("公网隧道已就绪（局域网直连同时可用）。手机在任何网络下用 App 扫码；更新程序后地址不变");
         } catch (Exception error) {
             if (mine != generation) return;
-            if (mode == "lan" || mode == "cloud") StopChildren();
+            if (mode == "lan") StopChildren();
+            else if (mode == "cloud") StopTunnelOnly();
             Say("启动失败：" + error.Message, true);
         }
         finally { if (held != null && held != tunnel) Kill(held); }
@@ -1206,7 +1277,14 @@ public sealed partial class App : Form {
             };
             updateTimer.Start(); quietTimer.Start();
             tunnelHealthTimer.Tick += (t, a) => {
-                if (Mode != "cloud" || tunnel == null || tunnel.HasExited || Changing || quitting || tunnelSupervisor == null) return;
+                if (Mode != "cloud" || Changing || quitting || tunnelSupervisor == null) return;
+                if (tunnel == null || tunnel.HasExited) {
+                    if (File.Exists(TunnelFile) && DateTime.UtcNow >= nextTunnelRetry) {
+                        Say("检测到公网隧道未连接，正在自动重连…");
+                        Reconnect();
+                    }
+                    return;
+                }
                 int mine = generation;
                 string currentUrl = address;
                 Task.Run(() => {
@@ -1219,6 +1297,11 @@ public sealed partial class App : Form {
                 });
             };
             tunnelHealthTimer.Start();
+            if (!systemEventsHooked) {
+                systemEventsHooked = true;
+                try { SystemEvents.PowerModeChanged += OnPowerModeChanged; } catch { }
+                try { NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged; } catch { }
+            }
             routeCatalog.RefreshAsync(true);
             Task.Run(async () => {
                 await Connect();
@@ -1302,7 +1385,17 @@ public sealed partial class App : Form {
         } catch (Exception error) { updateButton.Enabled = true; updateButton.Text = "更新失败"; Say("更新失败：" + error.Message, true); }
     }
     void Reveal() { Show(); WindowState = FormWindowState.Normal; Activate(); }
-    void Shutdown() { generation++; tray.Visible = false; if (desktopConsole != null && !desktopConsole.IsDisposed) { desktopConsole.ForceClose(); desktopConsole = null; } StopChildren(); Abandon(); }
+    void Shutdown() {
+        generation++;
+        if (systemEventsHooked) {
+            systemEventsHooked = false;
+            try { SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
+            try { NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged; } catch { }
+        }
+        tray.Visible = false;
+        if (desktopConsole != null && !desktopConsole.IsDisposed) { desktopConsole.ForceClose(); desktopConsole = null; }
+        StopChildren(); Abandon();
+    }
     void Quit() {
         if (!Confirm("退出 Remote AI？", "退出后手机不能再连接，正在运行的终端会结束。", "退出", true)) return;
         quitting = true; Shutdown();
