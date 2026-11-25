@@ -48,7 +48,8 @@ $common = @('/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/codepa
 # RemoteCli.exe: the window, with the terminal agent and WebView2 desktop console inside.
 $agentSources = 'RemoteCliAgent','RelayLink','RouteDiscovery','GitReview','Antigravity','AntigravityDesktop','Chats','ClaudePermissions','DesktopAdapters','Ways','Outbox','Running','Stats','Schedules','Chains','CodexDesktopControl','CodexSessions','SessionLocks','Transcripts','Reach','Marks','ClaudeRelay','Folders','FileTransfers','Removal','CodexQueue','Tools','AcpChat','Quotas','CodexApiBalance','Teams','Models','Peers','Worktrees','Organizer','OrganizeHistory','OrganizeSource','CodexOrganizer','ClaudeOrganizer','AgyOrganizer','ApiOrganizer','Attachments' | ForEach-Object { Join-Path $PSScriptRoot ($_ + '.cs') }
 $windowSources = 'RemoteCliApp','DesktopConsole','TunnelSupervisor','ToolInstaller','LanNetwork','Controls','Notice','QrCode','AutoUpdater','Relays','Remote' | ForEach-Object { Join-Path $PSScriptRoot ($_ + '.cs') }
-& $compiler @common "/resource:$icon,remote-ai.ico" "/out:$(Join-Path $OutDir 'RemoteCli.exe')" /main:RemoteCli.App /reference:System.Windows.Forms.dll /reference:System.Drawing.dll "/reference:$wvCore" "/reference:$wvWinForms" @agentSources @windowSources
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'RemoteCli.exe.config') -Destination $OutDir -Force
+& $compiler @common "/win32manifest:$PSScriptRoot/RemoteCli.manifest" "/resource:$icon,remote-ai.ico" "/out:$(Join-Path $OutDir 'RemoteCli.exe')" /main:RemoteCli.App /reference:System.Windows.Forms.dll /reference:System.Drawing.dll "/reference:$wvCore" "/reference:$wvWinForms" @agentSources @windowSources
 if ($LASTEXITCODE -ne 0) { throw 'RemoteCli.exe: compilation failed' }
 # RemoteCliAgent.exe: the agent alone, without a window, for a computer that uses a relay elsewhere.
 & $compiler @common "/out:$(Join-Path $OutDir 'RemoteCliAgent.exe')" @agentSources

@@ -22,7 +22,7 @@ namespace RemoteCli {
 /// The program on the computer: a small window and a tray icon around the relay, the optional tunnel and the
 /// terminal agent. Everything it starts ends when it exits.
 public sealed partial class App : Form {
-    const string Version = "1.28.0";
+    const string Version = "1.29.0";
     // cloudflared pinned to one release, checked against the sha256 Cloudflare publishes
     // for the artifact (the digest field of the release API, cross-checked 2026-10-12).
     const string TunnelDownload = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-windows-amd64.exe";
@@ -984,7 +984,9 @@ public sealed partial class App : Form {
         kept = Kept();
         KillLeftovers();
         Text = "Remote AI"; Font = Theme.Text();
-        AutoScaleMode = AutoScaleMode.None;      // positions below are for 100%; the whole window is scaled once at the end
+        SuspendLayout();
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(SideWidth + PageWidth, WindowHeight); FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false; StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Bg; ForeColor = Theme.Ink;
         Theme.ApplyIcon(this);
@@ -1225,10 +1227,11 @@ public sealed partial class App : Form {
         // now, and the skin chosen in the settings is put on.
         parts = Theme.Parts(this);
         if (Convert.ToString(config["Skin"]) != Theme.Default) Wear(Convert.ToString(config["Skin"]));
-        using (var g = CreateGraphics()) {
-            float factor = g.DpiX / 96f;
-            if (factor > 1.01f) { Scale(new SizeF(factor, factor)); folders.ItemHeight = (int)(54 * factor); activity.ItemHeight = (int)(54 * factor); }
-        }
+        ResumeLayout(true);
+        Action sizeRows = () => { folders.ItemHeight = activity.ItemHeight = LogicalToDeviceUnits(54); };
+        HandleCreated += (s, e) => sizeRows();
+        DpiChanged += (s, e) => sizeRows();
+        sizeRows();
         Shown += (s, e) => {
             agent = new TerminalAgent(dataDir) { Version = Version };
             agent.RoutesProvider = CurrentRoutes;
@@ -1406,7 +1409,10 @@ public sealed partial class App : Form {
     // under its label when it has one. Returns what was filled in, or null when the question was not agreed to.
     string[] Dialog(string title, string text, string yes, bool danger, string[] labels, string[] values) {
         using (var dialog = new Form { Text = "Remote AI", FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent,
-                                       MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Theme.Text(), BackColor = Theme.Bg, ForeColor = Theme.Ink, AutoScaleMode = AutoScaleMode.None }) {
+                                       MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Theme.Text(), BackColor = Theme.Bg, ForeColor = Theme.Ink }) {
+            dialog.SuspendLayout();
+            dialog.AutoScaleDimensions = new SizeF(96, 96);
+            dialog.AutoScaleMode = AutoScaleMode.Dpi;
             Theme.ApplyIcon(dialog);
             dialog.HandleCreated += (s, e) => Theme.Title(dialog.Handle);
             Place(dialog, Theme.Label(title, Theme.Ink, Theme.Bg, 11.5f, true), 24, 22, 372, 26);
@@ -1426,7 +1432,7 @@ public sealed partial class App : Form {
             int wide = yes.Length > 4 ? 128 : 96;
             Place(dialog, cancel, 396 - wide - 8 - 96, y, 96, 34); Place(dialog, ok, 396 - wide, y, wide, 34);
             dialog.AcceptButton = ok; dialog.CancelButton = cancel;
-            using (var g = dialog.CreateGraphics()) { float factor = g.DpiX / 96f; if (factor > 1.01f) dialog.Scale(new SizeF(factor, factor)); }
+            dialog.ResumeLayout(true);
             if (boxes.Count > 0) dialog.Shown += (s, e) => { boxes[0].Box.Focus(); boxes[0].Box.SelectAll(); };
             return dialog.ShowDialog(Visible ? this : null) == DialogResult.OK ? boxes.Select(b => b.Box.Text).ToArray() : null;
         }
@@ -1434,7 +1440,6 @@ public sealed partial class App : Form {
     bool Confirm(string title, string text, string yes, bool danger) { return Dialog(title, text, yes, danger, null, null) != null; }
     string Ask(string title, string text, string value) { var filled = Dialog(title, text, "确定", false, new[] { "" }, new[] { value }); return filled == null ? "" : filled[0]; }
 
-    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [STAThread] public static int Main(string[] args) {
         // --qr <text> <file.png>: writes the picture the window would show; used by the tests.
         if (args.Length == 3 && args[0] == "--qr") { using (var picture = Picture(args[1], 8)) { if (picture == null) return 2; picture.Save(args[2], ImageFormat.Png); } return 0; }
@@ -1444,7 +1449,6 @@ public sealed partial class App : Form {
         using (var single = new Mutex(true, "Local\\RemoteCliApp" + (String.IsNullOrWhiteSpace(elsewhere) ? "" : "-" + Math.Abs(elsewhere.ToLowerInvariant().GetHashCode())), out created)) {
             if (!created) { MessageBox.Show("Remote AI 已经在运行，请看屏幕右下角的托盘图标。", "Remote AI"); return 0; }
             ServicePointManager.DefaultConnectionLimit = 8;      // the held request and the reports run side by side
-            SetProcessDPIAware();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (args.Length >= 2 && args[0] == "--screenshot") ComputerName = "my-computer";       // a published picture must not carry this computer's name
