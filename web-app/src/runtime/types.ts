@@ -223,9 +223,17 @@ export interface ToolModelOption {
 
 export interface FileEntry {
   name: string;
-  kind: 'dir' | 'file';
+  dir: boolean;
+  kind?: 'dir' | 'file';
   size?: number;
   modified?: number;
+  hidden?: boolean;
+}
+
+export interface FilePreviewTarget {
+  dir: string;
+  path: string;
+  name: string;
 }
 
 export type SelectedItem =
@@ -236,24 +244,34 @@ export interface ToolMeta {
   id: string;
   label: string;
   short: string;
+  mono: string;
   color: string;
+  lightBg: string;
+  lightFg: string;
+  darkBg: string;
+  darkFg: string;
   supportsChat: boolean;
 }
 
+/** Matches Android Kit.java & web/app.css pastel squircle identity families. */
 export const TOOL_CATALOG: Record<string, ToolMeta> = {
-  claude: { id: 'claude', label: 'Claude Code', short: 'Claude', color: '#d97706', supportsChat: true },
-  codex: { id: 'codex', label: 'Codex', short: 'Codex', color: '#10b981', supportsChat: true },
-  agy: { id: 'agy', label: 'Antigravity CLI', short: 'Agy', color: '#6366f1', supportsChat: true },
-  gemini: { id: 'gemini', label: 'Gemini CLI', short: 'Gemini', color: '#3b82f6', supportsChat: false },
-  opencode: { id: 'opencode', label: 'OpenCode', short: 'OpenCode', color: '#14b8a6', supportsChat: false },
-  cursor: { id: 'cursor', label: 'Cursor Agent', short: 'Cursor', color: '#8b5cf6', supportsChat: false },
-  qoder: { id: 'qoder', label: 'Qoder', short: 'Qoder', color: '#ec4899', supportsChat: false },
-  cline: { id: 'cline', label: 'Cline', short: 'Cline', color: '#f59e0b', supportsChat: false },
-  pi: { id: 'pi', label: 'Pi', short: 'Pi', color: '#ef4444', supportsChat: false },
-  kiro: { id: 'kiro', label: 'Kiro CLI', short: 'Kiro', color: '#a855f7', supportsChat: false },
-  copilot: { id: 'copilot', label: 'Copilot CLI', short: 'Copilot', color: '#06b6d4', supportsChat: false },
-  shell: { id: 'shell', label: 'PowerShell 终端', short: 'Shell', color: '#64748b', supportsChat: false },
+  claude: { id: 'claude', label: 'Claude Code', short: 'Claude', mono: 'CC', color: '#a9441d', lightBg: '#fbe9e1', lightFg: '#a9441d', darkBg: '#3a2318', darkFg: '#f7b593', supportsChat: true },
+  codex: { id: 'codex', label: 'Codex', short: 'Codex', mono: 'CX', color: '#1d4fbf', lightBg: '#e6eefd', lightFg: '#1d4fbf', darkBg: '#17284a', darkFg: '#9dbbf7', supportsChat: true },
+  agy: { id: 'agy', label: 'Antigravity CLI', short: 'Agy', mono: 'AG', color: '#5536c9', lightBg: '#ece8fd', lightFg: '#5536c9', darkBg: '#261d4a', darkFg: '#bca9f8', supportsChat: true },
+  gemini: { id: 'gemini', label: 'Gemini CLI', short: 'Gemini', mono: 'GM', color: '#2445c8', lightBg: '#e8efff', lightFg: '#2445c8', darkBg: '#1a2748', darkFg: '#9ab8ff', supportsChat: false },
+  opencode: { id: 'opencode', label: 'OpenCode', short: 'OpenCode', mono: 'OC', color: '#15803d', lightBg: '#e6f6ec', lightFg: '#15803d', darkBg: '#153224', darkFg: '#86efac', supportsChat: false },
+  cursor: { id: 'cursor', label: 'Cursor Agent', short: 'Cursor', mono: 'CS', color: '#6d28d9', lightBg: '#f1eaff', lightFg: '#6d28d9', darkBg: '#2b1f48', darkFg: '#d4b8ff', supportsChat: false },
+  qoder: { id: 'qoder', label: 'Qoder', short: 'Qoder', mono: 'QD', color: '#2445c8', lightBg: '#eef1ff', lightFg: '#2445c8', darkBg: '#1b2548', darkFg: '#9dbbf7', supportsChat: false },
+  cline: { id: 'cline', label: 'Cline', short: 'Cline', mono: 'CL', color: '#7c3aed', lightBg: '#f3e8ff', lightFg: '#7c3aed', darkBg: '#2d1b4e', darkFg: '#d8b4fe', supportsChat: false },
+  pi: { id: 'pi', label: 'Pi', short: 'Pi', mono: 'PI', color: '#9a5b00', lightBg: '#fef3c7', lightFg: '#9a5b00', darkBg: '#3b2a10', darkFg: '#fcd34d', supportsChat: false },
+  kiro: { id: 'kiro', label: 'Kiro CLI', short: 'Kiro', mono: 'KR', color: '#9333ea', lightBg: '#f5e8ff', lightFg: '#9333ea', darkBg: '#321c47', darkFg: '#e0b3ff', supportsChat: false },
+  copilot: { id: 'copilot', label: 'Copilot CLI', short: 'Copilot', mono: 'CP', color: '#0b7a96', lightBg: '#e5f5f9', lightFg: '#0b7a96', darkBg: '#15303a', darkFg: '#8cd8eb', supportsChat: false },
+  shell: { id: 'shell', label: 'PowerShell 终端', short: 'Shell', mono: 'SH', color: '#5b6270', lightBg: '#eef0f5', lightFg: '#3f4756', darkBg: '#2a2f3d', darkFg: '#c5ccd9', supportsChat: false },
 };
+
+export function toolMeta(tool: string): ToolMeta {
+  return TOOL_CATALOG[tool] || TOOL_CATALOG.shell;
+}
 
 export function toolLabel(tool: string): string {
   return TOOL_CATALOG[tool]?.label || tool;
@@ -264,5 +282,15 @@ export function toolShort(tool: string): string {
 }
 
 export function toolColor(tool: string): string {
-  return TOOL_CATALOG[tool]?.color || '#64748b';
+  return TOOL_CATALOG[tool]?.color || '#5b6270';
+}
+
+export function toolBadgeStyle(tool: string): Record<string, string> {
+  const m = toolMeta(tool);
+  return {
+    '--tb-lbg': m.lightBg,
+    '--tb-lfg': m.lightFg,
+    '--tb-dbg': m.darkBg,
+    '--tb-dfg': m.darkFg,
+  };
 }

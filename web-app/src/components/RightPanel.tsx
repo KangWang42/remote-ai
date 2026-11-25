@@ -1,30 +1,51 @@
 import { useEffect, useState } from 'preact/hooks';
-import { API_BASE, fetchRoutesInfo, listFiles, postDesktopMessage } from '../runtime/api';
-import { toolColor, toolLabel, type DeviceInfo, type FileEntry, type RouteEntry } from '../runtime/types';
+import { API_BASE, fetchRoutesInfo, postDesktopMessage } from '../runtime/api';
+import {
+  toolBadgeStyle,
+  toolLabel,
+  toolMeta,
+  type DeviceInfo,
+  type FilePreviewTarget,
+  type RouteEntry,
+} from '../runtime/types';
 import { DiffPanel } from './DiffPanel';
+import { FileExplorer } from './FileExplorer';
 
-export type RightTab = 'diff' | 'files' | 'teams' | 'connect';
+export type RightTab = 'files' | 'diff' | 'teams' | 'connect';
 
 interface Props {
   tab: RightTab;
   onTabChange: (tab: RightTab) => void;
   project: string;
+  workspaces: string[];
   worktree?: string;
   device: DeviceInfo | null;
   skin: string;
   onSkinChange: (skin: string) => void;
+  onExpandPreview: (target: FilePreviewTarget) => void;
+  onCiteFile: (relPath: string, projectDir: string) => void;
   onClose?: () => void;
 }
 
-const SKINS: Array<{ id: string; label: string; sub: string; bg: string; accent: string }> = [
-  { id: 'auto', label: '跟随系统', sub: '浅纸白 · 深夜航', bg: 'linear-gradient(135deg,#f2f3f7 50%,#1a1b26 50%)', accent: '#7aa2f7' },
-  { id: 'paper', label: '纸白', sub: '清透浅色', bg: '#f2f3f7', accent: '#2f54eb' },
-  { id: 'dawn', label: '晨光', sub: '暖纸浅色', bg: '#f3ede3', accent: '#286983' },
-  { id: 'night', label: '夜航', sub: 'Tokyo Night', bg: '#1a1b26', accent: '#7aa2f7' },
-  { id: 'slate', label: '墨岩', sub: '冷静灰黑', bg: '#17191e', accent: '#61afef' },
-  { id: 'pine', label: '松林', sub: '护眼森绿', bg: '#1e2427', accent: '#a7c080' },
-  { id: 'dusk', label: '暮紫', sub: '微光柔紫', bg: '#1e1e2e', accent: '#cba6f7' },
-  { id: 'pond', label: '锦鲤池塘', sub: '动态游鱼', bg: '#10191b', accent: '#edbb83' },
+interface SkinCardSpec {
+  id: string;
+  label: string;
+  sub: string;
+  side: string;
+  main: string;
+  bar: string;
+  pill: string;
+}
+
+const SKINS: SkinCardSpec[] = [
+  { id: 'dawn', label: '晨光', sub: '暖黄纸感', side: '#f3ede3', main: '#fcf8f2', bar: '#d9ccba', pill: '#322d47' },
+  { id: 'paper', label: '纸白', sub: '清爽浅色', side: '#f2f3f7', main: '#ffffff', bar: '#dfe3eb', pill: '#1e212b' },
+  { id: 'pond', label: '锦鲤池塘', sub: '动态游鱼', side: '#10191b', main: '#192628', bar: '#2e4244', pill: '#edbb83' },
+  { id: 'auto', label: '跟随系统', sub: '浅白 · 深夜', side: '#f2f3f7', main: '#1a1b26', bar: '#64748b', pill: '#7aa2f7' },
+  { id: 'night', label: '夜航', sub: 'Tokyo Night', side: '#1a1b26', main: '#222436', bar: '#323756', pill: '#7aa2f7' },
+  { id: 'slate', label: '墨岩', sub: '冷静灰黑', side: '#17191e', main: '#1f232a', bar: '#333a47', pill: '#61afef' },
+  { id: 'pine', label: '松林', sub: '护眼森绿', side: '#1e2427', main: '#262e32', bar: '#3b474d', pill: '#a7c080' },
+  { id: 'dusk', label: '暮紫', sub: '微光柔紫', side: '#1e1e2e', main: '#262638', bar: '#3a3b54', pill: '#cba6f7' },
 ];
 
 const ROUTE_KIND_NAMES: Record<string, string> = {
@@ -35,34 +56,20 @@ const ROUTE_KIND_NAMES: Record<string, string> = {
   public: '公共中转',
 };
 
-export function RightPanel({ tab, onTabChange, project, worktree, device, skin, onSkinChange, onClose }: Props) {
-  const [filesPath, setFilesPath] = useState('');
-  const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [filesLoading, setFilesLoading] = useState(false);
+export function RightPanel({
+  tab,
+  onTabChange,
+  project,
+  workspaces,
+  worktree,
+  device,
+  skin,
+  onSkinChange,
+  onExpandPreview,
+  onCiteFile,
+  onClose,
+}: Props) {
   const [routesDetail, setRoutesDetail] = useState<{ environment_id?: string; routes?: RouteEntry[] } | null>(null);
-
-  useEffect(() => {
-    setFilesPath('');
-  }, [project]);
-
-  useEffect(() => {
-    if (tab !== 'files' || !project) return;
-    let alive = true;
-    setFilesLoading(true);
-    listFiles(project, filesPath)
-      .then((res) => {
-        if (alive) setEntries(res.entries || []);
-      })
-      .catch(() => {
-        if (alive) setEntries([]);
-      })
-      .finally(() => {
-        if (alive) setFilesLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [tab, project, filesPath]);
 
   useEffect(() => {
     if (tab !== 'connect') return;
@@ -76,93 +83,46 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
 
   return (
     <aside class="right-panel">
-      <div class="right-tabs">
-        {([
-          ['diff', 'Diff'],
-          ['files', '文件'],
-          ['teams', '协作'],
-          ['connect', '外观/连接'],
-        ] as Array<[RightTab, string]>).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            class={`right-tab${tab === id ? ' active' : ''}`}
-            onClick={() => onTabChange(id)}
-          >
-            {label}
-          </button>
-        ))}
+      <div class="right-tabs-wrap">
+        <div class="right-tabs" role="tablist">
+          {([
+            ['files', '文件'],
+            ['diff', 'Diff'],
+            ['teams', '协作'],
+            ['connect', '外观/连接'],
+          ] as Array<[RightTab, string]>).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              class={`right-tab${tab === id ? ' active' : ''}`}
+              onClick={() => onTabChange(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {onClose && (
-          <button type="button" class="icon-btn" onClick={onClose} title="收起右侧栏">
-            ✕
+          <button type="button" class="circle-btn" onClick={onClose} title="收起右侧栏" aria-label="收起右侧栏">
+            <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+              <path d="M5.5 5.5 14.5 14.5M14.5 5.5 5.5 14.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
           </button>
         )}
       </div>
 
       <div class="right-body">
-        {tab === 'diff' && <DiffPanel project={project} initialWorktree={worktree} />}
-
         {tab === 'files' && (
-          <div class="files-panel">
-            {!project ? (
-              <div class="empty-hint">选择一个项目以浏览文件</div>
-            ) : (
-              <>
-                <div class="files-crumb">
-                  <button type="button" class="ghost-btn compact" disabled={!filesPath} onClick={() => setFilesPath('')}>
-                    {project}
-                  </button>
-                  {filesPath && (
-                    <>
-                      <span>/</span>
-                      <span class="muted-code">{filesPath}</span>
-                      <button
-                        type="button"
-                        class="ghost-btn compact"
-                        onClick={() => {
-                          const parts = filesPath.split('/').filter(Boolean);
-                          parts.pop();
-                          setFilesPath(parts.join('/'));
-                        }}
-                      >
-                        上级
-                      </button>
-                    </>
-                  )}
-                  <a class="ghost-btn compact" href={`${API_BASE}/files/?dir=${encodeURIComponent(project)}`} target="_blank" rel="noreferrer">
-                    完整浏览
-                  </a>
-                </div>
-                {filesLoading ? (
-                  <div class="empty-hint">加载目录中…</div>
-                ) : entries.length === 0 ? (
-                  <div class="empty-hint">空目录</div>
-                ) : (
-                  <div class="file-rows">
-                    {entries.map((entry) => (
-                      <button
-                        key={entry.name}
-                        type="button"
-                        class="file-row"
-                        onClick={() => {
-                          const next = filesPath ? `${filesPath}/${entry.name}` : entry.name;
-                          if (entry.kind === 'dir') setFilesPath(next);
-                          else window.open(`${API_BASE}/files/?dir=${encodeURIComponent(project)}&path=${encodeURIComponent(next)}`, '_blank');
-                        }}
-                      >
-                        <span class="file-kind">{entry.kind === 'dir' ? '目录' : '文件'}</span>
-                        <span class="file-name">{entry.name}</span>
-                        {entry.size !== undefined && entry.kind === 'file' && (
-                          <span class="muted-code">{entry.size > 1024 ? `${Math.round(entry.size / 1024)} KB` : `${entry.size} B`}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          <FileExplorer
+            workspaces={workspaces}
+            activeProject={project}
+            onExpandPreview={onExpandPreview}
+            onCiteFile={onCiteFile}
+          />
         )}
+
+        {tab === 'diff' && <DiffPanel project={project} initialWorktree={worktree} />}
 
         {tab === 'teams' && (
           <div class="teams-panel">
@@ -195,7 +155,7 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
         {tab === 'connect' && (
           <div class="connect-panel">
             <section class="info-card">
-              <div class="info-title">外观主题（与手机端统一配色）</div>
+              <div class="info-title">外观主题（与手机 App 同套配色）</div>
               <div class="skin-grid">
                 {SKINS.map((s) => (
                   <button
@@ -204,10 +164,17 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
                     class={`skin-card${skin === s.id ? ' active' : ''}`}
                     onClick={() => onSkinChange(s.id)}
                   >
-                    <span
-                      class="skin-swatch"
-                      style={{ background: s.bg, '--sw-accent': s.accent } as any}
-                    />
+                    <div class="skin-preview" aria-hidden="true">
+                      <div class="skin-prev-side" style={{ background: s.side }}>
+                        <span class="skin-prev-bar" style={{ background: s.bar, width: '72%' }} />
+                        <span class="skin-prev-bar" style={{ background: s.bar, width: '54%' }} />
+                        <span class="skin-prev-bar" style={{ background: s.bar, width: '64%' }} />
+                      </div>
+                      <div class="skin-prev-main" style={{ background: s.main }}>
+                        <span class="skin-prev-bar" style={{ background: s.bar, width: '68%' }} />
+                        <span class="skin-prev-pill" style={{ background: s.pill }} />
+                      </div>
+                    </div>
                     <span class="skin-meta">
                       <span class="skin-name">{s.label}</span>
                       <span class="skin-sub">{s.sub}</span>
@@ -219,13 +186,18 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
 
             <section class="info-card">
               <div class="info-title">已检测到的 AI 工具 ({(device?.tools || []).length})</div>
-              <div class="filter-chips">
-                {(device?.tools || []).map((t) => (
-                  <span key={t} class="meta-chip">
-                    <span class="tool-dot" style={{ background: toolColor(t) }} />
-                    {toolLabel(t)}
-                  </span>
-                ))}
+              <div class="filter-chips" style={{ flexWrap: 'wrap' }}>
+                {(device?.tools || []).map((t) => {
+                  const meta = toolMeta(t);
+                  return (
+                    <span key={t} class="chip has-mono" style={{ cursor: 'default' }}>
+                      <span class="chip-mono" style={toolBadgeStyle(t)}>
+                        {meta.mono}
+                      </span>
+                      {toolLabel(t)}
+                    </span>
+                  );
+                })}
               </div>
               {isDesktopWebView && (
                 <div class="panel-links">

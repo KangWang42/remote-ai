@@ -14,8 +14,9 @@ import {
 } from '../runtime/api';
 import { parseChatChunks, parseTranscriptMessages } from '../runtime/chatParser';
 import {
-  toolColor,
+  toolBadgeStyle,
   toolLabel,
+  toolMeta,
   toolShort,
   type ChatChunk,
   type ChatMessageItem,
@@ -36,13 +37,15 @@ interface Props {
   onRefresh: () => void;
   onToggleTerminal: () => void;
   onOpenDiff: () => void;
-  onNewTask: () => void;
+  onOpenFiles: (dir: string) => void;
+  onNewTask: (dir?: string) => void;
   onAddProject: () => void;
   onRunScript: (dir: string, command: string) => void;
   onSelectTerminal: (id: string) => void;
   onToggleFocus: () => void;
   focusMode: boolean;
   terminalDrawerOpen: boolean;
+  pendingCite?: { nonce: number; text: string } | null;
 }
 
 function draftKey(selected: SelectedItem | null): string {
@@ -58,6 +61,7 @@ export function ChatPane({
   onRefresh,
   onToggleTerminal,
   onOpenDiff,
+  onOpenFiles,
   onNewTask,
   onAddProject,
   onRunScript,
@@ -65,6 +69,7 @@ export function ChatPane({
   onToggleFocus,
   focusMode,
   terminalDrawerOpen,
+  pendingCite,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -83,6 +88,7 @@ export function ChatPane({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const stickBottomRef = useRef(true);
   const chunksRef = useRef<ChatChunk[]>([]);
 
@@ -120,6 +126,14 @@ export function ChatPane({
       // ignore
     }
   };
+
+  useEffect(() => {
+    if (!pendingCite || !selected) return;
+    const next = draft ? `${draft.trimEnd()} ${pendingCite.text} ` : `${pendingCite.text} `;
+    updateDraft(next);
+    setNotice(`已引用 ${pendingCite.text}`);
+    window.setTimeout(() => composerRef.current?.focus(), 40);
+  }, [pendingCite?.nonce]);
 
   // Load runnable project scripts (package.json / Makefile / Cargo / pyproject)
   useEffect(() => {
@@ -389,27 +403,38 @@ export function ChatPane({
     return (
       <main class="main-pane empty-stage">
         <div class="empty-card">
+          <div class="empty-emblem" aria-hidden="true">R</div>
           <h2>Remote AI 总控台</h2>
           <p>
             在一个桌面工作区内统一指挥所有本地 AI 编程工具、隔离 Worktree 并行开发、按需审查 Diff，并随时从手机无缝接管。
           </p>
           {detectedTools.length > 0 && (
             <div class="tool-pill-row">
-              {detectedTools.map((t) => (
-                <span key={t} class="meta-chip">
-                  <span class="tool-dot" style={{ background: toolColor(t) }} />
-                  {toolLabel(t)}
-                </span>
-              ))}
+              {detectedTools.map((t) => {
+                const meta = toolMeta(t);
+                return (
+                  <span key={t} class="chip has-mono" style={{ cursor: 'default' }}>
+                    <span class="chip-mono" style={toolBadgeStyle(t)}>
+                      {meta.mono}
+                    </span>
+                    {toolLabel(t)}
+                  </span>
+                );
+              })}
             </div>
           )}
           <div class="empty-actions">
-            <button type="button" class="primary-btn" onClick={onNewTask}>
+            <button type="button" class="primary-btn" onClick={() => onNewTask()}>
               + 新建 AI 任务
             </button>
             <button type="button" class="ghost-btn" onClick={onAddProject}>
               + 添加项目文件夹
             </button>
+            {device?.workspaces?.[0] && (
+              <button type="button" class="ghost-btn" onClick={() => onOpenFiles(device.workspaces[0])}>
+                预览项目文件
+              </button>
+            )}
             <button type="button" class="ghost-btn" onClick={onToggleTerminal}>
               终端抽屉 (Ctrl+J)
             </button>
@@ -442,9 +467,20 @@ export function ChatPane({
               ☰
             </button>
           )}
-          <span class="tool-dot" style={{ background: toolColor(tool) }} title={toolShort(tool)} />
+          <span class="tool-squircle sm" style={toolBadgeStyle(tool)} title={toolShort(tool)}>
+            {toolMeta(tool).mono}
+          </span>
           <h1 class="pane-title">{title}</h1>
-          {projectDir && <span class="meta-chip">{projectDir}</span>}
+          {projectDir && (
+            <button
+              type="button"
+              class="meta-chip clickable"
+              title="点击浏览并预览该项目文件"
+              onClick={() => onOpenFiles(projectDir)}
+            >
+              {projectDir}
+            </button>
+          )}
           {projectDir && shownBranch && (
             <div class="branch-wrap">
               <button
@@ -514,11 +550,22 @@ export function ChatPane({
           {session?.origin && <span class="meta-chip">{session.origin}</span>}
         </div>
         <div class="pane-actions">
+          <button
+            type="button"
+            class="primary-btn compact"
+            title={projectDir ? `在「${projectDir}」下新建一个 AI 对话 (Ctrl+N)` : '新建 AI 对话 (Ctrl+N)'}
+            onClick={() => onNewTask(projectDir || undefined)}
+          >
+            + 新建 AI
+          </button>
           {projectDir && (
-            <button type="button" class="ghost-btn compact" title="保存隐藏 Git 快照（不污染分支或 stash）" onClick={handleCheckpoint}>
-              快照
+            <button type="button" class="ghost-btn compact" title="浏览与预览该项目文件" onClick={() => onOpenFiles(projectDir)}>
+              文件
             </button>
           )}
+          <button type="button" class="ghost-btn compact" onClick={onOpenDiff}>
+            Diff
+          </button>
           <button
             type="button"
             class={`ghost-btn compact${terminalDrawerOpen ? ' active' : ''}`}
@@ -526,9 +573,11 @@ export function ChatPane({
           >
             终端
           </button>
-          <button type="button" class="ghost-btn compact" onClick={onOpenDiff}>
-            Diff
-          </button>
+          {projectDir && (
+            <button type="button" class="ghost-btn compact" title="保存隐藏 Git 快照（不污染分支或 stash）" onClick={handleCheckpoint}>
+              快照
+            </button>
+          )}
         </div>
       </header>
 
@@ -584,6 +633,9 @@ export function ChatPane({
                         class="tool-card-head"
                         onClick={() => setExpandedTools((p) => ({ ...p, [m.id]: !p[m.id] }))}
                       >
+                        <span class="tool-step-icon" aria-hidden="true">
+                          {m.status === 'error' ? '!' : '✓'}
+                        </span>
                         <span class="tool-card-title">{m.title || '工具调用'}</span>
                         <span class="tool-card-summary">{m.text}</span>
                         <span class="caret">{open ? '▾' : '▸'}</span>
@@ -660,6 +712,7 @@ export function ChatPane({
               )}
               <div class="composer-box">
                 <textarea
+                  ref={composerRef}
                   rows={2}
                   placeholder={
                     isBusy

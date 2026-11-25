@@ -129,7 +129,7 @@ internal sealed class DesktopConsole : Form {
         try { Close(); } catch { }
     }
 
-    internal async void NavigateTo(string origin, string ticket, string openId = "", string tab = "") {
+    internal async void NavigateTo(string origin, string ticket, string openId = "", string tab = "", string skin = "") {
         string cleanOrigin = (origin ?? "").TrimEnd('/');
         if (cleanOrigin.Length == 0) return;
 
@@ -147,6 +147,10 @@ internal sealed class DesktopConsole : Form {
         if (!String.IsNullOrEmpty(tab)) {
             if (qs.Length > 0) qs.Append('&');
             qs.Append("tab=").Append(Uri.EscapeDataString(tab));
+        }
+        if (!String.IsNullOrEmpty(skin)) {
+            if (qs.Length > 0) qs.Append('&');
+            qs.Append("skin=").Append(Uri.EscapeDataString(skin));
         }
         string query = qs.Length > 0 ? "?" + qs.ToString() : "";
         string targetUrl = cleanOrigin + "/console/" + query + (String.IsNullOrEmpty(ticket) ? "" : "#t=" + Uri.EscapeDataString(ticket));

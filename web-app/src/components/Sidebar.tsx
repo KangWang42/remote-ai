@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'preact/hooks';
 import { postDesktopMessage } from '../runtime/api';
 import {
+  toolBadgeStyle,
   toolColor,
+  toolMeta,
   toolShort,
   type DeviceInfo,
   type SelectedItem,
@@ -16,9 +18,10 @@ interface Props {
   selected: SelectedItem | null;
   onSelect: (item: SelectedItem) => void;
   onNewTask: (defaultDir?: string) => void;
+  onOpenProjectFiles: (dir: string) => void;
   onAddProject: () => void;
   onOpenPalette: () => void;
-  onOpenRightTab: (tab: 'diff' | 'files' | 'teams' | 'connect') => void;
+  onOpenRightTab: (tab: 'files' | 'diff' | 'teams' | 'connect') => void;
   onToggleFocus: () => void;
   connected: boolean;
   latencyMs: number | null;
@@ -30,8 +33,8 @@ function routeBadge(device: DeviceInfo | null): string {
   if (host.endsWith('.ts.net') || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return 'Tailscale';
   if (host.endsWith('.trycloudflare.com')) return '公网隧道';
   if (/^\/c\/[a-f0-9]{20}\//.test(window.location.pathname)) return '公共中转';
-  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return '局域网直连';
-  return device?.routes?.length ? `多路由 (${device.routes.length})` : '中转连接';
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return '局域网';
+  return device?.routes?.length ? `多路由 (${device.routes.length})` : '中转';
 }
 
 export function Sidebar({
@@ -41,6 +44,7 @@ export function Sidebar({
   selected,
   onSelect,
   onNewTask,
+  onOpenProjectFiles,
   onAddProject,
   onOpenPalette,
   onOpenRightTab,
@@ -50,6 +54,7 @@ export function Sidebar({
 }: Props) {
   const [query, setQuery] = useState('');
   const [toolFilter, setToolFilter] = useState<string>('all');
+  const [stateFilter, setStateFilter] = useState<'all' | 'confirm' | 'busy' | 'open'>('all');
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
 
   const q = query.trim().toLowerCase();
@@ -125,14 +130,13 @@ export function Sidebar({
       activeItems: active,
       openItems: opened,
       projectGroups: Array.from(byProject.entries()),
-      recentSessions: recent.slice(0, 20),
+      recentSessions: recent.slice(0, 16),
     };
   }, [device, terminals, sessions, q, toolFilter]);
 
   const filterTools = useMemo(() => {
     const detected = device?.tools || ['claude', 'codex', 'agy', 'shell'];
-    const unique = Array.from(new Set(['all', ...detected]));
-    return unique.slice(0, 8);
+    return Array.from(new Set(['all', ...detected])).slice(0, 8);
   }, [device?.tools]);
 
   const isSelected = (item: SelectedItem) => {
@@ -140,24 +144,29 @@ export function Sidebar({
     return selected.id === item.id;
   };
 
-  const renderRow = (row: { key: string; title: string; sub: string; tool: string; branch?: string; item: SelectedItem }, badge?: string) => (
-    <button
-      key={row.key}
-      type="button"
-      class={`nav-row${isSelected(row.item) ? ' active' : ''}`}
-      onClick={() => onSelect(row.item)}
-    >
-      <span class="tool-dot" style={{ background: toolColor(row.tool) }} title={toolShort(row.tool)} />
-      <span class="nav-row-main">
-        <span class="nav-row-title">{row.title}</span>
-        <span class="nav-row-sub">
-          {row.sub}
-          {row.branch ? <span class="branch-chip">{row.branch}</span> : null}
+  const renderRow = (row: { key: string; title: string; sub: string; tool: string; branch?: string; item: SelectedItem }, badge?: string) => {
+    const meta = toolMeta(row.tool);
+    return (
+      <button
+        key={row.key}
+        type="button"
+        class={`nav-row${isSelected(row.item) ? ' active' : ''}`}
+        onClick={() => onSelect(row.item)}
+      >
+        <span class="tool-squircle" style={toolBadgeStyle(row.tool)} title={meta.label}>
+          {meta.mono}
         </span>
-      </span>
-      {badge ? <span class={`state-pill pill-${badge}`}>{badge === 'confirm' ? '确认' : '运行'}</span> : null}
-    </button>
-  );
+        <span class="nav-row-main">
+          <span class="nav-row-title">{row.title}</span>
+          <span class="nav-row-sub">
+            {row.sub}
+            {row.branch ? <span class="branch-chip">{row.branch}</span> : null}
+          </span>
+        </span>
+        {badge ? <span class={`state-pill pill-${badge}`}>{badge === 'confirm' ? '确认' : '运行'}</span> : null}
+      </button>
+    );
+  };
 
   const primaryQuotas = (device?.quotas || []).filter((q) => q.windows && q.windows.length > 0).slice(0, 3);
   const teamCount = (device?.team_cards || []).filter((c) => c.state === 'running' || c.confirm).length;
@@ -171,139 +180,212 @@ export function Sidebar({
             {typeof (window as any).RemoteCliNative?.home === 'function' ? (
               <button
                 type="button"
-                class="icon-btn"
+                class="circle-btn"
                 title="返回多机工作台"
                 onClick={() => (window as any).RemoteCliNative.home()}
               >
                 ←
               </button>
             ) : null}
-            <span class={`conn-dot ${connected && device?.online ? 'on' : 'off'}`} />
             <strong>Remote AI</strong>
-            <span class="route-tag" title="点击管理路由、外观与手机配对" onClick={() => onOpenRightTab('connect')}>
-              {routeBadge(device)}
-              {latencyMs !== null ? ` · ${latencyMs}ms` : ''}
-            </span>
+            <button type="button" class="route-pill" title="外观主题与连接状态" onClick={() => onOpenRightTab('connect')}>
+              <span class={`conn-dot ${connected && device?.online ? 'on' : 'off'}`} />
+              <span>
+                {routeBadge(device)}
+                {latencyMs !== null ? ` · ${latencyMs}ms` : ''}
+              </span>
+            </button>
           </div>
           <div class="head-actions">
             {isDesktopWebView ? (
               <button
                 type="button"
-                class="icon-btn"
-                title="手机扫码连接与本机设置"
+                class="circle-btn"
+                title="手机扫码连接与设置"
                 onClick={() => postDesktopMessage('open-classic')}
               >
-                扫码
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                  <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2h2v2h-2zm4-2h2v6h-4v-2h2z" fill="currentColor" />
+                </svg>
               </button>
             ) : null}
-            <button type="button" class="icon-btn" title="命令面板 (Ctrl+K)" onClick={onOpenPalette}>
-              ⌘K
+            <button type="button" class="circle-btn" title="命令面板 (Ctrl+K)" onClick={onOpenPalette}>
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+                <path d="m16 16 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
             </button>
-            <button type="button" class="primary-btn compact" onClick={() => onNewTask()}>
-              + 新建
+            <button type="button" class="circle-btn solid" title="新建 AI 任务" onClick={() => onNewTask()}>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+              </svg>
             </button>
           </div>
         </div>
 
-        <div class="search-row">
-          <input
-            type="search"
-            class="search-input"
-            placeholder="筛选会话、项目或终端…"
-            value={query}
-            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-          />
+        {/* Interactive 3-column KPI Monitor Card matching mobile app */}
+        <div class="kpi-card">
+          <button
+            type="button"
+            class={`kpi-cell${confirmItems.length > 0 ? ' is-confirm' : ''}${stateFilter === 'confirm' ? ' is-selected' : ''}`}
+            title="点击仅看等待确认的任务"
+            onClick={() => setStateFilter((v) => (v === 'confirm' ? 'all' : 'confirm'))}
+          >
+            <span>待确认</span>
+            <strong>{confirmItems.length}</strong>
+          </button>
+          <button
+            type="button"
+            class={`kpi-cell${activeItems.length > 0 ? ' is-busy' : ''}${stateFilter === 'busy' ? ' is-selected' : ''}`}
+            title="点击仅看正在执行的任务"
+            onClick={() => setStateFilter((v) => (v === 'busy' ? 'all' : 'busy'))}
+          >
+            <span>执行中</span>
+            <strong>{activeItems.length}</strong>
+          </button>
+          <button
+            type="button"
+            class={`kpi-cell${openItems.length > 0 ? ' is-open' : ''}${stateFilter === 'open' ? ' is-selected' : ''}`}
+            title="点击仅看已打开的会话"
+            onClick={() => setStateFilter((v) => (v === 'open' ? 'all' : 'open'))}
+          >
+            <span>已打开</span>
+            <strong>{openItems.length}</strong>
+          </button>
         </div>
 
+        <input
+          type="search"
+          class="search-input"
+          placeholder="搜索对话、终端和项目…"
+          value={query}
+          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+        />
+
         <div class="filter-chips">
-          {filterTools.map((t) => (
-            <button
-              key={t}
-              type="button"
-              class={`chip${toolFilter === t ? ' active' : ''}`}
-              onClick={() => setToolFilter(t)}
-            >
-              {t === 'all' ? '全部' : toolShort(t)}
-            </button>
-          ))}
+          {filterTools.map((t) => {
+            if (t === 'all') {
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  class={`chip${toolFilter === t ? ' active' : ''}`}
+                  onClick={() => setToolFilter(t)}
+                >
+                  全部
+                </button>
+              );
+            }
+            const m = toolMeta(t);
+            return (
+              <button
+                key={t}
+                type="button"
+                class={`chip has-mono${toolFilter === t ? ' active' : ''}`}
+                onClick={() => setToolFilter(t)}
+              >
+                <span class="chip-mono" style={toolBadgeStyle(t)}>
+                  {m.mono}
+                </span>
+                <span>{m.short}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       <div class="sidebar-scroll">
-        {confirmItems.length > 0 && (
-          <section class="nav-group">
-            <div class="group-title danger">等待确认 ({confirmItems.length})</div>
-            {confirmItems.map((r) => renderRow(r, 'confirm'))}
+        {(stateFilter === 'all' || stateFilter === 'confirm') && confirmItems.length > 0 && (
+          <section class="nav-section">
+            <div class="group-title danger">等待确认 · {confirmItems.length}</div>
+            <div class="card-group">{confirmItems.map((r) => renderRow(r, 'confirm'))}</div>
           </section>
         )}
 
-        {activeItems.length > 0 && (
-          <section class="nav-group">
-            <div class="group-title busy">正在执行 ({activeItems.length})</div>
-            {activeItems.map((r) => renderRow(r, 'busy'))}
+        {(stateFilter === 'all' || stateFilter === 'busy') && activeItems.length > 0 && (
+          <section class="nav-section">
+            <div class="group-title busy">正在执行 · {activeItems.length}</div>
+            <div class="card-group">{activeItems.map((r) => renderRow(r, 'busy'))}</div>
           </section>
         )}
 
-        {openItems.length > 0 && (
-          <section class="nav-group">
-            <div class="group-title">进行中 ({openItems.length})</div>
-            {openItems.map((r) => renderRow(r))}
+        {(stateFilter === 'all' || stateFilter === 'open') && openItems.length > 0 && (
+          <section class="nav-section">
+            <div class="group-title">已打开 · {openItems.length}</div>
+            <div class="card-group">{openItems.map((r) => renderRow(r))}</div>
           </section>
         )}
 
-        <section class="nav-group">
+        {stateFilter !== 'all' && (
+          <button type="button" class="ghost-btn compact wide" onClick={() => setStateFilter('all')}>
+            显示全部项目与对话
+          </button>
+        )}
+
+        {stateFilter === 'all' && (
+        <section class="nav-section">
           <div class="group-head-row">
-            <div class="group-title">项目工作区 ({projectGroups.length})</div>
-            <button
-              type="button"
-              class="mini-add"
-              title="添加项目文件夹"
-              onClick={onAddProject}
-            >
+            <div class="group-title">项目工作区 · {projectGroups.length}</div>
+            <button type="button" class="mini-add" title="添加项目文件夹" onClick={onAddProject}>
               +
             </button>
           </div>
           {projectGroups.length === 0 ? (
-            <button type="button" class="ghost-btn compact wide" onClick={onAddProject}>
+            <button type="button" class="ghost-btn wide" onClick={onAddProject}>
               + 添加第一个项目文件夹
             </button>
           ) : (
-            projectGroups.map(([dir, items]) => {
-              const collapsed = !!collapsedDirs[dir];
-              return (
-                <div key={dir} class="project-block">
-                  <div class="project-head">
-                    <button
-                      type="button"
-                      class="project-toggle"
-                      onClick={() => setCollapsedDirs((prev) => ({ ...prev, [dir]: !prev[dir] }))}
-                    >
-                      <span class="caret">{collapsed ? '▸' : '▾'}</span>
-                      <span class="project-name">{dir}</span>
-                      <span class="project-count">{items.length}</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="mini-add"
-                      title={`在 ${dir} 中新建 AI 任务`}
-                      onClick={() => onNewTask(dir)}
-                    >
-                      +
-                    </button>
+            <div class="card-group">
+              {projectGroups.map(([dir, items]) => {
+                const collapsed = !!collapsedDirs[dir];
+                return (
+                  <div key={dir} class="project-block">
+                    <div class="project-head">
+                      <button
+                        type="button"
+                        class="project-toggle"
+                        onClick={() => setCollapsedDirs((prev) => ({ ...prev, [dir]: !prev[dir] }))}
+                      >
+                        <span class="caret" style={{ color: 'var(--muted)' }}>{collapsed ? '▸' : '▾'}</span>
+                        <span class="project-name">{dir}</span>
+                        <span class="project-count">{items.length}</span>
+                      </button>
+                      <div class="project-actions">
+                        <button
+                          type="button"
+                          class="mini-add"
+                          title={`预览 ${dir} 项目文件`}
+                          onClick={() => onOpenProjectFiles(dir)}
+                        >
+                          <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+                            <path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h3.5l1.6 1.8H16A1.5 1.5 0 0 1 17.5 7.3v7.2A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          class="mini-add"
+                          title={`在 ${dir} 中新建 AI 对话`}
+                          onClick={() => onNewTask(dir)}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    {!collapsed && items.length > 0 && (
+                      <div class="project-items">{items.map((r) => renderRow(r))}</div>
+                    )}
                   </div>
-                  {!collapsed && items.length > 0 && (
-                    <div class="project-items">{items.map((r) => renderRow(r))}</div>
-                  )}
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           )}
         </section>
+        )}
 
-        {recentSessions.length > 0 && (
-          <section class="nav-group">
+        {stateFilter === 'all' && recentSessions.length > 0 && (
+          <section class="nav-section">
             <div class="group-title">最近对话</div>
-            {recentSessions.map((r) => renderRow(r))}
+            <div class="card-group">{recentSessions.map((r) => renderRow(r))}</div>
           </section>
         )}
       </div>
@@ -326,15 +408,15 @@ export function Sidebar({
             })}
           </div>
         )}
-        <div class="foot-links">
+        <div class="foot-seg">
           <button type="button" class="foot-btn" onClick={() => onOpenRightTab('teams')}>
             协作{teamCount > 0 ? ` (${teamCount})` : ''}
           </button>
           <button type="button" class="foot-btn" onClick={() => onOpenRightTab('connect')}>
-            外观 / 连接
+            外观与连接
           </button>
-          <button type="button" class="icon-btn" title="专注模式 (Ctrl+\)" onClick={onToggleFocus}>
-            ⤢
+          <button type="button" class="foot-btn" style={{ flex: '0 0 auto', padding: '6px 10px' }} title="专注模式 (Ctrl+\)" onClick={onToggleFocus}>
+            专注
           </button>
         </div>
       </div>

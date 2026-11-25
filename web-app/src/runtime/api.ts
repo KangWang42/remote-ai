@@ -314,11 +314,84 @@ export async function fetchProjectScripts(
   });
 }
 
-export async function listFiles(dir: string, path = ''): Promise<{ path: string; entries: FileEntry[] }> {
-  return requestJson('/api/files', {
+export async function listFiles(dir: string, path = ''): Promise<{ path: string; entries: FileEntry[]; more?: boolean }> {
+  const res = await requestJson<{ path?: string; entries?: any[]; more?: boolean }>('/api/files', {
     method: 'POST',
     body: JSON.stringify({ id: opId(), action: 'file_list', dir, path }),
   });
+  const entries: FileEntry[] = (res.entries || []).map((e) => ({
+    name: String(e?.name || ''),
+    dir: typeof e?.dir === 'boolean' ? e.dir : e?.kind === 'dir',
+    size: typeof e?.size === 'number' ? e.size : undefined,
+    modified: typeof e?.modified === 'number' ? e.modified : undefined,
+    hidden: !!e?.hidden,
+  }));
+  return { path: res.path || path, entries, more: !!res.more };
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const raw = atob(b64 || '');
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+/** Reads a project file chunk-by-chunk via /api/files file_read up to maxBytes (default 512 KB for text, 4 MB for images). */
+export async function readFileBytes(
+  dir: string,
+  path: string,
+  maxBytes = 512 * 1024,
+  signal?: AbortSignal,
+): Promise<{ bytes: Uint8Array; size: number; modified?: number; truncated: boolean }> {
+  const chunks: Uint8Array[] = [];
+  let offset = 0;
+  let totalSize = 0;
+  let modified: number | undefined;
+  let truncated = false;
+
+  for (;;) {
+    const piece = await requestJson<{
+      size?: number;
+      modified?: number;
+      offset?: number;
+      data?: string;
+      end?: boolean;
+    }>('/api/files', {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({ id: opId(), action: 'file_read', dir, path, offset }),
+    });
+    totalSize = typeof piece.size === 'number' ? piece.size : totalSize;
+    modified = typeof piece.modified === 'number' ? piece.modified : modified;
+    const part = base64ToBytes(piece.data || '');
+    if (part.byteLength > 0) {
+      const room = maxBytes - offset;
+      if (part.byteLength >= room) {
+        chunks.push(part.subarray(0, Math.max(0, room)));
+        offset += Math.max(0, room);
+        truncated = totalSize > maxBytes || !piece.end;
+        break;
+      }
+      chunks.push(part);
+      offset += part.byteLength;
+    }
+    if (piece.end || part.byteLength === 0 || offset >= totalSize) break;
+  }
+
+  const merged = new Uint8Array(offset);
+  let pos = 0;
+  for (const c of chunks) {
+    merged.set(c, pos);
+    pos += c.byteLength;
+  }
+  return { bytes: merged, size: totalSize || offset, modified, truncated };
+}
+
+export function fileViewerUrl(dir: string, folderPath: string, fileName: string): string {
+  const qs = new URLSearchParams({ dir });
+  if (folderPath) qs.set('path', folderPath);
+  if (fileName) qs.set('file', fileName);
+  return `${API_BASE}/files/?${qs.toString()}`;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

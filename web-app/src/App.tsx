@@ -7,10 +7,11 @@ import {
   postDesktopMessage,
   sendTerminalAction,
 } from './runtime/api';
-import type { DeviceInfo, SelectedItem, SessionEntry, TerminalEntry } from './runtime/types';
+import type { DeviceInfo, FilePreviewTarget, SelectedItem, SessionEntry, TerminalEntry } from './runtime/types';
 import { ChatPane } from './components/ChatPane';
 import { CommandPalette } from './components/CommandPalette';
-import { NewTaskModal } from './components/NewTaskModal';
+import { FilePreviewBody } from './components/FileExplorer';
+import { QuickSpawnStage } from './components/QuickSpawnStage';
 import { RightPanel, type RightTab } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { TerminalDrawer } from './components/TerminalDrawer';
@@ -49,31 +50,37 @@ export function App() {
 
   const [selected, setSelected] = useState<SelectedItem | null>(null);
   const [rightOpen, setRightOpen] = useState(() => window.innerWidth >= 1040);
-  const [rightTab, setRightTab] = useState<RightTab>('diff');
+  const [rightTab, setRightTab] = useState<RightTab>('files');
+  const [browseProject, setBrowseProject] = useState<string>('');
+  const [expandedFile, setExpandedFile] = useState<FilePreviewTarget | null>(null);
+  const [pendingCite, setPendingCite] = useState<{ nonce: number; text: string } | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [activeDrawerTermId, setActiveDrawerTermId] = useState<string | null>(null);
-  const [newTaskDir, setNewTaskDir] = useState<string | null>(null);
+  const [spawnDir, setSpawnDir] = useState<string | null>(null);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [manualProjectPath, setManualProjectPath] = useState('');
   const [addProjectErr, setAddProjectErr] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
 
-  const [sidebarWidth, setSidebarWidth] = useState(286);
+  const [sidebarWidth, setSidebarWidth] = useState(308);
   const [rightWidth, setRightWidth] = useState(430);
   const [mobilePane, setMobilePane] = useState<'sidebar' | 'chat' | 'right'>('sidebar');
   const [skin, setSkin] = useState(() => {
     try {
+      const qSkin = new URLSearchParams(window.location.search).get('skin');
+      if (qSkin && VALID_SKINS.has(qSkin)) return qSkin;
       const nativeSkin = (window as any).RemoteCliNative?.pref?.('skin');
       if (nativeSkin && VALID_SKINS.has(nativeSkin)) return nativeSkin;
-      const saved = localStorage.getItem('rcli-skin') || 'paper';
-      return VALID_SKINS.has(saved) ? saved : 'paper';
+      const saved = localStorage.getItem('rcli-skin') || 'dawn';
+      return VALID_SKINS.has(saved) ? saved : 'dawn';
     } catch {
-      return 'paper';
+      return 'dawn';
     }
   });
 
   const revRef = useRef(0);
+  const activeProjectRef = useRef('');
   const triggerRefreshRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -101,12 +108,17 @@ export function App() {
     });
   }, [skin]);
 
-  // Global keyboard shortcuts: Ctrl+K palette, Ctrl+J terminal drawer, Ctrl+\ focus mode
+  // Global keyboard shortcuts: Ctrl+K palette, Ctrl+N new AI, Ctrl+J terminal drawer, Ctrl+\ focus mode
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        setExpandedFile(null);
+        setSpawnDir(activeProjectRef.current || '');
+        setMobilePane('chat');
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
         e.preventDefault();
         setTerminalOpen((v) => !v);
@@ -223,7 +235,35 @@ export function App() {
   );
 
   const activeProject = activeTerminal?.dir || activeSession?.dir || device?.workspaces?.[0] || '';
+  activeProjectRef.current = activeProject;
+  const inspectorProject = browseProject || activeProject;
   const activeWorktree = activeTerminal?.worktree || '';
+
+  const openFilesFor = (dir?: string) => {
+    if (dir) setBrowseProject(dir);
+    setRightTab('files');
+    setRightOpen(true);
+    setFocusMode(false);
+    setMobilePane('right');
+  };
+
+  const openSpawnFor = (dir?: string) => {
+    setExpandedFile(null);
+    setSpawnDir(dir ?? activeProject ?? '');
+    setMobilePane('chat');
+  };
+
+  const handleCiteFile = (relPath: string, projectDir: string) => {
+    const token = `@${relPath}`;
+    if (selected) {
+      setExpandedFile(null);
+      setSpawnDir(null);
+      setPendingCite({ nonce: Date.now(), text: token });
+      setMobilePane('chat');
+    } else {
+      openSpawnFor(projectDir);
+    }
+  };
 
   const handleAddProjectTrigger = () => {
     // On Windows WebView2 desktop console, open the native FolderBrowserDialog directly.
@@ -347,9 +387,13 @@ export function App() {
           latencyMs={latencyMs}
           onSelect={(item) => {
             setSelected(item);
+            setSpawnDir(null);
+            setExpandedFile(null);
+            setBrowseProject('');
             setMobilePane('chat');
           }}
-          onNewTask={(dir) => setNewTaskDir(dir ?? '')}
+          onNewTask={(dir) => openSpawnFor(dir)}
+          onOpenProjectFiles={(dir) => openFilesFor(dir)}
           onAddProject={handleAddProjectTrigger}
           onOpenPalette={() => setPaletteOpen(true)}
           onOpenRightTab={(tab) => {
@@ -365,30 +409,64 @@ export function App() {
       <div class="col-resizer" onMouseDown={dragSidebar} title="拖拽调整侧边栏宽度" />
 
       <div class="col-center">
-        <ChatPane
-          device={device}
-          selected={selected}
-          terminal={activeTerminal}
-          session={activeSession}
-          onRefresh={() => triggerRefreshRef.current?.()}
-          onToggleTerminal={() => setTerminalOpen((v) => !v)}
-          onOpenDiff={() => {
-            setRightTab('diff');
-            setRightOpen(true);
-            setFocusMode(false);
-            setMobilePane('right');
-          }}
-          onNewTask={() => setNewTaskDir(activeProject)}
-          onAddProject={handleAddProjectTrigger}
-          onRunScript={handleRunScript}
-          onSelectTerminal={(id) => {
-            setSelected({ kind: 'terminal', id });
-            setMobilePane('chat');
-          }}
-          onToggleFocus={() => setFocusMode((v) => !v)}
-          focusMode={focusMode}
-          terminalDrawerOpen={terminalOpen}
-        />
+        {spawnDir !== null ? (
+          <QuickSpawnStage
+            device={device}
+            defaultDir={spawnDir || activeProject}
+            contextTitle={activeTerminal?.title || activeSession?.title}
+            onBack={() => setSpawnDir(null)}
+            onAddProject={handleAddProjectTrigger}
+            onCreated={(id) => {
+              setSpawnDir(null);
+              setExpandedFile(null);
+              setSelected({ kind: 'terminal', id });
+              setMobilePane('chat');
+              triggerRefreshRef.current?.();
+            }}
+          />
+        ) : expandedFile !== null ? (
+          <main class="main-pane">
+            <FilePreviewBody
+              target={expandedFile}
+              expanded
+              onBack={() => setExpandedFile(null)}
+              onToggleExpand={() => {
+                const dir = expandedFile.dir;
+                setExpandedFile(null);
+                openFilesFor(dir);
+              }}
+              onCiteFile={handleCiteFile}
+            />
+          </main>
+        ) : (
+          <ChatPane
+            device={device}
+            selected={selected}
+            terminal={activeTerminal}
+            session={activeSession}
+            onRefresh={() => triggerRefreshRef.current?.()}
+            onToggleTerminal={() => setTerminalOpen((v) => !v)}
+            onOpenDiff={() => {
+              setBrowseProject('');
+              setRightTab('diff');
+              setRightOpen(true);
+              setFocusMode(false);
+              setMobilePane('right');
+            }}
+            onOpenFiles={(dir) => openFilesFor(dir)}
+            onNewTask={(dir) => openSpawnFor(dir)}
+            onAddProject={handleAddProjectTrigger}
+            onRunScript={handleRunScript}
+            onSelectTerminal={(id) => {
+              setSelected({ kind: 'terminal', id });
+              setMobilePane('chat');
+            }}
+            onToggleFocus={() => setFocusMode((v) => !v)}
+            focusMode={focusMode}
+            terminalDrawerOpen={terminalOpen}
+            pendingCite={pendingCite}
+          />
+        )}
 
         <TerminalDrawer
           open={terminalOpen}
@@ -407,11 +485,18 @@ export function App() {
             <RightPanel
               tab={rightTab}
               onTabChange={setRightTab}
-              project={activeProject}
+              project={inspectorProject}
+              workspaces={device?.workspaces || []}
               worktree={activeWorktree}
               device={device}
               skin={skin}
               onSkinChange={setSkin}
+              onExpandPreview={(target) => {
+                setSpawnDir(null);
+                setExpandedFile(target);
+                setMobilePane('chat');
+              }}
+              onCiteFile={handleCiteFile}
               onClose={() => setRightOpen(false)}
             />
           </div>
@@ -436,39 +521,27 @@ export function App() {
         </button>
         <button
           type="button"
-          class={mobilePane === 'right' && rightTab === 'diff' ? 'active' : ''}
+          class={mobilePane === 'right' && rightTab === 'files' ? 'active' : ''}
           onClick={() => {
-            setRightTab('diff');
+            setRightTab('files');
             setRightOpen(true);
             setMobilePane('right');
           }}
         >
-          Diff
+          文件
         </button>
         <button
           type="button"
-          class={mobilePane === 'right' && rightTab !== 'diff' ? 'active' : ''}
+          class={mobilePane === 'right' && rightTab !== 'files' ? 'active' : ''}
           onClick={() => {
-            setRightTab(rightTab === 'diff' ? 'connect' : rightTab);
+            setRightTab(rightTab === 'files' ? 'diff' : rightTab);
             setRightOpen(true);
             setMobilePane('right');
           }}
         >
-          更多
+          检查/更多
         </button>
       </nav>
-
-      <NewTaskModal
-        open={newTaskDir !== null}
-        device={device}
-        defaultDir={newTaskDir || activeProject}
-        onClose={() => setNewTaskDir(null)}
-        onCreated={(id) => {
-          setSelected({ kind: 'terminal', id });
-          setMobilePane('chat');
-          triggerRefreshRef.current?.();
-        }}
-      />
 
       {addProjectOpen && (
         <div class="modal-backdrop" onClick={() => setAddProjectOpen(false)}>
@@ -537,7 +610,7 @@ export function App() {
           setMobilePane('chat');
         }}
         onAction={(action) => {
-          if (action === 'new') setNewTaskDir(activeProject);
+          if (action === 'new') openSpawnFor(activeProject);
           else if (action === 'terminal') setTerminalOpen((v) => !v);
           else if (action === 'diff' || action === 'connect') {
             setRightTab(action);

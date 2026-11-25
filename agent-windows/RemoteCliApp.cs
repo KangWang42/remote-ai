@@ -851,7 +851,7 @@ public sealed partial class App : Form {
                 string ticket = Convert.ToString(Ask(origin + "/api/ticket", new Dictionary<string, object>(), token)["ticket"]);
                 BeginInvoke(new Action(() => {
                     if (quitting) return;
-                    EnsureDesktopConsoleVisible().NavigateTo(origin, ticket, openId, tab);
+                    EnsureDesktopConsoleVisible().NavigateTo(origin, ticket, openId, tab, Convert.ToString(config["Skin"]));
                 }));
             } catch (Exception error) {
                 BeginInvoke(new Action(() => Toast("桌面总控台没有打开：" + error.Message)));

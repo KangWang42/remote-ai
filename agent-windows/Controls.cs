@@ -13,16 +13,17 @@ namespace RemoteCli {
 public static class Theme {
     // One row per skin of the phone app (web/terminal/skins.js, Kit.java in the app): background, panel, raised,
     // line, ink, muted, accent, on accent, good, busy, bad. A new installation starts with the skin the app starts with.
-    public static readonly string[] Names = { "night", "slate", "pine", "dusk", "paper", "dawn" }, Titles = { "夜航", "墨岩", "松林", "暮紫", "纸白 · 明亮", "晨光 · 明亮" };
+    public static readonly string[] Names = { "night", "slate", "pine", "dusk", "paper", "dawn", "pond" }, Titles = { "夜航", "墨岩", "松林", "暮紫", "纸白 · 清爽", "晨光 · 暖黄纸感", "锦鲤池塘" };
     static readonly int[][] Skins = {
         new[] { 0x1a1b26, 0x222436, 0x2c3048, 0x323756, 0xc0caf5, 0x8892b8, 0x7aa2f7, 0x10121c, 0x9ece6a, 0xe0af68, 0xf7768e },
         new[] { 0x17191e, 0x1f232a, 0x292e38, 0x333a47, 0xd7dae0, 0x8891a0, 0x61afef, 0x0f1216, 0x98c379, 0xe5c07b, 0xe06c75 },
         new[] { 0x1e2427, 0x262e32, 0x313b40, 0x3b474d, 0xd3c6aa, 0x8e9d92, 0xa7c080, 0x182019, 0xa7c080, 0xdbbc7f, 0xe67e80 },
         new[] { 0x1e1e2e, 0x262638, 0x313247, 0x3a3b54, 0xcdd6f4, 0x969ab5, 0xcba6f7, 0x181524, 0xa6e3a1, 0xf9e2af, 0xf38ba8 },
-        new[] { 0xf2f3f7, 0xffffff, 0xeef0f5, 0xdfe3eb, 0x0e1116, 0x5b6270, 0x2f54eb, 0xffffff, 0x15803d, 0x9a5b00, 0xc0261a },
-        new[] { 0xf3ede3, 0xfcf8f2, 0xeae1d3, 0xd9ccba, 0x3e3956, 0x6f667a, 0x286983, 0xffffff, 0x357455, 0xa86914, 0xb44864 } };
+        new[] { 0xf2f3f7, 0xffffff, 0xeef0f5, 0xe2e6ee, 0x0e1116, 0x5b6270, 0x2f54eb, 0xffffff, 0x15803d, 0x9a5b00, 0xc0261a },
+        new[] { 0xf3ede3, 0xfcf8f2, 0xeae1d3, 0xe0d5c4, 0x3e3956, 0x6f667a, 0x286983, 0xffffff, 0x357455, 0xa86914, 0xb44864 },
+        new[] { 0x10191b, 0x192628, 0x243537, 0x2e4244, 0xe2ece9, 0xa4b7b6, 0xedbb83, 0x10191b, 0xa8c99a, 0xe7c58b, 0xf39188 } };
     public const string Default = "paper";
-    public static Color Bg, Side, Panel, Raised, Hover, Line, Ink, Muted, Faint, Accent, AccentOver, AccentDown, OnAccent, Good, Busy, Bad;
+    public static Color Bg, Side, Panel, Raised, Hover, Line, Ink, Muted, Faint, Accent, AccentOver, AccentDown, OnAccent, SolidInk, SolidOver, SolidDown, OnSolid, Good, Busy, Bad;
     public static bool Light;
     public static string Skin = "";
     static Theme() { Use(Default); }
@@ -35,9 +36,13 @@ public static class Theme {
         Skin = Names[at];
         Bg = c[0]; Panel = c[1]; Raised = c[2]; Line = c[3]; Ink = c[4]; Muted = c[5]; Accent = c[6]; OnAccent = c[7]; Good = c[8]; Busy = c[9]; Bad = c[10];
         Light = (Bg.R * 299 + Bg.G * 587 + Bg.B * 114) / 1000 > 150;
-        // What the app's skins do not name: the side bar, a raised thing under the pointer, the faintest text.
-        Side = Mix(Bg, Panel, 0.6f); Hover = Mix(Raised, Ink, 0.1f); Faint = Mix(Muted, Bg, 0.42f);
+        Side = Mix(Bg, Panel, 0.55f); Hover = Mix(Raised, Ink, 0.08f); Faint = Mix(Muted, Bg, 0.42f);
         AccentOver = Mix(Accent, Light ? Color.Black : Color.White, Light ? 0.1f : 0.18f); AccentDown = Mix(Accent, Color.Black, 0.14f);
+        // Calm high-contrast primary button fill (charcoal ink on light skins, soft crisp ink on dark skins) instead of loud blue.
+        SolidInk = Light ? Mix(Ink, Bg, 0.06f) : Mix(Ink, Panel, 0.08f);
+        SolidOver = Light ? Mix(SolidInk, Color.White, 0.12f) : Mix(SolidInk, Color.White, 0.14f);
+        SolidDown = Light ? Mix(SolidInk, Color.Black, 0.12f) : Mix(SolidInk, Panel, 0.16f);
+        OnSolid = Light ? Panel : Bg;
     }
     // Controls are given their colours when they are made. To change the skin of a window that is open, the part of
     // the palette each control was given is noted once (under the default skin, whose colours all differ), and the
@@ -73,7 +78,12 @@ public static class Theme {
 
     public static Font Text(float size = 9f, bool bold = false) { return new Font(Family, size, bold ? FontStyle.Bold : FontStyle.Regular); }
     public static float Dpi(Graphics g) { return g.DpiX / 96f; }
-    public static void Smooth(Graphics g) { g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit; }
+    public static void Smooth(Graphics g) {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.CompositingQuality = CompositingQuality.HighQuality;
+        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+    }
 
     public static GraphicsPath Rounded(RectangleF r, float radius) {
         float d = Math.Max(0.1f, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
@@ -127,15 +137,15 @@ public static class Theme {
     static readonly List<Control> scrolled = new List<Control>();
     public static void Scroll(Control control) { scrolled.Add(control); control.HandleCreated += (s, e) => { try { SetWindowTheme(control.Handle, Light ? "Explorer" : "DarkMode_Explorer", null); } catch { } }; }
     /// A menu in the look of the windows: what is chosen has a mark, and a note may stand at the right of an entry.
-    public static ContextMenuStrip Menu() { return new ContextMenuStrip { Renderer = new MenuLook(), ShowImageMargin = false, ShowCheckMargin = true, Font = Text(9f), BackColor = Panel, ForeColor = Ink }; }
+    public static ContextMenuStrip Menu() { return new ContextMenuStrip { Renderer = new MenuLook(), ShowImageMargin = false, ShowCheckMargin = true, Font = Text(9.2f), BackColor = Panel, ForeColor = Ink, Padding = new Padding(4, 6, 4, 6) }; }
     sealed class MenuLook : ToolStripProfessionalRenderer {
         protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) { using (var back = new SolidBrush(Panel)) e.Graphics.FillRectangle(back, e.AffectedBounds); }
-        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) { using (var pen = new Pen(Line)) e.Graphics.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1); }
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) { using (var pen = new Pen(Mix(Line, Panel, 0.25f))) e.Graphics.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1); }
         protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
         protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
             if (!e.Item.Selected || !e.Item.Enabled) return;
             Smooth(e.Graphics);
-            Fill(e.Graphics, new RectangleF(3, 1, e.Item.Width - 6, e.Item.Height - 2), 6f * Dpi(e.Graphics), Raised);
+            Fill(e.Graphics, new RectangleF(4, 2, e.Item.Width - 8, e.Item.Height - 4), 8f * Dpi(e.Graphics), Raised);
         }
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) {
             // The note at the right (how long a relay took to answer) is quieter than the name; a heading is quieter still.
@@ -183,13 +193,13 @@ public sealed class RoundButton : Button {
         using (var back = new SolidBrush(Parent == null ? Theme.Bg : Parent.BackColor)) g.FillRectangle(back, ClientRectangle);
         Color fill, ink, edge;
         switch (Kind) {
-            case ButtonKind.Primary: fill = down ? Theme.AccentDown : over ? Theme.AccentOver : Theme.Accent; ink = Theme.OnAccent; edge = fill; break;
+            case ButtonKind.Primary: fill = down ? Theme.SolidDown : over ? Theme.SolidOver : Theme.SolidInk; ink = Theme.OnSolid; edge = fill; break;
             case ButtonKind.Ghost: fill = down ? Theme.Line : over ? Theme.Raised : (Parent == null ? Theme.Bg : Parent.BackColor); ink = over ? Theme.Ink : Theme.Muted; edge = fill; break;
-            case ButtonKind.Danger: fill = down ? Theme.Mix(Theme.Raised, Theme.Bad, 0.32f) : over ? Theme.Mix(Theme.Raised, Theme.Bad, 0.18f) : Theme.Raised; ink = Theme.Bad; edge = over ? Theme.Bad : Theme.Line; break;
-            default: fill = down ? Theme.Line : over ? Theme.Hover : Theme.Raised; ink = Theme.Ink; edge = Theme.Line; break;
+            case ButtonKind.Danger: fill = down ? Theme.Mix(Theme.Panel, Theme.Bad, 0.24f) : over ? Theme.Mix(Theme.Panel, Theme.Bad, 0.14f) : Theme.Mix(Theme.Panel, Theme.Bad, 0.08f); ink = Theme.Bad; edge = over ? Theme.Bad : Theme.Mix(Theme.Line, Theme.Bad, 0.28f); break;
+            default: fill = down ? Theme.Raised : over ? Theme.Mix(Theme.Panel, Theme.Raised, 0.65f) : Theme.Panel; ink = Theme.Ink; edge = over ? Theme.Mix(Theme.Line, Theme.Ink, 0.18f) : Theme.Line; break;
         }
         if (!Enabled) { ink = Theme.Faint; if (Kind == ButtonKind.Primary) { fill = Theme.Raised; edge = Theme.Line; } }
-        Theme.Fill(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 8f * k, fill, edge);
+        Theme.Fill(g, new RectangleF(1f, 1f, Width - 2f, Height - 2f), 10f * k, fill, edge, 1f);
         if (Focused && ShowFocusCues) using (var ring = new Pen(Theme.Accent, 1.4f * k)) using (var path = Theme.Rounded(new RectangleF(1.5f, 1.5f, Width - 3, Height - 3), 7f * k)) g.DrawPath(ring, path);
         using (var brush = new SolidBrush(ink)) using (var icon = new Font(Theme.Icons, Font.Size + 1f)) {
             SizeF text = g.MeasureString(Text, Font), glyph = Glyph.Length > 0 ? g.MeasureString(Glyph, icon) : SizeF.Empty;
@@ -207,7 +217,7 @@ public sealed class Card : Panel {
     protected override void OnPaint(PaintEventArgs e) {
         Theme.Smooth(e.Graphics);
         using (var back = new SolidBrush(Parent == null ? Theme.Bg : Parent.BackColor)) e.Graphics.FillRectangle(back, ClientRectangle);
-        Theme.Fill(e.Graphics, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 12f * Theme.Dpi(e.Graphics), Fill ?? Theme.Panel, Theme.Line);
+        Theme.Fill(e.Graphics, new RectangleF(1f, 1f, Width - 2f, Height - 2f), 14f * Theme.Dpi(e.Graphics), Fill ?? Theme.Panel, Theme.Line, 1f);
     }
 }
 
@@ -222,7 +232,7 @@ public sealed class Field : Panel {
     protected override void OnPaint(PaintEventArgs e) {
         Theme.Smooth(e.Graphics);
         using (var back = new SolidBrush(Parent == null ? Theme.Bg : Parent.BackColor)) e.Graphics.FillRectangle(back, ClientRectangle);
-        Theme.Fill(e.Graphics, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 8f * Theme.Dpi(e.Graphics), Theme.Bg, Box.Focused && !Box.ReadOnly ? Theme.Accent : Theme.Line);
+        Theme.Fill(e.Graphics, new RectangleF(1f, 1f, Width - 2f, Height - 2f), 10f * Theme.Dpi(e.Graphics), Theme.Bg, Box.Focused && !Box.ReadOnly ? Theme.SolidInk : Theme.Line, 1f);
     }
 }
 
@@ -241,10 +251,10 @@ public sealed class Option : Control {
     protected override void OnPaint(PaintEventArgs e) {
         var g = e.Graphics; Theme.Smooth(g);
         float k = Theme.Dpi(g);
-        Theme.Fill(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 8f * k, chosen ? Theme.Raised : hover ? Theme.Mix(Theme.Panel, Theme.Raised, 0.5f) : Theme.Panel, chosen ? Theme.Accent : Theme.Line, chosen ? 1.6f : 1f);
+        Theme.Fill(g, new RectangleF(1f, 1f, Width - 2f, Height - 2f), 10f * k, chosen ? Theme.Raised : hover ? Theme.Mix(Theme.Panel, Theme.Raised, 0.5f) : Theme.Panel, chosen ? Theme.SolidInk : Theme.Line, chosen ? 1.5f : 1f);
         float ring = 16 * k, x = 14 * k, y = (Height - ring) / 2;
-        using (var pen = new Pen(chosen ? Theme.Accent : Theme.Muted, 1.6f * k)) g.DrawEllipse(pen, x, y, ring, ring);
-        if (chosen) using (var dot = new SolidBrush(Theme.Accent)) g.FillEllipse(dot, x + 4 * k, y + 4 * k, ring - 8 * k, ring - 8 * k);
+        using (var pen = new Pen(chosen ? Theme.SolidInk : Theme.Muted, 1.6f * k)) g.DrawEllipse(pen, x, y, ring, ring);
+        if (chosen) using (var dot = new SolidBrush(Theme.SolidInk)) g.FillEllipse(dot, x + 4 * k, y + 4 * k, ring - 8 * k, ring - 8 * k);
         float left = x + ring + 12 * k;
         using (var bold = new Font(Font, FontStyle.Bold)) using (var ink = new SolidBrush(Theme.Ink)) using (var muted = new SolidBrush(Theme.Muted))
         using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap }) {
@@ -272,9 +282,9 @@ public sealed class Switch : Control {
         var g = e.Graphics; Theme.Smooth(g);
         using (var back = new SolidBrush(Parent == null ? Theme.Bg : Parent.BackColor)) g.FillRectangle(back, ClientRectangle);
         float h = Math.Min(Height - 2, Width / 1.9f), y = (Height - h) / 2, knob = h - 6 * Theme.Dpi(g) * 0.8f;
-        Theme.Fill(g, new RectangleF(1, y, Width - 2, h), h / 2, on ? (over ? Theme.AccentOver : Theme.Accent) : (over ? Theme.Hover : Theme.Raised), on ? (Color?)null : Theme.Faint);
+        Theme.Fill(g, new RectangleF(1, y, Width - 2, h), h / 2, on ? (over ? Theme.SolidOver : Theme.SolidInk) : (over ? Theme.Hover : Theme.Raised), on ? (Color?)null : Theme.Line);
         float pad = (h - knob) / 2, x = on ? Width - 1 - pad - knob : 1 + pad;
-        using (var brush = new SolidBrush(on ? Theme.OnAccent : Theme.Muted)) g.FillEllipse(brush, x, y + pad, knob, knob);
+        using (var brush = new SolidBrush(on ? Theme.OnSolid : Theme.Muted)) g.FillEllipse(brush, x, y + pad, knob, knob);
         if (Focused && ShowFocusCues) using (var ring = new Pen(Theme.Ink, 1f)) using (var path = Theme.Rounded(new RectangleF(0.5f, y - 0.5f, Width - 1, h + 1), h / 2)) g.DrawPath(ring, path);
     }
 }
@@ -301,14 +311,14 @@ public sealed class Segmented : Control {
         var g = e.Graphics; Theme.Smooth(g);
         float k = Theme.Dpi(g);
         using (var back = new SolidBrush(Parent == null ? Theme.Bg : Parent.BackColor)) g.FillRectangle(back, ClientRectangle);
-        Theme.Fill(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 9f * k, Theme.Bg, Focused && ShowFocusCues ? Theme.Muted : Theme.Line);
+        Theme.Fill(g, new RectangleF(1f, 1f, Width - 2f, Height - 2f), 10f * k, Theme.Raised, Focused && ShowFocusCues ? Theme.Muted : Theme.Line, 1f);
         if (Items.Length == 0) return;
         float each = (Width - 6 * k) / Items.Length;
         using (var bold = new Font(Font, FontStyle.Bold)) using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
             for (int i = 0; i < Items.Length; i++) {
                 var cell = new RectangleF(3 * k + i * each + 1, 3 * k + 1, each - 2, Height - 6 * k - 2);
-                if (i == chosen) Theme.Fill(g, cell, 7f * k, Theme.Raised, Theme.Accent);
-                else if (i == over) Theme.Fill(g, cell, 7f * k, Theme.Panel);
+                if (i == chosen) Theme.Fill(g, cell, 8f * k, Theme.Panel, Theme.Line, 1f);
+                else if (i == over) Theme.Fill(g, cell, 8f * k, Theme.Mix(Theme.Raised, Theme.Panel, 0.5f));
                 using (var brush = new SolidBrush(i == chosen ? Theme.Ink : Theme.Muted)) g.DrawString(Items[i], i == chosen ? bold : Font, brush, cell, format);
             }
     }
@@ -330,10 +340,10 @@ public sealed class NavItem : Control {
         var g = e.Graphics; Theme.Smooth(g);
         float k = Theme.Dpi(g);
         using (var back = new SolidBrush(Theme.Side)) g.FillRectangle(back, ClientRectangle);
-        if (chosen || over || (Focused && ShowFocusCues)) Theme.Fill(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 9f * k, chosen ? Theme.Panel : Theme.Mix(Theme.Side, Theme.Panel, 0.5f), Focused && ShowFocusCues ? Theme.Muted : (Color?)null);
-        if (chosen) Theme.Fill(g, new RectangleF(0, Height * 0.28f, 3 * k, Height * 0.44f), 1.5f * k, Theme.Accent);
+        if (chosen || over || (Focused && ShowFocusCues)) Theme.Fill(g, new RectangleF(1f, 1f, Width - 2f, Height - 2f), 10f * k, chosen ? Theme.Panel : Theme.Mix(Theme.Side, Theme.Panel, 0.55f), chosen ? Theme.Line : (Focused && ShowFocusCues ? Theme.Muted : (Color?)null), 1f);
+        if (chosen) Theme.Fill(g, new RectangleF(2f, Height * 0.28f, 3 * k, Height * 0.44f), 1.5f * k, Theme.SolidInk);
         using (var icon = new Font(Theme.Icons, Font.Size + 2.5f)) using (var bold = new Font(Font, chosen ? FontStyle.Bold : FontStyle.Regular))
-        using (var ink = new SolidBrush(chosen ? Theme.Ink : Theme.Muted)) using (var accent = new SolidBrush(chosen ? Theme.Accent : Theme.Muted))
+        using (var ink = new SolidBrush(chosen ? Theme.Ink : Theme.Muted)) using (var accent = new SolidBrush(chosen ? Theme.Ink : Theme.Muted))
         using (var format = new StringFormat { LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap }) {
             g.DrawString(Glyph, icon, accent, new RectangleF(13 * k, 1 * k, 30 * k, Height), format);
             g.DrawString(Title, bold, ink, new RectangleF(44 * k, 0, Width - 44 * k, Height), format);
@@ -394,7 +404,7 @@ public sealed class RowList : ListBox {
         if (chosen) Theme.Fill(g, inner, 9f * k, Theme.Raised, Theme.Line);
         var tile = new RectangleF(inner.X + 8 * k, inner.Y + (inner.Height - 34 * k) / 2, 34 * k, 34 * k);
         Theme.Fill(g, tile, 9f * k, chosen ? Theme.Hover : Theme.Bg);
-        using (var icon = new Font(Theme.Icons, Font.Size + 3f)) using (var accent = new SolidBrush(Theme.Accent)) using (var centre = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+        using (var icon = new Font(Theme.Icons, Font.Size + 3f)) using (var accent = new SolidBrush(Theme.Ink)) using (var centre = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             g.DrawString(row.Glyph, icon, accent, new RectangleF(tile.X, tile.Y + 1 * k, tile.Width, tile.Height), centre);
         float left = tile.Right + 12 * k, right = inner.Right - 10 * k;
         if (row.Tag.Length > 0) {
@@ -452,7 +462,7 @@ public sealed class Picker : Control {
         var g = e.Graphics; Theme.Smooth(g);
         float k = Theme.Dpi(g);
         using (var back = new SolidBrush(Parent == null ? Theme.Bg : Parent.BackColor)) g.FillRectangle(back, ClientRectangle);
-        Theme.Fill(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 8f * k, over ? Theme.Mix(Theme.Bg, Theme.Raised, 0.5f) : Theme.Bg, Focused && ShowFocusCues || over ? Theme.Accent : Theme.Line);
+        Theme.Fill(g, new RectangleF(1f, 1f, Width - 2f, Height - 2f), 10f * k, over ? Theme.Mix(Theme.Panel, Theme.Raised, 0.65f) : Theme.Panel, Focused && ShowFocusCues ? Theme.Accent : over ? Theme.Mix(Theme.Line, Theme.Ink, 0.18f) : Theme.Line, 1f);
         using (var bold = new Font(Font, FontStyle.Bold)) using (var arrow = new Font(Theme.Icons, Font.Size - 1f)) using (var ink = new SolidBrush(Theme.Ink)) using (var muted = new SolidBrush(Theme.Muted))
         using (var beside = new SolidBrush(tone == 1 ? Theme.Good : tone == 2 ? Theme.Bad : Theme.Muted))
         using (var left = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })

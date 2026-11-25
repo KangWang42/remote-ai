@@ -13,6 +13,7 @@ import {
 import { diffPool } from '../runtime/diffPool';
 import type { ParsedDiff } from '../runtime/diffWorker';
 import type { GitCheckpointEntry, GitFileSummary, GitStatusResponse } from '../runtime/types';
+import { SelectPopover } from './SelectPopover';
 
 interface Props {
   project: string;
@@ -323,20 +324,21 @@ export function DiffPanel({ project, initialWorktree = '' }: Props) {
         </div>
         <div class="diff-controls">
           {status?.worktrees && status.worktrees.length > 1 && (
-            <select
-              class="wt-select"
+            <SelectPopover
+              compact
               value={worktree}
-              onChange={(e) => setWorktree((e.target as HTMLSelectElement).value)}
-            >
-              <option value="">主工作区</option>
-              {status.worktrees
-                .filter((w) => !w.main)
-                .map((w) => (
-                  <option key={w.id} value={w.id}>
-                    WT: {w.branch || w.id}
-                  </option>
-                ))}
-            </select>
+              onChange={setWorktree}
+              options={[
+                { value: '', label: '主工作区', sub: status.branch || '当前分支' },
+                ...status.worktrees
+                  .filter((w) => !w.main)
+                  .map((w) => ({
+                    value: w.id,
+                    label: `WT: ${w.branch || w.id}`,
+                    sub: w.head ? w.head.slice(0, 7) : '隔离工作区',
+                  })),
+              ]}
+            />
           )}
           <button
             type="button"
