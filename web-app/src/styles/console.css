@@ -637,7 +637,7 @@ html[data-skin="pond"] .pond-toggle {
 /* Mobile Responsive (< 960px): Single-column + 48dp Bottom Bar */
 .mobile-nav { display: none; }
 @media (max-width: 960px) {
-  .console-shell { flex-direction: column; }
+  .console-shell { flex-direction: column; padding-top: env(safe-area-inset-top); }
   .col-resizer { display: none; }
   .col-sidebar, .col-center, .col-right { width: 100% !important; min-width: 0; flex: 1 1 auto; border: 0; }
   .console-shell.mobile-sidebar .col-center,
@@ -647,9 +647,9 @@ html[data-skin="pond"] .pond-toggle {
   .console-shell.mobile-right .col-sidebar,
   .console-shell.mobile-right .col-center { display: none; }
   .mobile-nav {
-    display: grid; grid-template-columns: repeat(4, 1fr); height: 54px; flex: 0 0 54px;
+    display: grid; grid-template-columns: repeat(4, 1fr); min-height: 54px; flex: 0 0 auto;
     border-top: 0.5px solid var(--rim); background: var(--panel);
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
   }
   .mobile-nav button {
     border: 0; background: transparent; color: var(--muted); font-size: 12px;

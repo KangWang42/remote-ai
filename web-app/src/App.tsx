@@ -23,6 +23,10 @@ function paintSkin(name: string) {
   if (typeof win.RemoteCliPaint === 'function') {
     const applied = win.RemoteCliPaint(chosen);
     try {
+      if (applied?.bg) {
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', applied.bg);
+      }
       if (win.RemoteCliNative?.chrome && applied?.bg) win.RemoteCliNative.chrome(applied.bg);
     } catch {
       // ignore

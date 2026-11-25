@@ -1,0 +1,22 @@
+{
+  "name": "Remote AI",
+  "short_name": "Remote AI",
+  "description": "在 iPhone、Android 与桌面端统一指挥本机 AI 编程会话与终端。",
+  "start_url": "./console/",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1a1b26",
+  "theme_color": "#f2f3f7",
+  "icons": [
+    {
+      "src": "./apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

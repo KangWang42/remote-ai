@@ -271,6 +271,9 @@ export function RightPanel({ tab, onTabChange, project, worktree, device, skin, 
                   经典移动视图
                 </a>
               </div>
+              <div class="muted-code" style={{ lineHeight: 1.55 }}>
+                iPhone / iPad：可安装原生 iOS 版（RemoteCli-iOS.ipa）扫码直连，或在 Safari 打开连接地址后点“分享 → 添加到主屏幕”免安装全屏使用。
+              </div>
             </section>
           </div>
         )}

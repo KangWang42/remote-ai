@@ -1,0 +1,60 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/ios-build.yml"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional version override (defaults to ios/project.yml MARKETING_VERSION)"
+        required: false
+        default: ""
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    name: Build RemoteCli-iOS.ipa (unsigned for AltStore/SideStore/TrollStore/Xcode)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build Release arm64 iOS app (unsigned)
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project RemoteCli.xcodeproj \
+            -scheme RemoteCli \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package RemoteCli-iOS.ipa
+        run: |
+          set -euo pipefail
+          APP_PATH="ios/build/Build/Products/Release-iphoneos/RemoteCli.app"
+          test -d "$APP_PATH"
+          mkdir -p dist ios/ipa-stage/Payload
+          cp -R "$APP_PATH" ios/ipa-stage/Payload/RemoteCli.app
+          (cd ios/ipa-stage && zip -qry ../../dist/RemoteCli-iOS.ipa Payload)
+          ls -lh dist/RemoteCli-iOS.ipa
+          shasum -a 256 dist/RemoteCli-iOS.ipa
+
+      - name: Upload RemoteCli-iOS.ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteCli-iOS-ipa
+          path: dist/RemoteCli-iOS.ipa
+          if-no-files-found: error
