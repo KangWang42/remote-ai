@@ -40,6 +40,7 @@ button:disabled { opacity: .42; cursor: default; }
 html[data-skin="pond"] #screen::before, html[data-skin="pond"] #screen::after { display: none; }
 
 header { contain: layout; }
+html[data-embed="1"] header { display: none; }
 /* The terminal keeps the height it had before the keyboard opened: the program on the computer is not resized, and
    the newest lines stay visible above the keyboard. */
 /* The terminal's own layers are ordered among themselves only (isolation): the layer for links has a z-index, and

@@ -122,6 +122,6 @@ python tests\pages_check.py <chrome.exe> <输出文件夹>     # 用本机的中
 java -cp .cache\zxing-core-3.5.3.jar tests\QrDecodeCheck.java <二维码.png> <内容>   # 手机端的二维码识别
 ```
 
-本轮相关模块：Android `Tabs.java` 画底部四个栏目，`Workbench.java` 提供“任务”和“项目”，`AppPages.java` 提供全局协作和统计；内嵌页面的 `begin.js` 负责新建对话；Windows `LanNetwork.cs` 选择局域网地址并诊断监听状态，`ToolInstaller.cs` 处理用户接受后的可选安装。
+本轮相关模块：Android `Tabs.java` 画底部四个栏目，`Workbench.java` 提供“任务”和“项目”，`AppPages.java` 提供全局协作和统计，`RouteSelector.java` / `RouteStore.java` / `RouteCoordinator.java` 负责多路由并发选路与本地凭据加密存储；内嵌页面的 `begin.js` 负责新建对话；`web-app/` 为基于 Vite + Preact + TypeScript 的统一总控台源码（`npm --prefix web-app run build` 输出至 `web/console/`，随 Windows 安装包和 Android APK 一并离线打包）；Windows `DesktopConsole.cs` 封装系统 Edge WebView2 原生桌面总控台（`agent-windows/build.ps1` 自动下载并校验固定版本 `Microsoft.Web.WebView2` NuGet 的三个轻量库文件），`GitReview.cs` 与 `Worktrees.cs` 提供两阶段按需 Diff、隐藏 ref 检查点与安全 Worktree 隔离，`RelayLink.cs` / `RouteDiscovery.cs` / `TunnelSupervisor.cs` 提供多路由并发上报与隧道自愈，`LanNetwork.cs` 选择局域网地址并诊断监听状态，`ToolInstaller.cs` 处理用户接受后的可选安装。
 
-新增检查：`python tests/lan_tools_check.py` 验证校园网地址、代理虚拟地址、端口诊断和跳过安装，运行时不安装工具。`tests/in_use_check.py` 同时核对闲置未归项目的对话仍出现在电脑活动列表，且不误算为执行中。
+新增检查：`python -m unittest relay/test_git_and_rev.py` 验证 `rev` 增量长轮询与 `/api/git` 协议；`python tests/git_review_check.py` 验证 Worktree 隔离、安全清理、隐藏 ref 检查点与两阶段 Diff；`python tests/multi_route_check.py` 验证多路由并发与隧道自愈；`python tests/console_smoke_check.py` 验证 `web/console/` 打包产物、同源 `SAMEORIGIN` 嵌入头与实时中转响应；`python tests/android_aggregate_check.py --jdk <JDK目录>` 包含 `RouteSelectorCheck` 多路由选路单测；`python tests/lan_tools_check.py` 验证校园网地址、代理虚拟地址、端口诊断和跳过安装，运行时不安装工具。`tests/in_use_check.py` 同时核对闲置未归项目的对话仍出现在电脑活动列表，且不误算为执行中。

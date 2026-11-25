@@ -1,0 +1,246 @@
+import { useEffect, useState } from 'preact/hooks';
+import { API_BASE, fetchRoutesInfo, listFiles } from '../runtime/api';
+import type { DeviceInfo, FileEntry, RouteEntry } from '../runtime/types';
+import { DiffPanel } from './DiffPanel';
+
+export type RightTab = 'diff' | 'files' | 'teams' | 'connect';
+
+interface Props {
+  tab: RightTab;
+  onTabChange: (tab: RightTab) => void;
+  project: string;
+  worktree?: string;
+  device: DeviceInfo | null;
+  skin: string;
+  onSkinChange: (skin: string) => void;
+  onClose?: () => void;
+}
+
+const SKINS: Array<{ id: string; label: string }> = [
+  { id: 'paper', label: '纸白' },
+  { id: 'night', label: '夜航' },
+  { id: 'forest', label: '墨绿' },
+  { id: 'warm', label: '暖纸' },
+  { id: 'cobalt', label: '钴蓝' },
+  { id: 'dusk', label: '霞光' },
+];
+
+const ROUTE_KIND_NAMES: Record<string, string> = {
+  lan: '局域网直连',
+  tailscale: 'Tailscale',
+  tunnel: '公网隧道',
+  own: '自有中转',
+  public: '公共中转',
+};
+
+export function RightPanel({ tab, onTabChange, project, worktree, device, skin, onSkinChange, onClose }: Props) {
+  const [filesPath, setFilesPath] = useState('');
+  const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [routesDetail, setRoutesDetail] = useState<{ environment_id?: string; routes?: RouteEntry[] } | null>(null);
+
+  useEffect(() => {
+    setFilesPath('');
+  }, [project]);
+
+  useEffect(() => {
+    if (tab !== 'files' || !project) return;
+    let alive = true;
+    setFilesLoading(true);
+    listFiles(project, filesPath)
+      .then((res) => {
+        if (alive) setEntries(res.entries || []);
+      })
+      .catch(() => {
+        if (alive) setEntries([]);
+      })
+      .finally(() => {
+        if (alive) setFilesLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tab, project, filesPath]);
+
+  useEffect(() => {
+    if (tab !== 'connect') return;
+    fetchRoutesInfo()
+      .then((res) => setRoutesDetail(res))
+      .catch(() => setRoutesDetail({ environment_id: device?.environment_id, routes: device?.routes }));
+  }, [tab, device?.environment_id]);
+
+  const shownRoutes = routesDetail?.routes || device?.routes || [];
+
+  return (
+    <aside class="right-panel">
+      <div class="right-tabs">
+        {([
+          ['diff', 'Diff'],
+          ['files', '文件'],
+          ['teams', '协作'],
+          ['connect', '连接'],
+        ] as Array<[RightTab, string]>).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            class={`right-tab${tab === id ? ' active' : ''}`}
+            onClick={() => onTabChange(id)}
+          >
+            {label}
+          </button>
+        ))}
+        {onClose && (
+          <button type="button" class="icon-btn" onClick={onClose} title="收起右侧栏">
+            ✕
+          </button>
+        )}
+      </div>
+
+      <div class="right-body">
+        {tab === 'diff' && <DiffPanel project={project} initialWorktree={worktree} />}
+
+        {tab === 'files' && (
+          <div class="files-panel">
+            {!project ? (
+              <div class="empty-hint">选择一个项目以浏览文件</div>
+            ) : (
+              <>
+                <div class="files-crumb">
+                  <button type="button" class="ghost-btn compact" disabled={!filesPath} onClick={() => setFilesPath('')}>
+                    {project}
+                  </button>
+                  {filesPath && (
+                    <>
+                      <span>/</span>
+                      <span class="muted-code">{filesPath}</span>
+                      <button
+                        type="button"
+                        class="ghost-btn compact"
+                        onClick={() => {
+                          const parts = filesPath.split('/').filter(Boolean);
+                          parts.pop();
+                          setFilesPath(parts.join('/'));
+                        }}
+                      >
+                        上级
+                      </button>
+                    </>
+                  )}
+                  <a class="ghost-btn compact" href={`${API_BASE}/files/?dir=${encodeURIComponent(project)}`} target="_blank" rel="noreferrer">
+                    完整浏览
+                  </a>
+                </div>
+                {filesLoading ? (
+                  <div class="empty-hint">加载目录中…</div>
+                ) : entries.length === 0 ? (
+                  <div class="empty-hint">空目录</div>
+                ) : (
+                  <div class="file-rows">
+                    {entries.map((entry) => (
+                      <button
+                        key={entry.name}
+                        type="button"
+                        class="file-row"
+                        onClick={() => {
+                          const next = filesPath ? `${filesPath}/${entry.name}` : entry.name;
+                          if (entry.kind === 'dir') setFilesPath(next);
+                          else window.open(`${API_BASE}/files/?dir=${encodeURIComponent(project)}&path=${encodeURIComponent(next)}`, '_blank');
+                        }}
+                      >
+                        <span class="file-kind">{entry.kind === 'dir' ? '目录' : '文件'}</span>
+                        <span class="file-name">{entry.name}</span>
+                        {entry.size !== undefined && entry.kind === 'file' && (
+                          <span class="muted-code">{entry.size > 1024 ? `${Math.round(entry.size / 1024)} KB` : `${entry.size} B`}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {tab === 'teams' && (
+          <div class="teams-panel">
+            <div class="panel-head-row">
+              <strong>多 AI 协作任务</strong>
+              <a class="primary-btn compact" href={`${API_BASE}/?tab=together&do=team`}>
+                + 发起协作
+              </a>
+            </div>
+            {!device?.team_cards || device.team_cards.length === 0 ? (
+              <div class="empty-hint">当前没有进行中的协作任务。可发起领队分工、写审循环或并行比稿。</div>
+            ) : (
+              device.team_cards.map((card) => (
+                <a key={card.id} class="team-card" href={`${API_BASE}/?tab=together&item=${encodeURIComponent(card.id)}`}>
+                  <div class="team-card-top">
+                    <span class="meta-chip">{card.mode === 'lead' ? '分工' : card.mode === 'review' ? '写审' : '比稿'}</span>
+                    <span class="meta-chip">{card.dir}</span>
+                    <span class={`state-pill pill-${card.confirm ? 'confirm' : card.state === 'running' ? 'busy' : 'idle'}`}>
+                      {card.confirm ? '待确认' : card.state}
+                    </span>
+                  </div>
+                  <div class="team-goal">{card.goal}</div>
+                  {card.note && <div class="team-note">{card.note}</div>}
+                </a>
+              ))
+            )}
+          </div>
+        )}
+
+        {tab === 'connect' && (
+          <div class="connect-panel">
+            <section class="info-card">
+              <div class="info-title">本机身份与多路由状态</div>
+              <div class="info-kv">
+                <span>电脑端版本</span>
+                <strong>{device?.version ? `v${device.version}` : '未知'}</strong>
+              </div>
+              <div class="info-kv">
+                <span>环境标识</span>
+                <code class="muted-code">{(routesDetail?.environment_id || device?.environment_id || '未生成').slice(0, 16)}</code>
+              </div>
+              <div class="route-list">
+                {shownRoutes.length === 0 ? (
+                  <div class="empty-hint">当前仅通过单一地址连接</div>
+                ) : (
+                  shownRoutes.map((r) => (
+                    <div key={r.url} class="route-row">
+                      <span class="meta-chip">{ROUTE_KIND_NAMES[r.kind] || r.kind}</span>
+                      <code class="route-url">{r.url}</code>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div class="panel-links">
+                <a class="ghost-btn compact" href={`${API_BASE}/computer/`}>
+                  电脑设置与线路
+                </a>
+                <a class="ghost-btn compact" href={`${API_BASE}/`}>
+                  切换经典移动视图
+                </a>
+              </div>
+            </section>
+
+            <section class="info-card">
+              <div class="info-title">总控台外观主题</div>
+              <div class="skin-grid">
+                {SKINS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    class={`chip${skin === s.id ? ' active' : ''}`}
+                    onClick={() => onSkinChange(s.id)}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}

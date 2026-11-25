@@ -85,6 +85,8 @@ public sealed partial class App : Form {
     bool trouble, preparing = true;
     static string ComputerName = Environment.MachineName;
     readonly NotifyIcon tray = new NotifyIcon();
+    DesktopConsole desktopConsole;
+    bool consoleAutoOpened;
     bool quitting, hinted, updating;
     ReleaseUpdate availableUpdate;
     readonly UpdateChecks updateChecks = new UpdateChecks(channel => AutoUpdater.CheckAsync(Version, channel));
@@ -104,7 +106,7 @@ public sealed partial class App : Form {
         try { config = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(ConfigFile, Encoding.UTF8)); } catch { config = null; }
         if (config == null) config = new Dictionary<string, object>();
         foreach (var item in new Dictionary<string, object> { { "Mode", "lan" }, { "Port", 8722 }, { "Server", "" }, { "OwnServer", "" }, { "RemoteEnabled", true },
-            { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "UpdateChannel", "release" }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", true }, { "ToolInstallSuggested", "" } })
+            { "RemoteMaxMode", "full" }, { "TunnelProtocol", "auto" }, { "AutoUpdate", false }, { "UpdateChannel", "release" }, { "RemoteDirs", new object[0] }, { "UpdateCheckUtc", "" }, { "Relay", "" }, { "Skin", Theme.Default }, { "Reach", "" }, { "ReachHeard", new object[0] }, { "ReachWait", 0 }, { "ReachAsk", true }, { "ToolInstallSuggested", "" }, { "ConsoleBounds", "" } })
             if (!config.ContainsKey(item.Key) || config[item.Key] == null) config[item.Key] = item.Value;
         if (Array.IndexOf(new[] { "lan", "cloud", "own", "public" }, Mode) < 0) config["Mode"] = "lan";
         try { password = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(PasswordFile), null, DataProtectionScope.CurrentUser)); } catch { password = ""; }
@@ -656,6 +658,7 @@ public sealed partial class App : Form {
         ShowProjects(); activityMark = "\n"; RefreshActivity();
         Say(said.Length > 0 ? said : "正在启动…", trouble);
         ShowMode();
+        if (desktopConsole != null && !desktopConsole.IsDisposed) desktopConsole.ApplyTheme();
         Invalidate(true);
     }
     Action projectsShown = () => { };
@@ -774,8 +777,57 @@ public sealed partial class App : Form {
             }
         });
     }
-    void OpenWindow(string terminal) { OpenWeb(terminal != null ? "?open=" + terminal : ""); }
-    void OpenNewTeam() { OpenWeb(NewTeamQuery); }
+    static bool CanUseDesktopConsole() {
+        try { return DesktopConsole.IsRuntimeAvailable(); } catch { return false; }
+    }
+    Rectangle ReadConsoleBounds(out FormWindowState state) {
+        state = FormWindowState.Normal;
+        try {
+            string raw = Convert.ToString(config["ConsoleBounds"]);
+            string[] parts = (raw ?? "").Split(',');
+            if (parts.Length >= 4) {
+                int x = Int32.Parse(parts[0]), y = Int32.Parse(parts[1]), w = Int32.Parse(parts[2]), h = Int32.Parse(parts[3]);
+                if (parts.Length >= 5 && parts[4] == "max") state = FormWindowState.Maximized;
+                return new Rectangle(x, y, w, h);
+            }
+        } catch { }
+        return Rectangle.Empty;
+    }
+    void SaveConsoleBounds(Rectangle rect, FormWindowState state) {
+        Keep("ConsoleBounds", String.Format("{0},{1},{2},{3},{4}", rect.X, rect.Y, rect.Width, rect.Height, state == FormWindowState.Maximized ? "max" : "norm"));
+    }
+    void OpenConsole(string openId = "", string tab = "") {
+        string origin = localRelayUp && localRelayPort > 0 ? "http://127.0.0.1:" + localRelayPort : Convert.ToString(config["Server"]).TrimEnd('/');
+        string secret = localRelayUp && localRelayPort > 0 && localPassword.Length > 0 ? localPassword : password;
+        if (origin.Length == 0 || secret.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
+        if (!CanUseDesktopConsole()) {
+            string q = !String.IsNullOrEmpty(openId) ? "?open=" + openId : !String.IsNullOrEmpty(tab) ? "?tab=" + tab : "";
+            OpenWeb(q);
+            return;
+        }
+        Task.Run(() => {
+            try {
+                string token = Convert.ToString(Ask(origin + "/api/login", new Dictionary<string, object> { { "password", secret } }, "")["token"]);
+                string ticket = Convert.ToString(Ask(origin + "/api/ticket", new Dictionary<string, object>(), token)["ticket"]);
+                BeginInvoke(new Action(() => {
+                    if (quitting) return;
+                    if (desktopConsole == null || desktopConsole.IsDisposed) {
+                        FormWindowState savedState;
+                        Rectangle savedBounds = ReadConsoleBounds(out savedState);
+                        desktopConsole = new DesktopConsole(dataDir, savedBounds, savedState, Reveal, SaveConsoleBounds);
+                    }
+                    desktopConsole.Show();
+                    if (desktopConsole.WindowState == FormWindowState.Minimized) desktopConsole.WindowState = FormWindowState.Normal;
+                    desktopConsole.Activate();
+                    desktopConsole.NavigateTo(origin, ticket, openId, tab);
+                }));
+            } catch (Exception error) {
+                BeginInvoke(new Action(() => Toast("桌面总控台没有打开：" + error.Message)));
+            }
+        });
+    }
+    void OpenWindow(string terminal) { OpenConsole(terminal ?? "", ""); }
+    void OpenNewTeam() { OpenConsole("", "together"); }
     Dictionary<string, object> Ask(string url, Dictionary<string, object> payload, string token) {
         var request = (HttpWebRequest)WebRequest.Create(url); request.Method = "POST"; request.ContentType = "application/json"; request.Timeout = 8000;
         if (token.Length > 0) request.Headers["Authorization"] = "Bearer " + token;
@@ -846,6 +898,7 @@ public sealed partial class App : Form {
             item.Click += (s, e) => Go(index);
             nav.Add(item);
         }
+        Action(side, "打开桌面总控台", Theme.IconTerminal, ButtonKind.Primary, 12, 290, SideWidth - 24, 38, (s, e) => OpenConsole());
         Place(side, sideAbove, 18, WindowHeight - 106, SideWidth - 30, 22); sideAbove.BackColor = Theme.Side; sideAbove.Visible = false;
         sideAbove.Font = Theme.Text(); sideAbove.Tag = Theme.Text(8.25f);     // the line of the tools is the longer one, in smaller letters
         Place(side, sideStatus, 18, WindowHeight - 84, SideWidth - 30, 22); sideStatus.BackColor = Theme.Side; sideStatus.Font = sideAbove.Font; ShowSide();
@@ -1051,7 +1104,8 @@ public sealed partial class App : Form {
         tray.Icon = Theme.TrayIcon(); tray.Visible = true; tray.Text = "Remote AI";
         tray.DoubleClick += (s, e) => Reveal();
         tray.ContextMenuStrip = new ContextMenuStrip();
-        tray.ContextMenuStrip.Items.Add("显示窗口", null, (s, e) => Reveal());
+        tray.ContextMenuStrip.Items.Add("打开桌面总控台", null, (s, e) => OpenConsole());
+        tray.ContextMenuStrip.Items.Add("连接与扫码设置", null, (s, e) => Reveal());
         tray.ContextMenuStrip.Items.Add("发起协作任务", null, (s, e) => OpenNewTeam());
         tray.ContextMenuStrip.Items.Add("复制地址", null, (s, e) => { if (address.Length > 0 && Mode != "public") try { Clipboard.SetText(address); } catch (ExternalException) { } });
         tray.ContextMenuStrip.Items.Add("重新连接", null, (s, e) => Again());
@@ -1134,7 +1188,17 @@ public sealed partial class App : Form {
             };
             tunnelHealthTimer.Start();
             routeCatalog.RefreshAsync(true);
-            Task.Run(async () => { await Connect(); await agent.Run(); });
+            Task.Run(async () => {
+                await Connect();
+                if (!consoleAutoOpened && !offstage && !quitting && localRelayUp && Dirs().Count > 0 && CanUseDesktopConsole()
+                    && !Environment.GetCommandLineArgs().Contains("--classic")
+                    && !Environment.GetCommandLineArgs().Contains("--hidden")
+                    && String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTECLI_DATA"))) {
+                    consoleAutoOpened = true;
+                    try { BeginInvoke(new Action(() => OpenConsole())); } catch (InvalidOperationException) { }
+                }
+                await agent.Run();
+            });
             activityTimer.Start();
             if (!offstage && !Environment.GetCommandLineArgs().Contains("--hidden") && String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTECLI_DATA")) && Convert.ToString(config["ToolInstallSuggested"]).Length == 0) {
                 Keep("ToolInstallSuggested", true);
@@ -1206,7 +1270,7 @@ public sealed partial class App : Form {
         } catch (Exception error) { updateButton.Enabled = true; updateButton.Text = "更新失败"; Say("更新失败：" + error.Message, true); }
     }
     void Reveal() { Show(); WindowState = FormWindowState.Normal; Activate(); }
-    void Shutdown() { generation++; tray.Visible = false; StopChildren(); Abandon(); }
+    void Shutdown() { generation++; tray.Visible = false; if (desktopConsole != null && !desktopConsole.IsDisposed) { desktopConsole.ForceClose(); desktopConsole = null; } StopChildren(); Abandon(); }
     void Quit() {
         if (!Confirm("退出 Remote AI？", "退出后手机不能再连接，正在运行的终端会结束。", "退出", true)) return;
         quitting = true; Shutdown();

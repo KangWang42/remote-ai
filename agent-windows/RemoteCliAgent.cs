@@ -185,6 +185,7 @@ public sealed class TerminalAgent {
     /// terminals, so it answers at once and does what takes time elsewhere.
     public Func<Dictionary<string, object>, Dictionary<string, object>> Computer;
     static readonly string[] ComputerActions = { "settings_read", "settings_change", "line_switch", "line_take", "line_keep", "routes_read" };
+    static readonly string[] GitActions = { "git_status", "git_file_diff", "git_commit", "git_push", "git_worktree_list", "git_worktree_apply", "git_worktree_remove", "git_checkpoint" };
     readonly DesktopOperations Desktop;
     readonly Func<IDesktopConversation> OpenDesktopConversation;
     readonly CodexDesktopSessions NativeDesktop;
@@ -303,6 +304,8 @@ public sealed class TerminalAgent {
         // A terminal runs in a project (Dir). One that took on a conversation that was open in a folder that is no
         // project runs in that folder instead: it has no project ("") and says the folder.
         public string Folder = "";
+        /// Optional isolated Git worktree for this session/terminal.
+        public string WorktreeId = "", WorktreePath = "", Branch = "";
         public DateTime Started = DateTime.UtcNow, ClosedSeen = DateTime.MinValue, Printed = DateTime.MinValue;
         public StringBuilder Pending = new StringBuilder();   // read from the program, not yet numbered
         public List<Dictionary<string, object>> Output = new List<Dictionary<string, object>>();
@@ -989,6 +992,7 @@ public sealed class TerminalAgent {
     static bool Elsewhere(string folder) { return folder.Length >= 3 && folder.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) < 0 && !folder.EndsWith(@"\AppData\Local\Temp", StringComparison.OrdinalIgnoreCase); }
     /// The folder a terminal runs in: its project's, or its own where it has no project. Null when that is gone.
     static string Place(LiveTerminal terminal, Dictionary<string, string> dirs) {
+        if (!String.IsNullOrEmpty(terminal.WorktreePath) && Directory.Exists(terminal.WorktreePath)) return terminal.WorktreePath;
         string path;
         if (terminal.Dir.Length == 0) return terminal.Folder.Length > 0 ? terminal.Folder : null;
         return dirs.TryGetValue(terminal.Dir, out path) ? path : null;
@@ -1806,10 +1810,10 @@ public sealed class TerminalAgent {
             bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read" || FileTransfers.Handles(action), update = action == "update";
             bool desktop = action == "app_open", organize = action == "session_organize";
             bool peek = action == "session_read" || action == "session_say" || action == "session_withdraw" || action == "session_release" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
-            bool computer = Array.IndexOf(ComputerActions, action) >= 0, ownWork = Array.IndexOf(WorkActions, action) >= 0;
+            bool computer = Array.IndexOf(ComputerActions, action) >= 0, ownWork = Array.IndexOf(WorkActions, action) >= 0, git = Array.IndexOf(GitActions, action) >= 0;
             if (!Regex.IsMatch(id, @"\A[a-f0-9]{16,32}\z")) throw new ArgumentException("操作编号无效");
             if (!ownWork && action.StartsWith("work_", StringComparison.Ordinal)) throw new ArgumentException("这台电脑的电脑端版本不支持这项操作，请更新电脑端");
-            if (!project && !file && !update && !peek && !computer && !ownWork && !desktop && !organize && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z")) throw new ArgumentException("操作编号无效");
+            if (!project && !file && !update && !peek && !computer && !ownWork && !git && !desktop && !organize && !Regex.IsMatch(terminal, @"\A[a-f0-9]{32}\z")) throw new ArgumentException("操作编号无效");
             double at; if (!Double.TryParse(Get(op, "at"), out at) || Math.Abs((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds - at) > 150) throw new ArgumentException("操作已过期");
             if (Get(prefs, "RemoteEnabled") != "True") throw new InvalidOperationException("电脑远控已关闭");
             if (op.ContainsKey("receipt") && (!(op["receipt"] is bool) || true.Equals(op["receipt"]) && !nativeControl && !agyControl))
@@ -1834,6 +1838,12 @@ public sealed class TerminalAgent {
                 return;
             }
             else if (ownWork) result = Work(action, op, prefs);
+            else if (git) {
+                string root;
+                if (!AllDirs(prefs).TryGetValue(Get(op, "dir"), out root) || !Directory.Exists(root)) throw new ArgumentException("项目目录未获允许或不存在");
+                RunAsync(id, () => GitReview.Handle(root, op, Worktrees), problem => problem is ArgumentException || problem is InvalidOperationException ? problem.Message : "Git 操作失败：" + problem.Message, limited: false);
+                return;
+            }
             else if (computer) { if (Computer == null) throw new InvalidOperationException("这台电脑运行的后台程序没有可在手机上更改的设置"); result = Computer(op); }
             else if (desktop) {
                 string tool = Get(op, "tool"), folder, draft = Get(op, "draft");
@@ -2075,6 +2085,12 @@ public sealed class TerminalAgent {
                 bool fresh = kind.NamedAtStart && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
                 var live = new LiveTerminal { Id = terminal, Tool = tool, Dir = dir, Folder = folder, Session = fork ? "" : session };
+                if (Get(op, "worktree") == "True" && dir.Length > 0) {
+                    var createdWt = Worktrees.CreateSessionWorktree(dirs[dir], terminal.Substring(0, 12), Get(op, "base_branch"), Get(op, "branch"));
+                    live.WorktreeId = createdWt.Id;
+                    live.WorktreePath = createdWt.Path;
+                    live.Branch = createdWt.Branch;
+                }
                 string requestedMode = Get(op, "mode").Trim().ToLowerInvariant();
                 string maxMode = Get(prefs, "RemoteMaxMode");
                 if (Get(op, "form") == "chat") {
@@ -2271,7 +2287,7 @@ public sealed class TerminalAgent {
                 instance = instance, environment_id = EnvironmentId, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools,
                 agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                 max_mode = ClampMode("", Get(prefs, "RemoteMaxMode")),
-                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "organize", "routes" }
+                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "organize", "routes", "git", "worktree" }
                     .Concat(Desktop.Tools.Select(tool => tool + "-desktop-open"))
                     .Concat(Settled != null ? new[] { "projects" } : new string[0])
                     .Concat(UpdateRequested != null ? new[] { "update" } : new string[0])
@@ -2288,6 +2304,7 @@ public sealed class TerminalAgent {
                 tool = t.Tool, dir = t.Dir, folder = t.Folder, created = Milliseconds(t.Started), title = t.Title, completion = CompletionOf(t.Tool, t.Session, t.Status),
                 form = t.Chat != null ? "chat" : "", said = t.Chat != null ? t.Chat.Said : "", ask = t.Chat != null ? t.Chat.Asking : "",
                 model = t.Model ?? "", effort = t.Effort ?? "", mode = t.Mode ?? "",
+                branch = t.Branch ?? "", worktree = t.WorktreeId ?? "",
                 team = t.Chat != null ? Teams.TeamOf(t.Id, t.Tool, t.Session) : ""
             }).ToArray();
             bool needCheck = sessionsDirty || nowUtc - sessionsChecked > TimeSpan.FromSeconds(1.5) || nowUtc - sessionsSent > TimeSpan.FromSeconds(10);

@@ -1,6 +1,7 @@
 .build/
 09_backup/
 .cache/
+web-app/node_modules/
 dist/
 __pycache__/
 agent-windows/bin/

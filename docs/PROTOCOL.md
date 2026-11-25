@@ -1413,3 +1413,36 @@ Between a computer's page and the app that shows it (`window.RemoteCliNative`):
 - The app opens a computer's page by links: `?tab=<name>` (that computer's part of a tab), `?project=<name>`, and `?tab=together&do=team|handoff|many|chain|schedule`, which opens that sheet of 协作 at once (`?tab=together&newchain=1` is the same as `do=chain`, from the app of 1.6.1).
 
 Windows offers optional Claude Code and Codex CLI installation on first visible startup, and from settings. Only locally accepted, selected tools are installed. It downloads the official Windows PowerShell installers from `https://claude.ai/install.ps1` and `https://chatgpt.com/codex/install.ps1` (redirecting to `downloads.claude.ai` and `releases.openai.com`, respectively), then executes a saved script without elevation. There is no remote install API. Installed tools are detected again; native executables must pass `--version`. Logs are in the computer data folder’s `tool-install` directory. Official instructions: <https://code.claude.com/docs/en/setup> and <https://learn.chatgpt.com/docs/codex/cli>.
+
+## Incremental Overview Sync, Git Review and Session Worktrees
+
+### Overview `rev` long-poll cursor
+
+- `GET /api/terminal` includes a monotonically increasing integer `rev` in every full overview snapshot.
+- Viewers may pass `?rev=<n>&wait=<seconds>` (`wait` clamped to `0..25`). When the relay's current state revision still equals `<n>`, the request is held until a device, terminal or session change increments `rev` or `wait` expires.
+- On timeout with no state change, the relay returns `{"unchanged": true, "rev": <n>, "online": <bool>}` instead of re-serializing the full overview payload.
+
+### First-class Session Worktrees
+
+- Agents advertising `worktree` in `device.features` accept optional `worktree` (`true`, a worktree id, or a branch name), `branch`, and `base_branch` fields on `POST /api/terminal` with `action: "start"`.
+- The computer creates or reuses a dedicated Git worktree for that session (isolated from the main working tree) and reports `worktree` and `branch` on the terminal metadata in overview snapshots.
+- Windows worktree removal (`SafeRemoveWorktree`) unlinks NTFS directory junctions and reparse points before recursive cleanup so shared junction targets (e.g. `node_modules`) are never traversed or deleted.
+
+### Git Review & Checkpoint API (`/api/git`)
+
+Authenticated endpoint `POST /api/git` (requires agent feature `git`) dispatches one-shot held operations (up to 25 seconds) with a caller-generated `id` (`16..32` hex characters), project `dir`, and optional `worktree` id:
+
+| `action` | Request fields | Response |
+| --- | --- | --- |
+| `git_status` | `dir`, optional `worktree` | Lightweight file list without diff bodies: `is_repo`, `branch`, `ahead`, `behind`, `staged`, `unstaged`, `untracked`, `files` (`[{path, status, staged, additions, deletions, binary}]`), `total_additions`, `total_deletions`, `worktrees` |
+| `git_file_diff` | `dir`, `path`, optional `worktree`, `staged`, `context` (`0..20`) | On-demand unified diff bounded to 256 KiB (`patch`, `truncated`, `binary`, `untracked`) |
+| `git_commit` | `dir`, `message`, optional `worktree`, `all`, `files` | Stages requested files (or all) and commits via `git commit -F -` with retry backoff on `.git/index.lock`; returns `commit`, `summary` |
+| `git_push` | `dir`, optional `worktree`, `remote`, `branch` | Pushes current or named branch; returns `output` |
+| `git_worktree_list` | `dir` | Active worktrees for the repository (`[{id, path, branch, head, main}]`) |
+| `git_worktree_apply` | `dir`, `worktree`, optional `squash` | Merges the session worktree branch into the main repository worktree |
+| `git_worktree_remove` | `dir`, `worktree`, optional `force` | Safely removes the session worktree and its branch |
+| `git_checkpoint` | `dir`, optional `worktree`, `label` | Captures the current working tree into a hidden Git ref `refs/remote-ai/checkpoints/<id>` via a scratch `GIT_INDEX_FILE` without modifying the real Git index or stash |
+
+### Embedded Console Framing
+
+- Both `relay/server.py` and Android `EmbeddedPages.java` set `X-Frame-Options: SAMEORIGIN` and `Content-Security-Policy: ... frame-ancestors 'self'` so the unified console (`/console/`) can embed same-origin `/terminal/?id=<id>&embed=1` frames inside its persistent LRU terminal drawer while continuing to block cross-origin framing.

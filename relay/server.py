@@ -38,10 +38,10 @@ SPACES, SPACE_DAYS, SPACES_A_DAY = 100, 30, 6      # computers at most; days a s
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".woff2": "font/woff2", ".bcmap": "application/octet-stream", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
          ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
-SECURITY = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+SECURITY = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "SAMEORIGIN",
             "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
                                        "media-src 'self' blob:; worker-src 'self' blob:; "
-                                       "font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"}
+                                       "font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"}
 
 
 # The pages are the same files until the program on the computer is updated. A phone keeps them and asks only
@@ -457,7 +457,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/terminal":
                 wait = max(0.0, min(25.0, float(first("wait", "0"))))
-                return self._json(200, terminals.overview(first("terminal"), int(first("after", "0")), wait=wait))
+                rev = max(0, int(first("rev", "0")))
+                return self._json(200, terminals.overview(first("terminal"), int(first("after", "0")), wait=wait, rev=rev))
             if path == "/api/terminal/stream":
                 lines = terminals.stream(first("terminal"), int(first("after", "0")))
                 item = next(lines)
@@ -624,7 +625,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ticket":
             return self._json(200, {"ticket": space.tickets.make()})
         call = {"/api/terminal": terminals.command, "/api/terminal/agent": terminals.agent, "/api/terminal/agent/pull": terminals.pull, "/api/files": terminals.files,
-                "/api/conversation": terminals.conversation, "/api/organize": terminals.organize, "/api/computer": terminals.computer, "/api/work": terminals.work}.get(path)
+                "/api/conversation": terminals.conversation, "/api/organize": terminals.organize, "/api/computer": terminals.computer, "/api/work": terminals.work,
+                "/api/git": terminals.git}.get(path)
         if call is None:
             return self._json(404, {"error": "not found"})
         try:

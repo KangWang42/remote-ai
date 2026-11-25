@@ -50,7 +50,8 @@ final class ComputerManagement {
         draw();
 
         LinearLayout access = kit.settingGroup(page, "使用这台电脑");
-        kit.setting(access, R.drawable.ic_computer, kit.accentInk(), "打开工作台", "查看这台电脑上的对话、终端和项目", "", kit.MUTED, () -> activity.open(url, ""));
+        kit.setting(access, R.drawable.ic_computer, kit.accentInk(), "打开总控台", "Diff 审查、Worktree 隔离与多标签工作区", "", kit.MUTED, () -> activity.openConsole(url));
+        kit.setting(access, R.drawable.ic_shell, kit.accentInk(), "打开经典工作台", "查看这台电脑上的对话、终端和项目", "", kit.MUTED, () -> activity.open(url, ""));
         kit.setting(access, R.drawable.ic_chart, TINT_AGY, "工作统计", "查看今日与近 30 天使用趋势", "", kit.MUTED, () -> activity.computerPage(url, "me"));
         kit.setting(access, R.drawable.ic_desktop, TINT_WARN, "远程桌面", "通过 UU 远程打开桌面或小窗", "", kit.MUTED, () -> activity.desktop(url));
         kit.setting(access, R.drawable.ic_settings, kit.MUTED, "电脑设置", "连接线路、远程访问与工具", "", kit.MUTED, () -> activity.computerSettings(url));

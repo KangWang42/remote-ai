@@ -657,6 +657,8 @@ public final class MainActivity extends Activity {
             startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
         }
     }
+    /** Straight into the unified console workspace (Diff, Worktree, multi-pane chat/terminal). */
+    void openConsole(String address) { openPage(address, "", "/console/"); }
     /** Straight into one terminal; its page is told to come back here rather than to that computer's list. */
     void openTerminal(String address, String terminal) { openTerminal(address, terminal, false); }
     void openTerminal(String address, String terminal, boolean chat) {

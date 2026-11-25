@@ -17,21 +17,33 @@ public sealed class Worktrees {
     static readonly Regex SafeTool = new Regex(@"\A[a-z0-9_-]{1,24}\z");
 
     public sealed class Created {
-        public string Path = "", BaseCommit = "";
+        public string Path = "", BaseCommit = "", Branch = "", Id = "";
+    }
+
+    public sealed class Info {
+        public string Id = "", Path = "", Branch = "", Head = "";
+        public bool Main, Managed, Locked;
     }
 
     public Worktrees(string rootDir) { this.rootDir = rootDir; }
 
     sealed class GitResult { public int Code; public byte[] OutBytes = new byte[0]; public string Out = "", Err = ""; }
 
-    static GitResult RunGit(string folder, string args, int timeoutMs = 20000) {
+    static GitResult RunGit(string folder, string args, int timeoutMs = 20000, Dictionary<string, string> extraEnv = null, string stdinText = null) {
         try {
             var info = new ProcessStartInfo("git", "-C \"" + folder + "\" " + args) {
                 UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true,
+                RedirectStandardInput = stdinText != null,
                 StandardErrorEncoding = new UTF8Encoding(false)
             };
+            if (extraEnv != null) foreach (var kv in extraEnv) info.EnvironmentVariables[kv.Key] = kv.Value;
             using (var p = Process.Start(info)) {
+                if (stdinText != null) {
+                    byte[] inputBytes = new UTF8Encoding(false).GetBytes(stdinText);
+                    p.StandardInput.BaseStream.Write(inputBytes, 0, inputBytes.Length);
+                    p.StandardInput.Close();
+                }
                 var outBuf = new MemoryStream();
                 var copyOut = p.StandardOutput.BaseStream.CopyToAsync(outBuf);
                 var readErr = p.StandardError.ReadToEndAsync();
@@ -48,6 +60,112 @@ public sealed class Worktrees {
         } catch (InvalidOperationException ex) {
             return new GitResult { Code = -1, Err = ex.Message };
         }
+    }
+
+    /// Creates an isolated named-branch worktree for an ordinary interactive session or terminal.
+    public Created CreateSessionWorktree(string repoDir, string sessionKey, string baseBranch = "", string branchName = "") {
+        if (String.IsNullOrEmpty(repoDir) || !Directory.Exists(repoDir)) throw new ArgumentException("项目文件夹不存在");
+        string safeKey = Regex.Replace(sessionKey ?? "", @"[^a-zA-Z0-9_-]", "");
+        if (safeKey.Length < 4 || safeKey.Length > 40) safeKey = Guid.NewGuid().ToString("N").Substring(0, 12);
+        var top = RunGit(repoDir, "rev-parse --show-toplevel");
+        if (top.Code != 0) throw new InvalidOperationException("该项目文件夹不是 Git 仓库，无法创建独立 Worktree");
+        string targetRef = String.IsNullOrWhiteSpace(baseBranch) ? "HEAD" : baseBranch.Trim();
+        var resolved = RunGit(repoDir, "rev-parse \"" + targetRef + "\"");
+        if (resolved.Code != 0 || String.IsNullOrWhiteSpace(resolved.Out)) throw new InvalidOperationException("找不到基线分支或提交：" + targetRef);
+        string baseCommit = resolved.Out.Trim();
+        string wantedBranch = String.IsNullOrWhiteSpace(branchName) ? "remote/" + safeKey.Substring(0, Math.Min(12, safeKey.Length)) : branchName.Trim();
+        string sessionsRoot = Path.Combine(rootDir, "sessions");
+        Directory.CreateDirectory(sessionsRoot);
+        string path = Path.Combine(sessionsRoot, safeKey);
+        if (Directory.Exists(path)) SafeRemoveWorktree(repoDir, path);
+
+        string branch = wantedBranch;
+        var exists = RunGit(repoDir, "show-ref --verify --quiet \"refs/heads/" + branch + "\"");
+        if (exists.Code == 0) branch = wantedBranch + "-" + DateTime.UtcNow.ToString("HHmmss");
+        var added = RunGit(repoDir, "worktree add -b \"" + branch + "\" \"" + path + "\" " + baseCommit, 30000);
+        if (added.Code != 0 || !Directory.Exists(path))
+            throw new InvalidOperationException("未能创建独立 Worktree：" + (added.Err.Length > 0 ? added.Err : "git worktree add 失败"));
+        return new Created { Id = safeKey, Path = path, BaseCommit = baseCommit, Branch = branch };
+    }
+
+    public string ResolveSessionWorktreePath(string repoDir, string worktreeId) {
+        if (String.IsNullOrWhiteSpace(worktreeId)) return repoDir;
+        string clean = worktreeId.Trim();
+        if (!Regex.IsMatch(clean, @"\A[A-Za-z0-9_-]{4,40}\z")) throw new ArgumentException("Worktree 标识无效");
+        string full = Path.Combine(rootDir, "sessions", clean);
+        if (!Directory.Exists(full)) throw new InvalidOperationException("指定的 Worktree 不存在或已清理");
+        return full;
+    }
+
+    public List<Info> ListWorktrees(string repoDir) {
+        var list = new List<Info>();
+        if (String.IsNullOrEmpty(repoDir) || !Directory.Exists(repoDir)) return list;
+        var res = RunGit(repoDir, "worktree list --porcelain", 15000);
+        if (res.Code != 0) return list;
+        string managedPrefix = Path.GetFullPath(Path.Combine(rootDir, "sessions")).TrimEnd('\\') + "\\";
+        Info current = null;
+        foreach (string rawLine in (res.Out ?? "").Split(new[] { '\r', '\n' })) {
+            string line = rawLine.Trim();
+            if (line.Length == 0) {
+                if (current != null && current.Path.Length > 0) { list.Add(current); current = null; }
+                continue;
+            }
+            if (line.StartsWith("worktree ", StringComparison.Ordinal)) {
+                if (current != null && current.Path.Length > 0) list.Add(current);
+                string p = line.Substring(9).Trim().Replace('/', '\\');
+                bool managed = p.StartsWith(managedPrefix, StringComparison.OrdinalIgnoreCase);
+                string id = managed ? Path.GetFileName(p.TrimEnd('\\')) : "";
+                current = new Info { Path = p, Main = list.Count == 0, Managed = managed, Id = id };
+            } else if (current != null) {
+                if (line.StartsWith("HEAD ", StringComparison.Ordinal)) current.Head = line.Substring(5).Trim();
+                else if (line.StartsWith("branch ", StringComparison.Ordinal)) current.Branch = line.Substring(7).Trim().Replace("refs/heads/", "");
+                else if (line == "locked" || line.StartsWith("locked ", StringComparison.Ordinal)) current.Locked = true;
+            }
+        }
+        if (current != null && current.Path.Length > 0) list.Add(current);
+        return list;
+    }
+
+    /// Windows-safe worktree removal: unlinks NTFS junctions without following them, removes directory, then prunes Git metadata.
+    public void SafeRemoveWorktree(string repoDir, string worktreePath) {
+        if (String.IsNullOrWhiteSpace(worktreePath)) return;
+        SafeDeleteDirectory(worktreePath);
+        if (!String.IsNullOrEmpty(repoDir) && Directory.Exists(repoDir)) {
+            RunGit(repoDir, "worktree remove --force --force \"" + worktreePath + "\"", 15000);
+            RunGit(repoDir, "worktree prune", 10000);
+        }
+    }
+
+    /// Captures a non-intrusive workspace snapshot into a hidden Git ref (refs/remote-ai/checkpoints/<id>)
+    /// using a persistent scratch index so user branches and index remain untouched.
+    public Dictionary<string, object> CaptureCheckpoint(string folder, string label = "") {
+        var common = RunGit(folder, "rev-parse --git-common-dir", 10000);
+        if (common.Code != 0 || String.IsNullOrWhiteSpace(common.Out)) throw new InvalidOperationException("不是有效的 Git 仓库");
+        var head = RunGit(folder, "rev-parse HEAD", 10000);
+        if (head.Code != 0 || String.IsNullOrWhiteSpace(head.Out)) throw new InvalidOperationException("仓库尚无提交，无法创建快照");
+        string commonDir = common.Out.Trim();
+        if (!Path.IsPathRooted(commonDir)) commonDir = Path.GetFullPath(Path.Combine(folder, commonDir));
+        string indexDir = Path.Combine(commonDir, "remote-ai-checkpoints");
+        Directory.CreateDirectory(indexDir);
+        string scratchIndex = Path.Combine(indexDir, "scratch.index");
+        var env = new Dictionary<string, string> { { "GIT_INDEX_FILE", scratchIndex } };
+        var readTree = RunGit(folder, "read-tree HEAD", 15000, env);
+        if (readTree.Code != 0) throw new InvalidOperationException("读取基线索引失败：" + readTree.Err);
+        var addAll = RunGit(folder, "add -A", 20000, env);
+        if (addAll.Code != 0) throw new InvalidOperationException("暂存快照文件失败：" + addAll.Err);
+        var tree = RunGit(folder, "write-tree", 15000, env);
+        if (tree.Code != 0 || String.IsNullOrWhiteSpace(tree.Out)) throw new InvalidOperationException("写入快照树失败：" + tree.Err);
+        string treeOid = tree.Out.Trim();
+        string headOid = head.Out.Trim();
+        string cpId = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-") + Guid.NewGuid().ToString("N").Substring(0, 6);
+        string msg = String.IsNullOrWhiteSpace(label) ? "Remote AI checkpoint " + cpId : label.Trim();
+        var commit = RunGit(folder, "commit-tree " + treeOid + " -p " + headOid, 15000, null, msg);
+        if (commit.Code != 0 || String.IsNullOrWhiteSpace(commit.Out)) throw new InvalidOperationException("创建快照提交失败：" + commit.Err);
+        string commitOid = commit.Out.Trim();
+        string refName = "refs/remote-ai/checkpoints/" + cpId;
+        var updated = RunGit(folder, "update-ref \"" + refName + "\" " + commitOid, 10000);
+        if (updated.Code != 0) throw new InvalidOperationException("更新快照引用失败：" + updated.Err);
+        return new Dictionary<string, object> { { "id", cpId }, { "ref", refName }, { "commit", commitOid }, { "head", headOid }, { "label", msg } };
     }
 
     /// Creates an isolated detached-HEAD worktree for one candidate tool of a compare task.
@@ -174,12 +292,24 @@ public sealed class Worktrees {
     }
 
     static void TryDeleteDir(string path) {
+        SafeDeleteDirectory(path);
+    }
+
+    /// Safely deletes a directory on Windows without following NTFS junctions or symlinks into targets.
+    public static void SafeDeleteDirectory(string path) {
         try {
             if (!Directory.Exists(path)) return;
-            foreach (string file in Directory.GetFiles(path, "*", SearchOption.AllDirectories)) {
-                try { File.SetAttributes(file, FileAttributes.Normal); } catch (Exception) { }
+            var dirInfo = new DirectoryInfo(path);
+            if ((dirInfo.Attributes & FileAttributes.ReparsePoint) != 0) {
+                Directory.Delete(path, false);
+                return;
             }
-            Directory.Delete(path, true);
+            foreach (string sub in Directory.GetDirectories(path)) SafeDeleteDirectory(sub);
+            foreach (string file in Directory.GetFiles(path)) {
+                try { File.SetAttributes(file, FileAttributes.Normal); File.Delete(file); } catch (Exception) { }
+            }
+            try { File.SetAttributes(path, FileAttributes.Normal); } catch (Exception) { }
+            Directory.Delete(path, false);
         } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 }

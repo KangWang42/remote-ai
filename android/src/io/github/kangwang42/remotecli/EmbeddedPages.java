@@ -25,10 +25,10 @@ final class EmbeddedPages {
         headers.put("Cache-Control", "no-store");
         headers.put("X-Content-Type-Options", "nosniff");
         headers.put("Referrer-Policy", "no-referrer");
-        headers.put("X-Frame-Options", "DENY");
+        headers.put("X-Frame-Options", "SAMEORIGIN");
         headers.put("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
             + "media-src 'self' blob:; worker-src 'self' blob:; font-src 'self' data:; connect-src 'self'; "
-            + "frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+            + "frame-ancestors 'self'; base-uri 'none'; form-action 'none'");
     }
 
     WebResourceResponse intercept(WebResourceRequest request) {

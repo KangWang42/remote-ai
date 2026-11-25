@@ -2,6 +2,7 @@
 (async () => {
   'use strict';
   const bridge = window.ProjectTerminal;
+  if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.dataset.embed = '1';
   const $ = id => document.getElementById(id);
   const input = $('input'), status = $('status-text'), connection = $('connection'), connectionText = $('connection-text'), connectionDetail = $('connection-detail'), notice = $('notice'), palette = $('palette'), sendButton = $('send');
   const screen = $('screen'), holder = $('terminal'), dot = $('dot'), slash = $('slash'), latest = $('latest');

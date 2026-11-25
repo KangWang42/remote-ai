@@ -448,6 +448,10 @@ def _routes(items):
 
 # What the program on the computer is asked about itself: a few of its settings, and the line it is reached by.
 COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep", "routes_read")
+# Workspace Git review, diff, commit/push, worktree management and turn checkpoints (agent-windows/GitReview.cs).
+GIT_ACTIONS = ("git_status", "git_file_diff", "git_commit", "git_push", "git_worktree_list", "git_worktree_apply", "git_worktree_remove", "git_checkpoint")
+_GIT_REF = re.compile(r"^[A-Za-z0-9._/-]{1,120}$")
+_GIT_PATH = re.compile(r"^[^\x00-\x1f]{1,260}$")
 # What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
 # it, the questions set to be asked at a time, and one conversation handed over to another.
 WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "brief", "chains", "chain_set", "chain_remove",
@@ -485,7 +489,7 @@ WAYS = {"say": ("codex-desktop", "agy-desktop", "hook", "wake"), "stop": ("codex
 _choice = re.compile(r"choice:(?:0|[1-9][0-9]{0,2})")
 # What the owner has said of a conversation, kept by the computer: it stands first in the lists, or is left out of them.
 MARKS = ("pinned", "hidden")
-ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end", "session_organize") + COMPUTER_ACTIONS + DESKTOP_ACTIONS + tuple("work_" + name for name in WORK_ACTIONS)     # operations whose acknowledgment carries an answer
+ANSWERED = FILE_ACTIONS + ("session_read", "session_say", "session_withdraw", "session_release", "session_stop", "session_answer", "session_mark", "session_delete", "session_end", "session_organize") + COMPUTER_ACTIONS + GIT_ACTIONS + DESKTOP_ACTIONS + tuple("work_" + name for name in WORK_ACTIONS)     # operations whose acknowledgment carries an answer
 _ask = re.compile(r"^[a-f0-9]{8,32}$")
 
 
@@ -580,7 +584,7 @@ class Relay:
         self._lock = threading.Lock()
         self._changed = threading.Condition(self._lock)       # new terminal output or state: waiting stream/overview readers wake
         self._ops_changed = threading.Condition(self._lock)   # new queued operations or RPC answers: pull() and _held() wake
-        self._tick = [0]            # counts terminal output/state wake-ups, so a waiter can tell one happened between look and wait
+        self._tick = [1]            # counts terminal output/state wake-ups, so a waiter can tell one happened between look and wait
         self._kept = None           # the list of terminals, once it has been read
         self._unsaved = None        # the time of the oldest output not yet written to disk
         self._logged = {}           # terminal -> [seq of the last piece in its file, characters in the file]
@@ -802,12 +806,23 @@ class Relay:
         while self._pending and now - next(iter(self._pending.values()))["at"] > 600:
             self._pending.queued.pop(self._pending.popitem(last=False)[0], None)
 
-    def overview(self, terminal="", after=0, now=None, wait=0):
+    def overview(self, terminal="", after=0, now=None, wait=0, rev=0):
         """The list, or one terminal's output after `after`. With `wait`, an answer that has nothing new is held back
-        until there is output or the terminal changed, at most that many seconds."""
+        until there is output or state changed, at most that many seconds. When `rev` matches the current list revision,
+        an unchanged overview returns a tiny sentinel instead of resending full lists."""
         deadline = time.monotonic() + min(max(wait, 0), 25)
         first = None
         while True:
+            if not terminal and rev > 0:
+                with self._lock:
+                    current_rev = self._tick[0]
+                    online = (time.time() if now is None else now) - self._device["seen"] < 15
+                if current_rev == rev:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return {"unchanged": True, "rev": current_rev, "online": online}
+                    self._wait(current_rev, remaining)
+                    continue
             result = self._overview(terminal, after, time.time() if now is None else now)
             if not terminal:
                 return result
@@ -863,7 +878,7 @@ class Relay:
                 attached = {t.get("session"): t["id"] for t in state["threads"].values() if t["state"] in ("starting", "running")}
                 for gone in [key for key in self._screens if key not in state["threads"]]:
                     del self._screens[gone]
-                return {"device": self._view(now), "terminals": sorted(
+                return {"rev": self._tick[0], "device": self._view(now), "terminals": sorted(
                     [dict(self._public(t), said=self._said(t) if t["state"] == "running" else "",
                           asks=self._question(t) if t["state"] == "running" and t.get("phase") == "confirm" else [])
                      for t in state["threads"].values()], key=lambda t: -t["created"]),
@@ -956,8 +971,15 @@ class Relay:
                 previous = payload.get("previous", "")
                 if previous and (not isinstance(previous, str) or not _id.fullmatch(previous)):
                     raise RemoteError("历史对话编号无效")
-                if any(type(payload.get(k, False)) is not bool for k in ("history", "takeover", "fork")):
+                if any(type(payload.get(k, False)) is not bool for k in ("history", "takeover", "fork", "worktree")):
                     raise RemoteError("历史选项无效")
+                if payload.get("worktree", False):
+                    if apart or "worktree" not in self._device.get("features", []):
+                        raise RemoteError("电脑端暂不支持在此处创建独立 Worktree")
+                    for ref_key in ("branch", "base_branch"):
+                        ref = payload.get(ref_key, "")
+                        if ref and (not isinstance(ref, str) or not _GIT_REF.fullmatch(ref.strip()) or ".." in ref or ref.startswith("-") or ref.startswith("/")):
+                            raise RemoteError("分支名称无效")
                 chat = payload.get("form", "") == "chat"
                 if payload.get("form", "") not in ("", "chat") or "text" in payload and not chat:
                     raise RemoteError("终端选项无效")
@@ -1411,6 +1433,73 @@ class Relay:
                     saved["organize"] = organized
             return answer
 
+    def git(self, payload, now=None, wait=FILE_SECONDS):
+        """Workspace Git status, on-demand per-file diff, commit/push, worktree management and checkpoints."""
+        now = time.time() if now is None else now
+        if not isinstance(payload, dict):
+            raise RemoteError("请求格式无效")
+        op_id, action, folder = payload.get("id"), payload.get("action"), payload.get("dir", "")
+        if not isinstance(op_id, str) or not _id.fullmatch(op_id):
+            raise RemoteError("操作编号无效")
+        if action not in GIT_ACTIONS:
+            raise RemoteError("不支持此 Git 操作")
+        if not isinstance(folder, str) or not folder:
+            raise RemoteError("请选择项目")
+        question = {"id": op_id, "action": action, "dir": folder}
+        wt = payload.get("worktree", "")
+        if wt:
+            if not isinstance(wt, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,80}", wt) or ".." in wt:
+                raise RemoteError("工作区标识无效")
+            question["worktree"] = wt
+        if action == "git_file_diff":
+            path = payload.get("path", "")
+            if not isinstance(path, str) or not _GIT_PATH.fullmatch(path) or ".." in path.replace("\\", "/").split("/") or path.startswith(("/", "\\")):
+                raise RemoteError("文件路径无效")
+            scope = payload.get("scope", "working")
+            if scope not in ("working", "staged", "base"):
+                raise RemoteError("差异范围无效")
+            question.update(path=path, scope=scope)
+            base = payload.get("base", "")
+            if base:
+                if not isinstance(base, str) or not _GIT_REF.fullmatch(base) or ".." in base or base.startswith("-"):
+                    raise RemoteError("基线引用无效")
+                question["base"] = base
+        elif action == "git_commit":
+            message = _words(payload.get("message"), most=2000)
+            if message is None:
+                raise RemoteError("请输入有效的提交说明")
+            question["message"] = message
+            files = payload.get("files")
+            if files is not None:
+                if not isinstance(files, list) or len(files) > 200 or any(not isinstance(p, str) or not _GIT_PATH.fullmatch(p) or ".." in p.replace("\\", "/").split("/") or p.startswith(("/", "\\")) for p in files):
+                    raise RemoteError("提交文件列表无效")
+                question["files"] = files
+        elif action == "git_push":
+            if payload.get("set_upstream") is True:
+                question["set_upstream"] = True
+        elif action in ("git_worktree_apply", "git_worktree_remove"):
+            if not wt:
+                raise RemoteError("请指定要操作的 Worktree")
+            if payload.get("remove_after") is True:
+                question["remove_after"] = True
+        elif action == "git_checkpoint":
+            label = payload.get("label", "")
+            if label and (not isinstance(label, str) or len(label) > 80 or any(ord(c) < 32 for c in label)):
+                raise RemoteError("快照说明无效")
+            if label:
+                question["label"] = label
+        with self._changed:
+            self._expire(now)
+            if op_id in self._pending:
+                raise RemoteError("操作编号已被其它操作使用")
+            if not self._view(now)["online"] or not self._device["enabled"]:
+                raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
+            if "git" not in self._device.get("features", []):
+                raise RemoteError("电脑端版本不支持 Git 审阅操作，请更新电脑端")
+            if folder not in self._device["workspaces"]:
+                raise RemoteError("没有这个项目")
+            return self._held(question, now, wait)
+
     def computer(self, payload, now=None, wait=FILE_SECONDS):
         """A question to the program on the computer about itself: its settings, and the line the phone reaches it
         by. The program answers and decides; the relay checks the shape of the question, passes it on, holds the
@@ -1776,7 +1865,7 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
@@ -1856,7 +1945,9 @@ class Relay:
                         dirty = True
                     for k, check in (("model", lambda v: isinstance(v, str) and (not v or bool(_model.fullmatch(v)))),
                                      ("effort", lambda v: isinstance(v, str) and (not v or bool(_effort.fullmatch(v.lower())))),
-                                     ("mode", lambda v: v in ("", "full", "edit", "read"))):
+                                     ("mode", lambda v: v in ("", "full", "edit", "read")),
+                                     ("branch", lambda v: isinstance(v, str) and len(v) <= 120),
+                                     ("worktree", lambda v: isinstance(v, str) and len(v) <= 80)):
                         if k in item and check(item[k]):
                             val = item[k].strip().lower() if k == "effort" else item[k].strip()
                             if val != term.get(k, ""):
