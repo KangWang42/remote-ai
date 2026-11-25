@@ -787,6 +787,24 @@ class Relay:
             lines.pop(0)
         return lines
 
+    def _reopened(self, state, payload, tool, folder, chat):
+        """The running terminal a `reopen` request shows the other way: a Claude Code or Codex conversation that its
+        tool has named, outside a collaboration task, of the same tool and project, shown now the other way."""
+        if "reopen" not in self._device.get("features", []):
+            raise RemoteError("电脑端版本不支持切换视图，请更新电脑端")
+        if set(payload) - {"id", "action", "tool", "dir", "form", "reopen"} or tool not in ("claude", "codex"):
+            raise RemoteError("切换视图的选项无效")
+        source = state["threads"].get(payload["reopen"]) if isinstance(payload["reopen"], str) else None
+        if not source or source["state"] not in ("starting", "running") or source["tool"] != tool or source["dir"] != folder:
+            raise RemoteError("原对话已结束，请刷新后重试")
+        if (source.get("form") == "chat") == chat:
+            raise RemoteError("这段对话已经是这种视图")
+        if not source.get("session"):
+            raise RemoteError(f"{LABELS[tool]} 还没有给这段对话编号，发一条消息后再切换")
+        if source.get("team"):
+            raise RemoteError("协作任务中的对话不能切换视图")
+        return source
+
     def _public(self, term):
         shown = {k: v for k, v in term.items() if k not in ("output", "instance", "size", "out_at", "touched", "calm_until", "modes", "modes_rest", "asking", "_asks_cache")}
         shown["team"] = term.get("team", "")
@@ -1012,7 +1030,12 @@ class Relay:
                         raise RemoteError("对话选项无效")
                     if "text" in payload and _words(payload["text"]) is None:
                         raise RemoteError("内容为空、超过 8000 字或含有控制字符")
-                session = payload.get("session", "")
+                # The same conversation shown the other way (`reopen`): the computer ends the terminal that runs it as a
+                # chat or on its tool's own screen and goes on with it the other way in a new terminal, which then
+                # stands for the conversation in the list (_single). What it was started with comes from that
+                # terminal, never from the request.
+                source = self._reopened(state, payload, tool, folder, chat) if "reopen" in payload else None
+                session = source["session"] if source else payload.get("session", "")
                 if tool == "agy" and (payload.get("history") or (payload.get("takeover") and not session)):
                     raise RemoteError("请在项目中选择具体的 Antigravity 对话，或新建终端")
                 if payload.get("history") and not session and not previous:
@@ -1021,7 +1044,9 @@ class Relay:
                 fork = payload.get("fork", False)
                 if fork and (tool != "codex" or not session or payload.get("takeover") or "codex-fork" not in self._device.get("features", [])):
                     raise RemoteError("电脑端不支持这个副本选项，请更新电脑后台")
-                if session:
+                if source:
+                    where, called = source.get("folder", ""), self._public(source)["title"]
+                elif session:
                     saved = next((s for s in self._sessions if s["id"] == session and s["tool"] == tool and s["dir"] == folder), None)                     if isinstance(session, str) and session_id_ok(tool, session) else None
                     if not saved:
                         raise RemoteError("电脑上没有找到这个对话，请刷新后重试")
@@ -1039,22 +1064,26 @@ class Relay:
                     raise RemoteError("电脑没有报告这个工具或目录")
                 if apart:
                     asked, payload = payload, dict(payload, folder=where)       # what the viewer sent is kept, to know the same request again
-                if sum(t["state"] in ("starting", "running") for t in state["threads"].values()) >= MAX_TERMINALS:
+                # (the terminal a reopened conversation leaves is ended by the computer before the new one starts)
+                if sum(t["state"] in ("starting", "running") for t in state["threads"].values()) - (1 if source else 0) >= MAX_TERMINALS:
                     raise RemoteError(f"最多同时运行 {MAX_TERMINALS} 个终端，请先结束一个")
                 terminal = uuid.uuid4().hex
                 if chat and not called and payload.get("text"):
                     # a new conversation is called by what it was first told, until its tool names it
                     called = " ".join(_words(payload["text"]).split())[:40]
+                given = source or payload
                 term = {"id": terminal, "tool": tool, "dir": folder, "folder": where,
                         # one outside every project is called what its conversation is: the computer lists that conversation only while it is open
-                        "title": (called[:60] if (apart or chat) and called else self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool]) + (" · 副本" if fork else ""), "session": "" if fork else session, "status": "",
-                        "model": (payload.get("model") or "").strip() if isinstance(payload.get("model"), str) else "",
-                        "effort": (payload.get("effort") or "").strip().lower() if isinstance(payload.get("effort"), str) else "",
-                        "mode": payload.get("mode") if payload.get("mode") in ("full", "edit", "read") else "",
+                        "title": (called[:60] if (apart or chat or source) and called else self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool]) + (" · 副本" if fork else ""), "session": "" if fork else session, "status": "",
+                        "model": (given.get("model") or "").strip() if isinstance(given.get("model"), str) else "",
+                        "effort": (given.get("effort") or "").strip().lower() if isinstance(given.get("effort"), str) else "",
+                        "mode": given.get("mode") if given.get("mode") in ("full", "edit", "read") else "",
                         "created": int(now * 1000), "state": "starting", "error": "", "seq": 0, "output": [], "size": 0, "cols": 80, "rows": 24,
                         "instance": self._device["instance"], "previous": previous, "history": bool(payload.get("history")), "touched": False}
                 if chat:
                     term.update(form="chat", touched=True)
+                if source and source.get("renamed"):
+                    term.update(title=source["title"], renamed=True)
                 state["threads"][terminal] = term
                 _room(state)
             else:
@@ -1890,7 +1919,7 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

@@ -116,6 +116,35 @@ class TerminalRelayTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteError, "不支持此操作"):
             self.relay.command({"action": "stop", "id": "4" * 32, "terminal": screen}, now=1013)
 
+    def test_a_conversation_is_reopened_the_other_way_with_what_it_had(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        self.info["features"] = ["chat"]
+        self.relay.agent({"info": self.info}, now=1001)
+        start = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "history": False, "form": "chat", "text": "看看结算页"}
+        chat = self.relay.command(start, now=1002)["terminal"]
+        listed = {"id": chat, "state": "running", "form": "chat", "status": "idle", "session": sid, "model": "opus", "mode": "edit"}
+        self.relay.agent({"info": self.info, "acks": [{"id": start["id"]}], "terminals": [listed]}, now=1003)
+        screen = {"action": "start", "id": "b" * 32, "tool": "claude", "dir": "demo", "reopen": chat}
+        with self.assertRaisesRegex(RemoteError, "不支持切换视图"):
+            self.relay.command(screen, now=1004)
+        self.info["features"] = ["chat", "reopen"]
+        self.relay.agent({"info": self.info, "terminals": [listed]}, now=1004)
+        for wrong in ({"form": "chat"}, {"session": sid}, {"takeover": True}, {"tool": "codex"}, {"reopen": "c" * 32}):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(screen, id="e" * 32, **wrong), now=1005)
+        self.relay.agent({"info": self.info, "terminals": [dict(listed, status="busy")]}, now=1005)
+        reopened = self.relay.command(screen, now=1006)
+        terminals = {t["id"]: t for t in self.relay.overview(now=1006)["terminals"]}
+        new = terminals[reopened["terminal"]]
+        self.assertEqual((new["session"], new["model"], new["mode"], new.get("form", "")), (sid, "opus", "edit", ""))
+        operation = self.relay.agent({"info": self.info, "terminals": [listed]}, now=1007)["operations"][-1]
+        self.assertEqual((operation["action"], operation["reopen"]), ("start", chat))
+        # the computer refused it: the conversation stays where it was
+        self.relay.agent({"info": self.info, "acks": [{"id": screen["id"], "error": "对话正在执行或等待确认"}], "terminals": [listed]}, now=1008)
+        terminals = {t["id"]: t for t in self.relay.overview(now=1008)["terminals"]}
+        self.assertEqual(terminals.get(reopened["terminal"], {"state": "closed"})["state"], "closed")
+        self.assertEqual(terminals[chat]["state"], "running")
+
     def test_an_agy_chat_needs_a_computer_that_runs_it(self):
         # Antigravity CLI runs as a conversation by its ACP server, on a computer that says so ("chat-agy")
         self.info["tools"] = ["claude", "codex", "agy", "shell"]

@@ -1497,6 +1497,25 @@ class EndToEnd(unittest.TestCase):
         self.poll(lambda: self.overview(),
                   lambda v: any(t["id"] == terminal and t["state"] == "closed" for t in v["terminals"]))
 
+    def test_a_conversation_is_reopened_the_other_way(self):
+        # the saved conversation on Claude Code's own screen, then as a chat: the screen's terminal ends first,
+        # and the chat goes on with the same conversation, which the list then shows once, as the chat
+        started = self.op({"action": "start", "tool": "claude", "dir": "项目", "session": self.saved})
+        screen = started["terminal"]
+        self.read_until(screen, "STANDIN_CLAUDE[")
+        self.poll(lambda: self.overview(), lambda v: any(t["id"] == screen and t["state"] == "running" and t.get("session") == self.saved for t in v["terminals"]))
+        reopened = self.op({"action": "start", "tool": "claude", "dir": "项目", "form": "chat", "reopen": screen})
+        chat = reopened["terminal"]
+        try:
+            view = self.poll(lambda: self.overview(), lambda v: any(t["id"] == chat and t["state"] == "running" for t in v["terminals"]))
+            listed = [t for t in view["terminals"] if t.get("session") == self.saved]
+            self.assertEqual([(t["id"], t.get("form")) for t in listed], [(chat, "chat")])
+            with self.assertRaises(AssertionError):                 # it is a chat already
+                self.op({"action": "start", "tool": "claude", "dir": "项目", "form": "chat", "reopen": chat})
+        finally:
+            self.op({"action": "close", "terminal": chat})
+        self.poll(lambda: self.overview(), lambda v: any(t["id"] == chat and t["state"] == "closed" for t in v["terminals"]))
+
     def test_close_kills_what_the_program_left_behind(self):
         # a background task that made a session of its own is past a kill of the process
         # group: closing the terminal takes it too, or it holds the screen open for ever

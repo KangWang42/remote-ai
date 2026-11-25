@@ -186,7 +186,8 @@ UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish"
 FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
-FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days"]
+TOOL_LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}
+FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "reopen"]
 ATTACHMENT_LIMIT = 20 * 1024 * 1024
 ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
 # What the phone asks about the owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
@@ -3480,7 +3481,7 @@ def handover(source, messages, note):
     asked = [m["text"] for m in messages if m.get("role") == "user"]
     answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
     steps = [m["text"] for m in messages if m.get("role") == "tool"]
-    label = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}.get(source["tool"], source["tool"])
+    label = TOOL_LABELS.get(source["tool"], source["tool"])
     brief = "【对话交接】下面是我在另一段对话里的进展（%s，“%s”%s），请接着处理。\n" % (label, source["title"], "，项目 " + source["dir"] if source["dir"] else "")
     if asked:
         brief += "\n我最初的要求：\n" + cut(asked[0], 800) + "\n"
@@ -3501,7 +3502,7 @@ def chain_brief(source, messages, note):
     cut = lambda text, most: text.strip() if len(text.strip()) <= most else text.strip()[:most] + "…"
     answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
     brief = "【接力】%s“%s”完成了一轮，把它的进展转给你。\n" % (
-        {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}.get(source["tool"], source["tool"]),
+        TOOL_LABELS.get(source["tool"], source["tool"]),
         source["title"])
     if answered:
         brief += "\n它最后的回答：\n" + cut(answered, 2000) + "\n"
@@ -3930,6 +3931,37 @@ class Agent:
         brief = handover(source, read.get("messages", []), str(op.get("note") or ""))
         return {"status": "accepted", "note": self.tell(taker["tool"], taker["id"], brief), "length": len(brief)}
 
+    def known_now(self, session, tool, name):
+        """A conversation of this computer's lists; one it has only just had is not listed yet: a look is asked for
+        now and waited for, rather than the phone told to refresh."""
+        if not session_id_ok(tool, session):
+            return None
+        saved = self.sessions.known(session, tool, name)
+        if saved is None:
+            self.scan_wake.set()
+            seen, deadline = self.scan_done, time.time() + 3.5
+            with self.scanned:
+                while self.scan_done == seen and time.time() < deadline:
+                    self.scanned.wait(deadline - time.time())
+            saved = self.sessions.known(session, tool, name)
+        return saved
+
+    def reopening(self, op, tool, name):
+        """The terminal a `reopen` start leaves: a Claude Code or Codex conversation that runs as a chat and is to be
+        shown on its tool's own screen, or the other way round. One at work, asking or unnamed stays."""
+        source = self.terminals.get(str(op.get("reopen") or ""))
+        if source is None or source.closed or source.closing_at is not None:
+            raise OpError("原对话已结束，请刷新后重试")
+        if source.tool != tool or source.project != name or tool not in ("claude", "codex"):
+            raise OpError("切换视图的选项无效")
+        if isinstance(source, Chat) == (op.get("form") == "chat"):
+            raise OpError("这段对话已经是这种视图")
+        if not source.session:
+            raise OpError("%s 还没有给这段对话编号，发一条消息后再切换" % TOOL_LABELS.get(tool, tool))
+        if source.status in ("busy", "confirm"):
+            raise OpError("对话正在执行或等待确认，请等这一轮结束或先停止")
+        return source
+
     def start_terminal(self, op, dirs, terminal, op_id=""):
         if terminal in self.terminals:
             return                              # already started; the operation is a repeat
@@ -3942,7 +3974,9 @@ class Agent:
         cwd = dirs[name]
         if not os.path.isdir(cwd):
             raise OpError("电脑上没有这个文件夹")
-        if sum(1 for live in self.terminals.values() if not live.closed) >= MAX_TERMINALS:
+        # the same conversation shown the other way: the terminal it leaves is ended below, once all else is certain
+        source = self.reopening(op, tool, name) if "reopen" in op else None
+        if sum(1 for live in self.terminals.values() if not live.closed) - (1 if source else 0) >= MAX_TERMINALS:
             raise OpError("最多同时运行 %d 个终端，请先结束一个" % MAX_TERMINALS)
         cfg = read_config(self.data)
         session = ""
@@ -3956,18 +3990,15 @@ class Agent:
             launcher = find_tool(tool)
             if launcher is None:
                 raise OpError("电脑没有这个工具")
-            session, history = str(op.get("session") or ""), op.get("history") is True
-            if session:
-                saved = self.sessions.known(session, tool, name) if session_id_ok(tool, session) else None
-                if saved is None and session_id_ok(tool, session):
-                    # a conversation this computer has only just had is not listed yet: ask for
-                    # a look now and wait for it, rather than tell the phone to refresh
-                    self.scan_wake.set()
-                    seen, deadline = self.scan_done, time.time() + 3.5
-                    with self.scanned:
-                        while self.scan_done == seen and time.time() < deadline:
-                            self.scanned.wait(deadline - time.time())
-                    saved = self.sessions.known(session, tool, name)
+            session, history = (source.session, False) if source else (str(op.get("session") or ""), op.get("history") is True)
+            if source:
+                if self.known_now(session, tool, name) is None:
+                    raise OpError("%s 还没有保存这段对话，发一条消息后再切换" % TOOL_LABELS.get(tool, tool))
+                source.kill()               # (waits for it: a conversation has one writer at a time)
+                if not source.closed:
+                    raise OpError("原对话还没有结束，请稍后重试")
+            elif session:
+                saved = self.known_now(session, tool, name)
                 if saved is None:
                     raise OpError("电脑上没有找到这个对话，请刷新后重试")
                 if saved["live"] or any(t.session == session and not t.closed for t in self.terminals.values()):
@@ -3981,7 +4012,7 @@ class Agent:
                 # a conversation run through its tool's structured mode; the first thing to say is said at once
                 if tool not in CHAT_TOOLS or history:
                     raise OpError("对话选项无效")
-                resume = bool(op.get("session"))       # (a new one of Claude Code's is named above, as for a terminal)
+                resume = bool(op.get("session")) or source is not None     # (a new one of Claude Code's is named above, as for a terminal)
                 chat = open_chat(terminal, name, cwd, tool, launcher, self.wake, session, resume, str(cfg.get("RemoteMaxMode") or ""))
                 self.terminals[terminal] = chat
                 if resume:

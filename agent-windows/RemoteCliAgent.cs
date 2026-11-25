@@ -360,6 +360,29 @@ public sealed class TerminalAgent {
     void RequireTerminalSlot() {
         if (!HasTerminalSlot()) throw new InvalidOperationException("最多同时运行 " + MaxTerminals + " 个终端，请先结束一个");
     }
+    /// The terminal a `reopen` start leaves: a Claude Code or Codex conversation that runs as a chat and is to be
+    /// shown on its tool's own screen, or the other way round. One at work, asking, unnamed or in a team stays.
+    LiveTerminal Reopening(Dictionary<string, object> op, string tool, string dir) {
+        LiveTerminal left;
+        if (!terminals.TryGetValue(Get(op, "reopen"), out left) || left.Pty.Closed) throw new InvalidOperationException("原对话已结束，请刷新后重试");
+        if (left.Tool != tool || left.Dir != dir || (tool != "claude" && tool != "codex")) throw new ArgumentException("切换视图的选项无效");
+        if ((left.Chat != null) == (Get(op, "form") == "chat")) throw new ArgumentException("这段对话已经是这种视图");
+        string session = left.Chat != null ? left.Chat.Session : left.Session;
+        if (session.Length == 0) throw new InvalidOperationException(Label(tool) + " 还没有给这段对话编号，发一条消息后再切换");
+        if (Teams.TeamOf(left.Id, left.Tool, session).Length > 0) throw new InvalidOperationException("协作任务中的对话不能切换视图");
+        string status = left.Chat != null ? left.Chat.Status : left.Status;
+        if (status == "busy" || status == "confirm") throw new InvalidOperationException("对话正在执行或等待确认，请等这一轮结束或先停止");
+        return left;
+    }
+    /// Ends the terminal a reopened conversation leaves, and waits until no program of this computer holds the
+    /// conversation any more: a conversation has one writer at a time.
+    void Leave(LiveTerminal left, Tool kind, string session) {
+        left.Pty.Dispose();         // (ends its whole process tree before it returns)
+        for (int tries = 0; ; tries++) {
+            try { kind.Exclusive(session, false, OwnRoots(), Parents(), null); return; }
+            catch (InvalidOperationException) { if (tries >= 15) throw; Thread.Sleep(200); }
+        }
+    }
     public sealed class ComputerTakeover {
         public string Tool, Dir, Session, Launcher;         // Dir: the folder the window opens in
         public bool PhoneTerminal;
@@ -2161,8 +2184,14 @@ public sealed class TerminalAgent {
             }
             else if (action == "start") {
                 if (terminals.ContainsKey(terminal)) return;
-                RequireTerminalSlot();
                 string tool = Get(op, "tool"), dir = Get(op, "dir"), previous = Get(op, "previous"), session = Get(op, "session");
+                // The same conversation shown the other way: what it goes on with is what the terminal it leaves had.
+                LiveTerminal left = op.ContainsKey("reopen") ? Reopening(op, tool, dir) : null;
+                if (left != null) {
+                    session = left.Chat != null ? left.Chat.Session : left.Session;
+                    op["model"] = left.Model; op["effort"] = left.Effort; op["mode"] = left.Mode;
+                }
+                else RequireTerminalSlot();
                 Tool kind = Tool.Named(tool);
                 if (Get(op, "history") == "True" && session.Length == 0 && previous.Length == 0) throw new ArgumentException("请选择具体历史对话，或重新新建对话");
                 bool fork = Get(op, "fork") == "True";
@@ -2170,11 +2199,15 @@ public sealed class TerminalAgent {
                 var dirs = AllDirs(prefs);
                 // In a project; or, to go on with a conversation that is open in a folder that is no project, in that
                 // folder (the relay says which, from what this computer listed).
-                string folder = dir.Length == 0 && (session.Length > 0 || previous.Length > 0) && kind.Converses ? NormalFolder(Get(op, "folder")) : "";
+                string folder = left != null ? left.Folder : dir.Length == 0 && (session.Length > 0 || previous.Length > 0) && kind.Converses ? NormalFolder(Get(op, "folder")) : "";
                 if (dir.Length == 0 ? folder.Length == 0 || !Directory.Exists(folder) : !dirs.ContainsKey(dir)) throw new ArgumentException("目录未获允许");
                 string launcher = FindTool(tool);
                 if (launcher == null) throw new ArgumentException("电脑未安装这个工具");
-                if (session.Length > 0) {
+                if (left != null) {
+                    // its record is what the other way reads; the terminal it leaves is ended only once that is certain
+                    if (ConversationFile(tool, session, Place(left, dirs)) == null) throw new InvalidOperationException(Label(tool) + " 还没有保存这段对话，发一条消息后再切换");
+                    Leave(left, kind, session);
+                } else if (session.Length > 0) {
                     var scanned = Scan(dirs);
                     bool found = scanned.Any(s => String.Equals(s.Id, session, StringComparison.OrdinalIgnoreCase) && s.Tool == tool
                         && (s.Dir == dir || (dir.Length == 0 && SamePath(s.Folder, folder)) || (dir.Length > 0 && dirs.ContainsKey(dir) && SamePath(s.Folder, dirs[dir]))));
@@ -2190,7 +2223,8 @@ public sealed class TerminalAgent {
                 bool fresh = kind.NamedAtStart && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
                 var live = new LiveTerminal { Id = terminal, Tool = tool, Dir = dir, Folder = folder, Session = fork ? "" : session };
-                if (Get(op, "worktree") == "True" && dir.Length > 0) {
+                if (left != null) { live.WorktreeId = left.WorktreeId; live.WorktreePath = left.WorktreePath; live.Branch = left.Branch; }
+                else if (Get(op, "worktree") == "True" && dir.Length > 0) {
                     var createdWt = Worktrees.CreateSessionWorktree(dirs[dir], terminal.Substring(0, 12), Get(op, "base_branch"), Get(op, "branch"));
                     live.WorktreeId = createdWt.Id;
                     live.WorktreePath = createdWt.Path;
@@ -2440,7 +2474,7 @@ public sealed class TerminalAgent {
                 instance = instance, environment_id = EnvironmentId, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools,
                 agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                 max_mode = ClampMode("", Get(prefs, "RemoteMaxMode")),
-                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "organize", "routes", "git", "worktree" }
+                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "reopen", "organize", "routes", "git", "worktree" }
                     .Concat(Desktop.Tools.Select(tool => tool + "-desktop-open"))
                     .Concat(Settled != null ? new[] { "projects" } : new string[0])
                     .Concat(UpdateRequested != null ? new[] { "update" } : new string[0])
