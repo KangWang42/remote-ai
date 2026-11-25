@@ -807,17 +807,25 @@ public sealed class TerminalAgent {
     }
     /// What a conversation is handed over with: what its owner asked first and last, what the tool answered last and
     /// did last, taken from its record. Written as its owner's own words to the conversation that takes over.
-    static string Brief(SessionInfo from, Dictionary<string, object> read, string note) {
+    internal static string Brief(SessionInfo from, Dictionary<string, object> read, string note) {
         var said = ((System.Collections.IEnumerable)read["messages"]).Cast<Dictionary<string, object>>().ToList();
-        Func<string, int, string> cut = (text, most) => { text = (text ?? "").Trim(); return text.Length <= most ? text : text.Substring(0, most) + "…"; };
+        Func<string, int, string> cut = (text, most) => { text = (text ?? "").Trim(); return text.Length <= most ? text : text.Substring(0, Char.IsHighSurrogate(text[most - 1]) ? most - 1 : most) + "…"; };
         var asked = said.Where(m => Convert.ToString(m["role"]) == "user").Select(m => Convert.ToString(m["text"])).ToList();
         string answered = said.Where(m => Convert.ToString(m["role"]) == "assistant").Select(m => Convert.ToString(m["text"])).LastOrDefault() ?? "";
-        var steps = said.Where(m => Convert.ToString(m["role"]) == "tool").Select(m => Convert.ToString(m["text"])).ToList();
-        var brief = new StringBuilder("【对话交接】下面是我在另一段对话里的进展（" + Label(from.Tool) + "，“" + from.Title + "”" + (from.Dir.Length > 0 ? "，项目 " + from.Dir : "") + "），请接着处理。\n");
+        var steps = said.Where(m => Convert.ToString(m["role"]) == "tool").ToList();
+        var brief = new StringBuilder("【对话交接】下面是我在另一段对话里的进展（" + Label(from.Tool) + "，“" + cut(from.Title, 100) + "”" + (from.Dir.Length > 0 ? "，项目 " + cut(from.Dir, 100) : "") + "），请接着处理。\n");
+        brief.Append("原对话 ID：" + cut(from.Id, 128) + "\n");
         if (asked.Count > 0) brief.Append("\n我最初的要求：\n" + cut(asked[0], 800) + "\n");
         if (asked.Count > 1) brief.Append("\n我最近的要求：\n" + cut(asked[asked.Count - 1], 800) + "\n");
         if (answered.Length > 0) brief.Append("\n它最后的回答：\n" + cut(answered, 2000) + "\n");
-        if (steps.Count > 0) brief.Append("\n它最近做的操作：\n" + String.Join("\n", steps.Skip(Math.Max(0, steps.Count - 8)).Select(step => "- " + cut(step, 160))) + "\n");
+        if (steps.Count > 0) {
+            brief.Append("\n它最近做的操作：\n");
+            foreach (var step in steps.Skip(Math.Max(0, steps.Count - 8))) {
+                brief.Append("- " + cut(Get(step, "text"), 160) + "\n");
+                string result = cut(Get(step, "result"), 160);
+                brief.Append(result.Length == 0 ? "  记录中没有返回内容\n" : "  返回摘录：" + result.Replace("\n", "\n  ") + "\n");
+            }
+        }
         if (!String.IsNullOrWhiteSpace(note)) brief.Append("\n我的补充：\n" + cut(note, 1000) + "\n");
         return brief.ToString().TrimEnd();
     }

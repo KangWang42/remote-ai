@@ -130,6 +130,10 @@ public static class SaidCheck {
             // the first lines of what came back (six at most; nothing where nothing came back)
             Func<Dictionary<string, object>, string, string> of = (m, key) => m.ContainsKey(key) ? (string)m[key] : null;
             Require(of(worked[1], "detail") == "python compare.py --a 4.0 --b 2.0" && of(worked[1], "result") == "step 1 same\nstep 2 same\nstep 3 differs", "the command and what came back: " + of(worked[1], "detail") + " / " + of(worked[1], "result"));
+            var source = new TerminalAgent.SessionInfo { Id = "test-session", Tool = "claude", Title = "对照", Dir = "test" };
+            string handover = TerminalAgent.Brief(source, new Dictionary<string, object> { { "messages", worked } }, "继续验证");
+            Require(handover.Contains("原对话 ID：test-session") && handover.Contains("返回摘录：step 1 same\n  step 2 same\n  step 3 differs")
+                    && handover.Contains("记录中没有返回内容") && handover.EndsWith("继续验证"), "handover pairs excerpts with operations and keeps the user's note");
             Require(of(worked[3], "detail") == null && of(worked[3], "result") == "     1\tlibrary(\"dplyr\")\n     2\t# 第三步 中\n     3\tx <- 3\n     4\tx <- 4\n     5\tx <- 5\n     6\tx <- 6\n…", "the first lines of a long one, from a row that is not read: " + of(worked[3], "result"));
             Require(of(worked[4], "detail") == null && of(worked[4], "result") == null && !worked[2].ContainsKey("result"), "a step told by its command has no second line; nothing came back, nothing is shown");
             // of a long conversation only the latest steps carry what came back

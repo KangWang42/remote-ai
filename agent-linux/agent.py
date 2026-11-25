@@ -3477,12 +3477,17 @@ def handover(source, messages, note):
     """What a conversation is handed over with: what its owner asked first and last, what the tool answered last
     and did last, taken from its record. Written as its owner's own words to the conversation that takes over.
     (The same words as the Windows program's.)"""
-    cut = lambda text, most: text.strip() if len(text.strip()) <= most else text.strip()[:most] + "…"
+    def cut(text, most):
+        text = text.strip()
+        # The phone and Windows count the 8,000-character input limit in UTF-16 units.
+        encoded = text.encode("utf-16-le", errors="replace")
+        return text if len(encoded) <= most * 2 else encoded[:most * 2].decode("utf-16-le", errors="ignore") + "…"
     asked = [m["text"] for m in messages if m.get("role") == "user"]
     answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
-    steps = [m["text"] for m in messages if m.get("role") == "tool"]
+    steps = [m for m in messages if m.get("role") == "tool"]
     label = TOOL_LABELS.get(source["tool"], source["tool"])
-    brief = "【对话交接】下面是我在另一段对话里的进展（%s，“%s”%s），请接着处理。\n" % (label, source["title"], "，项目 " + source["dir"] if source["dir"] else "")
+    brief = "【对话交接】下面是我在另一段对话里的进展（%s，“%s”%s），请接着处理。\n" % (label, cut(source["title"], 100), "，项目 " + cut(source["dir"], 100) if source["dir"] else "")
+    brief += "原对话 ID：" + cut(source["id"], 128) + "\n"
     if asked:
         brief += "\n我最初的要求：\n" + cut(asked[0], 800) + "\n"
     if len(asked) > 1:
@@ -3490,7 +3495,14 @@ def handover(source, messages, note):
     if answered:
         brief += "\n它最后的回答：\n" + cut(answered, 2000) + "\n"
     if steps:
-        brief += "\n它最近做的操作：\n" + "\n".join("- " + cut(step, 160) for step in steps[-8:]) + "\n"
+        brief += "\n它最近做的操作：\n"
+        for step in steps[-8:]:
+            brief += "- " + cut(step["text"], 160) + "\n"
+            result = cut(step.get("result") or "", 160)
+            if result:
+                brief += "  返回摘录：" + result.replace("\n", "\n  ") + "\n"
+            else:
+                brief += "  记录中没有返回内容\n"
     if note.strip():
         brief += "\n我的补充：\n" + cut(note, 1000) + "\n"
     return brief.rstrip()

@@ -1135,7 +1135,7 @@ class Pure(unittest.TestCase):
         one.schedules = kept
         other = "66666666-7777-8888-9999-000000000000"
         one.sessions.found = [{"id": session, "tool": "claude", "dir": "项目", "title": "甲", "live": True}, {"id": other, "tool": "codex", "dir": "", "title": "乙", "live": False}]
-        one.sessions.read = lambda *asked: {"messages": [{"role": "user", "text": "先做第一步"}, {"role": "tool", "text": "Bash：运行测试"}, {"role": "assistant", "text": "第一步做完了"},
+        one.sessions.read = lambda *asked: {"messages": [{"role": "user", "text": "先做第一步"}, {"role": "tool", "text": "Bash：运行测试", "result": "2 failed\n1 passed"}, {"role": "tool", "text": "读取版本"}, {"role": "assistant", "text": "第一步做完了"},
                                                           {"role": "user", "text": "再做第二步"}, {"role": "assistant", "text": "第二步也做完了"}]}
         with self.assertRaisesRegex(agent.OpError, "手机打开的终端"):
             one.owner_work("work_handoff", {"from": session, "from_tool": "claude", "to": other, "to_tool": "codex", "note": ""}, {})
@@ -1143,6 +1143,8 @@ class Pure(unittest.TestCase):
         answer = one.owner_work("work_handoff", {"from": other, "from_tool": "codex", "to": session, "to_tool": "claude", "note": "看一下边界情况"}, {})
         self.assertEqual((answer["status"], answer["note"]), ("accepted", "已发到手机终端"))
         said = typed.got[0]
+        self.assertIn("原对话 ID：" + other, said)
+        self.assertIn("返回摘录：2 failed\n  1 passed\n- 读取版本\n  记录中没有返回内容", said)
         self.assertTrue(said.startswith("\x1b[200~【对话交接】下面是我在另一段对话里的进展（Codex，“乙”），请接着处理。") and said.endswith("\x1b[201~\r"), said)
         for part in ("我最初的要求：\n先做第一步", "我最近的要求：\n再做第二步", "它最后的回答：\n第二步也做完了", "它最近做的操作：\n- Bash：运行测试", "我的补充：\n看一下边界情况"):
             self.assertIn(part, said)
