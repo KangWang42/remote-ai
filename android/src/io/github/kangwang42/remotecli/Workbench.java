@@ -490,35 +490,52 @@ final class Workbench {
             final JSONObject computer = list.optJSONObject(i);
             if (computer == null) continue;
             final String url = computer.optString("url");
+            final String recordId = computer.optString("id");
             if (!pending.add(url)) continue;
-            final String cookie = CookieManager.getInstance().getCookie(url);
             activity.net.execute(() -> {
                 String state = "off", line = "无法连接：电脑未开机，或地址已变更";
                 JSONObject data = null;
-                HttpURLConnection connection = null;
-                boolean whole = false;
-                try {
-                    connection = (HttpURLConnection) new URL(url + "/api/terminal").openConnection();
-                    connection.setConnectTimeout(4000); connection.setReadTimeout(8000); connection.setUseCaches(false);
-                    connection.setInstanceFollowRedirects(false);
-                    if (cookie != null) connection.setRequestProperty("Cookie", cookie);
-                    int code = connection.getResponseCode();
-                    if (code == 401) { state = "key"; line = "需要重新扫码登录"; }
-                    else if (code != 200) line = "电脑没有响应（" + code + "）";
-                    else {
-                        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                        try (InputStream input = connection.getInputStream()) {
-                            byte[] part = new byte[16384]; int n;
-                            while ((n = input.read(part)) > 0) {
-                                if (bytes.size() + n > 4000000) throw new Exception("返回内容过大");
-                                bytes.write(part, 0, n);
+                String origin = activity.activeOrigin(url);
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    String cookie = CookieManager.getInstance().getCookie(origin);
+                    HttpURLConnection connection = null;
+                    boolean whole = false;
+                    try {
+                        connection = (HttpURLConnection) new URL(origin + "/api/terminal").openConnection();
+                        connection.setConnectTimeout(4000); connection.setReadTimeout(8000); connection.setUseCaches(false);
+                        connection.setInstanceFollowRedirects(false);
+                        if (cookie != null) connection.setRequestProperty("Cookie", cookie);
+                        int code = connection.getResponseCode();
+                        if (code == 401) {
+                            if (attempt == 0 && !origin.equals(url) && activity.routes != null && activity.routes.ensureDirectCookie(recordId, origin)) continue;
+                            state = "key"; line = "需要重新扫码登录"; break;
+                        } else if (code != 200) {
+                            line = "电脑没有响应（" + code + "）";
+                        } else {
+                            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                            try (InputStream input = connection.getInputStream()) {
+                                byte[] part = new byte[16384]; int n;
+                                while ((n = input.read(part)) > 0) {
+                                    if (bytes.size() + n > 4000000) throw new Exception("返回内容过大");
+                                    bytes.write(part, 0, n);
+                                }
                             }
+                            whole = true;
+                            data = new JSONObject(bytes.toString("UTF-8"));
+                            break;
                         }
-                        whole = true;
-                        data = new JSONObject(bytes.toString("UTF-8"));
+                    } catch (Exception unreachable) { /* try alternate route once before marking "off" */ }
+                    finally { if (connection != null && !whole) connection.disconnect(); }
+                    if (attempt == 0 && activity.routes != null && !recordId.isEmpty()) {
+                        String next = activity.routes.failover(recordId, url, origin);
+                        if (!next.isEmpty() && !next.equals(origin)) { origin = next; continue; }
                     }
-                } catch (Exception unreachable) { /* keeps "off" */ }
-                finally { if (connection != null && !whole) connection.disconnect(); }
+                    break;
+                }
+                if (data != null && activity.routes != null && !recordId.isEmpty()) {
+                    JSONObject device = data.optJSONObject("device");
+                    if (device != null && device.optBoolean("online")) activity.routes.learnFromDevice(recordId, url, origin, device);
+                }
                 final JSONObject answer = data;
                 final String s = state, l = line;
                 activity.runOnUiThread(() -> {
@@ -1264,8 +1281,9 @@ final class Workbench {
                 // one at a time: each computer takes its operations in order, and an ended terminal frees its place first
                 for (int i = 0; i < asks.size(); i++) {
                     AggregateSessions.Thing task = things.get(i);
+                    String origin = activity.activeOrigin(task.url);
                     try {
-                        JSONObject result = post(task.url + asks.get(i)[0], CookieManager.getInstance().getCookie(task.url), new JSONObject(asks.get(i)[1]), 40000);
+                        JSONObject result = post(origin + asks.get(i)[0], CookieManager.getInstance().getCookie(origin), new JSONObject(asks.get(i)[1]), 40000);
                         if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error"));
                         done++;
                     } catch (Exception error) {
@@ -1291,13 +1309,14 @@ final class Workbench {
     }
     private interface Filled { void fill(JSONObject op) throws org.json.JSONException; }
     private void ask(String url, String path, String done, String failed, Filled filled) {
-        final String cookie = CookieManager.getInstance().getCookie(url);
+        final String origin = activity.activeOrigin(url);
+        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 JSONObject op = new JSONObject().put("id", UUID.randomUUID().toString().replace("-", ""));
                 filled.fill(op);
-                JSONObject result = post(url + path, cookie, op);
+                JSONObject result = post(origin + path, cookie, op);
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", failed));
             } catch (Exception error) {
                 String said = error.getMessage();
@@ -1308,13 +1327,14 @@ final class Workbench {
         });
     }
     private void markRemote(AggregateSessions.Thing task, boolean pin, boolean on) {
-        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        final String origin = activity.activeOrigin(task.url);
+        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 JSONObject op = new JSONObject().put("action", "mark").put("id", UUID.randomUUID().toString().replace("-", "")).put("session", task.entry.conversation());
                 if (pin) op.put("pinned", on); else { op.put("hidden", on); if (on) op.put("pinned", false); }
-                post(task.url + "/api/conversation", cookie, op);
+                post(origin + "/api/conversation", cookie, op);
             } catch (Exception error) {
                 String said = error.getMessage();
                 problem = "不支持此操作".equals(said) ? "这台电脑的电脑端或中转版本较早，暂不支持置顶和隐藏，请更新后再试" : said == null ? "没有改成，请稍后重试" : said;
@@ -1329,7 +1349,8 @@ final class Workbench {
         });
     }
     private void followUpRemote(AggregateSessions.Thing task, boolean on) {
-        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        final String origin = activity.activeOrigin(task.url);
+        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             boolean effective = on;
@@ -1340,7 +1361,7 @@ final class Workbench {
                     .put("tool", task.entry.tool)
                     .put("session", task.entry.conversation())
                     .put("follow_up", on);
-                JSONObject result = post(task.url + "/api/organize", cookie, op);
+                JSONObject result = post(origin + "/api/organize", cookie, op);
                 JSONObject item = result.optJSONObject("item");
                 if (item != null && item.has("follow_up")) effective = item.optBoolean("follow_up", on);
             } catch (Exception error) {
@@ -1360,12 +1381,13 @@ final class Workbench {
         });
     }
     private void addFolder(AggregateSessions.Thing task) {
-        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        final String origin = activity.activeOrigin(task.url);
+        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 JSONObject op = new JSONObject().put("action", "project_add").put("id", UUID.randomUUID().toString().replace("-", "")).put("path", task.entry.folder).put("name", "").put("create", false);
-                JSONObject result = post(task.url + "/api/terminal", cookie, op);
+                JSONObject result = post(origin + "/api/terminal", cookie, op);
                 if ("error".equals(result.optString("state"))) throw new Exception(result.optString("error", "没有加上，请稍后重试"));
             } catch (Exception error) { problem = error.getMessage() == null ? "没有加上，请稍后重试" : error.getMessage(); }
             final String message = problem.isEmpty() ? "已加为项目" : problem;
@@ -1400,7 +1422,8 @@ final class Workbench {
             "发送消息", "发送", text -> sayRemote(task, text));
     }
     private void sayRemote(AggregateSessions.Thing task, String text) {
-        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        final String origin = activity.activeOrigin(task.url);
+        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
@@ -1408,7 +1431,7 @@ final class Workbench {
                 op.put(task.entry.terminal ? "terminal" : "session", task.entry.id);
                 JSONObject result = null;
                 for (int attempt = 0; result == null && attempt < 3; attempt++) {
-                    try { result = post(task.url + (task.entry.terminal ? "/api/terminal" : "/api/conversation"), cookie, op, task.entry.terminal ? 8000 : 95000); }
+                    try { result = post(origin + (task.entry.terminal ? "/api/terminal" : "/api/conversation"), cookie, op, task.entry.terminal ? 8000 : 95000); }
                     catch (IOException unreachable) { Thread.sleep(500); }
                 }
                 if (result == null) throw new Exception("连不上这台电脑，消息没有发出");
@@ -1440,19 +1463,20 @@ final class Workbench {
             which -> { if (which == 0 && ending.add(key)) { redraw(); closeRemote(task, key); } });
     }
     private void closeRemote(AggregateSessions.Thing task, String key) {
-        final String cookie = CookieManager.getInstance().getCookie(task.url);
+        final String origin = activity.activeOrigin(task.url);
+        final String cookie = CookieManager.getInstance().getCookie(origin);
         activity.net.execute(() -> {
             String problem = "";
             try {
                 if (!task.entry.terminal) {
                     JSONObject op = new JSONObject().put("action", "end").put("id", UUID.randomUUID().toString().replace("-", "")).put("session", task.entry.id);
-                    post(task.url + "/api/conversation", cookie, op, 40000);
+                    post(origin + "/api/conversation", cookie, op, 40000);
                 } else {
                 JSONObject op = new JSONObject().put("action", "close").put("id", UUID.randomUUID().toString().replace("-", "")).put("terminal", task.entry.id);
                 JSONObject result = null;
                 long deadline = System.nanoTime() + 30_000_000_000L;
                 for (int attempt = 0; attempt < 60 && System.nanoTime() < deadline; attempt++) {
-                    try { result = post(task.url + "/api/terminal", cookie, op); }
+                    try { result = post(origin + "/api/terminal", cookie, op); }
                     catch (IOException unreachable) { Thread.sleep(400); continue; }
                     String state = result.optString("state");
                     if ("done".equals(state)) break;

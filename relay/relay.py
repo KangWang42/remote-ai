@@ -417,8 +417,37 @@ UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish"
 FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_SECONDS = 25
 WAKE_SECONDS = 85       # a message that is handed to a conversation where it sits idle takes a short run of its tool on the computer
+_ROUTE_URL = re.compile(r"^https?://[^/\s]+(?:/c/[a-f0-9]{20})?$")
+ROUTE_KINDS = ("lan", "tailscale", "tunnel", "own", "public")
+
+
+def _routes(items):
+    """Direct and fallback routes the computer advertises for multi-route selection."""
+    kept, seen = [], set()
+    for item in (items if isinstance(items, list) else [])[:12]:
+        if not isinstance(item, dict):
+            continue
+        kind, url = item.get("kind"), item.get("url")
+        priority = item.get("priority")
+        if kind not in ROUTE_KINDS or not isinstance(url, str) or len(url) > 260 or not _ROUTE_URL.fullmatch(url):
+            continue
+        if type(priority) is not int or not 0 <= priority <= 1000:
+            priority = {"lan": 10, "tailscale": 20, "tunnel": 30, "own": 40, "public": 50}[kind]
+        if url in seen:
+            continue
+        seen.add(url)
+        entry = {"kind": kind, "url": url, "priority": priority}
+        if item.get("local_auth") is True:
+            entry["local_auth"] = True
+        kept.append(entry)
+        if len(kept) >= 8:
+            break
+    kept.sort(key=lambda r: (r["priority"], r["url"]))
+    return kept
+
+
 # What the program on the computer is asked about itself: a few of its settings, and the line it is reached by.
-COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep")
+COMPUTER_ACTIONS = ("settings_read", "settings_change", "line_switch", "line_take", "line_keep", "routes_read")
 # What the phone asks about its owner's work on the computer (the computer needs the feature "work"): the numbers of
 # it, the questions set to be asked at a time, and one conversation handed over to another.
 WORK_ACTIONS = ("stats", "schedules", "schedule_set", "schedule_remove", "handoff", "brief", "chains", "chain_set", "chain_remove",
@@ -556,9 +585,34 @@ class Relay:
         self._unsaved = None        # the time of the oldest output not yet written to disk
         self._logged = {}           # terminal -> [seq of the last piece in its file, characters in the file]
         self._pending = _Operations()
-        self._device = {"seen": 0, "instance": "", "enabled": False, "workspaces": [], "tools": [], "projects": [], "candidates": [], "team_cards": []}
+        self._env_path = os.path.join(os.path.dirname(os.path.abspath(path)), "environment.json")
+        self._device = {"seen": 0, "instance": "", "environment_id": self._load_environment_id(), "enabled": False, "workspaces": [], "tools": [], "projects": [], "candidates": [], "team_cards": [], "routes": []}
         self._sessions = []         # conversations saved on the computer, as its last report listed them
         self._screens = {}          # terminal -> (instance, Screen): rebuilt from the kept output when it is missing
+
+    def _load_environment_id(self):
+        try:
+            with open(self._env_path, encoding="utf-8") as stream:
+                saved = json.load(stream).get("environment_id", "")
+            return saved if isinstance(saved, str) and _terminal.fullmatch(saved) else ""
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    def _save_environment_id(self, environment_id):
+        try:
+            os.makedirs(os.path.dirname(self._env_path), exist_ok=True)
+            tmp = self._env_path + ".tmp"
+            _write(tmp, json.dumps({"environment_id": environment_id}))
+            _replace(tmp, self._env_path)
+        except OSError:
+            pass
+
+    def discovery(self, now=None):
+        """Unauthenticated identity probe for multi-route selection (/.well-known/remote-ai)."""
+        now = time.time() if now is None else now
+        with self._lock:
+            return {"service": "remote-ai", "environment_id": self._device.get("environment_id", ""),
+                    "online": now - self._device["seen"] < 15, "capabilities": ["routes", "ws"]}
 
     def _load(self):
         try:
@@ -1714,17 +1768,23 @@ class Relay:
                     for s in payload["sessions"][:120]
                     if isinstance(s, dict) and isinstance(s.get("id"), str) and session_id_ok(s.get("tool"), s["id"]) and s.get("tool") in ("claude", "codex", "agy", "opencode", "qoder", "cline", "pi")
                     and _placed(s) and isinstance(s.get("title"), str) and s["title"].strip() and type(s.get("updated")) is int]
+            env_id = info.get("environment_id")
+            if isinstance(env_id, str) and _terminal.fullmatch(env_id):
+                if env_id != self._device.get("environment_id"):
+                    self._device["environment_id"] = env_id
+                    self._save_environment_id(env_id)
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
                            workspaces=[x for x in info.get("workspaces", []) if isinstance(x, str) and 0 < len(x) <= 60],
                            projects=_folders(info.get("projects"), 60), candidates=_folders(info.get("candidates"), 40),
                            quotas=_quotas(info.get("quotas")) if info.get("enabled") is True else [],
-                           team_cards=_team_cards(info.get("team_cards")) if info.get("enabled") is True else [])
+                           team_cards=_team_cards(info.get("team_cards")) if info.get("enabled") is True else [],
+                           routes=_routes(info.get("routes")) if info.get("enabled") is True else [])
             if not was_online or was_enabled != self._device["enabled"]:
                 wrote = True
             for term in state["threads"].values():

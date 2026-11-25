@@ -145,7 +145,7 @@ public sealed partial class App {
         string word = value as string;
         if (name == "rights" && Array.IndexOf(Rights, word) >= 0) Keep("RemoteMaxMode", word);
         // Another protocol is used by the next tunnel; the one in use is left to whoever changes it at the computer.
-        else if (name == "tunnel" && Array.IndexOf(Protocols, word) >= 0) Keep("TunnelProtocol", word);
+        else if (name == "tunnel" && Array.IndexOf(Protocols, word) >= 0) { Keep("TunnelProtocol", word); if (word == "auto" && tunnelSupervisor != null) tunnelSupervisor.ClearHttp2Fallback(); }
         else if (name == "autostart" && value is bool) Autostart = (bool)value;
         else if (name == "update" && value is bool) Keep("AutoUpdate", (bool)value);
         else if (name == "channel" && Array.IndexOf(AutoUpdater.Channels, word) >= 0) Keep("UpdateChannel", word);
@@ -208,9 +208,19 @@ public sealed partial class App {
                 { "autostart", Autostart }, { "update", Convert.ToString(config["AutoUpdate"]) == "True" }, { "channel", Convert.ToString(config["UpdateChannel"]) }, { "reach", Reaching }, { "ask", Asking }, { "wait", Waiting.ToString() } } }, { "reach", ReachStates() } };
     }
     static string Word(Dictionary<string, object> op, string key) { object value; return op.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : ""; }
+    Dictionary<string, object> RoutesPayload() {
+        var routes = CurrentRoutes().Select(r => (object)r.ToWire()).ToArray();
+        return new Dictionary<string, object> {
+            { "environment_id", agent != null ? agent.EnvironmentId : "" },
+            { "routes", routes },
+            { "local_password", localRelayUp ? localPassword : "" }
+        };
+    }
+
     // Called by the agent, on its thread, for each question; what takes time is done elsewhere.
     Dictionary<string, object> Itself(Dictionary<string, object> op) {
         string action = Word(op, "action");
+        if (action == "routes_read") return RoutesPayload();
         if (action == "settings_change") { object value; op.TryGetValue("value", out value); Set(Word(op, "name"), value); }
         else if (action == "line_switch") Turn(Word(op, "to"), Word(op, "id"));
         else if (action == "line_take") return HandOver(Word(op, "id"));
@@ -282,20 +292,20 @@ public sealed partial class App {
             } else {
                 int port = Port;
                 c.Mode = c.To; c.Name = c.To == "lan" ? "局域网" : "公网隧道"; c.Server = "http://127.0.0.1:" + port;
-                // The password of a place at a relay for everyone is known to that relay: the program's own relay gets another.
-                c.Password = c.WasMode == "public" ? NewPassword() : c.WasPassword;
+                bool reuseLocal = localRelayUp && localRelayPort == port && this.relay != null && !this.relay.HasExited;
+                c.Password = reuseLocal && localPassword.Length > 0 ? localPassword : (c.WasMode == "public" ? NewPassword() : c.WasPassword);
                 if (c.To == "cloud" && !File.Exists(TunnelFile)) {
                     Note(c, "正在下载隧道程序…");
                     await FetchTunnel(percent => Note(c, "正在下载隧道程序 " + percent + "%"));
                 }
-                if (!local) {
+                if (!reuseLocal && !local) {
                     if (!File.Exists(Python)) { await Undo(c, "电脑上的安装不完整，本机服务无法启动"); return; }
                     if (Listening(port)) { await Undo(c, "电脑上的端口 " + port + " 已被别的程序占用，需要在电脑上换一个端口"); return; }
                     if (c.Password != c.WasPassword) try { File.Delete(Path.Combine(dataDir, "relay", "sessions.json")); } catch { }
-                    c.Relay = StartRelay(c.To == "lan", port, c.Password);
+                    c.Relay = StartRelay(true, port, c.Password);
                     Remember();
                     if (!await Up(c.Relay, port)) { await Undo(c, "电脑上的本机服务没有启动成功"); return; }
-                } else if (c.To == "lan") {
+                } else if (!reuseLocal && c.To == "lan") {
                     // The program's relay listened for this computer alone. The tunnel stays, and the phone with it.
                     c.Widened = true;
                     if (!await Listen(true)) { await Undo(c, "电脑上的本机服务没有重新启动成功"); return; }
@@ -347,7 +357,12 @@ public sealed partial class App {
             if (c.Server != c.WasServer) {
                 // the agent signs in where it reports with the password of that place
                 WritePassword(c.Password); Keep("Server", c.Server);
-                if (agent != null) agent.Reset();
+                if (c.Mode == "lan" || c.Mode == "cloud") {
+                    WriteLocalPassword(c.Password);
+                    if (agent != null) agent.SetLinks(new[] { new RelayEndpoint { Name = "local", Origin = c.Server, Password = c.Password } });
+                } else {
+                    SyncAgentLinks(c.Server, c.Password);
+                }
                 c.Moved = true;
             }
             lock (changing) { if (c.State != "moving") return; c.State = "trial"; }
@@ -376,13 +391,18 @@ public sealed partial class App {
             generation++;               // whatever the line before was still doing is over
             bool local = c.Mode == "lan" || c.Mode == "cloud", wasLocal = c.WasMode == "lan" || c.WasMode == "cloud";
             if (!local) {
-                Kill(tunnel); tunnel = null; Kill(relay); relay = null;
-                // as when a relay is chosen at the computer: who signed in at the program's own relay with another password signs in again there
-                if (wasLocal && c.Password != c.WasPassword) try { File.Delete(Path.Combine(dataDir, "relay", "sessions.json")); } catch (IOException) { }
+                Kill(tunnel); tunnel = null;
+                await EnsureLocalRelay(Port, true);
+                SyncAgentLinks(c.Server, c.Password);
             }
-            else if (!wasLocal) { relay = c.Relay; tunnel = c.Tunnel; }
-            else if (c.Mode == "cloud") { tunnel = c.Tunnel; await Listen(false); }     // behind the tunnel, for this computer alone again
-            else { Kill(tunnel); tunnel = null; }
+            else if (!wasLocal) {
+                if (c.Relay != null) { relay = c.Relay; localRelayUp = true; localRelayPort = Port; }
+                tunnel = c.Tunnel;
+                WriteLocalPassword(c.Password);
+                SyncAgentLinks();
+            }
+            else if (c.Mode == "cloud") { tunnel = c.Tunnel; SyncAgentLinks(); }
+            else { Kill(tunnel); tunnel = null; SyncAgentLinks(); }
             c.Relay = c.Tunnel = null;
             if (tunnel != null) { tunnel.Exited += Lost(generation); Keep(c.Address, Port); }
             Remember();
@@ -397,9 +417,13 @@ public sealed partial class App {
     async Task Undo(LineChange c, string why, string from = null) {
         lock (changing) { if (!c.Open || (from != null && c.State != from)) return; c.State = "failed"; c.Note = why; c.Ended = DateTime.UtcNow; }
         try {
-            if (c.Moved) { WritePassword(c.WasPassword); Keep("Server", c.WasServer); if (agent != null) agent.Reset(); }
+            if (c.Moved) {
+                WritePassword(c.WasPassword); Keep("Server", c.WasServer);
+                if (c.WasMode == "lan" || c.WasMode == "cloud") SyncAgentLinks();
+                else SyncAgentLinks(c.WasServer, c.WasPassword);
+            }
             Kill(c.Tunnel); Kill(c.Relay); c.Tunnel = c.Relay = null;
-            if (c.Widened) await Listen(false);
+            if (c.Widened) await Listen(true);
             Remember();
         } catch (Exception) { }
         if (c.Moved) Say(c.WasSaid, c.WasTrouble);

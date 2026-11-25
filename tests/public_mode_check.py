@@ -47,7 +47,7 @@ def main():
             assert looked["address"] == "公共中转 · 测试中转" and looked["password_shown"] == "False" and places() == [], looked
             # choosing it: a place of this computer's own, nothing typed, neither address nor password shown, a code for the phone
             chosen = press(folder, "chosen", kind="public", relays=listed)
-            assert (chosen["mode"], chosen["tab"], chosen["own_relay"]) == ("public", "2", "stopped") and chosen["status"].startswith("已连上公共中转“测试中转”"), chosen
+            assert (chosen["mode"], chosen["tab"], chosen["own_relay"]) == ("public", "2", "running") and chosen["status"].startswith("已连上公共中转“测试中转”"), chosen
             assert re.fullmatch(re.escape(origin) + r"/c/[a-f0-9]{20}", chosen["server"]) and chosen["code"] == "True", chosen
             assert "127.0.0.1" not in chosen["address"] and chosen["password_shown"] == "False" and chosen["new_password_button"] == "False", chosen
             assert places() == [chosen["server"][-20:]] and (store / "spaces" / places()[0] / "sessions.json").exists(), places()

@@ -164,6 +164,54 @@ class SpacesTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Path=/;", reply.getheader("Set-Cookie"))
 
+    def test_well_known_discovery_and_routes_work_for_single_and_public_spaces(self):
+        env_id = "e" * 32
+        made = self.space("9.9.9.9")
+        space_phone = Phone(self.port, made["space"])
+        status, before, _ = space_phone.ask("/.well-known/remote-ai")
+        self.assertEqual(status, 200)
+        self.assertEqual((before["service"], before["environment_id"], before["online"]), ("remote-ai", "", False))
+        self.assertIn("routes", before["capabilities"])
+        self.assertEqual(space_phone.ask("/api/login", {"password": made["password"]})[0], 200)
+        agent_info = {
+            "instance": "b" * 32, "environment_id": env_id, "enabled": True, "features": ["settings", "routes"],
+            "routes": [
+                {"kind": "tunnel", "url": "https://demo.trycloudflare.com", "priority": 30},
+                {"kind": "lan", "url": "http://192.168.1.9:8722", "priority": 10, "local_auth": True},
+                {"kind": "tailscale", "url": "http://100.80.1.2:8722", "priority": 20, "local_auth": True},
+                {"kind": "lan", "url": "http://192.168.1.9:8722", "priority": 10},
+                {"kind": "bad", "url": "http://192.168.1.9:8722", "priority": 5},
+                {"kind": "lan", "url": "javascript:alert(1)", "priority": 5},
+            ],
+        }
+        status, _, _ = space_phone.ask("/api/terminal/agent", {"info": agent_info})
+        self.assertEqual(status, 200)
+        status, after, _ = Phone(self.port, made["space"]).ask("/.well-known/remote-ai")
+        self.assertEqual(status, 200)
+        self.assertEqual((after["environment_id"], after["online"]), (env_id, True))
+        _, overview, _ = space_phone.ask("/api/terminal")
+        self.assertEqual(overview["device"]["environment_id"], env_id)
+        self.assertEqual([(r["kind"], r["url"], r.get("local_auth", False)) for r in overview["device"]["routes"]], [
+            ("lan", "http://192.168.1.9:8722", True),
+            ("tailscale", "http://100.80.1.2:8722", True),
+            ("tunnel", "https://demo.trycloudflare.com", False),
+        ])
+        # environment_id persists across a Relay reload
+        reloaded = server.relay.Relay(self.server.spaces.get(made["space"][3:]).store)
+        self.assertEqual(reloaded.discovery()["environment_id"], env_id)
+        # routes_read is accepted by /api/computer
+        answered = {}
+        def ask_routes():
+            answered["reply"] = space_phone.ask("/api/computer", {"id": "1" * 32, "action": "routes_read"})
+        worker = threading.Thread(target=ask_routes)
+        worker.start()
+        _, pulled, _ = space_phone.ask("/api/terminal/agent/pull", {"instance": "b" * 32, "wait": 5})
+        self.assertEqual(pulled["operations"][0]["action"], "routes_read")
+        space_phone.ask("/api/terminal/agent", {"info": agent_info, "acks": [{"id": "1" * 32, "result": {"environment_id": env_id, "local_password": "secret"}}]})
+        worker.join(timeout=5)
+        self.assertEqual(answered["reply"][0], 200)
+        self.assertEqual(answered["reply"][1]["environment_id"], env_id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -349,14 +349,14 @@ def main():
             assert "没有在新线路上出现" in back["change"]["note"] and [line["id"] for line in back["lines"] if line["current"]] == [by_port[SECOND]], back
             assert config()["OwnServer"] == origin(SECOND) and config()["Server"] == origin(SECOND), config()
 
-            # ---- to the tunnel: the program's own relay and the tunnel are started beside the relay in use
-            assert not listening(local_port)
+            # ---- to the tunnel: the local relay stays always-on beside the remote relay, and the tunnel attaches to it
+            assert listening(local_port)
             marker = data / "exit-before-registration"
             marker.touch()
             second.ask("line_switch", to="cloud")
             failed = until(lambda: (lambda said: isinstance(said, dict) and said["change"]["state"] == "failed" and said)(second.ask("settings_read")), "the unregistered tunnel to fail")
             assert "公网隧道没有建立成功" in failed["change"]["note"] and second.online()
-            until(lambda: not listening(local_port), "the failed tunnel's relay to exit")
+            assert listening(local_port), "the always-on local relay stays running when a tunnel attempt fails"
             marker.unlink()
             handed = turn(second, "cloud", STANDIN)
             local = Phone(origin(local_port))
@@ -386,11 +386,13 @@ def main():
             time.sleep(3)           # the relay is started again behind the tunnel
             assert isinstance(local.about(), dict) and tunnels() == before
 
-            # ---- and back to a relay: the program's own relay and the tunnel are ended once the phone is there
+            # ---- and back to a relay: the tunnel ends once the phone is there, while the local relay remains always-on
             handed = turn(local, by_port[FIRST], origin(FIRST))
             assert first.sign_in(ticket=handed["ticket"]) and isinstance(first.about(), dict)
             assert [line["id"] for line in first.ask("line_keep", key=handed["key"])["lines"] if line["current"]] == [by_port[FIRST]]
-            until(lambda: not listening(local_port), "the program's own relay to end", 20)
+            assert listening(local_port), "the always-on local relay remains listening beside the remote relay"
+            routes_info = first.ask("routes_read")
+            assert isinstance(routes_info, dict) and len(routes_info.get("environment_id", "")) == 32 and routes_info.get("local_password"), routes_info
             assert (config()["Mode"], config()["OwnServer"]) == ("own", origin(FIRST)), config()
             until(lambda: tunnels() == before - 1, "the tunnel to end", 20)
             if len(sys.argv) > 1:

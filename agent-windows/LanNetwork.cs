@@ -29,6 +29,8 @@ internal static class LanNetwork {
         var text = new StringBuilder();
         if (!lan) text.AppendLine("当前没有选择局域网直连。请先在连接页选择“局域网”并连接，再用新的二维码扫码。");
         text.AppendLine("局域网地址：" + (address.Length > 0 ? address + ":" + port : "未找到可用的 Wi-Fi / 网线地址"));
+        string ts = TailscaleDiscovery.InterfaceIpv4();
+        if (ts.Length > 0) text.AppendLine("Tailscale 地址：" + ts + ":" + port);
         bool local = Listening("127.0.0.1", port);
         text.AppendLine("本机端口：" + (local ? "可以连接" : "没有响应，请检查连接状态或重新连接"));
         if (local && address.Length > 0) text.AppendLine("本机访问局域网地址：" + (Listening(address, port) ? "可以连接（仍需手机验证入站连接）" : "失败，请检查监听地址、防火墙和代理路由"));

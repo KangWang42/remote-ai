@@ -95,7 +95,7 @@ final class ComputerManagement {
         tagLp.leftMargin = kit.dp(8);
         titleRow.addView(onlineTag, tagLp);
         meta.addView(titleRow);
-        meta.addView(kit.line(MainActivity.host(current), 12.5f, kit.heroMuted(), false), kit.below(2));
+        meta.addView(kit.line(activity.routeSummary(current) + " · " + MainActivity.host(activity.activeOrigin(current)), 12.5f, kit.heroMuted(), false), kit.below(2));
         top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
 
         String versionLabel = state.version.isEmpty() ? "版本未知" : "v" + state.version;
@@ -141,13 +141,14 @@ final class ComputerManagement {
         stop();
         if (!activity.showing("computer")) return;
         final String url = current;
+        final String origin = activity.activeOrigin(url);
         final ComputerUpdate state = states.get(url);
         if (state == null || !loading.add(url)) return;
-        final String cookie = CookieManager.getInstance().getCookie(url);
+        final String cookie = CookieManager.getInstance().getCookie(origin);
         draw();
         activity.net.execute(() -> {
             JSONObject overview = null; String problem = "";
-            try { overview = overview(url, cookie); }
+            try { overview = overview(origin, cookie); }
             catch (IOException unreachable) { problem = "无法连接电脑，请确认电脑在线且地址可用"; }
             catch (Exception error) { problem = error.getMessage() == null ? "暂时无法连接电脑" : error.getMessage(); }
             final JSONObject data = overview; final String error = problem;
@@ -163,17 +164,17 @@ final class ComputerManagement {
                     }
                 }
                 state.expire(SystemClock.elapsedRealtime());
-                if (!activity.isDestroyed() && state.busy() && !state.accepted && state.online && state.enabled) send(url, cookie, state);
+                if (!activity.isDestroyed() && state.busy() && !state.accepted && state.online && state.enabled) send(url, origin, cookie, state);
                 else finished(url);
             });
         });
     }
 
-    private void send(String url, String cookie, ComputerUpdate state) {
+    private void send(String url, String origin, String cookie, ComputerUpdate state) {
         final String id = state.request;
         activity.net.execute(() -> {
             JSONObject result = null; String problem = ""; boolean uncertain = false;
-            try { result = bench.post(url + "/api/terminal", cookie, new JSONObject().put("action", "update").put("id", id)); }
+            try { result = bench.post(origin + "/api/terminal", cookie, new JSONObject().put("action", "update").put("id", id)); }
             catch (IOException error) { uncertain = true; }
             catch (Exception error) { problem = error.getMessage() == null ? "请求失败，请刷新后重试" : error.getMessage(); }
             final JSONObject reply = result; final String error = problem; final boolean retry = uncertain;

@@ -87,12 +87,12 @@ def main():
                 assert wrong["mode"] == "cloud" and wrong["own_relay"] == "running" and word in wrong["about"], wrong
             # the right password: saved, switched to, said, and its address and password shown for the phone
             accepted = press(folder, "accepted", address, relay_password)
-            assert (accepted["mode"], accepted["tab"], accepted["own_relay"], accepted["saved"]) == ("own", "3", "stopped", "1"), accepted
+            assert (accepted["mode"], accepted["tab"], accepted["own_relay"], accepted["saved"]) == ("own", "3", "running", "1"), accepted
             assert accepted["status"].startswith("已连上中转") and accepted["address"] == address and accepted["password_shown"] == "True", accepted
             assert accepted["config"]["Mode"] == "own" and accepted["config"]["OwnServer"] == address and accepted["field"] == "127.0.0.1:%d" % OWN, accepted
             # back on another way, the tab remembers that relay, and "重新连接" with the tab open connects to it
             again = press(folder, "again", "-", "-", "again", again="accepted", mode="cloud")
-            assert (again["mode"], again["own_relay"], again["saved"]) == ("own", "stopped", "1") and again["status"].startswith("已连上中转"), again
+            assert (again["mode"], again["own_relay"], again["saved"]) == ("own", "running", "1") and again["status"].startswith("已连上中转"), again
             # started with that relay in use: the two boxes show it, and "重新连接" connects to it again
             started = press(folder, "started", "-", "-", "again", again="accepted", mode="own")
             assert (started["mode"], started["address"], started["tab"]) == ("own", address, "3") and started["status"].startswith("已连上中转"), started

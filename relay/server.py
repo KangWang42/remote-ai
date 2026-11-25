@@ -444,6 +444,8 @@ class Handler(BaseHTTPRequestHandler):
         if path is None:
             return
         terminals = self.space.relay
+        if path == "/.well-known/remote-ai":
+            return self._json(200, dict(terminals.discovery(), version=VERSION))
         if not path.startswith("/api/"):
             return self._static(path, first("v"))
         if path == "/api/session":

@@ -32,11 +32,16 @@ public sealed partial class App : Form {
     readonly string dataDir = TerminalAgent.DefaultData;
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
     Dictionary<string, object> config;
-    string password = "", address = "";
+    string password = "", localPassword = "", address = "";
     Process relay, tunnel, kept;
     string keptUrl = "";
     TerminalAgent agent;
     int generation;
+    TunnelSupervisor tunnelSupervisor;
+    readonly RouteCatalog routeCatalog = new RouteCatalog(() => LanAddress());
+    readonly System.Windows.Forms.Timer tunnelHealthTimer = new System.Windows.Forms.Timer { Interval = 30 * 1000 };
+    bool localRelayUp;
+    int localRelayPort;
 
     readonly StatusLine status = new StatusLine(), sideStatus = new StatusLine(), sideAbove = new StatusLine();
     // What the side of the window says: how the phone's access stands and, when a tool is connected, which.
@@ -86,6 +91,7 @@ public sealed partial class App : Form {
 
     string ConfigFile { get { return Path.Combine(dataDir, "config.json"); } }
     string PasswordFile { get { return Path.Combine(dataDir, "password.dpapi"); } }
+    string LocalPasswordFile { get { return Path.Combine(dataDir, "local-password.dpapi"); } }
     string TunnelFile { get { return Path.Combine(dataDir, "cloudflared.exe"); } }
     string ChildrenFile { get { return Path.Combine(dataDir, "children.json"); } }
     string KeptFile { get { return Path.Combine(dataDir, "tunnel.json"); } }
@@ -103,6 +109,9 @@ public sealed partial class App : Form {
         if (Array.IndexOf(new[] { "lan", "cloud", "own", "public" }, Mode) < 0) config["Mode"] = "lan";
         try { password = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(PasswordFile), null, DataProtectionScope.CurrentUser)); } catch { password = ""; }
         if (password.Length == 0) SetPassword(NewPassword());
+        try { localPassword = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(LocalPasswordFile), null, DataProtectionScope.CurrentUser)); } catch { localPassword = ""; }
+        if (localPassword.Length == 0) WriteLocalPassword(Mode == "lan" || Mode == "cloud" ? password : NewPassword());
+        tunnelSupervisor = new TunnelSupervisor(dataDir);
     }
     // Settings are changed from the window and from the thread that connects, at a start with one's own relay at the
     // same moment: a change and the writing of the file are one step, one at a time. Every setting is there from
@@ -124,6 +133,7 @@ public sealed partial class App : Form {
     }
     void SetPassword(string value) {
         WritePassword(value);
+        if (Mode == "lan" || Mode == "cloud") WriteLocalPassword(value);
         // Phones that signed in with the old password must sign in again.
         try { File.Delete(Path.Combine(dataDir, "relay", "sessions.json")); } catch { }
     }
@@ -131,6 +141,10 @@ public sealed partial class App : Form {
     void WritePassword(string value) {
         password = value;
         File.WriteAllBytes(PasswordFile, ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null, DataProtectionScope.CurrentUser));
+    }
+    void WriteLocalPassword(string value) {
+        localPassword = value;
+        File.WriteAllBytes(LocalPasswordFile, ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null, DataProtectionScope.CurrentUser));
     }
     List<string> Dirs() { return ((System.Collections.IEnumerable)config["RemoteDirs"]).Cast<object>().Select(Convert.ToString).ToList(); }
 
@@ -149,7 +163,38 @@ public sealed partial class App : Form {
         } catch { }
     }
     // An update leaves the tunnel running: the new version takes it over, so the phone keeps the address it knows.
-    void StopChildren() { if (!updating) { Kill(tunnel); tunnel = null; } Kill(relay); relay = null; Remember(); }
+    void StopChildren() { if (!updating) { Kill(tunnel); tunnel = null; } Kill(relay); relay = null; localRelayUp = false; localRelayPort = 0; Remember(); }
+    void StopTunnelOnly() { if (!updating) { Kill(tunnel); tunnel = null; } Remember(); }
+
+    async Task<bool> EnsureLocalRelay(int port, bool widenNetwork) {
+        if (!File.Exists(Python)) return false;
+        if (relay != null && !relay.HasExited && localRelayUp && localRelayPort == port) return true;
+        if (relay != null) { Kill(relay); relay = null; localRelayUp = false; }
+        if (Listening(port)) return false;
+        if (localPassword.Length == 0) WriteLocalPassword(Mode == "lan" || Mode == "cloud" ? password : NewPassword());
+        relay = StartRelay(widenNetwork, port, localPassword);
+        Remember();
+        bool up = await Up(relay, port);
+        if (!up) { Kill(relay); relay = null; localRelayUp = false; localRelayPort = 0; Remember(); return false; }
+        localRelayUp = true; localRelayPort = port;
+        return true;
+    }
+
+    List<RouteInfo> CurrentRoutes() {
+        string mode = Mode;
+        string remoteUrl = mode == "cloud" ? address : mode == "own" ? Relays.Clean(Convert.ToString(config["OwnServer"]), true) : "";
+        return routeCatalog.Build(localRelayPort > 0 ? localRelayPort : Port, localRelayUp, mode, remoteUrl);
+    }
+
+    void SyncAgentLinks(string remoteServer = "", string remoteSecret = "") {
+        if (agent == null) return;
+        var endpoints = new List<RelayEndpoint>();
+        if (localRelayUp && localRelayPort > 0 && localPassword.Length > 0)
+            endpoints.Add(new RelayEndpoint { Name = "local", Origin = "http://127.0.0.1:" + localRelayPort, Password = localPassword });
+        if (!String.IsNullOrWhiteSpace(remoteServer) && !String.IsNullOrWhiteSpace(remoteSecret))
+            endpoints.Add(new RelayEndpoint { Name = "remote", Origin = remoteServer, Password = remoteSecret });
+        agent.SetLinks(endpoints);
+    }
     void Keep(string url, int port) {
         try {
             File.WriteAllText(KeptFile, json.Serialize(new Dictionary<string, object> { { "Pid", tunnel.Id }, { "Started", tunnel.StartTime.ToFileTimeUtc().ToString() }, { "Url", url },
@@ -232,15 +277,22 @@ public sealed partial class App : Form {
         return Listening(port);
     }
     // cloudflared announces the URL before it connects to the edge. Both are needed to hand the line to a phone.
-    Process StartTunnel(int port, out Task<string> address) {
+    Process StartTunnel(int port, out Task<string> address, int ownerGeneration = -1) {
         var found = new TaskCompletionSource<string>();
-        var run = new ProcessStartInfo(TunnelFile, "tunnel --no-autoupdate" + (Convert.ToString(config["TunnelProtocol"]) == "http2" ? " --protocol http2" : "") + " --url http://127.0.0.1:" + port) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = dataDir };
+        bool useHttp2 = tunnelSupervisor != null && tunnelSupervisor.ShouldUseHttp2(Convert.ToString(config["TunnelProtocol"]));
+        if (tunnelSupervisor != null) tunnelSupervisor.ResetRuntime();
+        var run = new ProcessStartInfo(TunnelFile, TunnelSupervisor.BuildArguments(port, useHttp2, withMetrics: true)) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = dataDir };
         var process = new Process { StartInfo = run, EnableRaisingEvents = true };
         string url = "";
         bool registered = false;
         var gate = new object();
         DataReceivedEventHandler look = (s, e) => {
-            if (e.Data == null || found.Task.IsCompleted) return;
+            if (e.Data == null) return;
+            if (tunnelSupervisor != null && tunnelSupervisor.ObserveLogLine(e.Data)) {
+                if (ownerGeneration >= 0 && ownerGeneration == generation && !quitting && Mode == "cloud" && !Changing)
+                    BeginInvoke(new Action(() => { Say("公网隧道 QUIC 不稳定，正在自动切换 HTTP/2 重连…"); Reconnect(); }));
+            }
+            if (found.Task.IsCompleted) return;
             lock (gate) {
                 if (url.Length == 0) {
                     var match = Regex.Match(e.Data, @"https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com\b");
@@ -267,10 +319,11 @@ public sealed partial class App : Form {
         int mine = ++generation;
         Process held = kept; kept = null;      // only the first start takes a tunnel over; "reconnect" always makes a new one
         ShowAddress("");
-        StopChildren();
         string mode = Mode;
+        int port = Port;
         try {
             if (mode == "own" || mode == "public") {
+                StopTunnelOnly();
                 Relay chosen = Remembered();
                 string server, wrong = "";
                 if (mode == "public") {
@@ -281,13 +334,16 @@ public sealed partial class App : Form {
                     wrong = relays.Space(chosen, out server, out secret);
                     if (mine != generation) return;
                     if (wrong.Length > 0) { Say(wrong, true); return; }
-                    if (secret != password) SetPassword(secret);
+                    if (secret != password) WritePassword(secret);
                 } else {
                     server = Relays.Clean(Convert.ToString(config["OwnServer"]), true);
                     if (server.Length == 0) { Say("尚未选择中转，请在“我的中转”中选择或添加", true); return; }
                 }
+                // Keep the local relay alive beside the remote relay so desktop and LAN/Tailscale phones connect directly.
+                await EnsureLocalRelay(port, true);
+                if (mine != generation) return;
                 Keep("Server", server);
-                if (agent != null) agent.Reset();
+                SyncAgentLinks(server, password);
                 ShowAddress(server);
                 if (mode == "own") {
                     // Whether it works is found out here and said: the address, the certificate or the password.
@@ -296,21 +352,25 @@ public sealed partial class App : Form {
                     if (mine != generation) return;
                 }
                 string name = chosen != null ? chosen.Name : new Uri(server).Authority;
-                Say(wrong.Length > 0 ? wrong : mode == "public" ? "已连上公共中转“" + name + "”，地址固定不变。手机 App 扫码连接" : "已连上中转“" + name + "”，地址固定不变。手机 App 扫码或输入地址连接", wrong.Length > 0);
+                string directHint = localRelayUp ? "（本机与局域网直连同时就绪）" : "";
+                Say(wrong.Length > 0 ? wrong : mode == "public" ? "已连上公共中转“" + name + "”，地址固定不变" + directHint + "。手机 App 扫码连接" : "已连上中转“" + name + "”，地址固定不变" + directHint + "。手机 App 扫码或输入地址连接", wrong.Length > 0);
                 return;
             }
+            StopChildren();
             if (!File.Exists(Python)) { Say("安装不完整：缺少 " + Python, true); return; }
-            int port = Port;
             if (Listening(port)) { Say("端口 " + port + " 已被别的程序占用，请到“设置”里换一个端口", true); return; }
             string ip = mode == "lan" ? LanAddress() : "";
             if (mode == "lan" && ip.Length == 0) { Say("未找到局域网地址，请先连接 Wi-Fi 或网线", true); return; }
-            relay = StartRelay(mode == "lan", port, password);
+            WriteLocalPassword(password);
+            // Listen on LAN too so phones on the same Wi-Fi/Tailscale can upgrade from tunnel to direct automatically.
+            relay = StartRelay(true, port, localPassword);
             Remember();
             bool up = await Up(relay, port);
             if (mine != generation) return;
             if (!up) { StopChildren(); Say("本机服务没有启动成功", true); return; }
+            localRelayUp = true; localRelayPort = port;
             Keep("Server", "http://127.0.0.1:" + port);
-            if (agent != null) agent.Reset();
+            SyncAgentLinks();
             if (mode == "lan") {
                 ShowAddress("http://" + ip + ":" + port);
                 Say("局域网直连已就绪，用 App 扫码。连接失败可点“连接诊断”");
@@ -328,7 +388,7 @@ public sealed partial class App : Form {
             }
             Say("正在建立公网隧道…");
             Task<string> given;
-            tunnel = StartTunnel(port, out given);
+            tunnel = StartTunnel(port, out given, mine);
             tunnel.Exited += lost;
             Remember();
             string url = await given;
@@ -341,7 +401,7 @@ public sealed partial class App : Form {
             }
             Keep(url, port);
             ShowAddress(url);
-            Say("公网隧道已就绪。手机在任何网络下用 App 扫码；更新程序后地址不变");
+            Say("公网隧道已就绪（局域网直连同时可用）。手机在任何网络下用 App 扫码；更新程序后地址不变");
         } catch (Exception error) {
             if (mine != generation) return;
             if (mode == "lan" || mode == "cloud") StopChildren();
@@ -543,7 +603,7 @@ public sealed partial class App : Form {
                 if (!relay.Public) { relays.Save(relay); draft = null; }
                 lock (saving) { if (!relay.Public) config["OwnServer"] = relay.Url; config["Relay"] = relay.Id; Keep("Mode", relay.Public ? "public" : "own"); }
                 relayTab = false; relayNote = ""; shown = null;
-                SetPassword(secret); ShowMode(); Reconnect();
+                WritePassword(secret); ShowMode(); Reconnect();
             }));
         });
     }
@@ -697,11 +757,12 @@ public sealed partial class App : Form {
         return root + "/" + search + "#t=" + Uri.EscapeDataString(ticket ?? "");
     }
     void OpenWeb(string query) {
-        string origin = Convert.ToString(config["Server"]).TrimEnd('/');
-        if (origin.Length == 0 || password.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
+        string origin = localRelayUp && localRelayPort > 0 ? "http://127.0.0.1:" + localRelayPort : Convert.ToString(config["Server"]).TrimEnd('/');
+        string secret = localRelayUp && localRelayPort > 0 && localPassword.Length > 0 ? localPassword : password;
+        if (origin.Length == 0 || secret.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
         Task.Run(() => {
             try {
-                string token = Convert.ToString(Ask(origin + "/api/login", new Dictionary<string, object> { { "password", password } }, "")["token"]);
+                string token = Convert.ToString(Ask(origin + "/api/login", new Dictionary<string, object> { { "password", secret } }, "")["token"]);
                 string ticket = Convert.ToString(Ask(origin + "/api/ticket", new Dictionary<string, object>(), token)["ticket"]);
                 string url = WindowUrl(origin, query, ticket);
                 string browser = AppBrowser();
@@ -819,7 +880,7 @@ public sealed partial class App : Form {
             if (wanted == Mode) { ShowMode(); return; }       // back from only looking at that tab: what is running stays
             if (Held()) return;
             // The password of a place at a relay for everyone is known to that relay: this computer's own relay gets another.
-            if (Mode == "public") SetPassword(NewPassword());
+            if (Mode == "public") { WritePassword(localPassword.Length > 0 ? localPassword : NewPassword()); if (localPassword.Length == 0) WriteLocalPassword(password); }
             Keep("Mode", wanted); ShowMode(); Reconnect();
         };
         Note(way, "地址", 20, 172, 200, 18, Theme.Muted, 8.5f, true);
@@ -1013,6 +1074,7 @@ public sealed partial class App : Form {
         }
         Shown += (s, e) => {
             agent = new TerminalAgent(dataDir) { Version = Version };
+            agent.RoutesProvider = CurrentRoutes;
             // The phone may ask for the update: it is looked for and installed at once, whatever the terminals are doing.
             agent.UpdateRequested = () => BeginInvoke(new Action(() => CheckForUpdate(false, true)));
             agent.Computer = Itself;
@@ -1057,6 +1119,21 @@ public sealed partial class App : Form {
                 await InstallUpdate(found);
             };
             updateTimer.Start(); quietTimer.Start();
+            tunnelHealthTimer.Tick += (t, a) => {
+                if (Mode != "cloud" || tunnel == null || tunnel.HasExited || Changing || quitting || tunnelSupervisor == null) return;
+                int mine = generation;
+                string currentUrl = address;
+                Task.Run(() => {
+                    bool localOk = tunnelSupervisor.CheckLocalReady();
+                    bool stuck = !localOk && tunnelSupervisor.IsStuckNotReady();
+                    bool gone = !stuck && currentUrl.Length > 0 && Gone(currentUrl);
+                    if ((stuck || gone) && mine == generation && !quitting && Mode == "cloud" && !Changing) {
+                        BeginInvoke(new Action(() => { Say("检测到公网隧道异常，正在自动重连…"); Reconnect(); }));
+                    }
+                });
+            };
+            tunnelHealthTimer.Start();
+            routeCatalog.RefreshAsync(true);
             Task.Run(async () => { await Connect(); await agent.Run(); });
             activityTimer.Start();
             if (!offstage && !Environment.GetCommandLineArgs().Contains("--hidden") && String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTECLI_DATA")) && Convert.ToString(config["ToolInstallSuggested"]).Length == 0) {

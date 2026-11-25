@@ -78,7 +78,9 @@ public sealed class Relays {
     }
     /// The relays for everyone, as the list said when it was last read.
     public List<Relay> Published() {
-        try { return Read(File.ReadAllText(ListFile, Encoding.UTF8)) ?? new List<Relay>(); } catch (IOException) { return new List<Relay>(); } catch (UnauthorizedAccessException) { return new List<Relay>(); }
+        lock (gate) {
+            try { return Read(File.ReadAllText(ListFile, Encoding.UTF8)) ?? new List<Relay>(); } catch (IOException) { return new List<Relay>(); } catch (UnauthorizedAccessException) { return new List<Relay>(); }
+        }
     }
     /// Reads the published list again. Returns whether it names other relays than before; a list that cannot be had
     /// leaves the one that was read last.

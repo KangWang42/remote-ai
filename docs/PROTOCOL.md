@@ -1,5 +1,25 @@
 # Protocol
 
+## Multi-route discovery and automatic selection (Stage 1)
+
+Each computer persists a stable 32-hex `environment_id` (`environment-id.txt`) across restarts and line changes.
+The relay exposes an unauthenticated identity probe at `GET /.well-known/remote-ai` (and `/c/<space>/.well-known/remote-ai`
+on public relays), returning `{"service":"remote-ai","version":"x.y.z","environment_id":"<32-hex>","online":bool,"capabilities":["routes","ws"]}`
+with `Cache-Control: no-store`.
+
+Computers running the multi-route agent advertise the `"routes"` feature, `device.environment_id`, and an ordered
+`device.routes` array (`[{"kind":"lan"|"tailscale"|"tunnel"|"own","url":"https?://...","priority":int,"local_auth":bool}]`).
+Public relay origins are never advertised in `device.routes`. Tailscale detection requires an adapter named `tailscale`,
+an adapter carrying Tailscale's unique IPv6 ULA prefix (`fd7a:115c:a1e0::/48`), or `tailscale status --json` with
+`BackendState: "Running"`, avoiding CGNAT collisions (such as Cloudflare WARP on `100.64.0.0/10`).
+
+Authenticated viewers may call `POST /api/computer` with `{"id":"<op>","action":"routes_read"}` to retrieve
+`{"environment_id","routes","local_password"}` so learned LAN/Tailscale routes can authenticate directly while
+keeping credentials encrypted in Android Keystore AES-GCM (`RouteStore`). Clients verify `environment_id` on
+`/.well-known/remote-ai` before sending credentials, reject loopback URLs in remote route tables, probe higher-priority
+routes in parallel with a shared 500 ms head start, back off silent routes exponentially (`60s * 2^n`, capped at 30 min),
+and apply a 5-minute cooldown to failed route switches.
+
 ## Pond appearance (1.7.4)
 
 The existing Android appearance bridge accepts `pond` in `look-skin` and `look-termskin`. Native screens use the matching palette; the computer's embedded pages lazily load the local ASCII pond assets. Older computer pages fall back to their default palette for this unknown name. No relay message or terminal input contract changes. Animation pause is local to the page origin (`rcli-pond-paused`), and does not affect terminal execution. The vendored `Pond`, `PondRenderer` and `koi` API and pinned source are documented in `web/themes/README.md`.

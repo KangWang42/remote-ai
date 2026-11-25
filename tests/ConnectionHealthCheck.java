@@ -40,6 +40,12 @@ public final class ConnectionHealthCheck {
         expect(retry.beginCheck(), "retry starts a fresh monitor even at the same address");
         expect(!nextPage.sample(false, 530), "old attempt cannot interrupt retry");
         expect(!retry.sample(false, 0), "retry gets a fresh failure allowance");
-        System.out.println("Connection health: tunnel HTTP errors, failure recovery, login and resource isolation passed");
+        retry.noteFrame(1000L);
+        expect(!retry.isSilentSocket(true, 1200L, true), "recent frame on direct route is healthy");
+        expect(retry.isSilentSocket(true, 1600L, true), "500ms silent direct socket when HTTP healthy is half-open");
+        expect(!retry.isSilentSocket(false, 2000L, true), "remote route tolerates 1s before silent-socket trigger");
+        expect(retry.isSilentSocket(false, 3600L, true), "2.5s silent remote socket when HTTP healthy is half-open");
+        expect(!retry.isSilentSocket(true, 5000L, false), "unhealthy HTTP is not a silent-socket condition");
+        System.out.println("Connection health: tunnel HTTP errors, failure recovery, login, silent-socket and resource isolation passed");
     }
 }

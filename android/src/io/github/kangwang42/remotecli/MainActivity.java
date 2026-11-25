@@ -105,6 +105,7 @@ public final class MainActivity extends Activity {
     private Workbench bench;
     private ComputerManagement computerManagement;
     private UuRemote uuRemote;
+    RouteCoordinator routes;
     private String pairingRecord = "";
     AppPages appPages;          // (the workbench redraws the limits on 我的 when it has read them)
     private Tabs tabs;
@@ -122,7 +123,7 @@ public final class MainActivity extends Activity {
     private String screen = "";                 // one of the tabs ("home", "projects", "together", "me"), "add", "scan" or "web"
     private final Runnable watch = this::checkConnection;
     private boolean foreground;
-    private String currentOrigin = "";
+    private String currentOrigin = "", currentComputerUrl = "";
     private String movedFrom = "", movedTo = "";       // a computer that is turning to another line: where it was, and where its page was sent
     private ConnectionHealth connectionHealth = new ConnectionHealth();
     boolean showing(String name) { return foreground && name.equals(screen); }
@@ -208,6 +209,8 @@ public final class MainActivity extends Activity {
         if (state != null) bench.restoreState(state.getBundle("workbench"));
         computerManagement = new ComputerManagement(this, kit, bench);
         uuRemote = new UuRemote(this, kit);
+        routes = new RouteCoordinator(this, net);
+        routes.startMonitoring();
         appPages = new AppPages(this, kit, bench);
         tabs = new Tabs(this, kit);
         repaint();
@@ -236,6 +239,9 @@ public final class MainActivity extends Activity {
 
     JSONObject computerByUrl(String url) { JSONArray list = computers(); for (int i = 0; i < list.length(); i++) { JSONObject item = list.optJSONObject(i); if (item != null && url.equals(item.optString("url"))) return item; } return null; }
     JSONObject computerById(String id) { JSONArray list = computers(); for (int i = 0; i < list.length(); i++) { JSONObject item = list.optJSONObject(i); if (item != null && DesktopProtocol.validId(id) && id.equals(item.optString("id"))) return item; } return null; }
+    String recordIdByUrl(String url) { JSONObject c = computerByUrl(url); return c == null ? "" : c.optString("id"); }
+    String activeOrigin(String savedUrl) { return routes == null ? savedUrl : routes.activeOrigin(recordIdByUrl(savedUrl), savedUrl); }
+    String routeSummary(String savedUrl) { return routes == null ? host(savedUrl) : routes.activeRouteSummary(recordIdByUrl(savedUrl), savedUrl); }
     void desktop(String url) { uuRemote.menu(url); }
     private boolean external(Intent intent, boolean cold) {
         Uri uri = intent == null ? null : intent.getData();
@@ -448,6 +454,7 @@ public final class MainActivity extends Activity {
             JSONObject item = now.optJSONObject(i);
             if (item == null || !url.equals(item.optString("url"))) continue;
             uuRemote.forget(item.optString("id"));
+            if (routes != null) routes.forget(item.optString("id"));
             now.remove(i);
         }
         store(now);
@@ -691,17 +698,20 @@ public final class MainActivity extends Activity {
         ticker.removeCallbacks(watch);
         bench.stop();
         computerManagement.stop();
-        currentOrigin = address;
+        final String savedComputerUrl = address;
+        final String targetOrigin = password.isEmpty() ? activeOrigin(address) : address;
+        currentComputerUrl = savedComputerUrl;
+        currentOrigin = targetOrigin;
         connectionHealth.retire();
         connectionHealth = new ConnectionHealth();
         final ConnectionHealth health = connectionHealth;
-        prefs.edit().putString("server", address).apply();
+        prefs.edit().putString("server", savedComputerUrl).apply();
         detachWeb();
         root.removeAllViews();
         screen = "web";
         bars(kit.BG);
         WebView view = ensureWeb();
-        final String origin = address;
+        final String origin = targetOrigin;
         final EmbeddedPages pages;
         try {
             pages = new EmbeddedPages(getAssets(), origin);
@@ -777,7 +787,7 @@ public final class MainActivity extends Activity {
         page.setAlpha(0f);
         root.addView(page, new FrameLayout.LayoutParams(-1, -1));
         page.animate().alpha(1f).setDuration(150).setInterpolator(new DecelerateInterpolator(1.8f)).start();
-        String webTarget = address + path;
+        String webTarget = origin + path;
         if (!password.isEmpty()) webTarget += "#p=" + Uri.encode(password);
         view.loadUrl(webTarget);
         if (foreground) ticker.post(watch);
@@ -824,6 +834,9 @@ public final class MainActivity extends Activity {
                 if (ok && connectionBanner != null && connectionBanner.getVisibility() == View.VISIBLE) {
                     connectionBanner.setVisibility(View.GONE);
                 }
+                if (ok && routes != null && !currentComputerUrl.isEmpty()) {
+                    routes.maybeUpgradeInBackground(recordIdByUrl(currentComputerUrl), currentComputerUrl, origin);
+                }
                 if (failed) reconnect(checked, origin, health);
                 else ticker.postDelayed(watch, 3000);
             });
@@ -831,6 +844,28 @@ public final class MainActivity extends Activity {
     }
 
     private void reconnect(WebView failed, String origin, ConnectionHealth health) {
+        final String savedUrl = currentComputerUrl.isEmpty() ? origin : currentComputerUrl;
+        final String recordId = recordIdByUrl(savedUrl);
+        if (routes != null && !recordId.isEmpty() && !origin.equals(movedTo)) {
+            net.execute(() -> {
+                String alternate = routes.failover(recordId, savedUrl, origin);
+                if (!alternate.isEmpty() && !alternate.equals(origin)) {
+                    runOnUiThread(() -> {
+                        if (!health.isActive() || web != failed || !"web".equals(screen)) return;
+                        String currentUrl = failed.getUrl();
+                        String recoverPath = currentUrl != null && currentUrl.startsWith(origin + "/") ? currentUrl.substring(origin.length()) : "/?tab=projects";
+                        openPage(savedUrl, "", recoverPath);
+                    });
+                    return;
+                }
+                showReconnectBanner(failed, origin, health);
+            });
+            return;
+        }
+        showReconnectBanner(failed, origin, health);
+    }
+
+    private void showReconnectBanner(WebView failed, String origin, ConnectionHealth health) {
         root.post(() -> {
             // The same WebView may now show another page; only its active connection may stop it.
             if (!health.isActive() || web != failed || !"web".equals(screen)) return;
@@ -1000,19 +1035,19 @@ public final class MainActivity extends Activity {
             JSONArray list = computers();
             for (int i = 0; i < list.length(); i++) {
                 JSONObject one = list.optJSONObject(i);
-                if (one != null && currentOrigin.equals(one.optString("url")) && !one.optString("name").isEmpty()) return one.optString("name");
+                if (one != null && (currentComputerUrl.equals(one.optString("url")) || currentOrigin.equals(one.optString("url"))) && !one.optString("name").isEmpty()) return one.optString("name");
             }
-            return host(currentOrigin);
+            return host(currentComputerUrl.isEmpty() ? currentOrigin : currentComputerUrl);
         }
         @JavascriptInterface public void disconnect() { home(); }
         /** Removes the currently opened computer from this phone without needing its password. */
         @JavascriptInterface public void forgetCurrent() {
-            final String target = currentOrigin;
+            final String target = currentComputerUrl.isEmpty() ? currentOrigin : currentComputerUrl;
             if (target != null && !target.isEmpty()) runOnUiThread(() -> confirmRemoveComputer(target));
         }
         /** The terminal page reports the finished work it has shown, so the workbench stops listing it as new. */
         @JavascriptInterface public void seen(String terminal, String at) {
-            final String origin = currentOrigin;
+            final String origin = currentComputerUrl.isEmpty() ? currentOrigin : currentComputerUrl;
             runOnUiThread(() -> { try { bench.markSeen(origin, terminal, Long.parseLong(at)); } catch (Exception invalid) { /* not a time */ } });
         }
     }
@@ -1046,5 +1081,5 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onPause() { super.onPause(); foreground = false; if (watching() && computers().length() > 0) Watcher.start(this); ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); CookieManager.getInstance().flush(); if (web != null) web.onPause(); if (scanner != null) { endScan(); home(""); } }
     @Override protected void onResume() { super.onResume(); foreground = true; if (watching()) Watcher.start(this, true); if (web != null) { web.onResume(); ticker.post(watch); } if (Tabs.has(screen)) bench.refresh(); if ("together".equals(screen) || "me".equals(screen)) appPages.refresh(screen); if ("computer".equals(screen)) computerManagement.refresh(); if ("reminders".equals(screen)) reminderSettings(); if (updater != null) updater.checkIfDue(); }
-    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { detachWeb(); web.destroy(); web = null; } super.onDestroy(); }
+    @Override protected void onDestroy() { foreground = false; ticker.removeCallbacks(watch); bench.stop(); computerManagement.stop(); if (routes != null) routes.stopMonitoring(); net.shutdownNow(); if (updater != null) updater.stop(); if (web != null) { detachWeb(); web.destroy(); web = null; } super.onDestroy(); }
 }
