@@ -118,7 +118,7 @@ export function ThreadView(p: Props) {
               role="tab"
               aria-selected={on}
               class={on ? 'on' : ''}
-              disabled={!on && !allowed}
+              disabled={Boolean(switching) || (!on && !allowed)}
               title={on ? undefined : allowed ? (v === 'chat' ? '以对话方式继续这段对话' : `在 ${meta.label} 自己的终端界面里继续`) : reopen.why}
               onClick={() => !on && allowed && switchTo(v)}
             >
