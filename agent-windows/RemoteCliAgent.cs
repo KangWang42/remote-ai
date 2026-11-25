@@ -184,7 +184,7 @@ public sealed class TerminalAgent {
         });
         Teams = new Teams(Path.Combine(dataDir, "teams.dat"), new Teams.Hands {
             Begin = BeginMember, Say = SayToMember, SayWithAttachments = SayToMember, ReadAttachment = ReadQueuedAttachment,
-            Stop = StopMember, Close = CloseMember, Restart = RestartMember, Changes = ChangesIn, Limits = Quotas.Of, Available = AvailableChatTools,
+            Stop = StopMember, Close = CloseMember, Restart = RestartMember, Changes = ChangesIn, Snapshot = SnapshotIn, Limits = Quotas.Of, Available = AvailableChatTools,
             MakeWorktree = MakeTeamWorktree, WorktreeDiff = Worktrees.Diff, WorktreeStat = Worktrees.Stat, ApplyWorktree = ApplyTeamWorktree, CleanWorktrees = CleanTeamWorktrees });
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
@@ -629,6 +629,11 @@ public sealed class TerminalAgent {
         string folder;
         return AllDirs(Preferences()).TryGetValue(dir, out folder) ? RemoteCli.Worktrees.ChangesIn(folder) : "";
     }
+    /// Fast read-only workspace snapshot for first-turn collaboration prompts (Teams.cs).
+    string SnapshotIn(string dir) {
+        string folder;
+        return AllDirs(Preferences()).TryGetValue(dir, out folder) ? WorkspaceSnapshot.Build(folder) : "";
+    }
     readonly HashSet<string> autoCpRunning = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     void ScheduleAutoCheckpoint(string folder, string tool) {
         if (String.IsNullOrWhiteSpace(folder)) return;
@@ -684,7 +689,7 @@ public sealed class TerminalAgent {
             var read = Said(file, tool);
             var said = ((IEnumerable)read["messages"]).Cast<Dictionary<string, object>>().ToList();
             if (said.Count == 0) return "";
-            Func<string, int, string> cut = (text, most) => { text = (text ?? "").Trim(); return text.Length <= most ? text : text.Substring(0, most) + "…"; };
+            Func<string, int, string> cut = (text, most) => ProcessText.TruncateSafe((text ?? "").Trim(), most, "…");
             var asked = said.Where(m => Convert.ToString(m["role"]) == "user").Select(m => Convert.ToString(m["text"])).Where(s => !String.IsNullOrWhiteSpace(s)).ToList();
             string answered = said.Where(m => Convert.ToString(m["role"]) == "assistant").Select(m => Convert.ToString(m["text"])).LastOrDefault(s => !String.IsNullOrWhiteSpace(s)) ?? "";
             var steps = said.Where(m => Convert.ToString(m["role"]) == "tool").Select(m => Convert.ToString(m["text"])).Where(s => !String.IsNullOrWhiteSpace(s)).ToList();

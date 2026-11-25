@@ -141,6 +141,7 @@ public sealed class Teams {
         /// what it had); false where the terminal is gone or its tool has not named the conversation yet.
         public Func<string, string, string, bool> Restart;
         public Func<string, string> Changes;                                     // project -> what changed, in words
+        public Func<string, string> Snapshot;                                    // project -> compact read-only workspace snapshot
         public Func<string, Quotas.Window[]> Limits;                             // tool -> its main windows still running
         public Func<string[]> Available;                                         // chat-capable tools installed on this computer
         public Func<string, string, string, Worktrees.Created> MakeWorktree;     // project, teamId, tool -> Created
@@ -440,30 +441,31 @@ public sealed class Teams {
         return usable.OrderBy(x => x.Item2).ThenBy(x => x.Item3).Select(x => x.Item1).FirstOrDefault();
     }
     static string ExtraRules(Team t) { return String.IsNullOrEmpty(t.Rules) ? "" : "\n\n【分工偏好】\n" + Cut(t.Rules, 1000); }
-    static string ContextBlock(Team t) { return String.IsNullOrEmpty(t.Context) ? "" : "\n\n## 前期已确认背景\n" + Cut(t.Context, 4000); }
+    static string ContextBlock(Team t) { return String.IsNullOrEmpty(t.Context) ? "" : "\n\n## 前期已确认背景\n" + Fold(t.Context, 4000); }
+    static string SnapshotBlock(string snapshot) { return String.IsNullOrWhiteSpace(snapshot) ? "" : "\n\n## 工作区快照（只读）\n" + snapshot.Trim(); }
     static string RoomsBlock(Team t, IDictionary<string, string> rooms) {
         // a self-forming leader may take on any installed tool, so it sees all of them
         var tools = t.Tools.Concat(t.AutoRoster ? rooms.Keys : Enumerable.Empty<string>()).Distinct();
         return rooms.Count > 0 ? "\n\n## 当前额度\n" + String.Join("\n", tools.Where(rooms.ContainsKey).Select(tool => "- " + Label(tool) + (tool == t.Tools[0] ? "（你）" : "") + "：" + rooms[tool])) : "";
     }
-    public static string DiscussFirst(Team t, string tool) {
-        return "【协作任务 · 方案讨论（只读）】目标：" + t.Goal + ContextBlock(t) + ExtraRules(t)
+    public static string DiscussFirst(Team t, string tool, string snapshot = "") {
+        return "【协作任务 · 方案讨论（只读）】目标：" + t.Goal + ContextBlock(t) + ExtraRules(t) + SnapshotBlock(snapshot)
             + "\n\n正式动手修改代码前，各位 AI 先只读查看相关代码并简明提出自己的方案建议（3–6 条要点：核心思路、涉及文件、潜在风险与边界条件）。不要修改任何文件。";
     }
-    public static string WriterFirst(Team t, string discussion = "") {
-        return "【协作任务 · 写】" + t.Goal + ContextBlock(t) + ExtraRules(t)
-            + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 前期方案讨论汇总\n" + Cut(discussion, 12000))
+    public static string WriterFirst(Team t, string discussion = "", string snapshot = "") {
+        return "【协作任务 · 写】" + t.Goal + ContextBlock(t) + ExtraRules(t) + SnapshotBlock(snapshot)
+            + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 前期方案讨论汇总\n" + Fold(discussion, 12000))
             + "\n\n请直接干脆地完成任务，完成后简明说明做了什么、改了哪些文件。之后 " + Label(t.Tools[1]) + " 会只读审查你的改动，有问题再交回修改。";
     }
     public static string ReviewerAsk(Team t, string words, string changes) {
         return "【协作任务 · 审查 · 第 " + t.Round + " 轮】另一个 AI（" + Label(t.Tools[0]) + "）正在完成这项任务：\n" + t.Goal + ContextBlock(t) + ExtraRules(t)
-            + "\n\n它这一轮的说明：\n" + Cut(words, 6000) + (changes.Length > 0 ? "\n\n改动：\n" + Cut(changes, 30000) : "")
+            + "\n\n它这一轮的说明：\n" + Fold(words, 6000) + (changes.Length > 0 ? "\n\n改动：\n" + Fold(changes, 30000) : "")
             + "\n\n请只审查，不要修改任何文件。没有必须修改的实质问题就直接通过，不要吹毛求疵。回答的第一行只写 REVIEW: PASS 或 REVIEW: CHANGES，之后逐条列出必须修改的问题与建议。";
     }
     public static string WriterAgain(Team t, string review) {
-        return "【协作任务 · 审查意见 · 第 " + t.Round + " 轮】" + Label(t.Tools[1]) + " 的审查意见：\n" + Cut(review, 12000) + "\n\n请据此修改，完成后简要说明改了什么。";
+        return "【协作任务 · 审查意见 · 第 " + t.Round + " 轮】" + Label(t.Tools[1]) + " 的审查意见：\n" + Fold(review, 12000) + "\n\n请据此修改，完成后简要说明改了什么。";
     }
-    public static string LeaderFirst(Team t, IDictionary<string, string> rooms, string discussion = "") {
+    public static string LeaderFirst(Team t, IDictionary<string, string> rooms, string discussion = "", string snapshot = "") {
         Func<string, string> room = tool => rooms.ContainsKey(tool) ? "；" + rooms[tool] : "";
         var members = LeadMembers(t).Select(role => {
             string tool = ToolOf(t, role);
@@ -483,8 +485,8 @@ public sealed class Teams {
             + "ASSIGN member-1 " + usable[0] + ": 实现输入校验（负责 validate.py），交回改动文件和测试输出\n"
             + "ASSIGN member-2 " + usable[usable.Length - 1] + ": 只读核对错误信息是否覆盖空值，交回核对结论\n"
             + "已有成员可用 ASSIGN member-1: 任务内容 继续，或加工具名切换。";
-        return "【协作任务 · 领队】目标：" + t.Goal + ExtraRules(t)
-            + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 成员前期方案讨论（只读）\n" + Cut(discussion, 12000))
+        return "【协作任务 · 领队】目标：" + t.Goal + ExtraRules(t) + SnapshotBlock(snapshot)
+            + (String.IsNullOrEmpty(discussion) ? "" : "\n\n## 成员前期方案讨论（只读）\n" + Fold(discussion, 12000))
             + "\n\n你负责确定范围、处理跨成员问题、整合并验收。成员在同一个项目文件夹工作：\n" + String.Join("\n", members)
             + (rooms.ContainsKey(t.Tools[0]) ? "\n你自己（" + Label(t.Tools[0]) + "）的" + rooms[t.Tools[0]] : "")
             + rosterGuide + (t.AutoRoster ? RoomsBlock(t, rooms) : "") + modelGuide
@@ -542,7 +544,7 @@ public sealed class Teams {
             + "第 " + t.Round + (t.Free ? " 轮（不限轮数）。" : " 轮，共 " + t.Rounds + " 轮。")
             + (last ? (t.Free ? "已到协作任务最多的 " + MaxTotalRounds + " 轮，请做最后一次验收。" : "已到设定的 " + t.Rounds + " 轮上限，请做最后一次验收。") : "请汇总本轮结果并单独验收。")
             + "\n\n整体目标：" + Cut(t.Goal, 2000)
-            + (changes.Length > 0 ? "\n\n## 文件夹中的当前改动\n" + Cut(changes, 20000) : "")
+            + (changes.Length > 0 ? "\n\n## 文件夹中的当前改动\n" + Fold(changes, 20000) : "")
             + RoomsBlock(t, rooms)
             + "\n\n对照用户要拿到的成品和约定的验收证据，检查实际交付及跨成员影响，亲自运行与这次改动相关的检查；只交付设计时，核对设计是否覆盖目标、约束和取舍，不要求代码改动。核实用户补充要求是否已落实。小的整合问题可直接修订并复查。"
             + "成品还没齐时（例如设计已确认、实现还没做），仍需执行的工作按范围交给成员。"
@@ -593,7 +595,7 @@ public sealed class Teams {
         return "\n\n## 同批并行成员分工\n" + String.Join("\n", others)
             + "\n以上成员与你在同一项目目录并行工作。请严格只改动你负责的文件与范围，不要修改对方负责的文件或重复对方工作；若发现跨范围依赖或冲突，先在交回结果中写明，由领队统一协调。";
     }
-    public static string MemberTask(Team t, string task, string role = "", IDictionary<string, string> batch = null, bool followUp = false) {
+    public static string MemberTask(Team t, string task, string role = "", IDictionary<string, string> batch = null, bool followUp = false, string snapshot = "") {
         string siblings = SiblingBlock(t, role, batch);
         if (followUp) {
             return "【协作任务 · 第 " + t.Round + " 轮补充派工】领队（" + Label(t.Tools[0]) + "）安排的新任务：\n" + task
@@ -605,39 +607,41 @@ public sealed class Teams {
             + "\n\n项目目标供参考：" + t.Goal
             + ContextBlock(t)
             + ExtraRules(t)
+            + SnapshotBlock(snapshot)
             + siblings
             + MemberGuide;
     }
-    public static string CompareFirst(Team t, string tool) {
-        return "【协作任务 · 并行比稿】目标：" + t.Goal + ContextBlock(t) + ExtraRules(t)
+    public static string CompareFirst(Team t, string tool, string snapshot = "") {
+        return "【协作任务 · 并行比稿】目标：" + t.Goal + ContextBlock(t) + ExtraRules(t) + SnapshotBlock(snapshot)
             + "\n\n你正在该项目的独立 Git worktree 副本中工作，不会与其他候选 AI 冲突。请直接完成你的最佳实现并验证关键路径，完成后简明说明你的方案思路、改了哪些文件以及取舍理由。用户会对比各候选方案并选择一个合并。";
     }
     public static string Results(Team t, Dictionary<string, string> answers, string changes, IDictionary<string, string> rooms, string guide = "") {
         return Answers(t, answers)
-            + (changes.Length > 0 ? "\n\n## 文件夹中的改动\n" + Cut(changes, 20000) : "")
+            + (changes.Length > 0 ? "\n\n## 文件夹中的改动\n" + Fold(changes, 20000) : "")
             + RoomsBlock(t, rooms)
             + "\n\n" + (guide.Length > 0 ? guide : "请对照用户要拿到的成品和验收证据，继续分派（ASSIGN 成员名: 任务）或确认完成（DONE: 总结）。");
     }
     const string DecideNext = "本轮仍有未完成的分工。请根据回报解决阻塞、明确范围或改派，只安排剩余工作；改派同样按专长、额度、依赖和文件归属选人。用户要的成品都有验收证据后再写 DONE: 总结。";
     const string SupplementGuide = "补充要求改变了用户要拿到的成品或验收证据时，先更新它们，再调整受影响的分工。把仍适用和本轮新增的任务尽早写成 ASSIGN 行，简单工作可直接完成。";
     static string Answers(Team t, Dictionary<string, string> answers) {
-        return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + RoleLabel(t, p.Key) + "\n" + Cut(p.Value, 8000)));
+        return "【协作任务 · 成员结果 · 第 " + t.Round + " 轮】\n\n" + String.Join("\n\n", answers.Select(p => "## " + RoleLabel(t, p.Key) + "\n" + Fold(p.Value, 8000)));
     }
     const string Remind = "【协作任务】没有在你的回答里找到分派或结束。请在回答的最后按格式写：\nASSIGN 成员名: 任务内容（可以多行）\n或单独一行：\nDONE: 总结";
-    static string Cut(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "\n…（后面省略）" : text; }
+    static string Cut(string text, int most) { return ProcessText.TruncateSafe(text, most, "\n…（后面省略）"); }
+    static string Fold(string text, int most) { return ProcessText.FoldHeadTail(text, most); }
     static string CutKeepingAttachments(string text, int most) {
         text = text ?? "";
         int marker = text.IndexOf("\n\n\u9644\u56fe\uff1a", StringComparison.Ordinal);
         if (marker < 0 || text.Length <= most) return Cut(text, most);
         string images = text.Substring(marker);
-        if (images.Length >= most) return images.Substring(0, most);
-        return text.Substring(0, most - images.Length) + images;
+        if (images.Length >= most) return ProcessText.SliceSafeChars(images, most);
+        return ProcessText.SliceSafeChars(text, most - images.Length) + images;
     }
     static string WithoutAttachments(string text, IEnumerable<Attachment> images) {
         var lines = new HashSet<string>(images.Select(image => "\u9644\u56fe\uff1a" + image.AbsolutePath), StringComparer.Ordinal);
         return String.Join("\n", text.Split('\n').Where(line => !lines.Contains(line)));
     }
-    static string Short(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "…" : text; }
+    static string Short(string text, int most) { return ProcessText.TruncateSafe(text, most, "…"); }
 
     // ---- what the members say, read
     /// A review's verdict from its first line that says one: true pass, false changes, null none.
@@ -782,6 +786,7 @@ public sealed class Teams {
             }
         }
 
+        string snapshot = Snapshot(team);
         if (team.Mode == "compare") {
             try {
                 foreach (string tool in team.Tools) {
@@ -794,7 +799,7 @@ public sealed class Teams {
                 throw;
             }
             Log(team, "目标", team.Goal);
-            foreach (string tool in team.Tools) Open(team, tool, tool, CompareFirst(team, tool), false, team.Worktrees[tool]);
+            foreach (string tool in team.Tools) Open(team, tool, tool, CompareFirst(team, tool, snapshot), false, team.Worktrees[tool]);
             return Of(team.Id);
         }
 
@@ -808,13 +813,13 @@ public sealed class Teams {
             }
             foreach (string roleName in discussants) {
                 string tool = ToolOf(team, roleName);
-                Open(team, "discuss:" + roleName, tool, DiscussFirst(team, tool), true, null);
+                Open(team, "discuss:" + roleName, tool, DiscussFirst(team, tool, snapshot), true, null);
             }
             return Of(team.Id);
         }
 
         string role = team.Mode == "review" ? "writer" : "leader";
-        Open(team, role, team.Tools[0], team.Mode == "review" ? WriterFirst(team) : LeaderFirst(team, Rooms(team)), false, null);
+        Open(team, role, team.Tools[0], team.Mode == "review" ? WriterFirst(team, "", snapshot) : LeaderFirst(team, Rooms(team), "", snapshot), false, null);
         return Of(team.Id);
     }
 
@@ -1851,7 +1856,8 @@ public sealed class Teams {
             team.Phase = "";
             Save();
         }
-        string discussion = String.Join("\n\n", collected.Select(p => "### " + RoleLabel(team, p.Key) + "\n" + Cut(p.Value, 5000)));
+        string discussion = String.Join("\n\n", collected.Select(p => "### " + RoleLabel(team, p.Key) + "\n" + Fold(p.Value, 5000)));
+        string snapshot = Snapshot(team);
         if (team.Mode == "review") {
             string writerTool = team.Tools[0];
             bool writerFailed; lock (gate) writerFailed = team.Failed.ContainsKey(writerTool);
@@ -1863,7 +1869,7 @@ public sealed class Teams {
                     writerTool = backup;
                 }
             }
-            Open(team, "writer", writerTool, WriterFirst(team, discussion), false, null);
+            Open(team, "writer", writerTool, WriterFirst(team, discussion, snapshot), false, null);
         } else {
             string leaderTool = team.Tools[0];
             bool leaderFailed; lock (gate) leaderFailed = team.Failed.ContainsKey(leaderTool);
@@ -1875,7 +1881,7 @@ public sealed class Teams {
                     leaderTool = backup;
                 }
             }
-            Ask(team, "leader", leaderTool, LeaderFirst(team, Rooms(team), discussion), false);
+            Ask(team, "leader", leaderTool, LeaderFirst(team, Rooms(team), discussion, snapshot), false);
         }
     }
 
@@ -1889,8 +1895,8 @@ public sealed class Teams {
         }
         bool allDone; bool anyOk;
         lock (gate) {
-            team.Summaries[tool] = how == "done" ? Cut(said, 6000) : (String.IsNullOrWhiteSpace(said) ? (how == "stopped" ? "（这一轮已停止）" : "（执行出错）") : Cut(said, 6000));
-            team.Diffs[tool] = Cut(diff, 30000);
+            team.Summaries[tool] = how == "done" ? Fold(said, 6000) : (String.IsNullOrWhiteSpace(said) ? (how == "stopped" ? "（这一轮已停止）" : "（执行出错）") : Fold(said, 6000));
+            team.Diffs[tool] = Fold(diff, 30000);
             team.Stats[tool] = stat.Length > 0 ? stat : (how == "done" ? "没有文件改动" : "未完成");
             allDone = team.Awaited.Count == 0;
             anyOk = team.Summaries.Values.Any(s => !s.StartsWith("（执行出错", StringComparison.Ordinal) && !s.StartsWith("（这一轮已停止", StringComparison.Ordinal));
@@ -1938,10 +1944,12 @@ public sealed class Teams {
                     foreach (string member in tasks.Keys) if (!team.Awaited.Contains(member)) team.Awaited.Add(member);
                     Save();
                 }
+                string snapshot = null;
                 foreach (var task in tasks) {
                     bool followUp;
                     lock (gate) followUp = team.Members.ContainsKey(task.Key) || team.Sessions.ContainsKey(task.Key);
-                    string fullPrompt = MemberTask(team, task.Value, task.Key, tasks, false);
+                    if (!followUp && snapshot == null) snapshot = Snapshot(team);
+                    string fullPrompt = MemberTask(team, task.Value, task.Key, tasks, false, snapshot ?? "");
                     string prompt = followUp ? MemberTask(team, task.Value, task.Key, tasks, true) : fullPrompt;
                     Ask(team, task.Key, ToolOf(team, task.Key), prompt, false, null, null, fullPrompt);
                 }
@@ -2021,6 +2029,7 @@ public sealed class Teams {
         }
         Log(team, "继续", "追加第 " + team.Round + " 轮");
         string added = words.Length > 0 ? "\n\n【用户补充】\n" + words : "";
+        string snapshot = null;
         foreach (var one in held) {
             if (one.Key == "writer" || one.Key == "leader") {
                 string prompt = one.Key == "writer" ? WriterAgain(team, one.Value)
@@ -2029,8 +2038,9 @@ public sealed class Teams {
             } else {
                 bool followUp;
                 lock (gate) followUp = team.Members.ContainsKey(one.Key) || team.Sessions.ContainsKey(one.Key);
-                string fullPrompt = MemberTask(team, one.Value, one.Key, held, false) + added;
-                string prompt = (followUp ? MemberTask(team, one.Value, one.Key, held, true) : MemberTask(team, one.Value, one.Key, held, false)) + added;
+                if (!followUp && snapshot == null) snapshot = Snapshot(team);
+                string fullPrompt = MemberTask(team, one.Value, one.Key, held, false, snapshot ?? "") + added;
+                string prompt = (followUp ? MemberTask(team, one.Value, one.Key, held, true) : MemberTask(team, one.Value, one.Key, held, false, snapshot ?? "")) + added;
                 Ask(team, one.Key, ToolOf(team, one.Key), prompt, false, null, attachments, fullPrompt);
             }
         }
@@ -2099,6 +2109,11 @@ public sealed class Teams {
     }
     string Changes(Team team) {
         try { return hands.Changes(team.Dir) ?? ""; }
+        catch (Exception) { return ""; }
+    }
+    string Snapshot(Team team) {
+        if (hands.Snapshot == null) return "";
+        try { return hands.Snapshot(team.Dir) ?? ""; }
         catch (Exception) { return ""; }
     }
     static long Now() { return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds; }

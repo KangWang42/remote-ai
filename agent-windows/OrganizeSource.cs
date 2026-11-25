@@ -92,7 +92,7 @@ internal static class OrganizeProcess {
         string line = String.Join(" ", arguments.Select(Quote));
         var info = new ProcessStartInfo {
             WorkingDirectory = folder, UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
-            RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+            RedirectStandardOutput = true, RedirectStandardError = true
         };
         if (launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || launcher.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)) {
             info.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
@@ -104,16 +104,20 @@ internal static class OrganizeProcess {
             byte[] words = new UTF8Encoding(false).GetBytes(input ?? "");
             process.StandardInput.BaseStream.Write(words, 0, words.Length);
             process.StandardInput.Close();
-            Task<string> output = process.StandardOutput.ReadToEndAsync(), errors = process.StandardError.ReadToEndAsync();
+            var outBuf = new MemoryStream();
+            var errBuf = new MemoryStream();
+            Task copyOut = process.StandardOutput.BaseStream.CopyToAsync(outBuf), copyErr = process.StandardError.BaseStream.CopyToAsync(errBuf);
             if (!process.WaitForExit(timeout)) {
-                try { Process.Start(new ProcessStartInfo("taskkill", "/PID " + process.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true }).WaitForExit(5000); }
-                catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
+                ProcessText.KillProcessTree(process.Id, 5000);
                 throw new TimeoutException();
             }
             process.WaitForExit();
-            if (process.ExitCode != 0 && output.Result.Trim().Length == 0)
-                throw new InvalidOperationException(label + " 没有完成整理：" + OrganizeReply.Limit(errors.Result.Trim(), 200));
-            return output.Result;
+            copyOut.Wait(3000); copyErr.Wait(3000);
+            string stdoutText = ProcessText.DecodeProcessOutput(outBuf.ToArray());
+            string stderrText = ProcessText.DecodeProcessOutput(errBuf.ToArray());
+            if (process.ExitCode != 0 && stdoutText.Trim().Length == 0)
+                throw new InvalidOperationException(label + " 没有完成整理：" + OrganizeReply.Limit(stderrText.Trim(), 200));
+            return stdoutText;
         }
     }
 

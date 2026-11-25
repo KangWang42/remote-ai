@@ -23,6 +23,9 @@ public sealed class Peers : IDisposable {
     public const string CollabToolName = "start_collaboration";
     public const string Flag = "--mcp";
     public const int DefaultTimeoutSeconds = 240;
+    /// Antigravity CLI hard-aborts MCP tool calls at 180s and spills outputs over ~10 KB UTF-8 to disk.
+    public const int AgyTimeoutSeconds = 168;
+    public const int AgyMaxAnswerBytes = 8600;
     const int MaxFrameBytes = 16 * 1024 * 1024;
     const int MaxQuestionChars = 16000;
     const int MaxAnswerChars = 24000;
@@ -247,7 +250,7 @@ public sealed class Peers : IDisposable {
         peerTool = (peerTool ?? "").Trim().ToLowerInvariant();
         question = (question ?? "").Trim();
         if (question.Length == 0) return Fail("请提供要请教的具体问题");
-        if (question.Length > MaxQuestionChars) question = question.Substring(0, MaxQuestionChars) + "\n…（问题过长，后文已省略）";
+        if (question.Length > MaxQuestionChars) question = ProcessText.TruncateSafe(question, MaxQuestionChars, "\n…（问题过长，后文已省略）");
         Tool kind = Tool.Of(peerTool);
         if (kind == null || !kind.Chats) return Fail("不支持请教工具：" + peerTool);
         if (peerTool == seat.CallerTool) return Fail("不能请教自己，请选择另一位 AI");
@@ -259,6 +262,10 @@ public sealed class Peers : IDisposable {
             if (seat.Closed || disposed) return Fail("原对话已结束");
             if (!seat.Consultants.TryGetValue(peerTool, out consultant)) seat.Consultants[peerTool] = consultant = new Consultant();
         }
+
+        int effectiveTimeout = String.Equals(seat.CallerTool, "agy", StringComparison.OrdinalIgnoreCase)
+            ? Math.Min(timeoutSeconds, AgyTimeoutSeconds)
+            : timeoutSeconds;
 
         lock (consultant.TurnGate) {
             if (seat.Closed || disposed || cancel.IsCancellationRequested) return Fail("请教已取消");
@@ -272,8 +279,10 @@ public sealed class Peers : IDisposable {
                 catch (Exception ex) { return Fail("未能启动 " + kind.Label + "：" + ex.Message); }
             }
             Chat chat = consultant.Chat;
+            string snapshot = consultant.Turns == 0 ? WorkspaceSnapshot.Build(seat.Folder) : "";
+            string snapshotBlock = snapshot.Length > 0 ? "\n\n【工作区快照（只读）】\n" + snapshot : "";
             string prompt = consultant.Turns == 0
-                ? "【只读请教】同一项目里的另一位 AI（" + Tool.LabelOf(seat.CallerTool) + "）向你请教以下问题。请只读查看所需文件并直接给出简明、具体、可操作的意见；不要修改任何文件，不要执行会改动状态的命令，也不要等待额外确认。\n\n" + question
+                ? "【只读请教】同一项目里的另一位 AI（" + Tool.LabelOf(seat.CallerTool) + "）向你请教以下问题。请只读查看所需文件并直接给出简明、具体、可操作的意见；不要修改任何文件，不要执行会改动状态的命令，也不要等待额外确认。" + snapshotBlock + "\n\n" + question
                 : "【继续请教】\n" + question;
             consultant.Turns++;
 
@@ -287,7 +296,7 @@ public sealed class Peers : IDisposable {
                     ResetConsultant(consultant);
                     return Fail(kind.Label + " 没有收下问题：" + ex.Message);
                 }
-                DateTime deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+                DateTime deadline = DateTime.UtcNow.AddSeconds(effectiveTimeout);
                 while (!done.Wait(200)) {
                     if (seat.Closed || disposed || cancel.IsCancellationRequested) {
                         try { chat.Stop(); } catch (Exception) { }
@@ -301,7 +310,7 @@ public sealed class Peers : IDisposable {
                     if (DateTime.UtcNow >= deadline) {
                         try { chat.Stop(); } catch (Exception) { }
                         ResetConsultant(consultant);
-                        return Fail(kind.Label + " 回答超时（超过 " + timeoutSeconds + " 秒）");
+                        return Fail(kind.Label + " 回答超时（超过 " + effectiveTimeout + " 秒）");
                     }
                 }
             } finally {
@@ -316,7 +325,10 @@ public sealed class Peers : IDisposable {
             }
             string answer = (endSaid ?? "").Trim();
             if (answer.Length == 0) return Fail(kind.Label + " 没有给出文字回答");
-            if (answer.Length > MaxAnswerChars) answer = answer.Substring(0, MaxAnswerChars) + "\n…（回答过长，后文已省略）";
+            if (String.Equals(seat.CallerTool, "agy", StringComparison.OrdinalIgnoreCase) && Encoding.UTF8.GetByteCount(answer) > AgyMaxAnswerBytes)
+                answer = ProcessText.FoldHeadTailUtf8(answer, AgyMaxAnswerBytes);
+            else if (answer.Length > MaxAnswerChars)
+                answer = ProcessText.FoldHeadTail(answer, MaxAnswerChars);
             return new Dictionary<string, object> { { "ok", true }, { "text", answer } };
         }
     }
@@ -421,15 +433,33 @@ public sealed class Peers : IDisposable {
         detail.AppendLine("目标：" + (goal.Length > 400 ? goal.Substring(0, 400) + "…" : goal));
         if (rules.Length > 0) detail.AppendLine("偏好：" + (rules.Length > 200 ? rules.Substring(0, 200) + "…" : rules));
 
+        bool isAgyCaller = String.Equals(seat.CallerTool, "agy", StringComparison.OrdinalIgnoreCase);
         if (collab.Confirm != null) {
-            bool allowed = collab.Confirm(seat.TerminalId, "collab", "将当前对话转为协作任务？", detail.ToString().TrimEnd(), cancel);
-            if (!allowed) return Fail(cancel.IsCancellationRequested ? "开启协作已取消" : "用户拒绝了开启协作，请继续以普通对话处理。");
+            bool allowed;
+            bool timedOut = false;
+            if (isAgyCaller) {
+                int confirmTimeout = Math.Min(timeoutSeconds, AgyTimeoutSeconds);
+                using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(confirmTimeout)))
+                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancel, timeoutCts.Token)) {
+                    allowed = collab.Confirm(seat.TerminalId, "collab", "将当前对话转为协作任务？", detail.ToString().TrimEnd(), linked.Token);
+                    timedOut = !allowed && timeoutCts.IsCancellationRequested && !cancel.IsCancellationRequested;
+                }
+            } else {
+                allowed = collab.Confirm(seat.TerminalId, "collab", "将当前对话转为协作任务？", detail.ToString().TrimEnd(), cancel);
+            }
+            if (!allowed) {
+                if (timedOut) return Fail("手机确认等待超时，请重新发起协作或提醒用户在手机上确认。");
+                return Fail(cancel.IsCancellationRequested ? "开启协作已取消" : "用户拒绝了开启协作，请继续以普通对话处理。");
+            }
         }
         if (seat.Closed || disposed || cancel.IsCancellationRequested) return Fail("开启协作已取消");
         try {
             CollabStarted started = collab.Promote(seat.TerminalId, item);
             if (started == null || String.IsNullOrEmpty(started.TeamId)) return Fail("未能开启协作任务");
-            return new Dictionary<string, object> { { "ok", true }, { "text", started.Prompt } };
+            string promptText = started.Prompt ?? "";
+            if (isAgyCaller && Encoding.UTF8.GetByteCount(promptText) > AgyMaxAnswerBytes)
+                promptText = ProcessText.FoldHeadTailUtf8(promptText, AgyMaxAnswerBytes);
+            return new Dictionary<string, object> { { "ok", true }, { "text", promptText } };
         } catch (Exception ex) {
             string why = ex is ArgumentException || ex is InvalidOperationException ? ex.Message : "电脑端开启协作失败";
             return Fail(why);
@@ -502,12 +532,27 @@ public sealed class Peers : IDisposable {
         var utf8 = new UTF8Encoding(false);
         Stream stdout = Console.OpenStandardOutput();
 
-        Action<object> send = message => {
-            byte[] line = utf8.GetBytes(ser.Serialize(message) + "\n");
-            lock (writeLock) { stdout.Write(line, 0, line.Length); stdout.Flush(); }
+        Action<object, bool> send = (message, useContentLength) => {
+            string body = ser.Serialize(message);
+            byte[] payloadBytes = utf8.GetBytes(body);
+            byte[] frame;
+            if (useContentLength) {
+                byte[] header = Encoding.ASCII.GetBytes("Content-Length: " + payloadBytes.Length + "\r\n\r\n");
+                frame = new byte[header.Length + payloadBytes.Length];
+                Buffer.BlockCopy(header, 0, frame, 0, header.Length);
+                Buffer.BlockCopy(payloadBytes, 0, frame, header.Length, payloadBytes.Length);
+            } else {
+                frame = new byte[payloadBytes.Length + 1];
+                Buffer.BlockCopy(payloadBytes, 0, frame, 0, payloadBytes.Length);
+                frame[payloadBytes.Length] = (byte)'\n';
+            }
+            lock (writeLock) {
+                try { stdout.Write(frame, 0, frame.Length); stdout.Flush(); }
+                catch (IOException) { } catch (ObjectDisposedException) { }
+            }
         };
-        Action<object, object> reply = (id, result) => send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id }, { "result", result } });
-        Action<object, int, string> fail = (id, code, message) => send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id }, { "error", new Dictionary<string, object> { { "code", code }, { "message", message } } } });
+        Action<object, object, bool> reply = (id, result, cl) => send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id }, { "result", result } }, cl);
+        Action<object, int, string, bool> fail = (id, code, message, cl) => send(new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id }, { "error", new Dictionary<string, object> { { "code", code }, { "message", message } } } }, cl);
 
         Func<string, Dictionary<string, object>, int, Dictionary<string, object>> pipeCall = (key, payload, timeoutMs) => {
             NamedPipeClientStream client = null;
@@ -531,10 +576,11 @@ public sealed class Peers : IDisposable {
         };
 
         try {
-            using (var reader = new StreamReader(Console.OpenStandardInput(), utf8)) {
+            using (var stdin = Console.OpenStandardInput()) {
                 string raw;
-                while ((raw = reader.ReadLine()) != null) {
-                    raw = raw.Trim();
+                bool useContentLength;
+                while (ReadMcpMessage(stdin, utf8, out raw, out useContentLength)) {
+                    raw = (raw ?? "").Trim();
                     if (raw.Length == 0) continue;
                     Dictionary<string, object> msg;
                     try { msg = ser.Deserialize<Dictionary<string, object>>(raw); }
@@ -555,28 +601,29 @@ public sealed class Peers : IDisposable {
                         continue;
                     }
 
+                    bool framed = useContentLength;
                     if (method == "initialize") {
                         string version = Text(p, "protocolVersion");
                         if (version.Length == 0) version = "2025-03-26";
                         reply(id, new Dictionary<string, object> {
                             { "protocolVersion", version },
                             { "capabilities", new Dictionary<string, object> { { "tools", new Dictionary<string, object>() } } },
-                            { "serverInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "version", "1" } } } });
+                            { "serverInfo", new Dictionary<string, object> { { "name", "remote-ai" }, { "version", "1" } } } }, framed);
                     } else if (method == "ping") {
-                        reply(id, new Dictionary<string, object>());
+                        reply(id, new Dictionary<string, object>(), framed);
                     } else if (method == "resources/list") {
-                        reply(id, new Dictionary<string, object> { { "resources", new object[0] } });
+                        reply(id, new Dictionary<string, object> { { "resources", new object[0] } }, framed);
                     } else if (method == "prompts/list") {
-                        reply(id, new Dictionary<string, object> { { "prompts", new object[0] } });
+                        reply(id, new Dictionary<string, object> { { "prompts", new object[0] } }, framed);
                     } else if (method == "tools/list") {
                         var back = pipeCall(null, new Dictionary<string, object> { { "op", "list" }, { "token", token } }, 3000);
                         object tools = back != null ? At(back, "tools") : null;
-                        reply(id, new Dictionary<string, object> { { "tools", tools ?? new object[0] } });
+                        reply(id, new Dictionary<string, object> { { "tools", tools ?? new object[0] } }, framed);
                     } else if (method == "tools/call") {
                         string name = Text(p, "name");
                         var args = At(p, "arguments");
                         if (name != ToolName && name != CollabToolName) {
-                            reply(id, ToolResult("不支持的工具：" + name, true));
+                            reply(id, ToolResult("不支持的工具：" + name, true), framed);
                             continue;
                         }
                         string reqKey = Convert.ToString(id);
@@ -591,12 +638,12 @@ public sealed class Peers : IDisposable {
                         string fallbackErr = name == ToolName ? "请教失败" : "开启协作失败";
                         Task.Run(() => {
                             var back = pipeCall(reqKey, reqPayload, 3000);
-                            if (back == null) reply(id, ToolResult("电脑端协作服务暂时不可用或调用已取消", true));
-                            else if (true.Equals(At(back, "ok"))) reply(id, ToolResult(Text(back, "text"), false));
-                            else reply(id, ToolResult(Text(back, "error").Length > 0 ? Text(back, "error") : fallbackErr, true));
+                            if (back == null) reply(id, ToolResult("电脑端协作服务暂时不可用或调用已取消", true), framed);
+                            else if (true.Equals(At(back, "ok"))) reply(id, ToolResult(Text(back, "text"), false), framed);
+                            else reply(id, ToolResult(Text(back, "error").Length > 0 ? Text(back, "error") : fallbackErr, true), framed);
                         });
                     } else {
-                        fail(id, -32601, "Method not found");
+                        fail(id, -32601, "Method not found", framed);
                     }
                 }
             }
@@ -605,8 +652,56 @@ public sealed class Peers : IDisposable {
             NamedPipeClientStream[] open;
             lock (inflightLock) { open = inflight.Values.ToArray(); inflight.Clear(); }
             foreach (var c in open) try { c.Dispose(); } catch (Exception) { }
+            lock (writeLock) { try { stdout.Flush(); } catch { } }
         }
         return 0;
+    }
+
+    /// Reads one MCP JSON-RPC message from stdio supporting both NDJSON and LSP-style Content-Length framing.
+    static bool ReadMcpMessage(Stream stdin, Encoding utf8, out string jsonText, out bool useContentLength) {
+        jsonText = "";
+        useContentLength = false;
+        while (true) {
+            string line = ReadAsciiOrUtf8Line(stdin, utf8);
+            if (line == null) return false;
+            string trimmed = line.Trim();
+            if (trimmed.Length == 0) continue;
+            if (trimmed.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith("Content-Type:", StringComparison.OrdinalIgnoreCase)) {
+                int contentLength = -1;
+                string header = trimmed;
+                while (header != null && header.Trim().Length > 0) {
+                    if (header.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)) {
+                        int parsed;
+                        if (Int32.TryParse(header.Substring("Content-Length:".Length).Trim(), out parsed)) contentLength = parsed;
+                    }
+                    header = ReadAsciiOrUtf8Line(stdin, utf8);
+                }
+                if (contentLength <= 0 || contentLength > MaxFrameBytes) continue;
+                byte[] body = new byte[contentLength];
+                int got = 0, n;
+                while (got < contentLength && (n = stdin.Read(body, got, contentLength - got)) > 0) got += n;
+                if (got < contentLength) return false;
+                jsonText = utf8.GetString(body, 0, got);
+                useContentLength = true;
+                return true;
+            }
+            jsonText = trimmed;
+            useContentLength = false;
+            return true;
+        }
+    }
+
+    static string ReadAsciiOrUtf8Line(Stream stream, Encoding utf8) {
+        var bytes = new List<byte>(256);
+        int b;
+        while ((b = stream.ReadByte()) >= 0) {
+            if (b == '\n') break;
+            if (b == '\r') continue;
+            bytes.Add((byte)b);
+            if (bytes.Count > MaxFrameBytes) break;
+        }
+        if (b < 0 && bytes.Count == 0) return null;
+        return utf8.GetString(bytes.ToArray());
     }
 
     static Dictionary<string, object> ToolResult(string text, bool isError) {

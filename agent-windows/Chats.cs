@@ -314,7 +314,7 @@ public abstract class Chat : IRunning {
         flusher.Dispose();
         var seat = Interlocked.Exchange(ref mcp, null);
         if (seat != null) seat.Dispose();
-        try { if (process != null && !process.HasExited) using (Process kill = Process.Start(new ProcessStartInfo("taskkill.exe", "/PID " + process.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true })) kill.WaitForExit(10000); } catch { }
+        try { if (process != null && !process.HasExited) ProcessText.KillProcessTree(process.Id, 10000); } catch { }
         if (process == null) { Closed = true; Drained = true; }
     }
 
@@ -355,7 +355,7 @@ public abstract class Chat : IRunning {
         if (kind == "out") {
             int had; printed.TryGetValue(id, out had);
             if (had >= OutputMost) return;
-            if (had + text.Length > OutputMost) text = text.Substring(0, OutputMost - had) + "\n…";
+            if (had + text.Length > OutputMost) text = ProcessText.SliceSafeChars(text, OutputMost - had) + "\n…";
             printed[id] = had + text.Length;
         }
         if (kind == "more" && id == wordsId) words.Append(text);
@@ -434,15 +434,23 @@ public abstract class Chat : IRunning {
         string line = text.Split('\n').Select(one => one.Trim()).LastOrDefault(one => one.Length > 0) ?? "";
         if (whole != null || line.Length > 0) Said = line.Length > 200 ? line.Substring(0, 200) : line;
     }
-    /// What a step gave back, for a step whose output was not passed on as it came: its last lines, as a terminal
-    /// would show them at its end.
+    /// What a step gave back, for a step whose output was not passed on as it came: normalized terminal output
+    /// with head-tail folding so both the initial root-cause lines and the trailing summary stay visible.
     public static string Shown(string back) {
-        back = (back ?? "").Replace("\r\n", "\n").Trim('\n', '\r');
-        if (back.Length > 6000) back = "…\n" + back.Substring(back.Length - 6000);
+        back = ProcessText.NormalizeTerminal(back ?? "").Trim('\n', '\r');
+        if (back.Length == 0) return "";
+        if (back.Length > 6000) back = ProcessText.FoldHeadTail(back, 6000);
         var lines = back.Split('\n');
-        return lines.Length > 40 ? "…\n" + String.Join("\n", lines.Skip(lines.Length - 40)) : back;
+        if (lines.Length > 48) {
+            int head = 16, tail = 30;
+            int omitted = lines.Length - head - tail;
+            back = String.Join("\n", lines.Take(head))
+                + "\n…（已折叠中间 " + omitted + " 行，共 " + lines.Length + " 行）…\n"
+                + String.Join("\n", lines.Skip(lines.Length - tail));
+        }
+        return back;
     }
-    protected static string Cut(string text, int most) { text = text ?? ""; return text.Length > most ? text.Substring(0, most) + "…" : text; }
+    protected static string Cut(string text, int most) { return ProcessText.TruncateSafe(text, most, "…"); }
     /// A step named as the tools' windows name it: what it is, and what for, where the tool says it.
     public static string Brief(object name, object given) {
         var input = given as Dictionary<string, object>; string about = "";

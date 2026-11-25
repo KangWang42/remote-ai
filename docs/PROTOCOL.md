@@ -926,11 +926,16 @@ or `writer`, returning the collaboration prompt inside the active turn so `ASSIG
 finishes. The server is attached only
 for that session without modifying global tool settings: Claude Code receives `--mcp-config <temp.json>` (with
 `MCP_TOOL_TIMEOUT=300000`), Codex receives `-c mcp_servers.remote_ai.{command,args,tool_timeout_sec,startup_timeout_sec}`
-on `codex app-server`, and Antigravity CLI receives `mcpServers` in ACP `session/new` / `session/load`. `tools/list`
+on `codex app-server`, and Antigravity CLI receives `mcpServers` in ACP `session/new` / `session/load`. The stdio
+bridge accepts both newline-delimited JSON and `Content-Length` framed JSON-RPC messages. Because Antigravity CLI
+aborts MCP tool calls at 180 seconds and spills outputs above ~10 KB UTF-8 to disk, calls from `agy` enforce a 168-second
+budget on both `ask_ai` and `start_collaboration` confirmation waits, and head-tail fold replies above 8,600 UTF-8 bytes
+so responses return inline cleanly. `tools/list`
 omits the caller itself in `ask_ai` and embeds each peer's current quota and tight (>=80%) warning from `Quotas.cs`.
 CLI-level tool permission prompts for `ask_ai` and `start_collaboration` are auto-approved (the latter uses Remote AI's
 own phone confirmation card) and shown as `step` items (`请教 <工具>：...` / `发起协作 · ...`). The consulted
-peer runs in `read` mode without MCP (preventing recursion), automatically denies write/command permission prompts
+peer runs in `read` mode without MCP (preventing recursion), receives a compact read-only workspace snapshot on its first
+turn, automatically denies write/command permission prompts
 (allowing only read/search inspection on ACP), reuses its read-only session for follow-ups unless `fresh: true`, and is
 disposed together with any temporary config file when the caller chat closes.
 

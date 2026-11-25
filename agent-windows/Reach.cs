@@ -589,10 +589,71 @@ public sealed class Reach : IDisposable {
     /// A request for permission that the program had taken is another matter: the program may be starting again (an
     /// update, asked for from the phone while its owner is away), and the request would fall to the tool's own
     /// question, where the phone cannot answer it. The hook waits a while for the program and hands it over anew.
+    /// Reads hook payload from stdin until EOF, a complete top-level JSON object arrives, or the safety cap/timeout
+    /// elapses, so hosts that omit stdin EOF never stall a hook subprocess.
+    static byte[] ReadHookStdin(Stream input, int maxBytes = 512 * 1024, int timeoutMs = 1500) {
+        var collected = new MemoryStream();
+        var done = new ManualResetEventSlim(false);
+        var gate = new object();
+        bool complete = false;
+        int depth = 0;
+        bool started = false, inString = false, escape = false;
+
+        var reader = new Thread(() => {
+            byte[] buf = new byte[4096];
+            try {
+                while (true) {
+                    int n = input.Read(buf, 0, buf.Length);
+                    if (n <= 0) break;
+                    bool finished = false;
+                    lock (gate) {
+                        int room = maxBytes - (int)collected.Length;
+                        if (room <= 0) { finished = true; }
+                        else {
+                            int take = Math.Min(n, room);
+                            collected.Write(buf, 0, take);
+                            for (int i = 0; i < take; i++) {
+                                byte b = buf[i];
+                                if (!started) {
+                                    if (b == 0xEF || b == 0xBB || b == 0xBF || b == ' ' || b == '\t' || b == '\r' || b == '\n') continue;
+                                    if (b != '{') { finished = true; break; }
+                                    started = true; depth = 1;
+                                    continue;
+                                }
+                                if (inString) {
+                                    if (escape) { escape = false; }
+                                    else if (b == '\\') { escape = true; }
+                                    else if (b == '"') { inString = false; }
+                                    continue;
+                                }
+                                if (b == '"') { inString = true; }
+                                else if (b == '{') { depth++; }
+                                else if (b == '}') {
+                                    depth--;
+                                    if (depth == 0) { complete = true; finished = true; break; }
+                                }
+                            }
+                            if (collected.Length >= maxBytes) finished = true;
+                        }
+                    }
+                    if (finished) break;
+                }
+            } catch (IOException) { } catch (ObjectDisposedException) { }
+            finally { done.Set(); }
+        }) { IsBackground = true, Name = "hook-stdin" };
+        reader.Start();
+        done.Wait(Math.Max(100, timeoutMs));
+        lock (gate) {
+            // If a non-JSON payload arrived or EOF closed cleanly, return everything read so far.
+            if (!complete && !done.IsSet && started && depth > 0) return new byte[0];
+            return collected.ToArray();
+        }
+    }
+
     public static int Hook(string tool, string pipeName) {
         try {
             byte[] hooked;
-            using (var input = Console.OpenStandardInput()) using (var all = new MemoryStream()) { input.CopyTo(all); hooked = all.ToArray(); }
+            using (var input = Console.OpenStandardInput()) hooked = ReadHookStdin(input);
             string text = Encoding.UTF8.GetString(hooked).Trim().TrimStart('﻿');
             if (!text.StartsWith("{", StringComparison.Ordinal)) return 0;
             bool request = Regex.IsMatch(text, "\"hook_event_name\"\\s*:\\s*\"PermissionRequest\"");

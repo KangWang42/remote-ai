@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace RemoteCli {
 /// Manages isolated Git worktrees for parallel multi-AI comparison tasks (`Teams` compare mode).
@@ -32,14 +33,15 @@ public sealed class Worktrees {
 
     sealed class GitResult { public int Code; public byte[] OutBytes = new byte[0]; public string Out = "", Err = ""; }
 
-    static GitResult RunGit(string folder, string args, int timeoutMs = 20000, Dictionary<string, string> extraEnv = null, string stdinText = null) {
+    static GitResult RunGit(string folder, string args, int timeoutMs = 20000, Dictionary<string, string> extraEnv = null, string stdinText = null, bool readOnly = false) {
         try {
-            var info = new ProcessStartInfo("git", "-C \"" + folder + "\" " + args) {
+            string prefix = readOnly ? ProcessText.HardenedReadOnlyGitPrefix : "";
+            var info = new ProcessStartInfo("git", prefix + "-C \"" + folder + "\" " + args) {
                 UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true,
-                RedirectStandardInput = stdinText != null,
-                StandardErrorEncoding = new UTF8Encoding(false)
+                RedirectStandardInput = stdinText != null
             };
+            ProcessText.ApplyNonInteractiveGitEnv(info);
             if (extraEnv != null) foreach (var kv in extraEnv) info.EnvironmentVariables[kv.Key] = kv.Value;
             using (var p = Process.Start(info)) {
                 if (stdinText != null) {
@@ -48,15 +50,21 @@ public sealed class Worktrees {
                     p.StandardInput.Close();
                 }
                 var outBuf = new MemoryStream();
+                var errBuf = new MemoryStream();
                 var copyOut = p.StandardOutput.BaseStream.CopyToAsync(outBuf);
-                var readErr = p.StandardError.ReadToEndAsync();
+                var copyErr = p.StandardError.BaseStream.CopyToAsync(errBuf);
                 if (!p.WaitForExit(timeoutMs)) {
-                    try { p.Kill(); } catch (Exception) { }
+                    ProcessText.KillProcessTree(p.Id, 3000);
                     return new GitResult { Code = -1, Err = "git 命令超时" };
                 }
-                copyOut.Wait(3000); readErr.Wait(3000);
+                copyOut.Wait(3000); copyErr.Wait(3000);
                 byte[] bytes = outBuf.ToArray();
-                return new GitResult { Code = p.ExitCode, OutBytes = bytes, Out = Encoding.UTF8.GetString(bytes), Err = (readErr.Result ?? "").Trim() };
+                return new GitResult {
+                    Code = p.ExitCode,
+                    OutBytes = bytes,
+                    Out = ProcessText.DecodeProcessOutput(bytes),
+                    Err = ProcessText.DecodeProcessOutput(errBuf.ToArray()).Trim()
+                };
             }
         } catch (System.ComponentModel.Win32Exception) {
             return new GitResult { Code = -1, Err = "电脑上未找到 git 命令" };
@@ -103,7 +111,7 @@ public sealed class Worktrees {
     public List<Info> ListWorktrees(string repoDir) {
         var list = new List<Info>();
         if (String.IsNullOrEmpty(repoDir) || !Directory.Exists(repoDir)) return list;
-        var res = RunGit(repoDir, "worktree list --porcelain", 15000);
+        var res = RunGit(repoDir, "worktree list --porcelain", 15000, readOnly: true);
         if (res.Code != 0) return list;
         string managedPrefix = Path.GetFullPath(Path.Combine(rootDir, "sessions")).TrimEnd('\\') + "\\";
         Info current = null;
@@ -255,28 +263,28 @@ public sealed class Worktrees {
     public string Diff(string worktreePath, string baseCommit) {
         if (String.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath)) return "";
         string target = String.IsNullOrWhiteSpace(baseCommit) ? "HEAD" : baseCommit.Trim();
-        var status = RunGit(worktreePath, "-c core.quotepath=false status --porcelain --untracked-files=all");
-        var diff = RunGit(worktreePath, "-c core.quotepath=false diff " + target + " --no-color");
+        var status = RunGit(worktreePath, "status --porcelain --untracked-files=all", readOnly: true);
+        var diff = RunGit(worktreePath, "diff --no-ext-diff " + target + " --no-color", readOnly: true);
         var parts = new List<string>();
         string statusLines = (status.Out ?? "").TrimEnd();
         if (statusLines.Length > 0) parts.Add("文件：\n" + statusLines);
         else {
             // Candidate may have committed all changes inside its worktree; show name-status vs baseCommit.
-            var committed = RunGit(worktreePath, "-c core.quotepath=false diff --name-status " + target);
+            var committed = RunGit(worktreePath, "diff --name-status " + target, readOnly: true);
             if (!String.IsNullOrWhiteSpace(committed.Out)) parts.Add("文件：\n" + committed.Out.TrimEnd());
         }
         string diffText = (diff.Out ?? "").TrimEnd();
         if (diffText.Length > 0) parts.Add(diffText);
         // Preview untracked text files so the user can compare newly added files too.
-        var untracked = RunGit(worktreePath, "-c core.quotepath=false ls-files --others --exclude-standard");
+        var untracked = RunGit(worktreePath, "ls-files --others --exclude-standard", readOnly: true);
         foreach (string rel in (untracked.Out ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Take(8)) {
             string full = Path.Combine(worktreePath, rel.Replace('/', Path.DirectorySeparatorChar));
             try {
                 if (!File.Exists(full)) continue;
                 byte[] bytes = File.ReadAllBytes(full);
                 if (bytes.Take(4096).Any(b => b == 0)) { parts.Add("+++ " + rel + "（二进制文件，" + bytes.Length + " 字节）"); continue; }
-                string text = Encoding.UTF8.GetString(bytes);
-                if (text.Length > 4000) text = text.Substring(0, 4000) + "\n…（后文省略）";
+                string text = ProcessText.DecodeProcessOutput(bytes);
+                if (text.Length > 4000) text = ProcessText.FoldHeadTail(text, 4000);
                 parts.Add("+++ 新建文件：" + rel + "\n" + text);
             } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
@@ -288,9 +296,9 @@ public sealed class Worktrees {
         if (String.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath)) return "工作区不可用";
         string target = String.IsNullOrWhiteSpace(baseCommit) ? "HEAD" : baseCommit.Trim();
         var names = new List<string>();
-        var diffNames = RunGit(worktreePath, "-c core.quotepath=false diff --name-only " + target);
+        var diffNames = RunGit(worktreePath, "diff --name-only " + target, readOnly: true);
         foreach (string line in (diffNames.Out ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) names.Add(line.Trim());
-        var untracked = RunGit(worktreePath, "-c core.quotepath=false ls-files --others --exclude-standard");
+        var untracked = RunGit(worktreePath, "ls-files --others --exclude-standard", readOnly: true);
         foreach (string line in (untracked.Out ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) if (!names.Contains(line.Trim())) names.Add(line.Trim());
         if (names.Count == 0) return "没有文件改动";
         var shortNames = names.Take(3).Select(n => { int i = n.LastIndexOfAny(new[] { '/', '\\' }); return i >= 0 ? n.Substring(i + 1) : n; }).ToArray();
@@ -340,13 +348,20 @@ public sealed class Worktrees {
         if (!String.IsNullOrEmpty(repoDir) && Directory.Exists(repoDir)) RunGit(repoDir, "worktree prune", 10000);
     }
 
-    /// Shared helper: git status + diff in a working directory (empty string if not a repo or clean).
+    /// Shared helper: git status + stat summary + diff in a working directory (empty string if not a repo or clean).
     public static string ChangesIn(string folder) {
         if (String.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return "";
-        var files = RunGit(folder, "status --porcelain --untracked-files=all", 15000);
+        var files = RunGit(folder, "status --porcelain --untracked-files=all", 15000, readOnly: true);
         if (files.Code != 0 || String.IsNullOrWhiteSpace(files.Out)) return "";
-        var diff = RunGit(folder, "-c core.quotepath=false diff HEAD --no-color", 15000);
-        return "文件：\n" + files.Out.TrimEnd() + "\n\n" + (diff.Code == 0 ? diff.Out.TrimEnd() : "");
+        var statTask = Task.Run(() => RunGit(folder, "diff --no-ext-diff --stat HEAD --no-color", 15000, readOnly: true));
+        var diffTask = Task.Run(() => RunGit(folder, "diff --no-ext-diff HEAD --no-color", 15000, readOnly: true));
+        Task.WaitAll(statTask, diffTask);
+        var parts = new List<string> { "文件：\n" + files.Out.TrimEnd() };
+        if (statTask.Result.Code == 0 && !String.IsNullOrWhiteSpace(statTask.Result.Out))
+            parts.Add("改动统计：\n" + statTask.Result.Out.TrimEnd());
+        if (diffTask.Result.Code == 0 && !String.IsNullOrWhiteSpace(diffTask.Result.Out))
+            parts.Add(diffTask.Result.Out.TrimEnd());
+        return String.Join("\n\n", parts.ToArray());
     }
 
     static void TryDeleteDir(string path) {
