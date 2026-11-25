@@ -3,10 +3,10 @@
 - 遇到功能实现受阻时，先查项目已有代码、本机已安装的同类工具、官方文档和公开实现。找到候选方案后，用当前环境验证实际接口、返回字段和适用条件，再判断能否复用或说明阻塞原因。
 - 更新广州公共中转时，优先使用同级探针项目的 `../05-探针/tools/fleet_access.py`，调用 `connect("CN-Tencent-GZ")`。该入口读取本地凭据并校验 SSH 主机身份。
 
-- 产品由 Android App 和电脑端组成；Windows 电脑端以 EXE 安装包发布。`web/` 是 App 使用、由电脑端提供的内嵌页面和终端组件，不作为独立网页产品介绍。
-- 用户要求（2026-10-11 起）：改动完成并通过相关检查后提交即可，不必每次发版，也不推送；用户说要发布时，再递增版本号，重新构建 EXE 和 APK，并发布对应的 GitHub Release。只改源码或重打同版本安装包不算发布完成。
-- 用户要求（2026-11-21 起）：新建 GitHub Release 默认勾选预发布。用户明确要求正式发布时，可将已经验收的预发布版本晋升为正式版，沿用该标签和附件；如果还需调整代码，则按新版本构建和发布。App 更新渠道默认只接收正式版，可在设置中开启接收预发布版本。
-- Android 的 `versionName`、Windows 程序和安装器版本、中转服务的 `VERSION`、打包脚本版本以及 Release 的 `vX.Y.Z` 标签必须一致；Android `versionCode` 也必须高于上一正式版。Rust/Linux 电脑端沿用各自版本约定。
-- 发布时上传 `RemoteCli-Setup-X.Y.Z.exe` 和 `RemoteCli-Android.apk` 两个文件；用户要求（2026-10-11 起）不再附 `SHA256SUMS.txt`，Release 说明里也不写校验值（两端的更新程序用 GitHub 给出的文件摘要校验下载）。APK 签名证书必须与上一正式版一致，不直接使用未经比对的默认密钥；必要时用 `android/build.ps1 -SecretDir` 指定既有发布密钥目录。确认 Release 标签指向此次已验证的提交，公开版本和文件摘要与本地成品一致；不覆盖旧版附件，不改写远端历史。
+- 产品由 Android App、iOS App 和电脑端组成；Windows 电脑端以 EXE 安装包发布。`web/` 是 App 使用、由电脑端提供的内嵌页面和终端组件，不作为独立网页产品介绍。
+- 用户要求（2026-10-11 起）：改动完成并通过相关检查后提交即可，不必每次发版，也不推送；用户说要发布时，再递增版本号，重新构建 Windows EXE、Android APK 与 iOS IPA，并发布对应的 GitHub Release。只改源码或重打同版本安装包不算发布完成。
+- 用户要求（2026-11-25 起）：新建 GitHub Release 默认直接发布为正式版（`--latest`，不勾选预发布）；仅在用户明确要求预发布时才勾选 `--prerelease --latest=false`。
+- Android 的 `versionName`、iOS 的 `MARKETING_VERSION`、Windows 程序和安装器版本、中转服务的 `VERSION`、打包脚本版本以及 Release 的 `vX.Y.Z` 标签必须一致；Android `versionCode` 与 iOS `CURRENT_PROJECT_VERSION` 也必须高于上一正式版。Rust/Linux 电脑端沿用各自版本约定。
+- 发布时上传 `RemoteCli-Setup-X.Y.Z.exe`、`RemoteCli-Android.apk` 与 `RemoteCli-iOS.ipa` 三个文件；用户要求（2026-10-11 起）不再附 `SHA256SUMS.txt`，Release 说明里也不写校验值（两端的更新程序用 GitHub 给出的文件摘要校验下载）。APK 签名证书必须与上一正式版一致，不直接使用未经比对的默认密钥；必要时用 `android/build.ps1 -SecretDir` 指定既有发布密钥目录。确认 Release 标签指向此次已验证的提交，公开版本和文件摘要与本地成品一致；不覆盖旧版附件，不改写远端历史。
 - 用户要求：项目保持清晰、可扩展的结构，不做无意义的堆砌。新能力以职责单一、接口明确的模块加入（例如 `agent-windows/Relays.cs`、`public-relays.json`、`relay.Relay`）；状态放在可以有多个实例的对象里，不靠全局变量或重复加载模块；改动同时带上测试和文档（涉及三方接口的写进 `docs/PROTOCOL.md`），并去掉因此不再需要的代码。
 - README 和 Release 说明直接描述功能、变化及必要的使用限制，使用自然、客观的中文；不加入助手自述或“未核验”“没有在手机上看过”等制作过程说明，不虚构测试证据。
