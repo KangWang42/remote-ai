@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   conversationAction,
   fetchProjectScripts,
@@ -12,14 +12,14 @@ import {
   terminalEmbedUrl,
   uploadImageAttachment,
 } from '../runtime/api';
-import { parseChatChunks, parseTranscriptMessages } from '../runtime/chatParser';
+import { ChatTimelineReducer, parseTranscriptMessages } from '../runtime/chatParser';
+import { ThreadCache } from '../runtime/threadCache';
 import { formatExactTime, formatRelativeTime, normalizeMs } from '../runtime/time';
 import {
   toolBadgeStyle,
   toolLabel,
   toolMeta,
   toolShort,
-  type ChatChunk,
   type ChatMessageItem,
   type DeviceInfo,
   type GitBranchEntry,
@@ -28,7 +28,7 @@ import {
   type SessionEntry,
   type TerminalEntry,
 } from '../runtime/types';
-import { MarkdownView } from './MarkdownView';
+import { VirtualTimeline } from './VirtualTimeline';
 
 interface Props {
   device: DeviceInfo | null;
@@ -79,7 +79,6 @@ export function ChatPane({
   const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
-  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const [scripts, setScripts] = useState<ProjectScriptEntry[]>([]);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<GitBranchEntry[]>([]);
@@ -87,17 +86,22 @@ export function ChatPane({
   const [newBranchName, setNewBranchName] = useState('');
   const [branchBusy, setBranchBusy] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [matchCursor, setMatchCursor] = useState(0);
+  const [jumpRequest, setJumpRequest] = useState<{ index: number; nonce: number } | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 30000);
     return () => window.clearInterval(timer);
   }, []);
 
-  const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const stickBottomRef = useRef(true);
-  const chunksRef = useRef<ChatChunk[]>([]);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const threadCacheRef = useRef<ThreadCache | null>(null);
+  if (!threadCacheRef.current) threadCacheRef.current = new ThreadCache(12);
+  const threadKey = selected ? `${selected.kind}:${selected.id}` : '';
 
   const isChatTerminal = terminal != null && terminal.form === 'chat';
   const isRawTerminal = terminal != null && terminal.form !== 'chat';
@@ -170,43 +174,96 @@ export function ChatPane({
     };
   }, [projectDir, worktreeId]);
 
-  const onTimelineScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+  // Ctrl+F opens in-conversation search across all (including virtualized) messages
+  useEffect(() => {
+    if (!selected || isRawTerminal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setSearchOpen(true);
+        window.setTimeout(() => searchInputRef.current?.focus(), 30);
+      } else if (e.key === 'Escape' && searchOpen) {
+        setSearchOpen(false);
+        setSearchQuery('');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected?.id, isRawTerminal, searchOpen]);
+
+  const matchIndices = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    const hits: number[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (
+        m.text.toLowerCase().includes(q) ||
+        (m.title && m.title.toLowerCase().includes(q)) ||
+        (m.output && m.output.toLowerCase().includes(q))
+      ) {
+        hits.push(i);
+      }
+    }
+    return hits;
+  }, [messages, searchQuery]);
+
+  useEffect(() => {
+    if (matchIndices.length === 0) {
+      setMatchCursor(0);
+      return;
+    }
+    const clamped = Math.min(matchCursor, matchIndices.length - 1);
+    setMatchCursor(clamped);
+    setJumpRequest({ index: matchIndices[clamped], nonce: Date.now() });
+  }, [searchQuery, matchIndices.length]);
+
+  const jumpMatch = (delta: number) => {
+    if (matchIndices.length === 0) return;
+    const next = (matchCursor + delta + matchIndices.length) % matchIndices.length;
+    setMatchCursor(next);
+    setJumpRequest({ index: matchIndices[next], nonce: Date.now() });
   };
 
   useEffect(() => {
-    if (stickBottomRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages.length, messages[messages.length - 1]?.text.length]);
-
-  useEffect(() => {
     setNotice('');
-    setExpandedTools({});
+    setSearchOpen(false);
+    setSearchQuery('');
+    setJumpRequest(null);
     if (!selected || isRawTerminal) {
       setMessages([]);
       return;
     }
 
+    const cache = threadCacheRef.current!;
+    const cached = cache.get(threadKey);
     const controller = new AbortController();
     let cancelled = false;
 
     if (isChatTerminal && terminal) {
-      chunksRef.current = [];
-      setLoading(true);
-      let after = 0;
+      const reducer = cached?.reducer || new ChatTimelineReducer();
+      let after = cached?.after || 0;
+      if (cached && cached.messages.length > 0) {
+        setMessages(cached.messages);
+        setLoading(false);
+      } else {
+        setMessages([]);
+        setLoading(true);
+      }
 
       const loop = async () => {
         while (!cancelled) {
           try {
             const reply = await fetchTerminalChunks(terminal.id, after, after === 0 ? 0 : 15, controller.signal);
             if (cancelled) return;
-            if (reply.reset) chunksRef.current = reply.chunks || [];
-            else if (reply.chunks && reply.chunks.length > 0) chunksRef.current = chunksRef.current.concat(reply.chunks);
+            const nextMsgs = reply.reset
+              ? reducer.reset(reply.chunks || [])
+              : reply.chunks && reply.chunks.length > 0
+                ? reducer.append(reply.chunks)
+                : reducer.snapshot();
             after = reply.after || after;
-            setMessages(parseChatChunks(chunksRef.current));
+            cache.upsert(threadKey, { after, reducer, messages: nextMsgs });
+            setMessages(nextMsgs);
             setLoading(false);
             if (reply.terminal?.state === 'closed') break;
           } catch (err: any) {
@@ -224,12 +281,20 @@ export function ChatPane({
     }
 
     if (selected.kind === 'session') {
-      setLoading(true);
+      if (cached && cached.messages.length > 0) {
+        setMessages(cached.messages);
+        setLoading(false);
+      } else {
+        setMessages([]);
+        setLoading(true);
+      }
       const loadSession = async () => {
         try {
           const reply = await readConversation(selected.tool, selected.id, selected.dir, selected.folder);
           if (cancelled) return;
-          setMessages(parseTranscriptMessages(reply));
+          const nextMsgs = parseTranscriptMessages(reply);
+          cache.upsert(threadKey, { messages: nextMsgs });
+          setMessages(nextMsgs);
         } catch (err: any) {
           if (!cancelled) setNotice(err?.message || '无法读取对话内容');
         } finally {
@@ -248,7 +313,7 @@ export function ChatPane({
       cancelled = true;
       controller.abort();
     };
-  }, [selected?.kind, selected?.id, isChatTerminal, isRawTerminal]);
+  }, [threadKey, isChatTerminal, isRawTerminal]);
 
   const handleAttachFiles = async (fileList: FileList | File[]) => {
     if (!supportsAttachments || !projectDir) return;
@@ -567,8 +632,26 @@ export function ChatPane({
               {isBusy ? `活跃 · ${lastWorkAgo}` : `上次工作 ${lastWorkAgo}`}
             </span>
           )}
+          {!isRawTerminal && messages.length >= 20 && (
+            <span class="meta-chip time-chip">{messages.length} 条记录</span>
+          )}
         </div>
         <div class="pane-actions">
+          {!isRawTerminal && (
+            <button
+              type="button"
+              class={`ghost-btn compact${searchOpen ? ' active' : ''}`}
+              title="在当前对话内查找 (Ctrl+F)"
+              onClick={() => {
+                const next = !searchOpen;
+                setSearchOpen(next);
+                if (!next) setSearchQuery('');
+                else window.setTimeout(() => searchInputRef.current?.focus(), 30);
+              }}
+            >
+              查找
+            </button>
+          )}
           <button
             type="button"
             class="primary-btn compact"
@@ -617,6 +700,52 @@ export function ChatPane({
         </div>
       )}
 
+      {searchOpen && !isRawTerminal && (
+        <div class="chat-search-bar">
+          <input
+            ref={searchInputRef}
+            type="search"
+            class="chat-search-input"
+            placeholder="搜索当前对话消息、工具名或输出内容…"
+            value={searchQuery}
+            onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                jumpMatch(e.shiftKey ? -1 : 1);
+              } else if (e.key === 'Escape') {
+                setSearchOpen(false);
+                setSearchQuery('');
+              }
+            }}
+          />
+          <span class="chat-search-count">
+            {searchQuery.trim()
+              ? matchIndices.length > 0
+                ? `${matchCursor + 1} / ${matchIndices.length}`
+                : '0 命中'
+              : `${messages.length} 条`}
+          </span>
+          <button type="button" class="icon-btn" disabled={matchIndices.length === 0} onClick={() => jumpMatch(-1)} title="上一条">
+            ↑
+          </button>
+          <button type="button" class="icon-btn" disabled={matchIndices.length === 0} onClick={() => jumpMatch(1)} title="下一条">
+            ↓
+          </button>
+          <button
+            type="button"
+            class="icon-btn"
+            onClick={() => {
+              setSearchOpen(false);
+              setSearchQuery('');
+            }}
+            title="关闭查找"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {isRawTerminal && terminal ? (
         <div class="raw-terminal-host">
           <iframe
@@ -628,91 +757,19 @@ export function ChatPane({
         </div>
       ) : (
         <>
-          <div class="timeline" ref={scrollRef} onScroll={onTimelineScroll}>
-            {loading && messages.length === 0 ? (
-              <div class="timeline-note">正在加载对话…</div>
-            ) : messages.length === 0 ? (
-              <div class="timeline-note">还没有消息，在下方输入开始对话。</div>
-            ) : (
-              messages.map((m, idx) => {
-                const isLast = idx === messages.length - 1;
-                if (m.role === 'user') {
-                  return (
-                    <div key={m.id} class="msg msg-user">
-                      <div class="msg-bubble">{m.text}</div>
-                    </div>
-                  );
-                }
-                if (m.role === 'tool') {
-                  const open = !!expandedTools[m.id];
-                  return (
-                    <div key={m.id} class={`tool-card status-${m.status || 'done'}`}>
-                      <button
-                        type="button"
-                        class="tool-card-head"
-                        onClick={() => setExpandedTools((p) => ({ ...p, [m.id]: !p[m.id] }))}
-                      >
-                        <span class="tool-step-icon" aria-hidden="true">
-                          {m.status === 'error' ? '!' : '✓'}
-                        </span>
-                        <span class="tool-card-title">{m.title || '工具调用'}</span>
-                        <span class="tool-card-summary">{m.text}</span>
-                        <span class="caret">{open ? '▾' : '▸'}</span>
-                      </button>
-                      {open && m.output && <pre class="tool-card-out">{m.output}</pre>}
-                    </div>
-                  );
-                }
-                if (m.role === 'ask') {
-                  return (
-                    <div key={m.id} class="ask-card">
-                      <div class="ask-title">{m.title || '等待确认'}</div>
-                      <pre class="ask-body">{m.text}</pre>
-                      <div class="ask-actions">
-                        {(m.options || []).map((opt) => (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            class={opt.id === 'deny' ? 'danger-btn compact' : 'primary-btn compact'}
-                            onClick={() => handleAnswer(m.askId || m.id, opt.id)}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                }
-                if (m.role === 'note' || m.role === 'error') {
-                  return (
-                    <div key={m.id} class={`timeline-note${m.role === 'error' ? ' is-error' : ''}`}>
-                      {m.text}
-                    </div>
-                  );
-                }
-                return (
-                  <div key={m.id} class="msg msg-assistant">
-                    <MarkdownView text={m.text} streaming={isBusy && isLast} />
-                  </div>
-                );
-              })
-            )}
-
-            {session?.ask && (
-              <div class="ask-card">
-                <div class="ask-title">电脑上的对话等待确认</div>
-                <pre class="ask-body">{session.ask.text}</pre>
-                <div class="ask-actions">
-                  <button type="button" class="primary-btn compact" onClick={() => handleAnswer(session.ask!.id, 'allow')}>
-                    允许一次
-                  </button>
-                  <button type="button" class="danger-btn compact" onClick={() => handleAnswer(session.ask!.id, 'deny')}>
-                    拒绝
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          <VirtualTimeline
+            threadKey={threadKey}
+            messages={messages}
+            loading={loading}
+            isBusy={isBusy}
+            sessionAsk={session?.ask}
+            initialScrollTop={threadCacheRef.current?.get(threadKey)?.scrollTop || 0}
+            initialStickBottom={threadCacheRef.current?.get(threadKey)?.stickBottom ?? true}
+            highlightIndex={matchIndices.length > 0 ? matchIndices[matchCursor] : null}
+            jumpRequest={jumpRequest}
+            onScrollStateChange={(st, stick) => threadCacheRef.current?.saveScroll(threadKey, st, stick)}
+            onAnswer={handleAnswer}
+          />
 
           <form class="composer" onSubmit={handleSend}>
             <div class="composer-inner">

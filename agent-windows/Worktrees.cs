@@ -13,6 +13,9 @@ namespace RemoteCli {
 /// safely checked and applied to the main project folder, and all temporary worktrees for that team are removed.
 public sealed class Worktrees {
     readonly string rootDir;
+    readonly object autoCpGate = new object();
+    readonly Dictionary<string, string> lastAutoTree = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    const int MaxAutoCheckpoints = 25;
     static readonly Regex SafeId = new Regex(@"\A[a-f0-9]{16,32}\z");
     static readonly Regex SafeTool = new Regex(@"\A[a-z0-9_-]{1,24}\z");
 
@@ -166,6 +169,61 @@ public sealed class Worktrees {
         var updated = RunGit(folder, "update-ref \"" + refName + "\" " + commitOid, 10000);
         if (updated.Code != 0) throw new InvalidOperationException("更新快照引用失败：" + updated.Err);
         return new Dictionary<string, object> { { "id", cpId }, { "ref", refName }, { "commit", commitOid }, { "head", headOid }, { "label", msg } };
+    }
+
+    /// Low-overhead automatic turn checkpoint using the persistent scratch index:
+    /// skips creating a ref when the working tree matches HEAD or the previous auto-checkpoint,
+    /// and prunes older auto-* refs beyond MaxAutoCheckpoints so ref storage stays bounded.
+    public Dictionary<string, object> CaptureAutoCheckpoint(string folder, string label = "") {
+        if (String.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return null;
+        string normalized = Path.GetFullPath(folder).TrimEnd('\\');
+        lock (autoCpGate) {
+            var common = RunGit(normalized, "rev-parse --git-common-dir", 8000);
+            if (common.Code != 0 || String.IsNullOrWhiteSpace(common.Out)) return null;
+            var head = RunGit(normalized, "rev-parse HEAD", 8000);
+            if (head.Code != 0 || String.IsNullOrWhiteSpace(head.Out)) return null;
+            var headTree = RunGit(normalized, "rev-parse HEAD^{tree}", 8000);
+            string headOid = head.Out.Trim();
+            string headTreeOid = headTree.Code == 0 ? (headTree.Out ?? "").Trim() : "";
+
+            string commonDir = common.Out.Trim();
+            if (!Path.IsPathRooted(commonDir)) commonDir = Path.GetFullPath(Path.Combine(normalized, commonDir));
+            string indexDir = Path.Combine(commonDir, "remote-ai-checkpoints");
+            Directory.CreateDirectory(indexDir);
+            string scratchIndex = Path.Combine(indexDir, "scratch.index");
+            var env = new Dictionary<string, string> { { "GIT_INDEX_FILE", scratchIndex } };
+            if (RunGit(normalized, "read-tree HEAD", 12000, env).Code != 0) return null;
+            if (RunGit(normalized, "add -A", 15000, env).Code != 0) return null;
+            var tree = RunGit(normalized, "write-tree", 12000, env);
+            if (tree.Code != 0 || String.IsNullOrWhiteSpace(tree.Out)) return null;
+            string treeOid = tree.Out.Trim();
+
+            string prevTree;
+            if (treeOid == headTreeOid || (lastAutoTree.TryGetValue(normalized, out prevTree) && prevTree == treeOid)) {
+                return null;
+            }
+            string cpId = "auto-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-") + Guid.NewGuid().ToString("N").Substring(0, 6);
+            string msg = String.IsNullOrWhiteSpace(label) ? "Auto checkpoint " + cpId : label.Trim();
+            var commit = RunGit(normalized, "commit-tree " + treeOid + " -p " + headOid, 12000, null, msg);
+            if (commit.Code != 0 || String.IsNullOrWhiteSpace(commit.Out)) return null;
+            string commitOid = commit.Out.Trim();
+            string refName = "refs/remote-ai/checkpoints/" + cpId;
+            if (RunGit(normalized, "update-ref \"" + refName + "\" " + commitOid, 8000).Code != 0) return null;
+            lastAutoTree[normalized] = treeOid;
+            PruneAutoCheckpoints(normalized);
+            return new Dictionary<string, object> { { "id", cpId }, { "ref", refName }, { "commit", commitOid }, { "head", headOid }, { "label", msg } };
+        }
+    }
+
+    void PruneAutoCheckpoints(string folder) {
+        var listed = RunGit(folder, "for-each-ref --sort=-creatordate --format=\"%(refname)\" refs/remote-ai/checkpoints/auto-*", 8000);
+        if (listed.Code != 0 || String.IsNullOrWhiteSpace(listed.Out)) return;
+        string[] refs = listed.Out.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        for (int i = MaxAutoCheckpoints; i < refs.Length; i++) {
+            string r = refs[i].Trim();
+            if (r.StartsWith("refs/remote-ai/checkpoints/auto-", StringComparison.Ordinal))
+                RunGit(folder, "update-ref -d \"" + r + "\"", 6000);
+        }
     }
 
     /// Creates an isolated detached-HEAD worktree for one candidate tool of a compare task.

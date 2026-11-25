@@ -1858,6 +1858,30 @@ class TerminalRelayTests(unittest.TestCase):
         term = self.relay.overview(tid, now=1007)["terminal"]
         self.assertEqual((term["model"], term["effort"], term["mode"]), ("claude-opus-5-5", "high", "read"))
 
+    def test_pty_output_burst_does_not_bump_overview_list_rev(self):
+        info = dict(self.info, features=["chat"])
+        self.relay.agent({"info": info, "terminals": []}, now=1000)
+        tid = self.relay.command({"action": "start", "id": "d" * 32, "tool": "claude", "dir": "demo", "form": "chat"}, now=1001)["terminal"]
+        self.relay.agent({"info": info, "acks": [{"id": "d" * 32}],
+                          "terminals": [{"id": tid, "state": "running", "form": "chat", "tool": "claude", "dir": "demo", "status": "busy"}]}, now=1002)
+        rev_before = self.relay.overview(now=1003)["rev"]
+        # Pure PTY/chat output chunks must wake per-terminal readers without bumping overview list rev.
+        self.relay.agent({"info": info,
+                          "terminals": [{"id": tid, "state": "running", "form": "chat", "tool": "claude", "dir": "demo", "status": "busy"}],
+                          "output": [{"terminal": tid, "seq": 1, "data": '{"t":"delta","text":"hello"}\n'},
+                                     {"terminal": tid, "seq": 2, "data": '{"t":"delta","text":" world"}\n'}]}, now=1004)
+        unchanged = self.relay.overview(now=1005, rev=rev_before, wait=0)
+        self.assertTrue(unchanged.get("unchanged"))
+        self.assertEqual(unchanged["rev"], rev_before)
+        chunks = self.relay.overview(tid, after=0, now=1005)["chunks"]
+        self.assertEqual(len(chunks), 2)
+        # Status/phase transition MUST bump overview list rev immediately.
+        self.relay.agent({"info": info,
+                          "terminals": [{"id": tid, "state": "running", "form": "chat", "tool": "claude", "dir": "demo", "status": "idle"}]}, now=1006)
+        updated = self.relay.overview(now=1007, rev=rev_before, wait=0)
+        self.assertFalse(updated.get("unchanged"))
+        self.assertGreater(updated["rev"], rev_before)
+
 
 if __name__ == "__main__":
     unittest.main()

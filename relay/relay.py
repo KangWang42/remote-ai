@@ -587,6 +587,7 @@ class Relay:
         self._changed = threading.Condition(self._lock)       # new terminal output or state: waiting stream/overview readers wake
         self._ops_changed = threading.Condition(self._lock)   # new queued operations or RPC answers: pull() and _held() wake
         self._tick = [1]            # counts terminal output/state wake-ups, so a waiter can tell one happened between look and wait
+        self._list_rev = [1]        # counts list-level metadata changes only (isolates overview pollers from raw PTY output bursts)
         self._kept = None           # the list of terminals, once it has been read
         self._unsaved = None        # the time of the oldest output not yet written to disk
         self._logged = {}           # terminal -> [seq of the last piece in its file, characters in the file]
@@ -817,13 +818,13 @@ class Relay:
         while True:
             if not terminal and rev > 0:
                 with self._lock:
-                    current_rev = self._tick[0]
+                    current_rev = self._list_rev[0]
                     online = (time.time() if now is None else now) - self._device["seen"] < 15
                 if current_rev == rev:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         return {"unchanged": True, "rev": current_rev, "online": online}
-                    self._wait(current_rev, remaining)
+                    self._wait_list(current_rev, remaining)
                     continue
             result = self._overview(terminal, after, time.time() if now is None else now)
             if not terminal:
@@ -845,8 +846,16 @@ class Relay:
             if self._tick[0] == seen:
                 self._changed.wait(min(seconds, 5))
 
-    def _wake(self):
+    def _wait_list(self, seen, seconds):
+        """Sleeps until list-level metadata changes, ignoring raw PTY output bursts on individual terminals."""
+        with self._changed:
+            if self._list_rev[0] == seen:
+                self._changed.wait(min(seconds, 5))
+
+    def _wake(self, list_changed=True):
         self._tick[0] += 1
+        if list_changed:
+            self._list_rev[0] += 1
         self._changed.notify_all()
 
     def _wake_ops(self):
@@ -880,7 +889,7 @@ class Relay:
                 attached = {t.get("session"): t["id"] for t in state["threads"].values() if t["state"] in ("starting", "running")}
                 for gone in [key for key in self._screens if key not in state["threads"]]:
                     del self._screens[gone]
-                return {"rev": self._tick[0], "device": self._view(now), "terminals": sorted(
+                return {"rev": self._list_rev[0], "device": self._view(now), "terminals": sorted(
                     [dict(self._public(t), said=self._said(t) if t["state"] == "running" else "",
                           asks=self._question(t) if t["state"] == "running" and t.get("phase") == "confirm" else [])
                      for t in state["threads"].values()], key=lambda t: -t["created"]),
@@ -1850,7 +1859,9 @@ class Relay:
             state = self._state()
             was_online = now - self._device["seen"] < 15
             was_enabled = self._device["enabled"]
-            dirty = wrote = answered = False
+            before_device = {k: v for k, v in self._device.items() if k != "seen"}
+            before_sessions = list(self._sessions) if isinstance(payload.get("sessions"), list) else None
+            dirty = wrote = answered = list_dirty = False
             if isinstance(payload.get("sessions"), list):
                 self._sessions[:] = [
                     {"id": s["id"], "tool": s["tool"], **_placed(s), "title": s["title"].strip()[:80], "updated": s["updated"],
@@ -1890,6 +1901,11 @@ class Relay:
                            routes=_routes(info.get("routes")) if info.get("enabled") is True else [])
             if not was_online or was_enabled != self._device["enabled"]:
                 wrote = True
+                list_dirty = True
+            if before_sessions is not None and self._sessions != before_sessions:
+                list_dirty = True
+            if {k: v for k, v in self._device.items() if k != "seen"} != before_device:
+                list_dirty = True
             for term in state["threads"].values():
                 if term.get("instance") != instance and term["state"] in ("starting", "running"):
                     term.update(state="closed", error="电脑后台已重启，请从历史对话恢复")
@@ -1949,7 +1965,9 @@ class Relay:
                         term["session"] = session
                         dirty = True
                     status = item.get("status") if item.get("status") in (("idle", "busy", "confirm", "starting") if term.get("form") == "chat" else ("idle", "busy")) and term["state"] == "running" else ""
-                    wrote = wrote or status != term.get("status")
+                    if status != term.get("status"):
+                        wrote = True
+                        list_dirty = True
                     term["status"] = status
                     term["completion"] = str(item.get("completion") or "")[:200]
                     # the collaboration task the computer lists it under; kept with the terminal for its history
@@ -1970,7 +1988,11 @@ class Relay:
                     if term.get("form") == "chat":
                         # what it said last and what it asks, in the computer's words
                         said, asking = str(item.get("said") or "")[:200], str(item.get("ask") or "")[:2000]
-                        wrote = wrote or said != term.get("said") or asking != term.get("asking")
+                        if asking != term.get("asking"):
+                            wrote = True
+                            list_dirty = True
+                        elif said != term.get("said"):
+                            wrote = True
                         term["said"], term["asking"] = said, asking
                     exit_code = item.get("exit_code")
                     if term["state"] == "closed" and type(exit_code) is int and term.get("exit_code") != exit_code:
@@ -2014,8 +2036,8 @@ class Relay:
             if dirty or (self._unsaved is not None and now - self._unsaved >= SAVE_SECONDS):
                 self._save(state)
                 self._unsaved = None
-            if dirty or wrote:
-                self._wake()
+            if dirty or wrote or list_dirty:
+                self._wake(list_changed=dirty or list_dirty)
             if answered:
                 self._wake_ops()
             for op in self._pending.queued.values():

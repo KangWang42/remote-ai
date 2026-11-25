@@ -403,6 +403,7 @@ export function App() {
             setMobilePane('right');
           }}
           onToggleFocus={() => setFocusMode((v) => !v)}
+          onRefresh={() => triggerRefreshRef.current?.()}
         />
       </div>
 

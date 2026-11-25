@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { postDesktopMessage } from '../runtime/api';
+import { postDesktopMessage, sendTerminalAction } from '../runtime/api';
 import { formatExactTime, formatRelativeTime, normalizeMs } from '../runtime/time';
 import {
   toolBadgeStyle,
@@ -24,6 +24,7 @@ interface Props {
   onOpenPalette: () => void;
   onOpenRightTab: (tab: 'files' | 'diff' | 'teams' | 'connect') => void;
   onToggleFocus: () => void;
+  onRefresh: () => void;
   connected: boolean;
   latencyMs: number | null;
 }
@@ -50,6 +51,7 @@ export function Sidebar({
   onOpenPalette,
   onOpenRightTab,
   onToggleFocus,
+  onRefresh,
   connected,
   latencyMs,
 }: Props) {
@@ -57,6 +59,11 @@ export function Sidebar({
   const [toolFilter, setToolFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<'all' | 'confirm' | 'busy' | 'open'>('all');
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
+  const [recentLimit, setRecentLimit] = useState(16);
+  const [batchMode, setBatchMode] = useState(false);
+  const [pickedIds, setPickedIds] = useState<Record<string, boolean>>({});
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchNote, setBatchNote] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -157,7 +164,7 @@ export function Sidebar({
       activeItems: active,
       openItems: opened,
       projectGroups: Array.from(byProject.entries()),
-      recentSessions: recent.slice(0, 16),
+      recentSessions: recent,
     };
   }, [device, terminals, sessions, q, toolFilter]);
 
@@ -165,6 +172,42 @@ export function Sidebar({
     const detected = device?.tools || ['claude', 'codex', 'agy', 'shell'];
     return Array.from(new Set(['all', ...detected])).slice(0, 8);
   }, [device?.tools]);
+
+  const runningTerminalIds = useMemo(
+    () => terminals.filter((t) => t.state === 'running' || t.state === 'starting').map((t) => t.id),
+    [terminals],
+  );
+  const closedTerminalIds = useMemo(
+    () => terminals.filter((t) => t.state === 'closed').map((t) => t.id),
+    [terminals],
+  );
+  const pickedList = useMemo(
+    () => terminals.filter((t) => pickedIds[t.id]).map((t) => t.id),
+    [terminals, pickedIds],
+  );
+
+  const runBatchAction = async (action: 'stop' | 'close', ids: string[]) => {
+    if (ids.length === 0 || batchBusy) return;
+    setBatchBusy(true);
+    setBatchNote('');
+    let ok = 0;
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          sendTerminalAction({ action, terminal: id })
+            .then(() => {
+              ok++;
+            })
+            .catch(() => {}),
+        ),
+      );
+      setBatchNote(action === 'stop' ? `已发送停止至 ${ok} 个会话` : `已关闭 ${ok} 个会话`);
+      setPickedIds({});
+      onRefresh();
+    } finally {
+      setBatchBusy(false);
+    }
+  };
 
   const isSelected = (item: SelectedItem) => {
     if (!selected || selected.kind !== item.kind) return false;
@@ -175,13 +218,26 @@ export function Sidebar({
     const meta = toolMeta(row.tool);
     const ago = formatRelativeTime(row.at, nowMs);
     const exact = formatExactTime(row.at);
+    const isTerm = row.item.kind === 'terminal';
+    const checked = isTerm && !!pickedIds[row.item.id];
     return (
       <button
         key={row.key}
         type="button"
-        class={`nav-row${isSelected(row.item) ? ' active' : ''}`}
-        onClick={() => onSelect(row.item)}
+        class={`nav-row${!batchMode && isSelected(row.item) ? ' active' : ''}${checked ? ' is-picked' : ''}`}
+        onClick={() => {
+          if (batchMode && isTerm) {
+            setPickedIds((prev) => ({ ...prev, [row.item.id]: !prev[row.item.id] }));
+            return;
+          }
+          onSelect(row.item);
+        }}
       >
+        {batchMode && isTerm && (
+          <span class={`batch-check${checked ? ' checked' : ''}`} aria-hidden="true">
+            {checked ? '✓' : ''}
+          </span>
+        )}
         <span class="tool-squircle" style={toolBadgeStyle(row.tool)} title={meta.label}>
           {meta.mono}
         </span>
@@ -245,6 +301,20 @@ export function Sidebar({
                 </svg>
               </button>
             ) : null}
+            <button
+              type="button"
+              class={`circle-btn${batchMode ? ' solid' : ''}`}
+              title={batchMode ? '退出批量管理' : '批量管理多个会话'}
+              onClick={() => {
+                setBatchMode((v) => !v);
+                setPickedIds({});
+                setBatchNote('');
+              }}
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <path d="M5 7h2m4 0h8M5 12h2m4 0h8M5 17h2m4 0h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </button>
             <button type="button" class="circle-btn" title="命令面板 (Ctrl+K)" onClick={onOpenPalette}>
               <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
                 <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
@@ -289,6 +359,69 @@ export function Sidebar({
             <strong>{openItems.length}</strong>
           </button>
         </div>
+
+        {batchMode && (
+          <div class="batch-bar">
+            <div class="batch-bar-top">
+              <strong>批量管理 · 已选 {pickedList.length}</strong>
+              <div class="batch-picks">
+                <button
+                  type="button"
+                  class="crumb-btn"
+                  onClick={() => {
+                    const next: Record<string, boolean> = {};
+                    for (const id of runningTerminalIds) next[id] = true;
+                    setPickedIds(next);
+                  }}
+                >
+                  运行中({runningTerminalIds.length})
+                </button>
+                {closedTerminalIds.length > 0 && (
+                  <button
+                    type="button"
+                    class="crumb-btn"
+                    onClick={() => {
+                      const next: Record<string, boolean> = {};
+                      for (const id of closedTerminalIds) next[id] = true;
+                      setPickedIds(next);
+                    }}
+                  >
+                    已结束({closedTerminalIds.length})
+                  </button>
+                )}
+              </div>
+            </div>
+            <div class="batch-bar-actions">
+              <button
+                type="button"
+                class="ghost-btn compact"
+                disabled={batchBusy || pickedList.length === 0}
+                onClick={() => runBatchAction('stop', pickedList)}
+              >
+                批量停止
+              </button>
+              <button
+                type="button"
+                class="danger-btn compact"
+                disabled={batchBusy || pickedList.length === 0}
+                onClick={() => runBatchAction('close', pickedList)}
+              >
+                批量关闭
+              </button>
+              {closedTerminalIds.length > 0 && (
+                <button
+                  type="button"
+                  class="ghost-btn compact"
+                  disabled={batchBusy}
+                  onClick={() => runBatchAction('close', closedTerminalIds)}
+                >
+                  清理已结束
+                </button>
+              )}
+            </div>
+            {batchNote && <div class="batch-note">{batchNote}</div>}
+          </div>
+        )}
 
         <input
           type="search"
@@ -420,8 +553,17 @@ export function Sidebar({
 
         {stateFilter === 'all' && recentSessions.length > 0 && (
           <section class="nav-section">
-            <div class="group-title">最近对话</div>
-            <div class="card-group">{recentSessions.map((r) => renderRow(r))}</div>
+            <div class="group-title">最近对话 · {recentSessions.length}</div>
+            <div class="card-group">{recentSessions.slice(0, recentLimit).map((r) => renderRow(r))}</div>
+            {recentSessions.length > recentLimit && (
+              <button
+                type="button"
+                class="ghost-btn compact wide load-more-btn"
+                onClick={() => setRecentLimit((n) => n + 24)}
+              >
+                加载更多历史（还有 {recentSessions.length - recentLimit} 条）
+              </button>
+            )}
           </section>
         )}
       </div>

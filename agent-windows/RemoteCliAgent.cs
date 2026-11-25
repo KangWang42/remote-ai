@@ -89,10 +89,45 @@ public sealed class PseudoTerminal : IRunning {
             CloseHandle(info.process); CloseHandle(info.thread);
             process = Process.GetProcessById(info.processId); Cols = cols; Rows = rows;
             Task.Run(delegate {
+                // Coalesce bursty ConPTY micro-reads into bounded frames (4ms / 24KB) so high-throughput builds
+                // do not cause lock contention or tiny-chunk storms while keeping interactive typing < 4ms.
                 byte[] bytes = new byte[8192]; char[] chars = new char[8192]; Decoder decoder = Encoding.UTF8.GetDecoder();
-                try { int n; while ((n = output.Read(bytes, 0, bytes.Length)) > 0) { int count = decoder.GetChars(bytes, 0, n, chars, 0, false); if (count > 0) receive(new string(chars, 0, count)); } }
-                catch (IOException ex) { ReadError = ex.Message; } catch (ObjectDisposedException) { }
-                finally { Drained = true; Closed = true; }
+                var pending = new StringBuilder(4096);
+                var flushGate = new object();
+                bool ended = false;
+                Action flushNow = () => {
+                    string batch = null;
+                    lock (flushGate) {
+                        if (pending.Length > 0) { batch = pending.ToString(); pending.Clear(); }
+                    }
+                    if (batch != null) receive(batch);
+                };
+                using (var timer = new System.Threading.Timer(_ => flushNow(), null, Timeout.Infinite, Timeout.Infinite)) {
+                    try {
+                        int n;
+                        while ((n = output.Read(bytes, 0, bytes.Length)) > 0) {
+                            int count = decoder.GetChars(bytes, 0, n, chars, 0, false);
+                            if (count <= 0) continue;
+                            string immediate = null;
+                            lock (flushGate) {
+                                pending.Append(chars, 0, count);
+                                if (pending.Length >= 24576) {
+                                    immediate = pending.ToString();
+                                    pending.Clear();
+                                } else if (!ended) {
+                                    timer.Change(4, Timeout.Infinite);
+                                }
+                            }
+                            if (immediate != null) receive(immediate);
+                        }
+                    } catch (IOException ex) { ReadError = ex.Message; } catch (ObjectDisposedException) { }
+                    finally {
+                        lock (flushGate) ended = true;
+                        timer.Change(Timeout.Infinite, Timeout.Infinite);
+                        flushNow();
+                        Drained = true; Closed = true;
+                    }
+                }
             });
             Task.Run(delegate { try { process.WaitForExit(); ExitCode = process.ExitCode; } catch { } finally { CloseConsole(); Closed = true; } });
         } catch { Dispose(); throw; }
@@ -571,10 +606,28 @@ public sealed class TerminalAgent {
         string folder;
         return AllDirs(Preferences()).TryGetValue(dir, out folder) ? RemoteCli.Worktrees.ChangesIn(folder) : "";
     }
-    /// A conversation the phone runs tells a team when a turn of it ends.
+    readonly HashSet<string> autoCpRunning = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    void ScheduleAutoCheckpoint(string folder, string tool) {
+        if (String.IsNullOrWhiteSpace(folder)) return;
+        lock (autoCpRunning) {
+            if (!autoCpRunning.Add(folder)) return;
+        }
+        Task.Run(() => {
+            try { Worktrees.CaptureAutoCheckpoint(folder, "auto · " + tool); }
+            catch { }
+            finally { lock (autoCpRunning) autoCpRunning.Remove(folder); }
+        });
+    }
+    /// A conversation the phone runs tells a team when a turn of it ends, and captures a low-overhead hidden Git checkpoint.
     void Heard(LiveTerminal live) {
         var chat = live.Chat;
-        if (chat != null) chat.Turned += (how, words) => { if (live.Chat == chat) Teams.Turned(live.Id, how, words); };
+        if (chat != null) chat.Turned += (how, words) => {
+            if (live.Chat == chat) {
+                Teams.Turned(live.Id, how, words);
+                if ((how == "done" || how == "idle") && live.Mode != "read" && !String.IsNullOrWhiteSpace(live.Folder))
+                    ScheduleAutoCheckpoint(live.Folder, live.Tool);
+            }
+        };
     }
     bool CanPromoteTerminal(string terminalId) {
         if (String.IsNullOrEmpty(terminalId)) return false;
