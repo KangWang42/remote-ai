@@ -11,13 +11,17 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
+[assembly: AssemblyFileVersion(RemoteCli.Setup.Version + ".0")]
+[assembly: AssemblyInformationalVersion(RemoteCli.Setup.Version)]
+
 namespace RemoteCli {
 /// The installer: unpacks the program into a folder of your choice, adds shortcuts and an entry under "Apps"
 /// for removing it. The default folder needs no administrator rights. `--uninstall` undoes all of it.
 ///   --quiet            no questions and no start afterwards
 ///   --dir <folder>     where to install (default: the folder of an earlier installation, else %LOCALAPPDATA%\Programs\RemoteCli)
 public static class Setup {
-    const string Version = "1.29.0", Name = "Remote AI";
+    internal const string Version = "1.29.0";
+    const string Name = "Remote AI";
     // The names it had before. Their shortcuts are taken away when this one is installed or removed; the folder, the
     // registry keys and the files keep their names, so that an installation is found and replaced whatever it was called.
     static readonly string[] EarlierNames = { "Remote CLI" };
