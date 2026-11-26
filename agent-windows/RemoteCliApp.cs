@@ -833,7 +833,7 @@ public sealed partial class App : Form {
         string search = String.IsNullOrEmpty(query) ? "" : (query.StartsWith("?") ? query : "?" + query);
         return root + "/" + search + "#t=" + Uri.EscapeDataString(ticket ?? "");
     }
-    void OpenWeb(string query) {
+    void OpenWeb(string query, bool console = false) {
         string origin = localRelayUp && localRelayPort > 0 ? "http://127.0.0.1:" + localRelayPort : Convert.ToString(config["Server"]).TrimEnd('/');
         string secret = localRelayUp && localRelayPort > 0 && localPassword.Length > 0 ? localPassword : password;
         if (origin.Length == 0 || secret.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
@@ -841,10 +841,14 @@ public sealed partial class App : Form {
             try {
                 string token = Convert.ToString(Ask(origin + "/api/login", new Dictionary<string, object> { { "password", secret } }, "")["token"]);
                 string ticket = Convert.ToString(Ask(origin + "/api/ticket", new Dictionary<string, object>(), token)["ticket"]);
-                string url = WindowUrl(origin, query, ticket);
+                string search = String.IsNullOrEmpty(query) ? "" : (query.StartsWith("?") ? query : "?" + query);
+                string url = console
+                    ? origin.TrimEnd('/') + "/console/" + search + "#t=" + Uri.EscapeDataString(ticket ?? "")
+                    : WindowUrl(origin, query, ticket);
                 string browser = AppBrowser();
+                string size = console ? "1280,840" : "480,880";
                 // A browser's "app" window has no address bar and keeps its sign-in in a folder of its own.
-                if (browser != null) Process.Start(new ProcessStartInfo(browser, "--app=\"" + url + "\" --user-data-dir=\"" + Path.Combine(dataDir, "window") + "\" --window-size=480,880 --no-first-run --no-default-browser-check") { UseShellExecute = false });
+                if (browser != null) Process.Start(new ProcessStartInfo(browser, "--app=\"" + url + "\" --user-data-dir=\"" + Path.Combine(dataDir, "window") + "\" --window-size=" + size + " --no-first-run --no-default-browser-check") { UseShellExecute = false });
                 else Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
             } catch (Exception error) {
                 BeginInvoke(new Action(() => Toast("窗口没有打开：" + error.Message)));
@@ -911,7 +915,7 @@ public sealed partial class App : Form {
         if (!CanUseDesktopConsole()) {
             if (origin.Length == 0 || secret.Length == 0) { Toast("电脑后台还没有准备好，请稍后再试"); return; }
             string q = !String.IsNullOrEmpty(openId) ? "?open=" + openId : !String.IsNullOrEmpty(tab) ? "?tab=" + tab : "";
-            OpenWeb(q);
+            OpenWeb(q, true);
             return;
         }
         var console = EnsureDesktopConsoleVisible();

@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -13,6 +14,15 @@ namespace RemoteCli {
 /// Native Windows desktop console window hosting the unified Preact/TS workspace inside Edge WebView2.
 /// Opens directly as the primary window on launch while keeping installer overhead under 800 KB.
 internal sealed class DesktopConsole : Form {
+    const int LogicalMinWidth = 920;
+    const int LogicalMinHeight = 600;
+    const int LogicalDefaultWidth = 1340;
+    const int LogicalDefaultHeight = 860;
+
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+    [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
     readonly string userDataDir;
     readonly Action openClassic;
     readonly Action pickFolder;
@@ -56,16 +66,31 @@ internal sealed class DesktopConsole : Form {
         Font = Theme.Text();
         BackColor = Theme.Bg;
         ForeColor = Theme.Ink;
-        MinimumSize = new Size(880, 560);
         Theme.ApplyIcon(this);
 
-        if (initialBounds.Width >= 880 && initialBounds.Height >= 560 && IsOnAnyScreen(initialBounds)) {
+        // PerMonitorV2 reports window bounds in physical pixels; scale minimum/default DIPs by the
+        // target monitor's DPI so high-DPI screens never collapse WebView2 into the mobile layout.
+        Screen targetScreen = initialBounds.Width > 0 && IsOnAnyScreen(initialBounds)
+            ? Screen.FromRectangle(initialBounds)
+            : Screen.PrimaryScreen;
+        Rectangle work = targetScreen.WorkingArea;
+        float dpiScale = MonitorDpiScale(targetScreen);
+        Size minSize = ScaledMinimumSize(work, dpiScale);
+        MinimumSize = minSize;
+
+        if (initialBounds.Width >= minSize.Width && initialBounds.Height >= minSize.Height && IsOnAnyScreen(initialBounds)) {
             StartPosition = FormStartPosition.Manual;
             Bounds = initialBounds;
             if (initialState == FormWindowState.Maximized) WindowState = FormWindowState.Maximized;
         } else {
-            StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1340, 860);
+            int defW = Math.Max(minSize.Width, Math.Min((int)Math.Round(LogicalDefaultWidth * dpiScale), (int)Math.Round(work.Width * 0.92)));
+            int defH = Math.Max(minSize.Height, Math.Min((int)Math.Round(LogicalDefaultHeight * dpiScale), (int)Math.Round(work.Height * 0.90)));
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(
+                work.Left + Math.Max(0, (work.Width - defW) / 2),
+                work.Top + Math.Max(0, (work.Height - defH) / 2),
+                defW,
+                defH);
         }
 
         loadingLabel = new Label {
@@ -93,6 +118,11 @@ internal sealed class DesktopConsole : Form {
             }
         };
         ResizeEnd += (s, e) => PersistWindowGeometry();
+        DpiChanged += (s, e) => {
+            if (IsDisposed) return;
+            Screen cur = Screen.FromControl(this);
+            MinimumSize = ScaledMinimumSize(cur.WorkingArea, Math.Max(1f, e.DeviceDpiNew / 96f));
+        };
         // Start initializing WebView2 immediately when the window is created so first paint is instant.
         Shown += async (s, e) => { await EnsureInitializedAsync(); };
     }
@@ -235,8 +265,33 @@ internal sealed class DesktopConsole : Form {
         if (saveBounds == null) return;
         try {
             Rectangle rect = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
-            if (rect.Width >= 880 && rect.Height >= 560) saveBounds(rect, WindowState);
+            if (rect.Width >= MinimumSize.Width && rect.Height >= MinimumSize.Height) saveBounds(rect, WindowState);
         } catch { }
+    }
+
+    static Size ScaledMinimumSize(Rectangle workArea, float dpiScale) {
+        float s = Math.Max(1f, dpiScale);
+        int minW = Math.Min((int)Math.Round(LogicalMinWidth * s), Math.Max(640, workArea.Width));
+        int minH = Math.Min((int)Math.Round(LogicalMinHeight * s), Math.Max(480, workArea.Height));
+        return new Size(minW, minH);
+    }
+
+    float MonitorDpiScale(Screen screen) {
+        try {
+            var center = new POINT {
+                X = screen.WorkingArea.Left + screen.WorkingArea.Width / 2,
+                Y = screen.WorkingArea.Top + screen.WorkingArea.Height / 2
+            };
+            IntPtr mon = MonitorFromPoint(center, 2); // MONITOR_DEFAULTTONEAREST
+            uint dx, dy;
+            if (mon != IntPtr.Zero && GetDpiForMonitor(mon, 0, out dx, out dy) == 0 && dx >= 96) {
+                return dx / 96f;
+            }
+        } catch { }
+        try {
+            using (var g = CreateGraphics()) return Math.Max(1f, g.DpiX / 96f);
+        } catch { }
+        return 1f;
     }
 
     static bool IsOnAnyScreen(Rectangle rect) {

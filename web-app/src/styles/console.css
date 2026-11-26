@@ -1180,8 +1180,15 @@ html[data-skin="pond"] .pond-toggle {
   background: rgb(25 38 40 / .92); border: 1px solid var(--card-border); box-shadow: var(--elevate); backdrop-filter: blur(12px);
 }
 
-/* ---- narrow windows: the list, or what was opened from it */
-@media (max-width: 860px) {
+/* ---- compact desktop windows: keep sidebar + main console visible together */
+@media (max-width: 1020px) and (min-width: 721px) {
+  .col-insp { display: none; }
+  .col-side { width: 236px !important; }
+  .head-actions .icon-btn[title^="变更"] { display: none; }
+}
+
+/* ---- narrow / phone windows: the list, or what was opened from it */
+@media (max-width: 720px) {
   .shell { padding-top: env(safe-area-inset-top); }
   .col-grip, .col-insp { display: none; }
   .col-side { width: 100% !important; }

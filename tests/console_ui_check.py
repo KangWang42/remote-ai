@@ -288,6 +288,11 @@ def main():
             browser.picture(out / "diff.png")
             assert errors() == "[]", errors()
 
+            # ---- a compact desktop window (e.g. half-screen / high-DPI): sidebar and main console stay side by side
+            browser.open(origin + "/console/", "document.querySelectorAll('.proj .th-row').length >= 3", "the console, compact desktop", width=780, height=700, deviceScaleFactor=1, mobile=False)
+            assert value("getComputedStyle(document.querySelector('.col-side')).display") != "none"
+            assert value("getComputedStyle(document.querySelector('.col-main')).display") != "none"
+
             # ---- a narrow window: the list, or what was opened from it
             browser.open(origin + "/console/", "document.querySelectorAll('.proj .th-row').length >= 3", "the list, narrow", width=390, height=844, deviceScaleFactor=1, mobile=True)
             assert value("getComputedStyle(document.querySelector('.col-main')).display") == "none"
