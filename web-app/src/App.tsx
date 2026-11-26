@@ -37,7 +37,7 @@ import { ThreadView } from './components/ThreadView';
 type Center =
   | { kind: 'home' }
   | { kind: 'thread' }
-  | { kind: 'new'; dir: string }
+  | { kind: 'new'; dir: string; together?: boolean }
   | { kind: 'team'; id: string }
   | { kind: 'diff'; target: DiffTarget }
   | { kind: 'file'; target: FilePreviewTarget };
@@ -241,7 +241,11 @@ export function App() {
     setNarrowList(true);
   };
   const newThread = (dir?: string) => {
-    setCenter({ kind: 'new', dir: dir ?? current?.project ?? '' });
+    setCenter({ kind: 'new', dir: dir ?? current?.project ?? '', together: false });
+    setNarrowList(false);
+  };
+  const newTeam = (dir?: string) => {
+    setCenter({ kind: 'new', dir: dir ?? current?.project ?? '', together: true });
     setNarrowList(false);
   };
   const openTeam = (card: TeamCardEntry | string) => {
@@ -317,10 +321,14 @@ export function App() {
     return items;
   };
 
-  const manyMenu = (many: Thread[]): MenuItem[] => {
-    const stoppable = many.filter((t) => canStop(t).ok);
-    const endable = many.filter((t) => canEnd(t).ok);
-    const archivable = many.filter((t) => canArchive(t).ok);
+  const runBatchAction = (action: 'stop' | 'read' | 'archive' | 'end', many: Thread[]) => {
+    if (many.length === 0) return;
+    if (action === 'read') {
+      markSeen(many);
+      setPicked({});
+      say(`已将 ${many.length} 个对话标为已读`);
+      return;
+    }
     const all = (list: Thread[], work: (t: Thread) => Promise<unknown>, done: string) =>
       attempt(async () => {
         const results = await Promise.allSettled(list.map(work));
@@ -328,18 +336,36 @@ export function App() {
         setPicked({});
         if (failed) throw new Error(`${list.length - failed} 个完成，${failed} 个没有完成`);
       }, done);
+    if (action === 'stop') {
+      const stoppable = many.filter((t) => canStop(t).ok);
+      if (stoppable.length) all(stoppable, act.stop, '已请求停止');
+    } else if (action === 'archive') {
+      const archivable = many.filter((t) => canArchive(t).ok);
+      if (archivable.length) all(archivable, (t) => act.mark(t, { hidden: true, pinned: false }), '已归档');
+    } else if (action === 'end') {
+      const endable = many.filter((t) => canEnd(t).ok);
+      if (endable.length && window.confirm(`结束 ${endable.length} 个对话？记录会保留。`)) {
+        all(endable, act.end, '已结束');
+      }
+    }
+  };
+
+  const manyMenu = (many: Thread[]): MenuItem[] => {
+    const stoppable = many.filter((t) => canStop(t).ok);
+    const endable = many.filter((t) => canEnd(t).ok);
+    const archivable = many.filter((t) => canArchive(t).ok);
     return [
       { label: `已选 ${many.length} 个对话`, disabled: ' ' },
       SEP,
-      { label: `停止 ${stoppable.length} 个`, disabled: stoppable.length ? false : '没有在执行的', run: () => all(stoppable, act.stop, '已请求停止') },
+      { label: `停止 ${stoppable.length} 个`, disabled: stoppable.length ? false : '没有在执行的', run: () => runBatchAction('stop', many) },
       {
         label: `结束 ${endable.length} 个`,
         danger: true,
         disabled: endable.length ? false : '没有可以结束的',
-        run: () => window.confirm(`结束 ${endable.length} 个对话？记录会保留。`) && all(endable, act.end, '已结束'),
+        run: () => runBatchAction('end', many),
       },
-      { label: '标为已读', run: () => (markSeen(many), setPicked({})) },
-      { label: `归档 ${archivable.length} 个`, disabled: archivable.length ? false : '只能归档没有运行的', run: () => all(archivable, (t) => act.mark(t, { hidden: true, pinned: false }), '已归档') },
+      { label: '标为已读', run: () => runBatchAction('read', many) },
+      { label: `归档 ${archivable.length} 个`, disabled: archivable.length ? false : '只能归档没有运行的', run: () => runBatchAction('archive', many) },
       SEP,
       { label: '取消选择', run: () => setPicked({}) },
     ];
@@ -400,10 +426,12 @@ export function App() {
 
   // ---- the desktop window's own requests: open a terminal, show a tab
   useEffect(() => {
-    const navigate = (openId?: string | null) => {
+    const navigate = (openId?: string | null, tab?: string | null) => {
       if (openId && /^[a-f0-9]{32}$/.test(openId)) openTerminal(openId);
+      else if (tab === 'together') newTeam();
     };
-    navigate(new URLSearchParams(window.location.search).get('open'));
+    const qs = new URLSearchParams(window.location.search);
+    navigate(qs.get('open'), qs.get('tab'));
     (window as any).RemoteAiConsoleNavigate = navigate;
     (window as any).RemoteAiConsoleToast = (text: string, bad?: boolean) => say(text, !!bad);
     return () => {
@@ -509,6 +537,7 @@ export function App() {
       <NewThread
         device={device}
         dir={center.dir}
+        initialTogether={center.together}
         onCancel={goHome}
         onAddProject={addProject}
         onStarted={openTerminal}
@@ -560,11 +589,20 @@ export function App() {
       <Home
         device={device}
         model={model}
+        picked={picked}
         onOpen={open}
+        onPick={pick}
+        onPickMany={(keys) => setPicked(Object.fromEntries(keys.map((k) => [k, true])))}
+        onClearPicked={() => setPicked({})}
+        onBatchAction={runBatchAction}
         onMenu={(t, e) => showMenu(threadMenu(t), e)}
+        onOpenTeam={openTeam}
         onNew={newThread}
+        onNewTeam={newTeam}
         onAddProject={addProject}
         onSeenAll={() => markSeen(model.attention.filter((t) => t.needs === 'done' || t.needs === 'failed'))}
+        onToast={say}
+        onChanged={refresh}
       />
     );
   }
@@ -582,6 +620,8 @@ export function App() {
           route={routeName(device)}
           onOpen={open}
           onPick={pick}
+          onClearPicked={() => setPicked({})}
+          onBatchAction={runBatchAction}
           onThreadMenu={(t, e) => showMenu(threadMenu(t), e)}
           onProjectMenu={(name, e) => showMenu(projectMenu(name), e)}
           onOpenTeam={openTeam}

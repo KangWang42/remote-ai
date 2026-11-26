@@ -7,6 +7,7 @@ import { SelectPopover } from './SelectPopover';
 interface Props {
   device: DeviceInfo | null;
   dir: string;
+  initialTogether?: boolean;
   onCancel: () => void;
   onAddProject: () => void;
   onStarted: (terminal: string) => void;
@@ -22,7 +23,7 @@ const CHAT_TOOLS = ['claude', 'codex', 'agy'];
  * it may work sit on one line above it. An AI that has a chat mode is begun as a chat (it can be shown on its own
  * screen later); one that has none runs on its screen. "多个 AI 协作" begins a collaboration task instead.
  */
-export function NewThread({ device, dir: initialDir, onCancel, onAddProject, onStarted, onTeamStarted }: Props) {
+export function NewThread({ device, dir: initialDir, initialTogether = false, onCancel, onAddProject, onStarted, onTeamStarted }: Props) {
   const features = device?.features || [];
   const workspaces = device?.workspaces || [];
   const tools = (device?.tools || []).filter((t) => t !== 'shell');
@@ -41,7 +42,7 @@ export function NewThread({ device, dir: initialDir, onCancel, onAddProject, onS
   const [worktree, setWorktree] = useState(false);
   const [branch, setBranch] = useState('');
   const [catalog, setCatalog] = useState<Record<string, ToolModelOption[]>>({});
-  const [together, setTogether] = useState(false);
+  const [together, setTogether] = useState(() => initialTogether && teams);
   const [teamMode, setTeamMode] = useState<TeamMode>('lead');
   const [leader, setLeader] = useState(teamTools[0] || '');
   const [members, setMembers] = useState<string[]>(teamTools.slice(1, 2));
@@ -55,6 +56,9 @@ export function NewThread({ device, dir: initialDir, onCancel, onAddProject, onS
   useEffect(() => {
     if (initialDir) setDir(initialDir);
   }, [initialDir]);
+  useEffect(() => {
+    setTogether(initialTogether && teams);
+  }, [initialTogether, teams]);
   useEffect(() => {
     if (!dir && workspaces[0]) setDir(workspaces[0]);
   }, [workspaces.join('|')]);

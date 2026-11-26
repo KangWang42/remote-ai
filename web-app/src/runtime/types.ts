@@ -45,6 +45,40 @@ export interface TeamCardEntry {
   confirm?: boolean;
   note?: string;
   updated?: number;
+  tools?: string[];
+  roster?: Array<{ role: string; tool: string }>;
+}
+
+export interface ScheduleEntry {
+  id: string;
+  tool: string;
+  session: string;
+  title?: string;
+  text: string;
+  kind: 'once' | 'daily' | 'every';
+  time?: string;
+  at?: number;
+  minutes?: number;
+  days?: number[];
+  on: boolean;
+  next?: number;
+  runs?: number;
+  last?: { at: number; ok: boolean; note?: string } | null;
+}
+
+export interface ChainEntry {
+  id: string;
+  from: string;
+  from_tool: string;
+  from_title?: string;
+  to: string;
+  to_tool: string;
+  to_title?: string;
+  text: string;
+  left: number;
+  rounds: number;
+  runs?: number;
+  last?: { at: number; ok: boolean; note?: string } | null;
 }
 
 export interface DeviceInfo {

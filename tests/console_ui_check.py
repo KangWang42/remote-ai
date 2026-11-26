@@ -112,7 +112,29 @@ def main():
             assert len(home_geom["cards"]) == 2 and abs(home_geom["cards"][0][0] - home_geom["cards"][1][0]) <= 2 and abs(home_geom["cards"][0][1] - home_geom["cards"][1][1]) <= 2, home_geom
             assert home_geom["earlier"] == ["整理周报"], home_geom
             assert home_geom["stripes"] == 0, ("no left accent stripes on rows/cards", home_geom)
+            assert value("document.querySelectorAll('.home-hub .hub-tile').length") >= 3, "overview task hub shows teams, schedules and chains"
             browser.picture(out / "list.png")
+            # Multi-select batch mode right in Overview
+            press(".home-head-acts button", "多选")
+            until("!!document.querySelector('.home-batch-bar')", "overview batch selection bar")
+            value("document.querySelectorAll('.home-grid .home-card')[0].click()")
+            value("document.querySelectorAll('.home-grid .home-card')[1].click()")
+            until("document.querySelector('.batch-count')?.textContent === '已选 2 个对话' && document.querySelectorAll('.home-card.is-picked .hc-check.on').length === 2", "two overview cards selected")
+            time.sleep(0.2)
+            browser.picture(out / "batch.png")
+            press(".home-batch-bar button", "完成")
+            until("!document.querySelector('.home-batch-bar')", "exited multi-select mode")
+            # Schedule creation & management directly in Overview
+            press(".home-task-bar button", "定时任务")
+            until("!!document.querySelector('.home-sec h2') && document.querySelector('.home-sec h2').textContent.includes('定时提问')", "schedules tab opened")
+            press(".home-sec-head button", "新建定时")
+            until("!!document.querySelector('.dlg textarea')", "schedule creation dialog")
+            value("(t => { t.value = '每天检查测试结果'; t.dispatchEvent(new Event('input', { bubbles: true })); })(document.querySelector('.dlg textarea'))")
+            press(".dlg-foot button", "保存")
+            until("!document.querySelector('.dlg') && document.querySelectorAll('.auto-grid .auto-card').length === 1", "created schedule card visible")
+            browser.picture(out / "schedules.png")
+            press(".home-task-bar button", "全部概览")
+            until("document.querySelectorAll('.home-grid .home-card').length === 2", "back to overview")
             press(".side-foot button", "设置")
             until("document.querySelectorAll('.quota-bar').length >= 4", "account quota windows")
             assert not value("document.querySelector('.dlg a[href*=\"/computer/\"]')"), "settings dialog must never navigate away to mobile /computer/"

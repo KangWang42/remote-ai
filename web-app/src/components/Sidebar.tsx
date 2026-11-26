@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { formatExactTime, formatRelativeTime, getRecencyTier, isToday } from '../runtime/time';
-import { runtimeLabel, type ProjectGroup, type Thread, type ThreadModel } from '../runtime/threads';
+import { canArchive, canEnd, canStop, runtimeLabel, type ProjectGroup, type Thread, type ThreadModel } from '../runtime/threads';
 import { toolBadgeStyle, toolMeta, type DeviceInfo, type TeamCardEntry } from '../runtime/types';
 
 type SideFilter = 'all' | 'today' | 'active';
@@ -15,6 +15,8 @@ interface Props {
   route: string;
   onOpen: (t: Thread) => void;
   onPick: (t: Thread, range: boolean) => void;
+  onClearPicked: () => void;
+  onBatchAction: (action: 'stop' | 'read' | 'archive' | 'end', threads: Thread[]) => void;
   onThreadMenu: (t: Thread, e: MouseEvent) => void;
   onProjectMenu: (name: string, e: MouseEvent) => void;
   onOpenTeam: (card: TeamCardEntry) => void;
@@ -250,6 +252,10 @@ export function Sidebar(p: Props) {
   const attention = p.model.attention;
   const renderedProjects = p.model.projects.map(group).filter(Boolean);
   const filteredLoose = p.model.loose.filter(matchesFilter);
+  const pickedList = useMemo(() => p.model.all.filter((t) => p.picked[t.key]), [p.model.all, p.picked]);
+  const pickedStoppable = useMemo(() => pickedList.filter((t) => canStop(t).ok).length, [pickedList]);
+  const pickedArchivable = useMemo(() => pickedList.filter((t) => canArchive(t).ok).length, [pickedList]);
+  const pickedEndable = useMemo(() => pickedList.filter((t) => canEnd(t).ok).length, [pickedList]);
 
   return (
     <aside class="sidebar">
@@ -301,6 +307,30 @@ export function Sidebar(p: Props) {
             进行中{activeTotal > 0 ? <span class="pill-n">{activeTotal}</span> : null}
           </button>
         </div>
+        {pickedList.length > 0 && (
+          <div class="side-batch" role="region" aria-label="侧栏多选操作">
+            <div class="side-batch-head">
+              <span>已选 {pickedList.length} 项</span>
+              <button type="button" class="link-btn" onClick={p.onClearPicked}>
+                取消
+              </button>
+            </div>
+            <div class="side-batch-acts">
+              <button type="button" class="btn quiet small" disabled={pickedStoppable === 0} onClick={() => p.onBatchAction('stop', pickedList)}>
+                停止
+              </button>
+              <button type="button" class="btn quiet small" onClick={() => p.onBatchAction('read', pickedList)}>
+                已读
+              </button>
+              <button type="button" class="btn quiet small" disabled={pickedArchivable === 0} onClick={() => p.onBatchAction('archive', pickedList)}>
+                归档
+              </button>
+              <button type="button" class="btn quiet small is-danger" disabled={pickedEndable === 0} onClick={() => p.onBatchAction('end', pickedList)}>
+                结束
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div class="side-scroll">
