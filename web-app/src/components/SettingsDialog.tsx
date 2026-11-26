@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { API_BASE, fetchRoutesInfo, postDesktopMessage } from '../runtime/api';
+import { fetchRoutesInfo, postDesktopMessage, terminalOp } from '../runtime/api';
 import { toolBadgeStyle, toolLabel, toolMeta, type DeviceInfo, type RouteEntry } from '../runtime/types';
 import { Dialog } from './Dialog';
 
@@ -7,6 +7,7 @@ interface Props {
   device: DeviceInfo | null;
   skin: string;
   onSkin: (skin: string) => void;
+  onToast?: (text: string, bad?: boolean) => void;
   onClose: () => void;
 }
 
@@ -34,15 +35,55 @@ function windowName(name: string): string {
 
 const ROUTE: Record<string, string> = { lan: '局域网', tailscale: 'Tailscale', tunnel: '公网隧道', own: '自有中转', public: '公共中转' };
 
-export function SettingsDialog({ device, skin, onSkin, onClose }: Props) {
+export function SettingsDialog({ device, skin, onSkin, onToast, onClose }: Props) {
   const [routes, setRoutes] = useState<RouteEntry[]>(device?.routes || []);
+  const [loadingRoutes, setLoadingRoutes] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState('');
+  const [updating, setUpdating] = useState(false);
   const desktop = typeof (window as any).chrome?.webview?.postMessage === 'function';
+  const canRemoteUpdate = Boolean(device?.features?.includes('update'));
 
-  useEffect(() => {
+  const reloadRoutes = () => {
+    setLoadingRoutes(true);
     fetchRoutesInfo()
       .then((res) => setRoutes((res.routes as RouteEntry[]) || []))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoadingRoutes(false));
+  };
+
+  useEffect(() => {
+    reloadRoutes();
   }, []);
+
+  const copyRoute = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrl(url);
+      onToast?.('已复制连接地址');
+      window.setTimeout(() => setCopiedUrl((cur) => (cur === url ? '' : cur)), 1600);
+    } catch {
+      onToast?.('复制失败，请手动选择复制', true);
+    }
+  };
+
+  const triggerUpdate = async () => {
+    if (updating) return;
+    if (desktop) {
+      postDesktopMessage('check-update');
+      onToast?.('正在检查更新…');
+      return;
+    }
+    if (!canRemoteUpdate) return;
+    setUpdating(true);
+    try {
+      await terminalOp({ action: 'update' });
+      onToast?.('已通知电脑端检查并安装更新');
+    } catch (err: any) {
+      onToast?.(err?.message || '检查更新失败', true);
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   const quotas = (device?.quotas || []).filter((q) => q.windows?.length);
 
@@ -67,33 +108,62 @@ export function SettingsDialog({ device, skin, onSkin, onClose }: Props) {
       </section>
 
       <section class="set-sec">
-        <h3>手机连接</h3>
+        <div class="set-sec-head">
+          <h3>电脑端与更新</h3>
+          {device?.newer ? <span class="rec-tag is-recent">有新版本 v{device.newer}</span> : null}
+        </div>
         {device?.version && (
           <div class="kv">
-            <span>电脑端版本</span>
+            <span>当前电脑端版本</span>
             <strong>v{device.version}</strong>
           </div>
         )}
-        {routes.length > 0 && (
+        <div class="row-btns">
+          {(desktop || canRemoteUpdate) && (
+            <button
+              type="button"
+              class={`btn ${device?.newer ? 'primary' : 'quiet'} small`}
+              disabled={updating}
+              onClick={triggerUpdate}
+            >
+              {updating ? '正在检查…' : device?.newer ? `立即更新到 v${device.newer}` : '检查更新'}
+            </button>
+          )}
+          {desktop && (
+            <button type="button" class="btn quiet small" onClick={() => postDesktopMessage('open-settings')}>
+              后台设置
+            </button>
+          )}
+          {desktop && (
+            <button type="button" class="btn quiet small" onClick={() => postDesktopMessage('open-classic')}>
+              手机扫码连接
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section class="set-sec">
+        <div class="set-sec-head">
+          <h3>连接线路</h3>
+          <button type="button" class="link-btn" disabled={loadingRoutes} onClick={reloadRoutes}>
+            {loadingRoutes ? '刷新中…' : '刷新'}
+          </button>
+        </div>
+        {routes.length > 0 ? (
           <div class="routes">
             {routes.map((r) => (
               <div key={r.url} class="route">
                 <span class="chip soft">{ROUTE[r.kind] || r.kind}</span>
-                <code>{r.url}</code>
+                <code title={r.url}>{r.url}</code>
+                <button type="button" class="link-btn route-copy" onClick={() => copyRoute(r.url)}>
+                  {copiedUrl === r.url ? '已复制' : '复制'}
+                </button>
               </div>
             ))}
           </div>
+        ) : (
+          <p class="muted small">暂未检测到可用连接线路，可点击“手机扫码连接”或“后台设置”配置。</p>
         )}
-        <div class="row-btns">
-          {desktop && (
-            <button type="button" class="btn primary small" onClick={() => postDesktopMessage('open-classic')}>
-              手机扫码连接
-            </button>
-          )}
-          <a class="btn quiet small" href={`${API_BASE}/computer/`}>
-            线路详情
-          </a>
-        </div>
       </section>
 
       <section class="set-sec">

@@ -405,8 +405,10 @@ export function App() {
     };
     navigate(new URLSearchParams(window.location.search).get('open'));
     (window as any).RemoteAiConsoleNavigate = navigate;
+    (window as any).RemoteAiConsoleToast = (text: string, bad?: boolean) => say(text, !!bad);
     return () => {
       delete (window as any).RemoteAiConsoleNavigate;
+      delete (window as any).RemoteAiConsoleToast;
     };
   }, []);
 
@@ -654,7 +656,7 @@ export function App() {
           }}
         />
       )}
-      {settings && <SettingsDialog device={device} skin={skin} onSkin={setSkin} onClose={() => setSettings(false)} />}
+      {settings && <SettingsDialog device={device} skin={skin} onSkin={setSkin} onToast={say} onClose={() => setSettings(false)} />}
       {palette && (
         <CommandPalette
           threads={model.all}

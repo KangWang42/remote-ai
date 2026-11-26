@@ -115,6 +115,8 @@ def main():
             browser.picture(out / "list.png")
             press(".side-foot button", "设置")
             until("document.querySelectorAll('.quota-bar').length >= 4", "account quota windows")
+            assert not value("document.querySelector('.dlg a[href*=\"/computer/\"]')"), "settings dialog must never navigate away to mobile /computer/"
+            assert value("Array.from(document.querySelectorAll('.dlg h3')).some(h => h.textContent.includes('电脑端与更新'))"), "settings dialog shows host & update section"
             assert value("Array.from(document.querySelectorAll('.quota-bar')).slice(0,4).map(n => n.className)") == [
                 "quota-bar", "quota-bar elevated", "quota-bar elevated", "quota-bar high"]
             colors = value("Array.from(document.querySelectorAll('.quota-bar span')).slice(0,4).map(n => getComputedStyle(n).backgroundColor.match(/\\d+/g).map(Number))")

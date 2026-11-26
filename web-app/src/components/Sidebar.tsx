@@ -358,9 +358,10 @@ export function Sidebar(p: Props) {
       </div>
 
       <div class="side-foot">
-        <button type="button" class="foot-btn" onClick={p.onSettings} title="外观、连接与手机、AI 工具">
+        <button type="button" class="foot-btn" onClick={p.onSettings} title="外观、版本更新、连接与 AI 工具">
           <Gear />
           <span>设置</span>
+          {p.device?.newer ? <span class="rec-tag is-recent">新版</span> : null}
         </button>
         <span class={`conn ${p.connected && p.device?.online ? 'on' : 'off'}`} title="与电脑端的连接">
           <span class="conn-dot" />

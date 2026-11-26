@@ -25,6 +25,8 @@ internal sealed class DesktopConsole : Form {
 
     readonly string userDataDir;
     readonly Action openClassic;
+    readonly Action openSettings;
+    readonly Action checkUpdate;
     readonly Action pickFolder;
     readonly Action openInstaller;
     readonly Action<string> onSkinChanged;
@@ -51,12 +53,16 @@ internal sealed class DesktopConsole : Form {
         Rectangle initialBounds,
         FormWindowState initialState,
         Action onOpenClassic,
+        Action onOpenSettings,
+        Action onCheckUpdate,
         Action onPickFolder,
         Action onOpenInstaller,
         Action<string> onSkin,
         Action<Rectangle, FormWindowState> onSaveBounds) {
         userDataDir = Path.Combine(dataDir, "webview2");
         openClassic = onOpenClassic ?? (() => { });
+        openSettings = onOpenSettings ?? openClassic;
+        checkUpdate = onCheckUpdate ?? (() => { });
         pickFolder = onPickFolder ?? (() => { });
         openInstaller = onOpenInstaller ?? (() => { });
         onSkinChanged = onSkin;
@@ -150,6 +156,23 @@ internal sealed class DesktopConsole : Form {
         try { await webView.ExecuteScriptAsync("window.RemoteAiConsoleRefresh && window.RemoteAiConsoleRefresh();"); } catch { }
     }
 
+    internal async void ShowToast(string text, bool bad = false) {
+        if (!initialized || webView == null || webView.CoreWebView2 == null || IsDisposed || String.IsNullOrEmpty(text)) return;
+        try {
+            string js = "window.RemoteAiConsoleToast && window.RemoteAiConsoleToast(" + JsQuote(text) + "," + (bad ? "true" : "false") + ");";
+            await webView.ExecuteScriptAsync(js);
+        } catch { }
+    }
+
+    static bool IsConsoleUrl(string uri, string origin) {
+        if (String.IsNullOrEmpty(uri) || String.IsNullOrEmpty(origin)) return false;
+        string cleanOrigin = origin.TrimEnd('/');
+        if (uri.StartsWith(cleanOrigin + "/console/", StringComparison.OrdinalIgnoreCase)) return true;
+        if (String.Equals(uri, cleanOrigin + "/console", StringComparison.OrdinalIgnoreCase)) return true;
+        return uri.StartsWith(cleanOrigin + "/console?", StringComparison.OrdinalIgnoreCase)
+            || uri.StartsWith(cleanOrigin + "/console#", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal void ForceClose() {
         forceClose = true;
         PersistWindowGeometry();
@@ -163,8 +186,11 @@ internal sealed class DesktopConsole : Form {
         string cleanOrigin = (origin ?? "").TrimEnd('/');
         if (cleanOrigin.Length == 0) return;
 
-        // If already loaded on the same origin, jump directly in-place without reloading the WebView.
-        if (initialized && webView != null && webView.CoreWebView2 != null && String.Equals(currentOrigin, cleanOrigin, StringComparison.OrdinalIgnoreCase)) {
+        // If already loaded on the desktop console of the same origin, jump directly in-place without reloading.
+        // If WebView2 ever navigated away from /console/, force a reload back into /console/.
+        if (initialized && webView != null && webView.CoreWebView2 != null
+            && String.Equals(currentOrigin, cleanOrigin, StringComparison.OrdinalIgnoreCase)
+            && IsConsoleUrl(webView.CoreWebView2.Source, cleanOrigin)) {
             if (!String.IsNullOrEmpty(openId) || !String.IsNullOrEmpty(tab)) {
                 string js = "window.RemoteAiConsoleNavigate && window.RemoteAiConsoleNavigate(" + JsQuote(openId) + "," + JsQuote(tab) + ");";
                 try { await webView.ExecuteScriptAsync(js); } catch { }
@@ -215,6 +241,19 @@ internal sealed class DesktopConsole : Form {
             core.Settings.IsZoomControlEnabled = true;
             core.Settings.AreHostObjectsAllowed = false;
 
+            // Keep the top-level DesktopConsole WebView2 locked to /console/ so links to /computer/, /files/,
+            // or mobile / can never replace the desktop workspace with the phone UI.
+            core.NavigationStarting += (s, args) => {
+                string uri = args.Uri ?? "";
+                if (String.IsNullOrEmpty(uri) || uri.Equals("about:blank", StringComparison.OrdinalIgnoreCase)) return;
+                if (!String.IsNullOrEmpty(currentOrigin) && !IsConsoleUrl(uri, currentOrigin)) {
+                    args.Cancel = true;
+                    if (uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) {
+                        try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); } catch { }
+                    }
+                }
+            };
+
             core.NavigationCompleted += (s, args) => {
                 if (IsDisposed) return;
                 if (webView != null) webView.Visible = true;
@@ -225,11 +264,7 @@ internal sealed class DesktopConsole : Form {
                 args.Handled = true;
                 string uri = args.Uri ?? "";
                 if (uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) {
-                    if (!String.IsNullOrEmpty(currentOrigin) && uri.StartsWith(currentOrigin + "/", StringComparison.OrdinalIgnoreCase)) {
-                        try { core.Navigate(uri); } catch { }
-                    } else {
-                        try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); } catch { }
-                    }
+                    try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); } catch { }
                 }
             };
 
@@ -237,6 +272,8 @@ internal sealed class DesktopConsole : Form {
                 try {
                     string msg = args.TryGetWebMessageAsString() ?? "";
                     if (msg == "open-classic") BeginInvoke(new Action(openClassic));
+                    else if (msg == "open-settings") BeginInvoke(new Action(openSettings));
+                    else if (msg == "check-update") BeginInvoke(new Action(checkUpdate));
                     else if (msg == "pick-folder") BeginInvoke(new Action(pickFolder));
                     else if (msg == "open-installer") BeginInvoke(new Action(openInstaller));
                     else if (msg.StartsWith("skin:", StringComparison.Ordinal) && onSkinChanged != null) {

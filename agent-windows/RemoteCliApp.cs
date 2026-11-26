@@ -566,6 +566,9 @@ public sealed partial class App : Form {
         toast.Left = pages[0].Left + (pages[0].Width - toast.Width) / 2;
         toast.Visible = true; toast.BringToFront();
         toastTimer.Stop(); toastTimer.Start();
+        if (!Visible && desktopConsole != null && !desktopConsole.IsDisposed && desktopConsole.Visible) {
+            desktopConsole.ShowToast(text);
+        }
     }
     void Copy(string text, string what) {
         if (String.IsNullOrEmpty(text)) return;
@@ -882,7 +885,9 @@ public sealed partial class App : Form {
                 dataDir,
                 savedBounds,
                 savedState,
-                Reveal,
+                () => { Go(0); Reveal(); },
+                () => { Go(3); Reveal(); },
+                () => CheckForUpdate(true),
                 PickFolderFromConsole,
                 () => ToolInstaller.Show(desktopConsole != null && !desktopConsole.IsDisposed ? (Form)desktopConsole : (Form)this, dataDir),
                 SyncSkinFromConsole,
@@ -1217,7 +1222,8 @@ public sealed partial class App : Form {
         tray.DoubleClick += (s, e) => { if (CanUseDesktopConsole()) OpenConsole(); else Reveal(); };
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("打开桌面总控台", null, (s, e) => OpenConsole());
-        tray.ContextMenuStrip.Items.Add("连接与扫码设置", null, (s, e) => Reveal());
+        tray.ContextMenuStrip.Items.Add("连接与扫码设置", null, (s, e) => { Go(0); Reveal(); });
+        tray.ContextMenuStrip.Items.Add("后台设置与更新", null, (s, e) => { Go(3); Reveal(); });
         tray.ContextMenuStrip.Items.Add("发起协作任务", null, (s, e) => OpenNewTeam());
         tray.ContextMenuStrip.Items.Add("复制地址", null, (s, e) => { if (address.Length > 0 && Mode != "public") try { Clipboard.SetText(address); } catch (ExternalException) { } });
         tray.ContextMenuStrip.Items.Add("重新连接", null, (s, e) => Again());
@@ -1441,7 +1447,10 @@ public sealed partial class App : Form {
             dialog.AcceptButton = ok; dialog.CancelButton = cancel;
             dialog.ResumeLayout(true);
             if (boxes.Count > 0) dialog.Shown += (s, e) => { boxes[0].Box.Focus(); boxes[0].Box.SelectAll(); };
-            return dialog.ShowDialog(Visible ? this : null) == DialogResult.OK ? boxes.Select(b => b.Box.Text).ToArray() : null;
+            IWin32Window owner = Visible
+                ? (IWin32Window)this
+                : (desktopConsole != null && !desktopConsole.IsDisposed && desktopConsole.Visible ? (IWin32Window)desktopConsole : null);
+            return dialog.ShowDialog(owner) == DialogResult.OK ? boxes.Select(b => b.Box.Text).ToArray() : null;
         }
     }
     bool Confirm(string title, string text, string yes, bool danger) { return Dialog(title, text, yes, danger, null, null) != null; }
