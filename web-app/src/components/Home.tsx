@@ -186,7 +186,10 @@ export function Home({ device, model, onOpen, onMenu, onNew, onAddProject, onSee
                 class={`kpi-cell${attention.length > 0 ? ' has-bad' : ''}${view === 'attention' ? ' is-on' : ''}`}
                 onClick={() => toggleView('attention')}
               >
-                <span class="kpi-label">待处理</span>
+                <span class="kpi-label">
+                  {attention.length > 0 && <span class="kpi-dot" aria-hidden="true" />}
+                  待处理
+                </span>
                 <strong class="kpi-val">{attention.length}</strong>
               </button>
               <button
@@ -196,7 +199,10 @@ export function Home({ device, model, onOpen, onMenu, onNew, onAddProject, onSee
                 class={`kpi-cell${running.length > 0 ? ' has-busy' : ''}${view === 'running' ? ' is-on' : ''}`}
                 onClick={() => toggleView('running')}
               >
-                <span class="kpi-label">进行中</span>
+                <span class="kpi-label">
+                  {running.length > 0 && <span class="kpi-dot" aria-hidden="true" />}
+                  进行中
+                </span>
                 <strong class="kpi-val">{running.length}</strong>
               </button>
               <button
@@ -206,7 +212,10 @@ export function Home({ device, model, onOpen, onMenu, onNew, onAddProject, onSee
                 class={`kpi-cell${todayAll.length > 0 ? ' has-accent' : ''}${view === 'today' ? ' is-on' : ''}`}
                 onClick={() => toggleView('today')}
               >
-                <span class="kpi-label">今日活跃</span>
+                <span class="kpi-label">
+                  {todayAll.length > 0 && <span class="kpi-dot" aria-hidden="true" />}
+                  今日活跃
+                </span>
                 <strong class="kpi-val">{todayAll.length}</strong>
               </button>
               <button

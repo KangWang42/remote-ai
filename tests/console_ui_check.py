@@ -107,10 +107,11 @@ def main():
             assert sorted(value(titles)) == sorted(["补充单元测试", "结算页金额多一位小数"]), value(titles)
             value("Array.from(document.querySelectorAll('.side-filters .filter-pill')).find(b => b.textContent.startsWith('全部')).click()")
             until("document.querySelectorAll('.proj .th-row').length === 3", "all sidebar filter restored")
-            home_geom = value("(() => { const kpis = Array.from(document.querySelectorAll('.home-kpi-strip .kpi-val')).map(n => n.textContent); const cards = Array.from(document.querySelectorAll('.home-grid .home-card')).map(n => { const r = n.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }); const earlier = Array.from(document.querySelectorAll('.home-list-row .hl-title')).map(n => n.textContent); return { kpis, cards, earlier }; })()")
+            home_geom = value("(() => { const kpis = Array.from(document.querySelectorAll('.home-kpi-strip .kpi-val')).map(n => n.textContent); const cards = Array.from(document.querySelectorAll('.home-grid .home-card')).map(n => { const r = n.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }); const earlier = Array.from(document.querySelectorAll('.home-list-row .hl-title')).map(n => n.textContent); const stripes = [...document.querySelectorAll('.th-row, .home-card')].filter(n => getComputedStyle(n, '::before').content !== 'none').length; return { kpis, cards, earlier, stripes }; })()")
             assert home_geom["kpis"] == ["0", "0", "2", "3"], home_geom
             assert len(home_geom["cards"]) == 2 and abs(home_geom["cards"][0][0] - home_geom["cards"][1][0]) <= 2 and abs(home_geom["cards"][0][1] - home_geom["cards"][1][1]) <= 2, home_geom
             assert home_geom["earlier"] == ["整理周报"], home_geom
+            assert home_geom["stripes"] == 0, ("no left accent stripes on rows/cards", home_geom)
             browser.picture(out / "list.png")
             press(".side-foot button", "设置")
             until("document.querySelectorAll('.quota-bar').length >= 4", "account quota windows")
@@ -255,6 +256,7 @@ def main():
             assert file_names()[:3] == ["docs", "a-old.txt", "app.js"], file_names()
             assert value("Array.from(document.querySelectorAll('.file-row-wrap')).find(n => n.querySelector('.file-name')?.textContent === 'app.js')?.querySelector('.rec-tag')?.textContent") == "刚改"
             assert not value("Array.from(document.querySelectorAll('.file-row-wrap')).find(n => n.querySelector('.file-name')?.textContent === 'a-old.txt')?.querySelector('.rec-tag')")
+            assert value("Array.from(document.querySelectorAll('.file-row-wrap')).filter(n => getComputedStyle(n, '::before').content !== 'none').length") == 0, "no left accent stripes on file rows"
             value("document.querySelector('.files-sort-btn').click()")
             until("Array.from(document.querySelectorAll('.file-row-wrap .file-name')).map(n => n.textContent)[1] === 'app.js'", "sorted by recent modified")
             value("Array.from(document.querySelectorAll('.files-controls .filter-pill')).find(b => b.textContent.startsWith('今日')).click()")
