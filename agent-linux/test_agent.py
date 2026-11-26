@@ -1810,7 +1810,7 @@ class Chats(unittest.TestCase):
     def test_permission_suggestions(self):
         chat = object.__new__(agent.ClaudeChat)
         offered, answered = [], []
-        chat.ask = lambda *args: offered.append(args)
+        chat.ask = lambda *args, **kwargs: offered.append(args)
         chat.respond = lambda *args: answered.append(args)
         for command, valid in (("npm test *", True), ("mv *.csv backup/", False)):
             with self.subTest(command=command):

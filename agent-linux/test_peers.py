@@ -160,11 +160,12 @@ class PeersTest(unittest.TestCase):
         token = mcp.args[3]
         to_read, to_write = os.pipe()
         from_read, from_write = os.pipe()
+        to_bridge = os.fdopen(to_read, "r")
         to_server = os.fdopen(to_write, "w")
         from_server = os.fdopen(from_read, "r")
         from_bridge = os.fdopen(from_write, "w")
         reader = threading.Thread(target=lambda: peers.bridge(self.peers.path, token,
-                                                              input=open(to_read), output=from_bridge),
+                                                              input=to_bridge, output=from_bridge),
                                   daemon=True)
         reader.start()
         try:
@@ -182,6 +183,7 @@ class PeersTest(unittest.TestCase):
             to_server.close()
             from_bridge.close()
             reader.join(5)
+            to_bridge.close()
             from_server.close()
 
 

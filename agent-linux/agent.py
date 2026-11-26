@@ -2365,6 +2365,8 @@ class Chat(Live):
     It keeps the shape of a terminal (Live) for the report, the relay's acknowledgements and ending it."""
 
     form = "chat"
+    mcp = None
+    auto_ask = False
 
     def __init__(self, terminal_id, project, cwd, tool, launcher, wake, session, resume, mode, mcp=None):
         # (a terminal's fields, without a screen: Live.__init__ is not run, it would start a pty)
