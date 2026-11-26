@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import * as act from './runtime/actions';
 import { bootstrapAuthFromHash, checkSession, fetchOverview, loginWithPassword, postDesktopMessage, terminalOp } from './runtime/api';
+import { chatOutbox } from './runtime/chatOutbox';
 import {
   buildThreads,
   canArchive,
@@ -168,6 +169,26 @@ export function App() {
   useEffect(() => {
     if (current && current.key !== sel.key) setSel({ key: current.key, terminal: current.terminal?.id || '' });
   }, [current?.key]);
+
+  // Flush stacked pending messages as one merged prompt whenever any chat thread becomes idle (even in background).
+  useEffect(() => {
+    const flushIdle = () => {
+      for (const t of model.all) {
+        if (t.runtime !== 'chat' || !t.terminal || t.terminal.state !== 'running') continue;
+        if (t.busy || t.needs === 'confirm') continue;
+        if (t.terminal.phase && t.terminal.phase !== 'idle' && t.terminal.phase !== 'done') continue;
+        if (!chatOutbox.hasWaiting(t.terminal.id)) continue;
+        chatOutbox
+          .flush(t, ['waiting'])
+          .then((flushed) => {
+            if (flushed) refresh();
+          })
+          .catch(() => {});
+      }
+    };
+    flushIdle();
+    return chatOutbox.subscribe(flushIdle);
+  }, [model.all, refresh]);
 
   const project =
     browse ||

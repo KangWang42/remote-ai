@@ -106,7 +106,14 @@ export class ChatTimelineReducer {
             this.turnStarted = Number(ev.at);
             this.phase = { state: 'busy', at: this.turnStarted };
           }
-          this.add({ id, role: 'user', op: ev.op, text: String(ev.text || ''), at: ev.at });
+          this.add({
+            id,
+            role: 'user',
+            op: ev.op,
+            ops: Array.isArray(ev.ops) ? ev.ops.map(String) : undefined,
+            text: String(ev.text || ''),
+            at: ev.at,
+          });
         }
         else if (kind === 'text') this.add({ id, role: 'assistant', text: String(ev.text || ''), at: ev.at });
         else if (kind === 'thought') this.add({ id, role: 'thought', text: String(ev.text || ''), at: ev.at });

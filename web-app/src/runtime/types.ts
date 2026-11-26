@@ -146,6 +146,7 @@ export interface ChatChunk {
 export interface ChatMessageItem {
   id: string;
   op?: string;
+  ops?: string[];
   role: 'user' | 'assistant' | 'tool' | 'thought' | 'note' | 'ask' | 'error';
   text: string;
   title?: string;

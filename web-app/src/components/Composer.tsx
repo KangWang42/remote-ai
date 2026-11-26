@@ -9,11 +9,16 @@ interface Props {
   pictureDir: string;
   busy: boolean;
   canStop: boolean;
+  /** True when submitting appends to the local pending batch instead of firing a separate turn now. */
+  queueMode?: boolean;
+  /** True while a stop request is in flight: new input dispatches right after stop. */
+  stopping?: boolean;
   disabled?: string;
   /** Text to put into the box, e.g. a cited file (changes when `nonce` does). */
   insert?: { nonce: number; text: string } | null;
   onSend: (text: string, pictures: string[]) => Promise<void>;
   onStop: () => Promise<void>;
+  onStopAndSend?: (text: string, pictures: string[]) => Promise<void>;
 }
 
 const MAX_PICTURES = 4;
@@ -104,6 +109,33 @@ export function Composer(p: Props) {
     }
   };
 
+  const stopAndSend = async () => {
+    const words = text.trim();
+    if ((!words && pictures.length === 0) || sending || uploading || p.disabled || !p.onStopAndSend) return;
+    setSending(true);
+    setNote('');
+    try {
+      await p.onStopAndSend(words, pictures);
+      if (box.current?.value === text) keep('');
+      setPictures((current) => current.filter((path) => !pictures.includes(path)));
+    } catch (err: any) {
+      setNote(err?.message || '停止并发送失败');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const hasDraft = Boolean(text.trim() || pictures.length > 0);
+  const hintText = uploading
+    ? '正在上传图片…'
+    : p.stopping
+      ? '已请求停止 · 现在发送将立即执行新指令'
+      : p.queueMode
+        ? 'Enter 加入待发（本轮结束后合并一次发出）'
+        : p.busy
+          ? '可以继续补充'
+          : 'Enter 发送 · Shift+Enter 换行';
+
   return (
     <form
       class="composer"
@@ -182,20 +214,31 @@ export function Composer(p: Props) {
                 </button>
               </>
             )}
-            <span class="composer-hint">{uploading ? '正在上传图片…' : p.busy ? '可以继续补充' : 'Enter 发送 · Shift+Enter 换行'}</span>
+            <span class="composer-hint">{hintText}</span>
           </div>
           <div class="composer-right">
             {p.busy && p.canStop && (
-              <button type="button" class="btn quiet" onClick={stop}>
+              <button type="button" class="btn quiet" disabled={sending} onClick={stop}>
                 停止
+              </button>
+            )}
+            {p.busy && p.canStop && p.onStopAndSend && hasDraft && (
+              <button
+                type="button"
+                class="btn stop-send"
+                disabled={sending || uploading || Boolean(p.disabled)}
+                title="先停止当前这一轮，然后立即发送并运行这条新指令"
+                onClick={stopAndSend}
+              >
+                停止并发送
               </button>
             )}
             <button
               type="submit"
               class="btn primary"
-              disabled={sending || uploading || Boolean(p.disabled) || (!text.trim() && pictures.length === 0)}
+              disabled={sending || uploading || Boolean(p.disabled) || !hasDraft}
             >
-              {sending ? '发送中' : '发送'}
+              {sending ? '发送中' : p.queueMode ? '加入待发' : '发送'}
             </button>
           </div>
         </div>

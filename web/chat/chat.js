@@ -144,9 +144,14 @@
     let node;
     const item = { id: e.id, kind: e.kind, text: e.text || '', detail: e.detail || '', state: 'run', out: '' };
     if (e.kind === 'user') {
-      // what this page sent comes back from the tool: the bubble that waited for it is that message now
-      const waiting = e.op && mine.get(e.op);
-      if (waiting) { acknowledge(waiting); mine.delete(e.op); saveMine(); if (waiting.node) waiting.node.remove(); }
+      // what this page sent comes back from the tool: the bubble(s) that waited for it are that message now
+      const ackOps = Array.isArray(e.ops) && e.ops.length ? e.ops : (e.op ? [e.op] : []);
+      let changed = false;
+      ackOps.forEach(op => {
+        const waiting = op && mine.get(op);
+        if (waiting) { acknowledge(waiting); mine.delete(op); changed = true; if (waiting.node) waiting.node.remove(); }
+      });
+      if (changed) saveMine();
       node = userNode(item.text);
     } else if (e.kind === 'text') {
       node = el('div', { className: 'text md' });

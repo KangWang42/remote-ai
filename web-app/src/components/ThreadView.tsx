@@ -48,13 +48,45 @@ export function ThreadView(p: Props) {
   const [jump, setJump] = useState<{ index: number; nonce: number } | null>(null);
   const [switching, setSwitching] = useState('');
   const [problem, setProblem] = useState('');
+  const [stoppingNow, setStoppingNow] = useState(false);
+  const [flushingNow, setFlushingNow] = useState(false);
+  const [recallInsert, setRecallInsert] = useState<{ nonce: number; text: string } | null>(null);
   const searchBox = useRef<HTMLInputElement | null>(null);
+
+  const waitingPending = pending.filter((m) => m.state === 'waiting');
+  const pausedPending = pending.filter((m) => m.state === 'paused');
+  const inflightPending = pending.filter((m) => m.state === 'sending' || m.state === 'sent' || m.state === 'unknown');
+  const composerInsert = useMemo(() => {
+    if (!p.insert) return recallInsert;
+    if (!recallInsert) return p.insert;
+    return recallInsert.nonce > p.insert.nonce ? recallInsert : p.insert;
+  }, [p.insert, recallInsert]);
 
   useEffect(() => {
     setSearching(false);
     setQuery('');
     setProblem('');
+    setStoppingNow(false);
+    setRecallInsert(null);
   }, [t.key]);
+
+  useEffect(() => {
+    if (phase === 'idle' || phase === 'ended' || phase === 'failed') {
+      setStoppingNow(false);
+    }
+  }, [phase]);
+
+  // Automatically merge & send accumulated waiting messages in one turn as soon as the current turn ends.
+  useEffect(() => {
+    if (t.runtime !== 'chat' || !t.terminal || phase !== 'idle') return;
+    if (!chatOutbox.hasWaiting(t.terminal.id)) return;
+    chatOutbox
+      .flush(t, ['waiting'])
+      .then((flushed) => {
+        if (flushed) p.onChanged();
+      })
+      .catch((err: any) => setProblem(err?.message || '合并发送待发消息失败'));
+  }, [t.key, t.runtime, t.terminal?.id, phase, waitingPending.length]);
 
   useEffect(() => {
     if (t.runtime === 'screen') return;
@@ -141,6 +173,52 @@ export function ThreadView(p: Props) {
     ) : null;
 
   const composerDisabled = !say.ok ? say.why : '';
+  const canStopChat = stop.ok || t.runtime === 'chat';
+  const queueMode = t.runtime === 'chat' && (working || phase === 'starting') && !stoppingNow;
+
+  const stopIgnoringIdle = async () => {
+    try {
+      await act.stop(t);
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      if (!msg.includes('没有在执行') && !msg.includes('已结束')) throw err;
+    }
+  };
+
+  const stopAndFlushWaiting = async () => {
+    if (!t.terminal || flushingNow || waitingPending.length === 0) return;
+    setFlushingNow(true);
+    setProblem('');
+    setStoppingNow(true);
+    try {
+      if (working) await stopIgnoringIdle();
+      await chatOutbox.flush(t, ['waiting']);
+      p.onChanged();
+    } catch (err: any) {
+      setProblem(err?.message || '停止并发送失败');
+    } finally {
+      setFlushingNow(false);
+    }
+  };
+
+  const flushPaused = async () => {
+    if (!t.terminal || flushingNow || pausedPending.length === 0) return;
+    setFlushingNow(true);
+    setProblem('');
+    try {
+      await chatOutbox.flush(t, ['paused']);
+      p.onChanged();
+    } catch (err: any) {
+      setProblem(err?.message || '合并发送失败');
+    } finally {
+      setFlushingNow(false);
+    }
+  };
+
+  const editPendingItem = (id: string, text: string) => {
+    chatOutbox.remove(new Set([id]));
+    if (text) setRecallInsert({ nonce: Date.now(), text });
+  };
 
   return (
     <main class="thread">
@@ -289,42 +367,201 @@ export function ThreadView(p: Props) {
           )}
           <div class="thread-feedback">
             <RunStatus key={t.terminal?.id || t.key} phase={phase} since={since} />
-            {(pending.length > 0 || queued.length > 0) && <ul class="pending-list" aria-label="待发送消息" aria-live="polite">
-              {queued.map((m) => <li key={m.id}><strong>{({ queued: '待发送', paused: '已暂停发送', sending: '发送中' })[m.state]}</strong><span>{m.text}</span></li>)}
-              {pending.map((m) => {
-                const unknown = m.state === 'unknown' || t.runtime !== 'chat';
-                return <li key={m.id}>
-                  <strong>{unknown ? '送达结果未知' : m.state === 'sending' ? '正在提交' : '待发送'}</strong>
-                  <span>{[m.text, ...m.pictures.map((path) => path.split('/').pop())].filter(Boolean).join(' · ')}</span>
-                  {unknown && <button type="button" class="link-btn" onClick={() => chatOutbox.remove(new Set([m.id]))}>已核对</button>}
-                </li>;
-              })}
-            </ul>}
+            {(pending.length > 0 || queued.length > 0) && (
+              <div class="pending-panel" aria-label="待发送消息" aria-live="polite">
+                {waitingPending.length > 0 && (
+                  <div class="pending-group">
+                    <div class="pending-head">
+                      <span class="pending-title">
+                        <strong>待发送 · {waitingPending.length} 条</strong>
+                        <span>{waitingPending.length > 1 ? '本轮结束后合并一次发出' : '本轮结束后发出'}</span>
+                      </span>
+                      <span class="pending-acts">
+                        {working && canStopChat && (
+                          <button
+                            type="button"
+                            class="pending-act primary"
+                            disabled={flushingNow}
+                            onClick={stopAndFlushWaiting}
+                          >
+                            {flushingNow ? '正在发送…' : waitingPending.length > 1 ? '停止并合并发送' : '停止并立即发送'}
+                          </button>
+                        )}
+                        {!working && phase === 'idle' && (
+                          <button
+                            type="button"
+                            class="pending-act primary"
+                            disabled={flushingNow}
+                            onClick={stopAndFlushWaiting}
+                          >
+                            {waitingPending.length > 1 ? '立即合并发送' : '立即发出'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          class="pending-act"
+                          disabled={flushingNow}
+                          onClick={() => t.terminal && chatOutbox.clearDrafts(t.terminal.id, ['waiting'])}
+                        >
+                          清空
+                        </button>
+                      </span>
+                    </div>
+                    <ul class="pending-list">
+                      {waitingPending.map((m, idx) => (
+                        <li key={m.id}>
+                          <span class="pending-idx">{idx + 1}</span>
+                          <span class="pending-text">
+                            {[m.text, ...m.pictures.map((path) => path.split('/').pop())].filter(Boolean).join(' · ')}
+                          </span>
+                          <button type="button" class="link-btn" onClick={() => editPendingItem(m.id, m.text)}>
+                            编辑
+                          </button>
+                          <button
+                            type="button"
+                            class="pending-del"
+                            title="移除这条待发送消息"
+                            aria-label="移除"
+                            onClick={() => chatOutbox.remove(new Set([m.id]))}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {pausedPending.length > 0 && (
+                  <div class="pending-group is-paused">
+                    <div class="pending-head">
+                      <span class="pending-title">
+                        <strong>已暂停待发 · {pausedPending.length} 条</strong>
+                        <span>可先输入新指令，或随时合并发出</span>
+                      </span>
+                      <span class="pending-acts">
+                        <button
+                          type="button"
+                          class="pending-act primary"
+                          disabled={flushingNow || working || phase === 'confirm'}
+                          onClick={flushPaused}
+                        >
+                          {pausedPending.length > 1 ? '合并发送' : '立即发送'}
+                        </button>
+                        <button
+                          type="button"
+                          class="pending-act"
+                          disabled={flushingNow}
+                          onClick={() => t.terminal && chatOutbox.clearDrafts(t.terminal.id, ['paused'])}
+                        >
+                          清空
+                        </button>
+                      </span>
+                    </div>
+                    <ul class="pending-list">
+                      {pausedPending.map((m, idx) => (
+                        <li key={m.id}>
+                          <span class="pending-idx">{idx + 1}</span>
+                          <span class="pending-text">
+                            {[m.text, ...m.pictures.map((path) => path.split('/').pop())].filter(Boolean).join(' · ')}
+                          </span>
+                          <button type="button" class="link-btn" onClick={() => editPendingItem(m.id, m.text)}>
+                            编辑
+                          </button>
+                          <button
+                            type="button"
+                            class="pending-del"
+                            title="移除这条待发送消息"
+                            aria-label="移除"
+                            onClick={() => chatOutbox.remove(new Set([m.id]))}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {(queued.length > 0 || inflightPending.length > 0) && (
+                  <ul class="pending-list">
+                    {queued.map((m) => (
+                      <li key={m.id}>
+                        <strong>{({ queued: '待发送', paused: '已暂停发送', sending: '发送中' })[m.state]}</strong>
+                        <span class="pending-text">{m.text}</span>
+                      </li>
+                    ))}
+                    {inflightPending.map((m) => {
+                      const unknown = m.state === 'unknown' || t.runtime !== 'chat';
+                      return (
+                        <li key={m.id}>
+                          <strong>{unknown ? '送达结果未知' : m.state === 'sending' ? '正在提交' : '已提交，等待接收'}</strong>
+                          <span class="pending-text">
+                            {[m.text, ...m.pictures.map((path) => path.split('/').pop())].filter(Boolean).join(' · ')}
+                          </span>
+                          {unknown && (
+                            <button type="button" class="link-btn" onClick={() => chatOutbox.remove(new Set([m.id]))}>
+                              已核对
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
           <Composer
             draftKey={`rcli-draft:${t.key}`}
             placeholder={
               t.runtime === 'idle'
                 ? `接着这段对话说点什么，${toolLabel(t.tool)} 会在这里继续`
-                : working
-                  ? '补充要求'
-                  : '说点什么'
+                : stoppingNow
+                  ? '输入新指令，发送后会立即执行'
+                  : working
+                    ? '补充要求（可多条累计，或点“停止并发送”立即执行）'
+                    : '说点什么'
             }
             pictureDir={t.runtime === 'chat' && t.project ? t.project : ''}
             busy={working}
-            canStop={stop.ok || t.runtime === 'chat'}
+            canStop={canStopChat}
+            queueMode={queueMode}
+            stopping={stoppingNow}
             disabled={phase === 'confirm' ? '先回答它的确认请求' : composerDisabled}
-            insert={p.insert}
+            insert={composerInsert}
             onSend={async (text, pictures) => {
-              if (t.runtime === 'chat') await chatOutbox.send(t, text, pictures);
-              else await act.say(t, text, pictures);
+              if (t.runtime === 'chat' && t.terminal) {
+                if ((working || phase === 'starting') && !stoppingNow) {
+                  chatOutbox.enqueue(t.terminal.id, text, pictures);
+                  return;
+                }
+                await chatOutbox.sendNow(t, text, pictures);
+              } else {
+                await act.say(t, text, pictures);
+              }
               p.onChanged();
             }}
             onStop={async () => {
+              setStoppingNow(true);
+              if (t.terminal) {
+                chatOutbox.pauseWaiting(t.terminal.id);
+                chatOutbox.markInFlightUnknown(t.terminal.id);
+              }
               await act.stop(t);
-              chatOutbox.mark(new Set(pending.map((m) => m.id)), 'unknown');
               p.onChanged();
             }}
+            onStopAndSend={
+              t.runtime === 'chat' && canStopChat
+                ? async (text, pictures) => {
+                    setStoppingNow(true);
+                    if (t.terminal) chatOutbox.pauseWaiting(t.terminal.id);
+                    await stopIgnoringIdle();
+                    await chatOutbox.sendNow(t, text, pictures);
+                    p.onChanged();
+                  }
+                : undefined
+            }
           />
         </>
       )}

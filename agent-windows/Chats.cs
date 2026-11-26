@@ -568,11 +568,20 @@ public sealed class ClaudeChat : Chat {
             if (stopping && afterStop.Count > 0) {
                 TurnEndedQuiet("stopped", "");
                 blocks.Clear();
+                var texts = new List<string>();
+                var allAttachments = new List<Attachment>();
+                string firstId = "";
                 while (afterStop.Count > 0) {
                     var next = afterStop.Dequeue();
-                    string shown = Attachments.WithText(next.Text, next.Attachments);
-                    said.Enqueue(new KeyValuePair<string, string>(shown, next.Id));
-                    SendUser(shown, next.Attachments);
+                    string piece = Attachments.WithText(next.Text, next.Attachments);
+                    if (piece.Length > 0) texts.Add(piece);
+                    if (next.Attachments != null) allAttachments.AddRange(next.Attachments);
+                    if (firstId.Length == 0 && next.Id.Length > 0) firstId = next.Id;
+                }
+                if (texts.Count > 0) {
+                    string merged = String.Join("\n\n", texts.ToArray());
+                    said.Enqueue(new KeyValuePair<string, string>(merged, firstId));
+                    SendUser(merged, allAttachments.Count > 0 ? allAttachments : null);
                 }
                 State(asks.Count > 0 ? "confirm" : "busy");
                 return;
@@ -836,10 +845,28 @@ public sealed class CodexChat : JsonRpcChat {
                 if (thread.Length == 0) { Unopened("Codex 没有打开这段对话：" + Text(At(answer, "error"), "message"), early.Count > 0); early.Clear(); return; }
                 Known(thread);
                 State(Status == "busy" ? "busy" : "idle");
-                foreach (var one in early.ToArray()) Start(one.Text, one.Id, one.Attachments);
-                early.Clear();
+                if (early.Count > 0) {
+                    var batch = early.ToArray();
+                    early.Clear();
+                    StartBatch(batch);
+                }
             });
         });
+    }
+    void StartBatch(Early[] batch) {
+        if (batch == null || batch.Length == 0) return;
+        if (batch.Length == 1) { Start(batch[0].Text, batch[0].Id, batch[0].Attachments); return; }
+        var texts = new List<string>();
+        var allAttachments = new List<Attachment>();
+        string firstId = "";
+        foreach (var one in batch) {
+            string piece = (one.Text ?? "").Trim();
+            if (piece.Length > 0) texts.Add(piece);
+            if (one.Attachments != null) allAttachments.AddRange(one.Attachments);
+            if (firstId.Length == 0 && one.Id.Length > 0) firstId = one.Id;
+        }
+        if (texts.Count > 0 || allAttachments.Count > 0)
+            Start(String.Join("\n\n", texts.ToArray()), firstId, allAttachments.Count > 0 ? allAttachments : null);
     }
     // The local Codex app-server probe could not complete a turn/start request on this machine.
     // Per the protocol contract, keep the absolute-path text and omit native image blocks until verified.
@@ -900,11 +927,11 @@ public sealed class CodexChat : JsonRpcChat {
                 afterStop.Clear();
                 if (queuedNext != null && status == "interrupted") {
                     TurnEndedQuiet("stopped", "");
-                    foreach (var one in queuedNext) Start(one.Text, one.Id, one.Attachments);
+                    StartBatch(queuedNext);
                     break;
                 }
                 TurnEnded(status == "completed" ? "done" : status == "interrupted" ? "stopped" : "failed", status == "failed" ? Text(At(done, "error"), "message") : "");
-                if (queuedNext != null) foreach (var one in queuedNext) Start(one.Text, one.Id, one.Attachments);
+                if (queuedNext != null) StartBatch(queuedNext);
                 State(asks.Count > 0 ? "confirm" : turn.Length > 0 ? "busy" : "idle");
                 break;
             }

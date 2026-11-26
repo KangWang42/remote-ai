@@ -180,6 +180,21 @@ def main():
             read.until(lambda e: e in read.events[n:] and e["t"] == "turn" and e["end"] == "done", "the turn after a refusal")
             assert not any(e["t"] == "done" and e.get("ok") for e in read.events[n:]), "the refused step did not run"
 
+            if tool == "agy":
+                # Stacked follow-ups while an ACP turn runs merge into a single follow-up turn with all op IDs.
+                n = len(read.events)
+                op(action="say", terminal=terminal, text="先查第一处")
+                ask = read.until(lambda e: e in read.events[n:] and e["t"] == "ask", "agy batch base turn ask")
+                op1, op2 = secrets.token_hex(16), secrets.token_hex(16)
+                op(id=op1, action="say", terminal=terminal, text="批次第一条")
+                op(id=op2, action="say", terminal=terminal, text="批次第二条")
+                op(action="answer", terminal=terminal, ask=ask["id"], decision="deny")
+                merged = read.until(lambda e: e in read.events[n:] and e["t"] == "item" and e["kind"] == "user" and "批次第一条" in e["text"], "agy merged follow-up")
+                assert merged["text"] == "批次第一条\n\n批次第二条" and merged.get("ops") == [op1, op2], merged
+                ask2 = read.until(lambda e: e in read.events[n:] and e["t"] == "ask" and e["id"] != ask["id"], "agy merged turn ask")
+                op(action="answer", terminal=terminal, ask=ask2["id"], decision="deny")
+                read.until(lambda e: e in read.events[n:] and e["t"] == "state" and e["state"] == "idle", "agy idle after merged turn")
+
             # ---- ended: the terminal closes, and the conversation is listed as saved, not held
             op(action="close", terminal=terminal)
             for _ in range(100):

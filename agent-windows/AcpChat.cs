@@ -134,24 +134,39 @@ public class AcpChat : JsonRpcChat {
             queued.Enqueue(new Queued { Text = text, Id = id ?? "", Attachments = attachments });
             if (Session.Length == 0) { State("busy"); return; }
             if (!working) Prompt();
-            else Note("\u6d88\u606f\u5c06\u5728\u8fd9\u4e00\u8f6e\u7ed3\u675f\u540e\u53d1\u51fa");
+            else if (!stopping) Note("\u6d88\u606f\u5c06\u5728\u8fd9\u4e00\u8f6e\u7ed3\u675f\u540e\u5408\u5e76\u53d1\u51fa");
         }
     }
-    // The next thing said goes as a turn of its own; what waits goes after it, one by one.
+    // All messages waiting in the queue go together in one turn so stacked follow-ups never wait turn by turn.
     void Prompt() {
-        var said = queued.Dequeue();
+        var batch = new List<Queued>();
+        while (queued.Count > 0) batch.Add(queued.Dequeue());
+        if (batch.Count == 0) return;
         working = true; writing = thinking = "";
-        string shown = Attachments.WithText(said.Text, said.Attachments);
-        Item("u" + Guid.NewGuid().ToString("N").Substring(0, 12), "user", shown, said.Id.Length > 0 ? new Dictionary<string, object> { { "op", said.Id } } : null);
+        var texts = new List<string>();
+        var allAttachments = new List<Attachment>();
+        var ops = new List<string>();
+        foreach (var one in batch) {
+            string piece = Attachments.WithText(one.Text, one.Attachments);
+            if (piece.Length > 0) texts.Add(piece);
+            if (one.Attachments != null) allAttachments.AddRange(one.Attachments);
+            if (one.Id.Length > 0) ops.Add(one.Id);
+        }
+        string shown = String.Join("\n\n", texts.ToArray());
+        Dictionary<string, object> extra = null;
+        if (ops.Count > 0) {
+            extra = new Dictionary<string, object> { { "op", ops[0] } };
+            if (ops.Count > 1) extra["ops"] = ops.ToArray();
+        }
+        Item("u" + Guid.NewGuid().ToString("N").Substring(0, 12), "user", shown, extra);
         State("busy");
-        object prompt = nativeImages && said.Attachments != null && said.Attachments.Count > 0
-            ? (object)Attachments.AcpContent(shown, said.Attachments)
+        object prompt = nativeImages && allAttachments.Count > 0
+            ? (object)Attachments.AcpContent(shown, allAttachments)
             : new object[] { new Dictionary<string, object> { { "type", "text" }, { "text", shown } } };
         Call("session/prompt", new Dictionary<string, object> { { "sessionId", Session }, { "prompt", prompt } }, answer => {
             working = false; writing = thinking = "";
             var error = At(answer, "error");
             string reason = Text(At(answer, "result"), "stopReason");
-            bool wasStopping = stopping;
             string how = error != null ? "failed" : reason == "cancelled" ? "stopped" : reason == "end_turn" ? "done" : reason == "refusal" ? "failed" : "done";
             string errText = error != null ? Text(error, "message") : reason == "max_tokens" || reason == "max_turn_requests" ? "这一轮达到了长度上限" : reason == "refusal" ? "工具拒绝了这个请求" : "";
             if (how == "stopped" && queued.Count > 0) {
@@ -161,7 +176,7 @@ public class AcpChat : JsonRpcChat {
             }
             TurnEnded(how, errText);
             if (asks.Count > 0) State("confirm");
-            else if (queued.Count > 0 && !wasStopping) Prompt();
+            else if (queued.Count > 0) Prompt();
             else State("idle");
         });
     }
