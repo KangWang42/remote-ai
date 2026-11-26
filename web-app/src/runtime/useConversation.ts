@@ -18,6 +18,8 @@ export function sourceOf(t: Thread | null): string {
 export interface Conversation {
   source: string;
   messages: ChatMessageItem[];
+  phase: ChatTimelineReducer['phase'];
+  asked: number;
   loading: boolean;
   /** Why it cannot be read, where it cannot. */
   problem: string;
@@ -35,11 +37,15 @@ export function useConversation(t: Thread | null): Conversation {
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [problem, setProblem] = useState('');
+  const [phase, setPhase] = useState<ChatTimelineReducer['phase']>(null);
+  const [asked, setAsked] = useState(0);
   const thread = useRef(t);
   thread.current = t;
 
   useEffect(() => {
     setProblem('');
+    setAsked(0);
+    setPhase(cache.get(source)?.reducer.phase || null);
     if (!source) {
       setMessages([]);
       setLoading(false);
@@ -67,6 +73,7 @@ export function useConversation(t: Thread | null): Conversation {
                 : reducer.snapshot();
             after = reply.after || after;
             cache.upsert(source, { after, reducer, messages: next });
+            setPhase(reducer.phase);
             setMessages(next);
             setLoading(false);
             if (reply.terminal?.state === 'closed') return;
@@ -89,6 +96,7 @@ export function useConversation(t: Thread | null): Conversation {
             setMessages([]);
           } else {
             const next = parseTranscriptMessages(reply);
+            setAsked(Number(reply.asked) || 0);
             cache.upsert(source, { messages: next });
             setMessages(next);
           }
@@ -115,6 +123,8 @@ export function useConversation(t: Thread | null): Conversation {
   return {
     source,
     messages,
+    phase,
+    asked,
     loading,
     problem,
     scroll: { top: kept?.scrollTop || 0, stick: kept?.stickBottom ?? true },

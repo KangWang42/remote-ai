@@ -876,6 +876,11 @@ without `teams-flex-rounds` is refused `rounds` 0, so a team never starts silent
 
 ## Chats
 
+With the `chat-model` and `reopen` capabilities, a viewer may also send `start` with `reopen`, the original
+`dir` and `tool`, `form: "chat"`, `model` (empty for the tool default) and optional `effort`. This reopens a saved,
+idle, standalone Claude Code, Codex or Antigravity chat in its original workspace, with the same session and
+permission mode. A view switch still takes no model parameters. Team members use `team_swap` on their own role.
+
 Client delivery presentation distinguishes queueing/retry, acceptance, rejection, and unknown outcome.
 An HTTP 5xx or a lost response may retry the existing operation ID and unchanged payload; it is not a
 definitive rejection. A successful terminal-operation acknowledgment may only mean the relay queued the

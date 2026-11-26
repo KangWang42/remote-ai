@@ -600,6 +600,14 @@ html[data-theme="dark"] .tool-mark { background: var(--tb-dbg); color: var(--tb-
 .head-title { margin: 0; font-size: 14.5px; font-weight: 680; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .head-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .head-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.model-picker { max-width: min(230px, 65vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-feedback { flex: none; padding: 4px 14px; color: var(--muted); font-size: 12px; }
+.run-status { display: inline-flex; gap: 8px; align-items: baseline; }
+.run-status [role="timer"] { font-variant-numeric: tabular-nums; color: var(--ink); }
+.pending-list { margin: 4px 0; padding: 0; max-height: 15vh; overflow: auto; list-style: none; }
+.pending-list li { display: flex; gap: 8px; align-items: baseline; }
+.pending-list strong { flex: none; color: var(--busy-ink); }
+.pending-list li > span { overflow-wrap: anywhere; }
 
 .branch { position: relative; }
 .branch-pop { position: absolute; top: calc(100% + 6px); left: 0; width: 280px; display: flex; flex-direction: column; gap: 6px; padding: 8px; }
@@ -723,7 +731,10 @@ html[data-theme="dark"] .tool-mark { background: var(--tb-dbg); color: var(--tb-
 .row-btns.center { justify-content: center; }
 .quota { display: grid; grid-template-columns: 1fr 120px 70px; gap: 10px; align-items: center; font-size: 12px; }
 .quota-bar { height: 5px; border-radius: 99px; background: var(--raised); overflow: hidden; }
-.quota-bar span { display: block; height: 100%; }
+.quota-bar span { display: block; height: 100%; background: #376bc2; transition: width .25s ease, background-color .2s ease; }
+html[data-theme="dark"] .quota-bar:not(.high):not(.elevated) span { background: #82adf1; }
+.quota-bar.elevated span { background: var(--busy); }
+.quota-bar.high span { background: var(--bad); }
 .quota-n { color: var(--muted); text-align: right; }
 
 /* ---- inspector */

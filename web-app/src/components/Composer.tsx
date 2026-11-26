@@ -86,8 +86,8 @@ export function Composer(p: Props) {
     setNote('');
     try {
       await p.onSend(words, pictures);
-      keep('');
-      setPictures([]);
+      if (box.current?.value === text) keep('');
+      setPictures((current) => current.filter((path) => !pictures.includes(path)));
     } catch (err: any) {
       setNote(err?.message || '没有发出');
     } finally {
@@ -182,7 +182,7 @@ export function Composer(p: Props) {
                 </button>
               </>
             )}
-            <span class="composer-hint">{uploading ? '正在上传图片…' : p.busy ? '正在执行，可以继续补充' : 'Enter 发送 · Shift+Enter 换行'}</span>
+            <span class="composer-hint">{uploading ? '正在上传图片…' : p.busy ? '可以继续补充' : 'Enter 发送 · Shift+Enter 换行'}</span>
           </div>
           <div class="composer-right">
             {p.busy && p.canStop && (

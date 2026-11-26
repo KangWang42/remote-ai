@@ -44,6 +44,7 @@ def lines():
 
 # ---- Claude Code
 def claude(args):
+    record_standin("STANDIN_MODEL_LOG", args)
     session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
     answers, stop, turns, peer_turns = {}, threading.Event(), [], [0]
 

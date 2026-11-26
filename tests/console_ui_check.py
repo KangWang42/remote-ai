@@ -50,7 +50,13 @@ def main():
         homes.claude_saved(shop, SAVED, "结算页金额多一位小数", 3, said=("结算页的金额有时多一位小数", "已经改成按分计算。"))
         homes.codex_saved(shop, "019a0000-0000-7000-8000-000000000001", "补充单元测试", 6)
         homes.codex_saved(notes, "019a0000-0000-7000-8000-000000000002", "整理周报", 50)
-        environment = homes.environment(RCLI_PASSWORD=PASSWORD)
+        model_log = base / "model.jsonl"
+        environment = homes.environment(RCLI_PASSWORD=PASSWORD, STANDIN_MODEL_LOG=str(model_log))
+        (data / "quotas").mkdir()
+        (data / "quotas" / "claude.json").write_text(json.dumps({
+            "tool": "claude", "why": "", "at": int(time.time() * 1000),
+            "windows": [dict(name=str(i), used=n, resets=0) for i, n in enumerate((50, 50.1, 79.9, 80))],
+        }), encoding="utf-8")
         tools = homes.stand_ins(temporary)
         for name in ("claude", "codex"):
             (tools / (name + ".cmd")).write_text('@if "%%1"=="--help" (echo stand-in) else ("%s" "%s" %s %%*)\r\n'
@@ -84,6 +90,13 @@ def main():
             assert sorted(value(titles)) == sorted(["整理周报", "补充单元测试", "结算页金额多一位小数"]), value(titles)
             assert value("document.querySelectorAll('.proj-name').length") == 2
             browser.picture(out / "list.png")
+            press(".side-foot button", "设置")
+            until("document.querySelectorAll('.quota-bar').length >= 4", "account quota windows")
+            assert value("Array.from(document.querySelectorAll('.quota-bar')).slice(0,4).map(n => n.className)") == [
+                "quota-bar", "quota-bar elevated", "quota-bar elevated", "quota-bar high"]
+            colors = value("Array.from(document.querySelectorAll('.quota-bar span')).slice(0,4).map(n => getComputedStyle(n).backgroundColor.match(/\\d+/g).map(Number))")
+            assert colors[0][2] > colors[0][0] and colors[3][0] > colors[3][2], colors
+            value("document.querySelector('.dlg-head button').click()")
 
             # ---- a right click on a conversation: its menu, with the reasons of what cannot be done now
             value("(n => n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 300 })))(Array.from(document.querySelectorAll('.th-row')).find(n => n.textContent.includes('结算页')))")
@@ -115,6 +128,38 @@ def main():
             browser.picture(out / "chat.png")
             press(".ask-card button", "允许")
             until("Array.from(document.querySelectorAll('.thread-head .seg button')).some(b => b.textContent === '终端' && !b.disabled)", "the turn ended: it can be shown the other way")
+
+            # Switch the model from the conversation and check the actual tool invocation.
+            value("document.querySelector('.model-picker').click()")
+            until("!!document.querySelector('.dlg select option[value=\"sonnet\"]')", "the tool's model list")
+            value("(s => { s.value = 'sonnet'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.querySelector('.dlg select'))")
+            press(".dlg-foot button", "应用模型")
+            until("!document.querySelector('.dlg') && document.querySelector('.model-picker')?.textContent.includes('sonnet')", "the original chat on the new model")
+            until("fetch('../api/terminal').then(r=>r.json()).then(j=>j.terminals.some(t=>t.state==='running' && t.model==='sonnet' && t.session===%s))" % q(SAVED), "running model")
+            def compose(text):
+                value("(b => { b.value = %s; b.dispatchEvent(new Event('input', {bubbles:true})); })(document.querySelector('.composer textarea'))" % q(text))
+                press(".composer button", "发送")
+
+            compose("慢一点执行")
+            until("document.querySelector('.run-status')?.textContent.includes('等待确认')", "waiting for confirmation")
+            launches = [json.loads(line) for line in model_log.read_text(encoding="utf-8").splitlines()]
+            assert any(a[a.index("--resume") + 1] == SAVED and "--model" in a and a[a.index("--model") + 1] == "sonnet" for a in launches if "--resume" in a)
+            press(".ask-card button", "允许")
+            until("!!document.querySelector('[role=timer]')", "elapsed running time")
+            first = value("document.querySelector('[role=timer]').textContent")
+            until("!!document.querySelector('[role=timer]') && document.querySelector('[role=timer]').textContent !== %s" % q(first), "clock ticks")
+            assert value("document.querySelector('.model-picker').disabled")
+            compose("随后检查第二项")
+            until("document.querySelector('.pending-list')?.textContent.includes('待发送随后检查第二项')", "the next message waits for this turn")
+            value("Array.from(document.querySelectorAll('.proj .th-row')).find(n=>n.textContent.includes('补充单元测试')).click()")
+            until("document.querySelector('.head-title')?.textContent === '补充单元测试' && !document.querySelector('.pending-list')", "another conversation has its own status")
+            value("Array.from(document.querySelectorAll('.proj .th-row')).find(n=>n.textContent.includes('结算页')).click()")
+            until("document.querySelector('.pending-list')?.textContent.includes('待发送随后检查第二项') && !!document.querySelector('[role=timer]')", "pending message and timer restored")
+            browser.picture(out / "pending.png")
+            press(".composer button", "停止")
+            until("!document.querySelector('.pending-list') && Array.from(document.querySelectorAll('.tl-item')).some(n=>n.textContent.includes('随后检查第二项'))", "the matching echo replaced the pending message")
+            press(".ask-card button", "允许")
+            until("document.querySelector('.run-status')?.textContent === '等待消息' && !document.querySelector('[role=timer]')", "the clock stops")
 
             # ---- the same conversation on its tool's own screen, and back: one terminal at a time, the same conversation
             press(".thread-head .seg button", "终端")

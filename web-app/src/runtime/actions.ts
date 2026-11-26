@@ -19,9 +19,9 @@ function sayWay(t: Thread): string {
 }
 
 /** Says something. A conversation nobody has open is gone on with as a Remote AI conversation: resolves with its terminal. */
-export async function say(t: Thread, text: string, attachments: string[] = []): Promise<string | void> {
+export async function say(t: Thread, text: string, attachments: string[] = [], id?: string): Promise<string | void> {
   if (t.runtime === 'chat' && t.terminal) {
-    await terminalOp({ action: 'say', terminal: t.terminal.id, text, ...(attachments.length ? { attachments } : {}) });
+    await terminalOp({ action: 'say', terminal: t.terminal.id, text, ...(id ? { id } : {}), ...(attachments.length ? { attachments } : {}) });
     return;
   }
   if (t.runtime === 'elsewhere') {
@@ -88,6 +88,24 @@ export async function reopen(t: Thread, to: 'chat' | 'screen'): Promise<string> 
     ...(to === 'chat' ? { form: 'chat' } : {}),
   });
   return started.terminal;
+}
+
+export async function changeModel(t: Thread, model: string, effort: string): Promise<void> {
+  if (t.busy || t.needs === 'confirm' || !t.session) throw new Error('请等当前对话空闲后再切换模型');
+  if (t.team) {
+    const { teams } = await workAction('teams');
+    const team = teams?.find((entry: { id: string }) => entry.id === t.team);
+    const role = Object.keys(team?.members || {}).find((key) => team.members[key] === t.terminal?.id);
+    if (!role || !['running', 'paused'].includes(team.state)) throw new Error('这段对话已不是当前协作成员');
+    await workAction('team_swap', { team: t.team, role, tool: t.tool, model, effort });
+    return;
+  }
+  if (t.runtime === 'chat' && t.terminal) {
+    await terminalOp({ action: 'start', reopen: t.terminal.id, dir: t.project, tool: t.tool, form: 'chat', model, effort });
+    return;
+  }
+  if (t.runtime !== 'idle') throw new Error('请在运行这段对话的窗口切换模型');
+  await terminalOp({ ...recordPayload(t, 'start'), form: 'chat', model, effort, ...(t.terminal?.mode ? { mode: t.terminal.mode } : {}) });
 }
 
 /** Goes on with a conversation nobody has open, as a chat or on its tool's screen. */

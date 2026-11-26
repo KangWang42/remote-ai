@@ -145,6 +145,30 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertEqual(terminals.get(reopened["terminal"], {"state": "closed"})["state"], "closed")
         self.assertEqual(terminals[chat]["state"], "running")
 
+    def test_model_change_reopens_only_an_idle_chat_and_keeps_permissions(self):
+        self.info["features"] = ["chat", "reopen"]
+        self.relay.agent({"info": self.info}, now=1001)
+        start = dict(action="start", id="a" * 32, tool="claude", dir="demo", form="chat")
+        terminal = self.relay.command(start, now=1002)["terminal"]
+        session = "11111111-2222-3333-4444-555555555555"
+        original = dict(id=terminal, session=session, state="running", form="chat", mode="read", model="opus", status="idle")
+        self.relay.agent({"info": self.info, "terminals": [original], "acks": [{"id": start["id"]}]}, now=1003)
+        tune = dict(start, id="b" * 32, reopen=terminal, model="sonnet", effort="high")
+        with self.assertRaises(RemoteError):
+            self.relay.command(tune, now=1004)
+        self.info["features"].append("chat-model")
+        for status in ("busy", "confirm"):
+            self.relay.agent({"info": self.info, "terminals": [dict(original, status=status)]}, now=1005)
+            with self.assertRaises(RemoteError):
+                self.relay.command(tune, now=1006)
+        self.relay.agent({"info": self.info, "terminals": [original]}, now=1007)
+        for extra in (dict(mode="full"), dict(form=""), dict(session=session), dict(worktree=True)):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(tune, **extra), now=1008)
+        reopened = self.relay.command(tune, now=1009)["terminal"]
+        result = next(t for t in self.relay.overview(now=1009)["terminals"] if t["id"] == reopened)
+        self.assertEqual((result["session"], result["mode"], result["model"], result["effort"]), (session, "read", "sonnet", "high"))
+
     def test_an_agy_chat_needs_a_computer_that_runs_it(self):
         # Antigravity CLI runs as a conversation by its ACP server, on a computer that says so ("chat-agy")
         self.info["tools"] = ["claude", "codex", "agy", "shell"]

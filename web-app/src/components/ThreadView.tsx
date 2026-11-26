@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import * as act from '../runtime/actions';
 import { terminalEmbedUrl } from '../runtime/api';
+import { chatOutbox, usePending } from '../runtime/chatOutbox';
+import { normalizeMs } from '../runtime/time';
 import { canReopen, canSay, canStop, canTakeOver, type Thread } from '../runtime/threads';
 import { useConversation } from '../runtime/useConversation';
 import { toolBadgeStyle, toolLabel, toolMeta } from '../runtime/types';
@@ -8,6 +10,8 @@ import { BranchMenu } from './BranchMenu';
 import { Composer } from './Composer';
 import { Dots } from './Sidebar';
 import { VirtualTimeline } from './VirtualTimeline';
+import { ThreadModelPicker } from './ThreadModelPicker';
+import { RunStatus } from './RunStatus';
 
 interface Props {
   thread: Thread;
@@ -31,6 +35,13 @@ interface Props {
 export function ThreadView(p: Props) {
   const t = p.thread;
   const conv = useConversation(t);
+  const pending = usePending(t.terminal?.id || '', conv.messages);
+  const queued = t.record?.queued || [];
+  const livePhase = t.runtime === 'chat' ? conv.phase : null;
+  const phase = t.runtime === 'idle' ? (t.needs === 'failed' ? 'failed' : 'ended') :
+    livePhase?.state || (t.needs === 'confirm' ? 'confirm' : t.terminal?.state === 'starting' ? 'starting' : t.busy ? 'busy' : 'idle');
+  const since = normalizeMs(t.runtime === 'elsewhere' ? conv.asked : livePhase?.at || t.terminal?.phase_at);
+  const working = phase === 'busy';
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -150,7 +161,7 @@ export function ThreadView(p: Props) {
             </button>
           )}
           {t.project && <BranchMenu project={t.project} worktree={t.worktree} known={t.branch} />}
-          {t.terminal?.model && <span class="chip soft">{t.terminal.model}</span>}
+          <ThreadModelPicker thread={t} features={p.features} blocked={working || phase === 'confirm' || phase === 'starting' || pending.length > 0 || queued.length > 0} onChanged={p.onChanged} />
           {t.terminal?.mode === 'read' && <span class="chip soft">只读</span>}
         </div>
         <div class="head-actions">
@@ -252,7 +263,7 @@ export function ThreadView(p: Props) {
             threadKey={conv.source || t.key}
             messages={conv.messages}
             loading={conv.loading}
-            isBusy={t.busy}
+            isBusy={working}
             sessionAsk={t.runtime === 'elsewhere' ? t.record?.ask : null}
             initialScrollTop={conv.scroll.top}
             initialStickBottom={conv.scroll.stick}
@@ -276,26 +287,42 @@ export function ThreadView(p: Props) {
               </button>
             </div>
           )}
+          <div class="thread-feedback">
+            <RunStatus key={t.terminal?.id || t.key} phase={phase} since={since} />
+            {(pending.length > 0 || queued.length > 0) && <ul class="pending-list" aria-label="待发送消息" aria-live="polite">
+              {queued.map((m) => <li key={m.id}><strong>{({ queued: '待发送', paused: '已暂停发送', sending: '发送中' })[m.state]}</strong><span>{m.text}</span></li>)}
+              {pending.map((m) => {
+                const unknown = m.state === 'unknown' || t.runtime !== 'chat';
+                return <li key={m.id}>
+                  <strong>{unknown ? '送达结果未知' : m.state === 'sending' ? '正在提交' : '待发送'}</strong>
+                  <span>{[m.text, ...m.pictures.map((path) => path.split('/').pop())].filter(Boolean).join(' · ')}</span>
+                  {unknown && <button type="button" class="link-btn" onClick={() => chatOutbox.remove(new Set([m.id]))}>已核对</button>}
+                </li>;
+              })}
+            </ul>}
+          </div>
           <Composer
             draftKey={`rcli-draft:${t.key}`}
             placeholder={
               t.runtime === 'idle'
                 ? `接着这段对话说点什么，${toolLabel(t.tool)} 会在这里继续`
-                : t.busy
+                : working
                   ? '补充要求'
                   : '说点什么'
             }
             pictureDir={t.runtime === 'chat' && t.project ? t.project : ''}
-            busy={t.busy}
-            canStop={stop.ok}
-            disabled={composerDisabled}
+            busy={working}
+            canStop={stop.ok || t.runtime === 'chat'}
+            disabled={phase === 'confirm' ? '先回答它的确认请求' : composerDisabled}
             insert={p.insert}
             onSend={async (text, pictures) => {
-              await act.say(t, text, pictures);
+              if (t.runtime === 'chat') await chatOutbox.send(t, text, pictures);
+              else await act.say(t, text, pictures);
               p.onChanged();
             }}
             onStop={async () => {
               await act.stop(t);
+              chatOutbox.mark(new Set(pending.map((m) => m.id)), 'unknown');
               p.onChanged();
             }}
           />

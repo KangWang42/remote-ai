@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { API_BASE, fetchRoutesInfo, postDesktopMessage } from '../runtime/api';
-import { toolBadgeStyle, toolColor, toolLabel, toolMeta, type DeviceInfo, type RouteEntry } from '../runtime/types';
+import { toolBadgeStyle, toolLabel, toolMeta, type DeviceInfo, type RouteEntry } from '../runtime/types';
 import { Dialog } from './Dialog';
 
 interface Props {
@@ -122,16 +122,16 @@ export function SettingsDialog({ device, skin, onSkin, onClose }: Props) {
           <h3>额度</h3>
           {quotas.map((q) =>
             (q.windows.some((w) => !w.group) ? q.windows.filter((w) => !w.group) : q.windows).map((w) => {
-              const used = Math.round(Math.min(100, Math.max(0, w.used)));
+              const used = Math.min(100, Math.max(0, w.used));
               return (
                 <div key={`${q.tool}:${w.name}`} class="quota">
                   <span class="quota-name">
                     {w.group || toolLabel(q.tool)} · {windowName(w.name)}
                   </span>
-                  <span class="quota-bar">
-                    <span style={{ width: `${used}%`, background: toolColor(q.tool) }} />
+                  <span class={`quota-bar${used >= 80 ? ' high' : used > 50 ? ' elevated' : ''}`}>
+                    <span style={{ width: `${used}%` }} />
                   </span>
-                  <span class="quota-n">已用 {used}%</span>
+                  <span class="quota-n">已用 {Number(used.toFixed(1))}%</span>
                 </div>
               );
             }),

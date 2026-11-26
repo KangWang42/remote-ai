@@ -790,16 +790,21 @@ class Relay:
         return lines
 
     def _reopened(self, state, payload, tool, folder, chat):
-        """The running terminal a `reopen` request shows the other way: a Claude Code or Codex conversation that its
-        tool has named, outside a collaboration task, of the same tool and project, shown now the other way."""
+        """Find the original terminal for a view switch or an in-place chat model change."""
         if "reopen" not in self._device.get("features", []):
             raise RemoteError("电脑端版本不支持切换视图，请更新电脑端")
-        if set(payload) - {"id", "action", "tool", "dir", "form", "reopen"} or tool not in ("claude", "codex"):
+        tune = "model" in payload and "chat-model" in self._device.get("features", [])
+        allowed = {"id", "action", "tool", "dir", "form", "reopen"}
+        if tune:
+            allowed.update(("model", "effort"))
+        if set(payload) - allowed or tool not in (CHAT_TOOLS if tune else ("claude", "codex")):
             raise RemoteError("切换视图的选项无效")
         source = state["threads"].get(payload["reopen"]) if isinstance(payload["reopen"], str) else None
         if not source or source["state"] not in ("starting", "running") or source["tool"] != tool or source["dir"] != folder:
             raise RemoteError("原对话已结束，请刷新后重试")
-        if (source.get("form") == "chat") == chat:
+        if tune and (not chat or source.get("form") != "chat" or source.get("phase") in ("busy", "confirm", "starting")):
+            raise RemoteError("请等对话空闲后再切换模型")
+        if not tune and (source.get("form") == "chat") == chat:
             raise RemoteError("这段对话已经是这种视图")
         if not source.get("session"):
             raise RemoteError(f"{LABELS[tool]} 还没有给这段对话编号，发一条消息后再切换")
@@ -1032,10 +1037,7 @@ class Relay:
                         raise RemoteError("对话选项无效")
                     if "text" in payload and _words(payload["text"]) is None:
                         raise RemoteError("内容为空、超过 8000 字或含有控制字符")
-                # The same conversation shown the other way (`reopen`): the computer ends the terminal that runs it as a
-                # chat or on its tool's own screen and goes on with it the other way in a new terminal, which then
-                # stands for the conversation in the list (_single). What it was started with comes from that
-                # terminal, never from the request.
+                # Reuse the source session and workspace on both view switches and chat model changes.
                 source = self._reopened(state, payload, tool, folder, chat) if "reopen" in payload else None
                 session = source["session"] if source else payload.get("session", "")
                 if tool == "agy" and (payload.get("history") or (payload.get("takeover") and not session)):
@@ -1074,6 +1076,8 @@ class Relay:
                     # a new conversation is called by what it was first told, until its tool names it
                     called = " ".join(_words(payload["text"]).split())[:40]
                 given = source or payload
+                if source and "model" in payload:
+                    given = dict(source, model=payload["model"], effort=payload.get("effort", ""))
                 term = {"id": terminal, "tool": tool, "dir": folder, "folder": where,
                         # one outside every project is called what its conversation is: the computer lists that conversation only while it is open
                         "title": (called[:60] if (apart or chat or source) and called else self._device.get("shell") or LABELS[tool] if tool == "shell" else LABELS[tool]) + (" · 副本" if fork else ""), "session": "" if fork else session, "status": "",
@@ -1929,7 +1933,7 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

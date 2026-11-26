@@ -119,6 +119,7 @@ export interface SessionEntry {
   can_takeover?: boolean;
   takeover_reason?: string;
   reach?: string[] | null;
+  queued?: Array<{ id: string; text: string; state: 'queued' | 'sending' | 'paused'; at: number }>;
   ask?: SessionAsk | null;
   last?: string;
   team?: string;
@@ -144,6 +145,7 @@ export interface ChatChunk {
 
 export interface ChatMessageItem {
   id: string;
+  op?: string;
   role: 'user' | 'assistant' | 'tool' | 'thought' | 'note' | 'ask' | 'error';
   text: string;
   title?: string;

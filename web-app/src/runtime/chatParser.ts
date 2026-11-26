@@ -19,6 +19,8 @@ const DECIDED: Record<string, string> = { allow: '已允许', always: '已总是
  * draws again what changed: what is being written at the end.
  */
 export class ChatTimelineReducer {
+  phase: { state: string; at: number } | null = null;
+  private turnStarted = 0;
   private items: ChatMessageItem[] = [];
   private index = new Map<string, number>();
   private lastSeq = 0;
@@ -27,6 +29,8 @@ export class ChatTimelineReducer {
   private dirty = false;
 
   reset(chunks: ChatChunk[] = []): ChatMessageItem[] {
+    this.phase = null;
+    this.turnStarted = 0;
     this.items = [];
     this.index.clear();
     this.lastSeq = 0;
@@ -84,12 +88,26 @@ export class ChatTimelineReducer {
     if (!ev || typeof ev !== 'object') return;
     const id = String(ev.id || key);
     switch (ev.t) {
+      case 'state': {
+        const state = String(ev.state), at = Number(ev.at) || 0;
+        if (state === 'busy' && !this.turnStarted) this.turnStarted = at;
+        if (state === 'idle' || state === 'ended') this.turnStarted = 0;
+        this.phase = { state, at: this.turnStarted || at };
+        return;
+      }
       case 'history':
         for (const m of parseTranscriptMessages(ev)) this.add({ ...m, id: `h:${key}:${m.id}` });
         return;
       case 'item': {
         const kind = String(ev.kind || '');
-        if (kind === 'user') this.add({ id, role: 'user', text: String(ev.text || ''), at: ev.at });
+        if (kind === 'user') {
+          // Queued turns can run back to back without an intervening idle state.
+          if (this.phase?.state === 'busy' && !this.turnStarted && ev.at) {
+            this.turnStarted = Number(ev.at);
+            this.phase = { state: 'busy', at: this.turnStarted };
+          }
+          this.add({ id, role: 'user', op: ev.op, text: String(ev.text || ''), at: ev.at });
+        }
         else if (kind === 'text') this.add({ id, role: 'assistant', text: String(ev.text || ''), at: ev.at });
         else if (kind === 'thought') this.add({ id, role: 'thought', text: String(ev.text || ''), at: ev.at });
         else if (kind === 'step')
@@ -129,6 +147,7 @@ export class ChatTimelineReducer {
         this.change(id, (it) => ({ role: 'note', text: `${it.title || '确认'}：${DECIDED[String(ev.decision || 'gone')] || '已回答'}` }));
         return;
       case 'turn':
+        this.turnStarted = 0;
         if (ev.end === 'failed') this.add({ id: key, role: 'error', text: String(ev.error || '这一轮出错了'), at: ev.at });
         else if (ev.end === 'stopped') this.add({ id: key, role: 'note', text: '已停止', at: ev.at });
         return;

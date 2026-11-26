@@ -360,13 +360,20 @@ public sealed class TerminalAgent {
     void RequireTerminalSlot() {
         if (!HasTerminalSlot()) throw new InvalidOperationException("最多同时运行 " + MaxTerminals + " 个终端，请先结束一个");
     }
-    /// The terminal a `reopen` start leaves: a Claude Code or Codex conversation that runs as a chat and is to be
-    /// shown on its tool's own screen, or the other way round. One at work, asking, unnamed or in a team stays.
+    /// Locate the idle conversation whose view or model is changing, before ending its process.
     LiveTerminal Reopening(Dictionary<string, object> op, string tool, string dir) {
         LiveTerminal left;
         if (!terminals.TryGetValue(Get(op, "reopen"), out left) || left.Pty.Closed) throw new InvalidOperationException("原对话已结束，请刷新后重试");
-        if (left.Tool != tool || left.Dir != dir || (tool != "claude" && tool != "codex")) throw new ArgumentException("切换视图的选项无效");
-        if ((left.Chat != null) == (Get(op, "form") == "chat")) throw new ArgumentException("这段对话已经是这种视图");
+        bool tune = op.ContainsKey("model");
+        if (left.Tool != tool || left.Dir != dir) throw new ArgumentException("原对话的工具或目录已变更");
+        if (tune) {
+            if (left.Chat == null || Get(op, "form") != "chat" || left.Chat.Status != "idle") throw new ArgumentException("请等对话空闲后再切换模型");
+            string model = Get(op, "model"), effort = Get(op, "effort");
+            if ((model.Length > 0 && !Models.Valid(model)) || (effort.Length > 0 && !Models.ValidEffort(effort))) throw new ArgumentException("模型或思考深度无效");
+        } else {
+            if (tool != "claude" && tool != "codex") throw new ArgumentException("切换视图的选项无效");
+            if ((left.Chat != null) == (Get(op, "form") == "chat")) throw new ArgumentException("这段对话已经是这种视图");
+        }
         string session = left.Chat != null ? left.Chat.Session : left.Session;
         if (session.Length == 0) throw new InvalidOperationException(Label(tool) + " 还没有给这段对话编号，发一条消息后再切换");
         if (Teams.TeamOf(left.Id, left.Tool, session).Length > 0) throw new InvalidOperationException("协作任务中的对话不能切换视图");
@@ -2202,7 +2209,8 @@ public sealed class TerminalAgent {
                 LiveTerminal left = op.ContainsKey("reopen") ? Reopening(op, tool, dir) : null;
                 if (left != null) {
                     session = left.Chat != null ? left.Chat.Session : left.Session;
-                    op["model"] = left.Model; op["effort"] = left.Effort; op["mode"] = left.Mode;
+                    if (!op.ContainsKey("model")) { op["model"] = left.Model; op["effort"] = left.Effort; }
+                    op["mode"] = left.Mode;
                 }
                 else RequireTerminalSlot();
                 Tool kind = Tool.Named(tool);
@@ -2487,7 +2495,7 @@ public sealed class TerminalAgent {
                 instance = instance, environment_id = EnvironmentId, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools,
                 agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                 max_mode = ClampMode("", Get(prefs, "RemoteMaxMode")),
-                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "reopen", "organize", "routes", "git", "worktree" }
+                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "reopen", "organize", "routes", "git", "worktree" }
                     .Concat(Desktop.Tools.Select(tool => tool + "-desktop-open"))
                     .Concat(Settled != null ? new[] { "projects" } : new string[0])
                     .Concat(UpdateRequested != null ? new[] { "update" } : new string[0])
