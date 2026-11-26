@@ -6,6 +6,8 @@ export type InspectorTab = 'changes' | 'files';
 
 interface Props {
   tab: InspectorTab;
+  /** Conversation or project scope key so file preview memory follows each thread. */
+  scopeKey: string;
   project: string;
   worktree: string;
   workspaces: string[];
@@ -42,6 +44,7 @@ export function Inspector(p: Props) {
           <ChangesPanel project={p.project} worktree={p.worktree} openFile={p.openDiff} onOpenDiff={p.onOpenDiff} />
         ) : (
           <FileExplorer
+            scopeKey={p.scopeKey}
             workspaces={p.workspaces}
             activeProject={p.project}
             worktree={p.worktree}

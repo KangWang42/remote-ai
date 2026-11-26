@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { fileViewerUrl, gitStatus, listFiles, readFileBytes } from '../runtime/api';
+import { fileMemory, type FileFilterMode } from '../runtime/fileMemory';
 import { formatExactTime, formatRelativeTime, getRecencyTier, isToday, normalizeMs } from '../runtime/time';
 import type { FileEntry, FilePreviewTarget, GitFileSummary } from '../runtime/types';
 import type { DiffTarget } from './ChangesPanel';
@@ -93,8 +94,23 @@ export function FilePreviewBody({ target, expanded = false, onBack, onToggleExpa
   const [truncated, setTruncated] = useState(false);
   const [size, setSize] = useState(0);
   const [imgUrl, setImgUrl] = useState('');
-  const [mdMode, setMdMode] = useState<'rendered' | 'source'>('rendered');
+  const [mdMode, setMdMode] = useState<'rendered' | 'source'>(() => fileMemory.getPreview(target).mdMode);
   const [copied, setCopied] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setMdMode(fileMemory.getPreview(target).mdMode);
+  }, [target.dir, fullPath]);
+
+  useEffect(() => {
+    if (loading || err || kind === 'rich') return;
+    const savedTop = fileMemory.getPreview(target).scrollTop;
+    if (!savedTop) return;
+    const raf = window.requestAnimationFrame(() => {
+      if (bodyRef.current) bodyRef.current.scrollTop = savedTop;
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [loading, err, target.dir, fullPath, mdMode, kind]);
 
   useEffect(() => {
     setErr('');
@@ -196,14 +212,20 @@ export function FilePreviewBody({ target, expanded = false, onBack, onToggleExpa
               <button
                 type="button"
                 class={mdMode === 'rendered' ? 'active' : ''}
-                onClick={() => setMdMode('rendered')}
+                onClick={() => {
+                  setMdMode('rendered');
+                  fileMemory.savePreview(target, { mdMode: 'rendered' });
+                }}
               >
                 预览
               </button>
               <button
                 type="button"
                 class={mdMode === 'source' ? 'active' : ''}
-                onClick={() => setMdMode('source')}
+                onClick={() => {
+                  setMdMode('source');
+                  fileMemory.savePreview(target, { mdMode: 'source' });
+                }}
               >
                 源码
               </button>
@@ -235,7 +257,14 @@ export function FilePreviewBody({ target, expanded = false, onBack, onToggleExpa
         </div>
       </header>
 
-      <div class="fpreview-body">
+      <div
+        ref={bodyRef}
+        class="fpreview-body"
+        onScroll={(e) => {
+          const el = e.currentTarget as HTMLDivElement;
+          fileMemory.savePreview(target, { scrollTop: el.scrollTop });
+        }}
+      >
         {loading ? (
           <div class="empty-hint">正在读取文件内容…</div>
         ) : err ? (
@@ -284,7 +313,6 @@ export function FilePreviewBody({ target, expanded = false, onBack, onToggleExpa
 }
 
 type FileSortMode = 'name' | 'modified';
-type FileFilterMode = 'all' | 'today' | 'changed';
 
 const SORT_KEY = 'rcli-console-files-sort-v1';
 function loadFileSort(): FileSortMode {
@@ -312,6 +340,8 @@ const GIT_STATUS_TITLE: Record<string, string> = {
 };
 
 interface ExplorerProps {
+  /** Conversation or project scope key so each thread remembers its own folder & previewed file. */
+  scopeKey: string;
   workspaces: string[];
   activeProject: string;
   worktree?: string;
@@ -320,10 +350,11 @@ interface ExplorerProps {
   onCiteFile?: (relPath: string, projectDir: string) => void;
 }
 
-/** Project file explorer with recency & Git change badges, sort/filter controls, breadcrumbs, and live preview. */
-export function FileExplorer({ workspaces, activeProject, worktree = '', onExpandPreview, onOpenDiff, onCiteFile }: ExplorerProps) {
-  const [browseDir, setBrowseDir] = useState(activeProject || workspaces[0] || '');
-  const [folderPath, setFolderPath] = useState('');
+/** Project file explorer with per-thread memory, recency & Git change badges, sort/filter controls, and live preview. */
+export function FileExplorer({ scopeKey, workspaces, activeProject, worktree = '', onExpandPreview, onOpenDiff, onCiteFile }: ExplorerProps) {
+  const initial = fileMemory.resolve(scopeKey, activeProject, workspaces);
+  const [browseDir, setBrowseDir] = useState(initial.browseDir);
+  const [folderPath, setFolderPath] = useState(initial.folderPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [gitFilesList, setGitFilesList] = useState<GitFileSummary[]>([]);
   const [more, setMore] = useState(false);
@@ -332,30 +363,50 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
   const [search, setSearch] = useState('');
   const [showHidden, setShowHidden] = useState(false);
   const [sortMode, setSortMode] = useState<FileSortMode>(loadFileSort);
-  const [filterMode, setFilterMode] = useState<FileFilterMode>('all');
-  const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(null);
+  const [filterMode, setFilterMode] = useState<FileFilterMode>(initial.filterMode);
+  const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(initial.previewTarget);
   const [tick, setTick] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  const activeScopeRef = useRef(scopeKey);
+  const workspacesKey = workspaces.join('|');
 
   const activeWorktree = browseDir === activeProject ? worktree : '';
+
+  const updateState = (next: {
+    browseDir?: string;
+    folderPath?: string;
+    previewTarget?: FilePreviewTarget | null;
+    filterMode?: FileFilterMode;
+  }) => {
+    const resolved = {
+      browseDir: next.browseDir !== undefined ? next.browseDir : browseDir,
+      folderPath: next.folderPath !== undefined ? next.folderPath : folderPath,
+      previewTarget: next.previewTarget !== undefined ? next.previewTarget : previewTarget,
+      filterMode: next.filterMode !== undefined ? next.filterMode : filterMode,
+    };
+    setBrowseDir(resolved.browseDir);
+    setFolderPath(resolved.folderPath);
+    setPreviewTarget(resolved.previewTarget);
+    setFilterMode(resolved.filterMode);
+    fileMemory.save(scopeKey, resolved);
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
     return () => window.clearInterval(timer);
   }, []);
 
-  // Follow active project switch automatically when user jumps between projects
+  // Restore remembered folder & open file whenever the user switches conversations or projects.
   useEffect(() => {
-    if (activeProject && activeProject !== browseDir) {
-      setBrowseDir(activeProject);
-      setFolderPath('');
-      setPreviewTarget(null);
-      setSearch('');
-      setFilterMode('all');
-    } else if (!browseDir && workspaces[0]) {
-      setBrowseDir(workspaces[0]);
-    }
-  }, [activeProject, workspaces.join('|')]);
+    if (scopeKey === activeScopeRef.current && browseDir) return;
+    activeScopeRef.current = scopeKey;
+    const restored = fileMemory.resolve(scopeKey, activeProject, workspaces);
+    setBrowseDir(restored.browseDir);
+    setFolderPath(restored.folderPath);
+    setPreviewTarget(restored.previewTarget);
+    setFilterMode(restored.filterMode);
+    setSearch('');
+  }, [scopeKey, activeProject, workspacesKey]);
 
   useEffect(() => {
     if (!browseDir) {
@@ -474,11 +525,9 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
     return (
       <FilePreviewBody
         target={previewTarget}
-        onBack={() => setPreviewTarget(null)}
+        onBack={() => updateState({ previewTarget: null })}
         onToggleExpand={() => {
-          const t = previewTarget;
-          setPreviewTarget(null);
-          onExpandPreview(t);
+          onExpandPreview(previewTarget);
         }}
         onCiteFile={onCiteFile}
       />
@@ -500,11 +549,14 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
             value={browseDir}
             options={projectOptions}
             onChange={(next) => {
-              setBrowseDir(next);
-              setFolderPath('');
+              const remembered = fileMemory.resolveProject(next, workspaces);
+              updateState({
+                browseDir: remembered.browseDir,
+                folderPath: remembered.folderPath,
+                previewTarget: remembered.previewTarget,
+                filterMode: remembered.filterMode,
+              });
               setSearch('');
-              setFilterMode('all');
-              setPreviewTarget(null);
             }}
           />
         </div>
@@ -526,7 +578,7 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
           type="button"
           class={`crumb-btn${crumbs.length === 0 ? ' current' : ''}`}
           onClick={() => {
-            setFolderPath('');
+            updateState({ folderPath: '', previewTarget: null });
             setSearch('');
           }}
         >
@@ -543,7 +595,7 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
                 class={`crumb-btn${isLast ? ' current' : ''}`}
                 disabled={isLast}
                 onClick={() => {
-                  setFolderPath(target);
+                  updateState({ folderPath: target, previewTarget: null });
                   setSearch('');
                 }}
               >
@@ -569,7 +621,7 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
             role="tab"
             aria-selected={filterMode === 'all'}
             class={`filter-pill${filterMode === 'all' ? ' on' : ''}`}
-            onClick={() => setFilterMode('all')}
+            onClick={() => updateState({ filterMode: 'all' })}
           >
             全部
           </button>
@@ -578,7 +630,7 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
             role="tab"
             aria-selected={filterMode === 'today'}
             class={`filter-pill${filterMode === 'today' ? ' on' : ''}`}
-            onClick={() => setFilterMode(filterMode === 'today' ? 'all' : 'today')}
+            onClick={() => updateState({ filterMode: filterMode === 'today' ? 'all' : 'today' })}
           >
             今日{todayCount > 0 ? <span class="pill-n">{todayCount}</span> : null}
           </button>
@@ -588,7 +640,7 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
               role="tab"
               aria-selected={filterMode === 'changed'}
               class={`filter-pill${filterMode === 'changed' ? ' on' : ''}`}
-              onClick={() => setFilterMode(filterMode === 'changed' ? 'all' : 'changed')}
+              onClick={() => updateState({ filterMode: filterMode === 'changed' ? 'all' : 'changed' })}
             >
               有改动{changedCount > 0 ? <span class="pill-n">{changedCount}</span> : null}
             </button>
@@ -627,7 +679,7 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
               type="button"
               class="file-row"
               onClick={() => {
-                setFolderPath(crumbs.slice(0, -1).join('/'));
+                updateState({ folderPath: crumbs.slice(0, -1).join('/'), previewTarget: null });
                 setSearch('');
               }}
             >
@@ -651,10 +703,10 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
                   class="file-row"
                   onClick={() => {
                     if (entry.dir) {
-                      setFolderPath(folderPath ? `${folderPath}/${entry.name}` : entry.name);
+                      updateState({ folderPath: folderPath ? `${folderPath}/${entry.name}` : entry.name, previewTarget: null });
                       setSearch('');
                     } else {
-                      setPreviewTarget({ dir: browseDir, path: folderPath, name: entry.name });
+                      updateState({ previewTarget: { dir: browseDir, path: folderPath, name: entry.name } });
                     }
                   }}
                 >
@@ -703,7 +755,11 @@ export function FileExplorer({ workspaces, activeProject, worktree = '', onExpan
                     type="button"
                     class="file-quick-expand"
                     title="在主区域大屏预览"
-                    onClick={() => onExpandPreview({ dir: browseDir, path: folderPath, name: entry.name })}
+                    onClick={() => {
+                      const target = { dir: browseDir, path: folderPath, name: entry.name };
+                      updateState({ previewTarget: target });
+                      onExpandPreview(target);
+                    }}
                   >
                     ⤢
                   </button>

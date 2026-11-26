@@ -614,6 +614,7 @@ export function App() {
           <div class="col-insp" style={{ width: `${inspWidth}px` }}>
             <Inspector
               tab={inspectorTab}
+              scopeKey={browse ? `proj:${browse}` : current?.key ? `thread:${current.key}` : project ? `proj:${project}` : ''}
               project={project}
               worktree={browse ? '' : current?.worktree || ''}
               workspaces={device?.workspaces || []}

@@ -43,12 +43,16 @@ def main():
         data, shop, notes = base / "agent", base / "web-shop", base / "notes"
         for folder in (data, shop, notes):
             folder.mkdir()
+        (shop / "docs").mkdir()
+        (shop / "docs" / "notes.md").write_text("# 结算说明\n\n按分计算金额，避免浮点小数误差。\n", encoding="utf-8")
         (shop / "a-old.txt").write_text("older note\n", encoding="utf-8")
         (shop / "app.js").write_text("export const total = items => items.reduce((a, b) => a + b.price, 0);\n", encoding="utf-8")
         for step in (["init", "-q"], ["add", "."], ["commit", "-qm", "init"]):
             subprocess.run(["git", "-c", "user.email=check@example.com", "-c", "user.name=check"] + step, cwd=shop, check=True)
         old_ts = time.time() - 72 * 3600
         os.utime(shop / "a-old.txt", (old_ts, old_ts))
+        os.utime(shop / "docs" / "notes.md", (old_ts, old_ts))
+        os.utime(shop / "docs", (old_ts, old_ts))
         (shop / "app.js").write_text("export const total = items => items.reduce((a, b) => a + b.price * b.count, 0);\n", encoding="utf-8")
         homes = Homes(temporary)
         long_thought = "\n".join(f"思考步骤 {i}：核对结算金额舍入与分单位换算边界条件" for i in range(1, 21))
@@ -238,21 +242,41 @@ def main():
             assert value("document.querySelector('.new-field .cselect-val').textContent") == "notes"
             browser.picture(out / "new.png")
 
-            # ---- a file's changes and file explorer recency/git badges, sort, filter, direct diff
-            value("document.querySelector('.brand').click()")
-            until("!!document.querySelector('.fc-main')", "the project's changes")
+            # ---- a file's changes and file explorer recency/git badges, sort, filter, direct diff, and per-thread file memory
+            value("Array.from(document.querySelectorAll('.proj .th-row')).find(n => n.textContent.includes('结算页')).click()")
+            until("document.querySelector('.head-title')?.textContent === '结算页金额多一位小数'", "back to web-shop thread")
             press(".insp-head .seg button", "文件")
-            until("document.querySelectorAll('.file-row-wrap').length >= 2 && !!document.querySelector('.git-st-btn.st-M')", "files with git & recency badges")
+            until("document.querySelectorAll('.file-row-wrap').length >= 3 && !!document.querySelector('.git-st-btn.st-M')", "files with git & recency badges")
             file_names = lambda: value("Array.from(document.querySelectorAll('.file-row-wrap .file-name')).map(n => n.textContent)")
-            assert file_names()[:2] == ["a-old.txt", "app.js"], file_names()
+            assert file_names()[:3] == ["docs", "a-old.txt", "app.js"], file_names()
             assert value("Array.from(document.querySelectorAll('.file-row-wrap')).find(n => n.querySelector('.file-name')?.textContent === 'app.js')?.querySelector('.rec-tag')?.textContent") == "刚改"
             assert not value("Array.from(document.querySelectorAll('.file-row-wrap')).find(n => n.querySelector('.file-name')?.textContent === 'a-old.txt')?.querySelector('.rec-tag')")
             value("document.querySelector('.files-sort-btn').click()")
-            until("Array.from(document.querySelectorAll('.file-row-wrap .file-name')).map(n => n.textContent)[0] === 'app.js'", "sorted by recent modified")
+            until("Array.from(document.querySelectorAll('.file-row-wrap .file-name')).map(n => n.textContent)[1] === 'app.js'", "sorted by recent modified")
             value("Array.from(document.querySelectorAll('.files-controls .filter-pill')).find(b => b.textContent.startsWith('今日')).click()")
             until("document.querySelectorAll('.file-row-wrap').length === 1", "today file filter")
             assert file_names() == ["app.js"], file_names()
             browser.picture(out / "files.png")
+            value("Array.from(document.querySelectorAll('.files-controls .filter-pill')).find(b => b.textContent.startsWith('全部')).click()")
+            until("document.querySelectorAll('.file-row-wrap').length >= 3", "all files restored")
+
+            # Open docs/notes.md in the right pane, switch to another project's conversation and back: preview & folder must be remembered.
+            value("Array.from(document.querySelectorAll('.file-row-wrap .file-row')).find(b => b.querySelector('.file-name')?.textContent === 'docs').click()")
+            until("Array.from(document.querySelectorAll('.file-row-wrap .file-name')).some(n => n.textContent === 'notes.md')", "entered docs folder")
+            value("Array.from(document.querySelectorAll('.file-row-wrap .file-row')).find(b => b.querySelector('.file-name')?.textContent === 'notes.md').click()")
+            until("document.querySelector('.fpreview-name')?.textContent === 'notes.md' && document.querySelector('.fpreview-md')?.textContent.includes('结算说明')", "opened notes.md preview")
+            value("Array.from(document.querySelectorAll('.proj .th-row')).find(n => n.textContent.includes('整理周报')).click()")
+            until("document.querySelector('.head-title')?.textContent === '整理周报' && !document.querySelector('.fpreview')", "switched to notes project thread")
+            value("Array.from(document.querySelectorAll('.proj .th-row')).find(n => n.textContent.includes('结算页')).click()")
+            until("document.querySelector('.head-title')?.textContent === '结算页金额多一位小数' && document.querySelector('.fpreview-name')?.textContent === 'notes.md' && document.querySelector('.fpreview-md')?.textContent.includes('结算说明')", "restored notes.md preview on returning to thread")
+            press(".insp-head .seg button", "变更")
+            until("!!document.querySelector('.fc-main')", "switched to changes tab")
+            press(".insp-head .seg button", "文件")
+            until("document.querySelector('.fpreview-name')?.textContent === 'notes.md'", "restored notes.md preview across inspector tab switch")
+            press(".fpreview-head button", "← 返回目录")
+            until("document.querySelector('.crumb-btn.current')?.textContent === 'docs' && Array.from(document.querySelectorAll('.file-row-wrap .file-name')).some(n => n.textContent === 'notes.md')", "returned to docs subfolder instead of root")
+            value("document.querySelector('.files-crumb .crumb-btn').click()")
+            until("!!document.querySelector('.git-st-btn.st-M')", "returned to project root")
             value("document.querySelector('.git-st-btn.st-M').click()")
             until("document.querySelectorAll('.d-line.k-add').length === 1 && document.querySelectorAll('.d-line.k-del').length === 1", "the file's changes from explorer git badge")
             browser.picture(out / "diff.png")
