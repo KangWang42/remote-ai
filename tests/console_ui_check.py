@@ -107,6 +107,10 @@ def main():
             assert sorted(value(titles)) == sorted(["补充单元测试", "结算页金额多一位小数"]), value(titles)
             value("Array.from(document.querySelectorAll('.side-filters .filter-pill')).find(b => b.textContent.startsWith('全部')).click()")
             until("document.querySelectorAll('.proj .th-row').length === 3", "all sidebar filter restored")
+            home_geom = value("(() => { const kpis = Array.from(document.querySelectorAll('.home-kpi-strip .kpi-val')).map(n => n.textContent); const cards = Array.from(document.querySelectorAll('.home-grid .home-card')).map(n => { const r = n.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }); const earlier = Array.from(document.querySelectorAll('.home-list-row .hl-title')).map(n => n.textContent); return { kpis, cards, earlier }; })()")
+            assert home_geom["kpis"] == ["0", "0", "2", "3"], home_geom
+            assert len(home_geom["cards"]) == 2 and abs(home_geom["cards"][0][0] - home_geom["cards"][1][0]) <= 2 and abs(home_geom["cards"][0][1] - home_geom["cards"][1][1]) <= 2, home_geom
+            assert home_geom["earlier"] == ["整理周报"], home_geom
             browser.picture(out / "list.png")
             press(".side-foot button", "设置")
             until("document.querySelectorAll('.quota-bar').length >= 4", "account quota windows")

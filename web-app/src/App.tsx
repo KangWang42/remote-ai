@@ -560,8 +560,9 @@ export function App() {
         model={model}
         onOpen={open}
         onMenu={(t, e) => showMenu(threadMenu(t), e)}
-        onNew={() => newThread()}
+        onNew={newThread}
         onAddProject={addProject}
+        onSeenAll={() => markSeen(model.attention.filter((t) => t.needs === 'done' || t.needs === 'failed'))}
       />
     );
   }
