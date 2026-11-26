@@ -17,6 +17,36 @@ export function formatExactTime(raw?: number | null): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
+export type RecencyTier = 'recent' | 'today' | 'yesterday' | 'older';
+
+/** Within 60 minutes counts as freshly modified / just active. */
+const RECENT_WINDOW_MS = 60 * 60 * 1000;
+
+/** Classifies a timestamp into a calm visual recency tier relative to local calendar days. */
+export function getRecencyTier(raw?: number | null, now = Date.now()): RecencyTier {
+  const ms = normalizeMs(raw);
+  if (!ms) return 'older';
+  const cur = new Date(now);
+  const startToday = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()).getTime();
+  if (ms >= startToday) {
+    const diff = now - ms;
+    if (diff >= -5 * 60 * 1000 && diff < RECENT_WINDOW_MS) return 'recent';
+    return 'today';
+  }
+  const startYesterday = startToday - 86400 * 1000;
+  if (ms >= startYesterday) return 'yesterday';
+  return 'older';
+}
+
+export function isToday(raw?: number | null, now = Date.now()): boolean {
+  const tier = getRecencyTier(raw, now);
+  return tier === 'recent' || tier === 'today';
+}
+
+export function isRecent(raw?: number | null, now = Date.now()): boolean {
+  return getRecencyTier(raw, now) === 'recent';
+}
+
 /**
  * Compact, human-readable relative work timestamp:
  * - < 60s -> "刚刚"

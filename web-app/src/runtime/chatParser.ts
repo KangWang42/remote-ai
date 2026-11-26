@@ -163,8 +163,14 @@ export function parseTranscriptMessages(reply: any): ChatMessageItem[] {
   const raw = Array.isArray(reply?.messages) ? reply.messages : [];
   return raw.map((m: any, i: number): ChatMessageItem => {
     const role = String(m.role || '').toLowerCase();
+    const id = String(m.id || `m${i}`);
+    const at = typeof m.at === 'number' ? m.at : undefined;
     if (role === 'tool')
-      return { id: String(m.id || `m${i}`), role: 'tool', title: String(m.text || '操作'), text: String(m.detail || ''), output: m.result ? boundToolOutput('', String(m.result)) : '', status: 'done' };
-    return { id: String(m.id || `m${i}`), role: role === 'user' ? 'user' : 'assistant', text: String(m.text || ''), at: typeof m.at === 'number' ? m.at : undefined };
+      return { id, role: 'tool', title: String(m.text || '操作'), text: String(m.detail || ''), output: m.result ? boundToolOutput('', String(m.result)) : '', status: 'done', at };
+    if (role === 'thought')
+      return { id, role: 'thought', text: String(m.text || ''), at };
+    if (role === 'note' || role === 'error')
+      return { id, role, text: String(m.text || ''), at };
+    return { id, role: role === 'user' ? 'user' : 'assistant', text: String(m.text || ''), at };
   });
 }

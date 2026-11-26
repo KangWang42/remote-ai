@@ -41,7 +41,14 @@ export function Inspector(p: Props) {
         {p.tab === 'changes' ? (
           <ChangesPanel project={p.project} worktree={p.worktree} openFile={p.openDiff} onOpenDiff={p.onOpenDiff} />
         ) : (
-          <FileExplorer workspaces={p.workspaces} activeProject={p.project} onExpandPreview={p.onExpandFile} onCiteFile={p.onCiteFile} />
+          <FileExplorer
+            workspaces={p.workspaces}
+            activeProject={p.project}
+            worktree={p.worktree}
+            onExpandPreview={p.onExpandFile}
+            onOpenDiff={p.onOpenDiff}
+            onCiteFile={p.onCiteFile}
+          />
         )}
       </div>
     </aside>

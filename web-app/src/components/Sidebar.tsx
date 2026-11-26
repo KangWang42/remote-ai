@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { formatExactTime, formatRelativeTime } from '../runtime/time';
+import { formatExactTime, formatRelativeTime, getRecencyTier, isToday } from '../runtime/time';
 import { runtimeLabel, type ProjectGroup, type Thread, type ThreadModel } from '../runtime/threads';
 import { toolBadgeStyle, toolMeta, type DeviceInfo, type TeamCardEntry } from '../runtime/types';
+
+type SideFilter = 'all' | 'today' | 'active';
 
 interface Props {
   device: DeviceInfo | null;
@@ -27,6 +29,7 @@ const HISTORY_SHOWN = 3;
 
 export function Sidebar(p: Props) {
   const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<SideFilter>('all');
   const [folded, setFolded] = useState<Record<string, boolean>>(() => loadFolded());
   const [more, setMore] = useState<Record<string, boolean>>({});
   const [now, setNow] = useState(() => Date.now());
@@ -36,13 +39,27 @@ export function Sidebar(p: Props) {
     return () => window.clearInterval(timer);
   }, []);
 
+  const matchesFilter = (t: Thread) => {
+    if (filter === 'today') return isToday(t.at, now);
+    if (filter === 'active') return t.runtime !== 'idle' || t.needs !== null;
+    return true;
+  };
+
+  const todayTotal = useMemo(() => p.model.all.filter((t) => isToday(t.at, now)).length, [p.model.all, now]);
+  const activeTotal = useMemo(
+    () => p.model.all.filter((t) => t.runtime !== 'idle' || t.needs !== null).length,
+    [p.model.all],
+  );
+
   const q = query.trim().toLowerCase();
   const found = useMemo(() => {
     if (!q) return null;
-    return p.model.all.filter((t) =>
-      [t.title, t.project, t.folder, t.preview, toolMeta(t.tool).label].some((s) => (s || '').toLowerCase().includes(q)),
+    return p.model.all.filter(
+      (t) =>
+        matchesFilter(t) &&
+        [t.title, t.project, t.folder, t.preview, toolMeta(t.tool).label].some((s) => (s || '').toLowerCase().includes(q)),
     );
-  }, [p.model.all, q]);
+  }, [p.model.all, q, filter, now]);
 
   const toggleFold = (name: string) => {
     setFolded((prev) => {
@@ -57,11 +74,14 @@ export function Sidebar(p: Props) {
     const active = p.selectedKey === t.key;
     const picked = !!p.picked[t.key];
     const state = t.needs || (t.busy ? 'busy' : t.runtime !== 'idle' ? 'open' : 'idle');
+    const tier = getRecencyTier(t.at, now);
+    const todayHit = tier === 'recent' || tier === 'today';
+    const exact = formatExactTime(t.at);
     return (
       <button
         key={t.key}
         type="button"
-        class={`th-row${active ? ' active' : ''}${picked ? ' picked' : ''}`}
+        class={`th-row${active ? ' active' : ''}${picked ? ' picked' : ''}${todayHit ? ` is-${tier}` : ''}`}
         onClick={(e) => {
           if (e.ctrlKey || e.metaKey || e.shiftKey) p.onPick(t, e.shiftKey);
           else p.onOpen(t);
@@ -70,7 +90,7 @@ export function Sidebar(p: Props) {
           e.preventDefault();
           p.onThreadMenu(t, e);
         }}
-        title={t.title}
+        title={exact ? `${t.title} · ${exact}` : t.title}
       >
         <span class={`th-dot st-${state}`} aria-hidden="true" />
         <span class="tool-mark" style={toolBadgeStyle(t.tool)} title={meta.label}>
@@ -79,7 +99,17 @@ export function Sidebar(p: Props) {
         <span class="th-main">
           <span class="th-top">
             <span class="th-title">{t.title}</span>
-            <span class="th-time" title={formatExactTime(t.at) || undefined}>
+            {t.pinned && (
+              <span class="th-pin" title="已置顶" aria-label="已置顶">
+                置顶
+              </span>
+            )}
+            {todayHit && (
+              <span class={`rec-tag is-${tier}`} title={exact ? `今日更新：${exact}` : '今日'}>
+                今日
+              </span>
+            )}
+            <span class={`th-time is-${tier}`} title={exact || undefined}>
               {formatRelativeTime(t.at, now)}
             </span>
           </span>
@@ -97,15 +127,23 @@ export function Sidebar(p: Props) {
   const teamRow = (card: TeamCardEntry, members: Thread[]) => {
     const active = p.teamOpen === card.id;
     const state = card.confirm ? 'confirm' : card.state === 'running' ? 'busy' : 'idle';
+    const tier = getRecencyTier(card.updated, now);
+    const todayHit = tier === 'recent' || tier === 'today';
     return (
       <div key={`team:${card.id}`} class="th-team">
-        <button type="button" class={`th-row${active ? ' active' : ''}`} onClick={() => p.onOpenTeam(card)} title={card.goal}>
+        <button
+          type="button"
+          class={`th-row${active ? ' active' : ''}${todayHit ? ` is-${tier}` : ''}`}
+          onClick={() => p.onOpenTeam(card)}
+          title={card.goal}
+        >
           <span class={`th-dot st-${state}`} aria-hidden="true" />
           <span class="tool-mark team-mark">协</span>
           <span class="th-main">
             <span class="th-top">
               <span class="th-title">{card.goal || '协作任务'}</span>
-              <span class="th-time">{card.updated ? formatRelativeTime(card.updated, now) : ''}</span>
+              {todayHit && <span class={`rec-tag is-${tier}`}>今日</span>}
+              <span class={`th-time is-${tier}`}>{card.updated ? formatRelativeTime(card.updated, now) : ''}</span>
             </span>
             <span class="th-sub">
               <span class="th-preview">
@@ -120,15 +158,28 @@ export function Sidebar(p: Props) {
   };
 
   const group = (g: ProjectGroup) => {
-    const isFolded = !!folded[g.name];
+    const isFolded = filter === 'all' && !!folded[g.name];
     const teamIds = new Set(g.teams.map((c) => c.id));
-    const solo = g.threads.filter((t) => !t.team || !teamIds.has(t.team));
+    const filteredTeams =
+      filter === 'all'
+        ? g.teams
+        : g.teams.filter((c) => {
+            if (filter === 'today') return isToday(c.updated, now) || g.threads.some((t) => t.team === c.id && isToday(t.at, now));
+            return c.state === 'running' || !!c.confirm || g.threads.some((t) => t.team === c.id && (t.runtime !== 'idle' || t.needs !== null));
+          });
+    const solo = g.threads.filter((t) => (!t.team || !teamIds.has(t.team)) && matchesFilter(t));
+    if (filter !== 'all' && solo.length === 0 && filteredTeams.length === 0) return null;
+
+    const todayInProj = g.threads.filter((t) => isToday(t.at, now)).length;
     const live = solo.filter((t) => t.runtime !== 'idle' || t.needs);
     const history = solo.filter((t) => t.runtime === 'idle' && !t.needs);
-    const shownHistory = more[g.name] ? history : history.slice(0, Math.max(0, HISTORY_SHOWN - live.length));
+    const showAllHistory = filter !== 'all' || !!more[g.name];
+    const shownHistory = showAllHistory ? history : history.slice(0, Math.max(0, HISTORY_SHOWN - live.length));
     const hidden = history.length - shownHistory.length;
+    const projTitle = g.latestAt ? `${g.name} · 最近活跃：${formatRelativeTime(g.latestAt, now)}` : g.name;
+
     return (
-      <section key={g.name} class="proj">
+      <section key={g.name} class={`proj${todayInProj > 0 ? ' has-today' : ''}`}>
         <div
           class="proj-head"
           onContextMenu={(e) => {
@@ -136,11 +187,22 @@ export function Sidebar(p: Props) {
             p.onProjectMenu(g.name, e);
           }}
         >
-          <button type="button" class="proj-toggle" onClick={() => toggleFold(g.name)} title={g.name}>
+          <button type="button" class="proj-toggle" onClick={() => toggleFold(g.name)} title={projTitle}>
             <span class={`fold${isFolded ? '' : ' open'}`} aria-hidden="true" />
             <span class="proj-name">{g.name}</span>
             {g.pinned ? <span class="proj-pin" aria-label="已置顶">●</span> : null}
-            {g.attention > 0 ? <span class="proj-count need">{g.attention}</span> : g.busy > 0 ? <span class="proj-count busy">{g.busy}</span> : null}
+            <span class="proj-badges">
+              {todayInProj > 0 ? (
+                <span class="proj-today" title={`今日有 ${todayInProj} 段对话更新`}>
+                  今日 {todayInProj}
+                </span>
+              ) : null}
+              {g.attention > 0 ? (
+                <span class="proj-count need">{g.attention}</span>
+              ) : g.busy > 0 ? (
+                <span class="proj-count busy">{g.busy}</span>
+              ) : null}
+            </span>
           </button>
           <button type="button" class="proj-act" title={`在 ${g.name} 中新建对话`} onClick={() => p.onNew(g.name)}>
             <Plus />
@@ -156,10 +218,10 @@ export function Sidebar(p: Props) {
         </div>
         {!isFolded && (
           <div class="proj-body">
-            {g.teams.map((card) =>
+            {filteredTeams.map((card) =>
               teamRow(
                 card,
-                g.threads.filter((t) => t.team === card.id),
+                g.threads.filter((t) => t.team === card.id && matchesFilter(t)),
               ),
             )}
             {live.map((t) => row(t))}
@@ -169,12 +231,12 @@ export function Sidebar(p: Props) {
                 更早的 {hidden} 个对话
               </button>
             )}
-            {more[g.name] && history.length > HISTORY_SHOWN && (
+            {filter === 'all' && more[g.name] && history.length > HISTORY_SHOWN && (
               <button type="button" class="th-more" onClick={() => setMore((m) => ({ ...m, [g.name]: false }))}>
                 收起
               </button>
             )}
-            {g.threads.length === 0 && g.teams.length === 0 && (
+            {filter === 'all' && g.threads.length === 0 && g.teams.length === 0 && (
               <button type="button" class="th-more" onClick={() => p.onNew(g.name)}>
                 还没有对话，新建一个
               </button>
@@ -186,6 +248,8 @@ export function Sidebar(p: Props) {
   };
 
   const attention = p.model.attention;
+  const renderedProjects = p.model.projects.map(group).filter(Boolean);
+  const filteredLoose = p.model.loose.filter(matchesFilter);
 
   return (
     <aside class="sidebar">
@@ -208,6 +272,35 @@ export function Sidebar(p: Props) {
             if (e.key === 'Escape') setQuery('');
           }}
         />
+        <div class="side-filters" role="tablist" aria-label="对话筛选">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filter === 'all'}
+            class={`filter-pill${filter === 'all' ? ' on' : ''}`}
+            onClick={() => setFilter('all')}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filter === 'today'}
+            class={`filter-pill${filter === 'today' ? ' on' : ''}`}
+            onClick={() => setFilter(filter === 'today' ? 'all' : 'today')}
+          >
+            今日{todayTotal > 0 ? <span class="pill-n">{todayTotal}</span> : null}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filter === 'active'}
+            class={`filter-pill${filter === 'active' ? ' on' : ''}`}
+            onClick={() => setFilter(filter === 'active' ? 'all' : 'active')}
+          >
+            进行中{activeTotal > 0 ? <span class="pill-n">{activeTotal}</span> : null}
+          </button>
+        </div>
       </div>
 
       <div class="side-scroll">
@@ -218,7 +311,7 @@ export function Sidebar(p: Props) {
           </section>
         ) : (
           <>
-            {attention.length > 0 && (
+            {filter === 'all' && attention.length > 0 && (
               <section class="side-sec need-sec">
                 <div class="side-label">
                   <span>需要你处理 · {attention.length}</span>
@@ -234,7 +327,7 @@ export function Sidebar(p: Props) {
 
             <section class="side-sec">
               <div class="side-label">
-                <span>项目</span>
+                <span>{filter === 'today' ? '今日项目' : filter === 'active' ? '进行中的项目' : '项目'}</span>
                 <button type="button" class="link-btn" onClick={p.onAddProject} title="添加项目文件夹">
                   添加
                 </button>
@@ -243,17 +336,21 @@ export function Sidebar(p: Props) {
                 <button type="button" class="th-more" onClick={p.onAddProject}>
                   添加第一个项目文件夹
                 </button>
+              ) : renderedProjects.length === 0 ? (
+                <div class="side-empty">
+                  {filter === 'today' ? '今天还没有活跃的对话' : '当前没有进行中的对话'}
+                </div>
               ) : (
-                p.model.projects.map(group)
+                renderedProjects
               )}
             </section>
 
-            {p.model.loose.length > 0 && (
+            {filteredLoose.length > 0 && (
               <section class="side-sec">
                 <div class="side-label">
                   <span>其它文件夹</span>
                 </div>
-                {p.model.loose.map((t) => row(t))}
+                {filteredLoose.map((t) => row(t))}
               </section>
             )}
           </>

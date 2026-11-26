@@ -2,6 +2,7 @@ import { memo } from 'preact/compat';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatMessageItem, SessionAsk } from '../runtime/types';
 import { MarkdownView } from './MarkdownView';
+import { ThoughtBlock } from './ThoughtBlock';
 
 const VIRTUAL_THRESHOLD = 45;
 const OVERSCAN_PX = 720;
@@ -11,8 +12,10 @@ interface RowProps {
   index: number;
   streaming: boolean;
   expanded: boolean;
+  thoughtExpanded: boolean | undefined;
   highlighted: boolean;
   onToggleTool: (id: string) => void;
+  onToggleThought: (id: string, next: boolean) => void;
   onAnswer: (askId: string, decision: string) => void;
   onMeasure?: (id: string, height: number) => void;
 }
@@ -22,8 +25,10 @@ const TimelineRow = memo(function TimelineRow({
   index,
   streaming,
   expanded,
+  thoughtExpanded,
   highlighted,
   onToggleTool,
+  onToggleThought,
   onAnswer,
   onMeasure,
 }: RowProps) {
@@ -39,7 +44,7 @@ const TimelineRow = memo(function TimelineRow({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [item.id, expanded, onMeasure]);
+  }, [item.id, expanded, thoughtExpanded, highlighted, onMeasure]);
 
   let content: any;
   if (item.role === 'user') {
@@ -84,7 +89,15 @@ const TimelineRow = memo(function TimelineRow({
   } else if (item.role === 'note' || item.role === 'error') {
     content = <div class={`timeline-note${item.role === 'error' ? ' is-error' : ''}`}>{item.text}</div>;
   } else if (item.role === 'thought') {
-    content = <div class="msg-thought">{item.text}</div>;
+    content = (
+      <ThoughtBlock
+        text={item.text}
+        streaming={streaming}
+        expanded={thoughtExpanded}
+        highlighted={highlighted}
+        onToggle={(next) => onToggleThought(item.id, next)}
+      />
+    );
   } else {
     content = (
       <div class="msg msg-assistant">
@@ -105,10 +118,16 @@ const TimelineRow = memo(function TimelineRow({
 });
 
 /** Role & length bucket estimator so unmeasured items avoid scroll jumping in 500+ turn chats. */
-function estimateHeight(item: ChatMessageItem, expanded: boolean): number {
+function estimateHeight(item: ChatMessageItem, expanded: boolean, thoughtExpanded?: boolean): number {
   if (item.role === 'note' || item.role === 'error') return 42;
   if (item.role === 'tool') return expanded && item.output ? 240 : 62;
   if (item.role === 'ask') return 180;
+  if (item.role === 'thought') {
+    if (thoughtExpanded !== true) return 52;
+    const newlines = (item.text.match(/\n/g) || []).length;
+    const estimatedLines = Math.max(newlines + 1, Math.ceil(item.text.length / 64));
+    return Math.min(2400, Math.max(88, 52 + estimatedLines * 21));
+  }
   const len = item.text.length;
   if (item.role === 'user') return Math.min(320, 56 + Math.ceil(len / 44) * 24);
   const newlines = (item.text.match(/\n/g) || []).length;
@@ -156,6 +175,7 @@ export function VirtualTimeline({
   const prevLenRef = useRef(messages.length);
 
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+  const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
   const [scrollTop, setScrollTop] = useState(initialScrollTop);
   const [viewportH, setViewportH] = useState(640);
   const [measureVer, setMeasureVer] = useState(0);
@@ -167,6 +187,7 @@ export function VirtualTimeline({
   useEffect(() => {
     heightsRef.current.clear();
     setExpandedTools({});
+    setExpandedThoughts({});
     setPinnedRange(null);
     setUnreadCount(0);
     stickBottomRef.current = initialStickBottom;
@@ -243,6 +264,10 @@ export function VirtualTimeline({
     setExpandedTools((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
+  const handleToggleThought = useCallback((id: string, next: boolean) => {
+    setExpandedThoughts((prev) => ({ ...prev, [id]: next }));
+  }, []);
+
   const layout = useMemo(() => {
     const count = messages.length;
     const offsets = new Float64Array(count + 1);
@@ -250,12 +275,12 @@ export function VirtualTimeline({
     for (let i = 0; i < count; i++) {
       offsets[i] = acc;
       const m = messages[i];
-      const h = heightsRef.current.get(m.id) ?? estimateHeight(m, !!expandedTools[m.id]);
+      const h = heightsRef.current.get(m.id) ?? estimateHeight(m, !!expandedTools[m.id], expandedThoughts[m.id]);
       acc += h;
     }
     offsets[count] = acc;
     return { offsets, totalHeight: acc };
-  }, [messages, expandedTools, measureVer]);
+  }, [messages, expandedTools, expandedThoughts, measureVer]);
 
   // Stick to bottom when streaming or new messages arrive (if user hasn't scrolled up)
   const lastTextLen = messages.length > 0 ? messages[messages.length - 1].text.length : 0;
@@ -355,8 +380,10 @@ export function VirtualTimeline({
                   index={absIdx}
                   streaming={isBusy && isLast}
                   expanded={!!expandedTools[m.id]}
+                  thoughtExpanded={expandedThoughts[m.id]}
                   highlighted={highlightIndex === absIdx}
                   onToggleTool={handleToggleTool}
+                  onToggleThought={handleToggleThought}
                   onAnswer={onAnswer}
                   onMeasure={useVirtual ? handleMeasure : undefined}
                 />

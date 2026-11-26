@@ -8,6 +8,7 @@ changes open in the middle; a narrow window shows the list or what was opened fr
     python tests/console_ui_check.py <chrome.exe> <folder for the pictures> [<folder of RemoteCliAgent.exe>]
 """
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -42,13 +43,18 @@ def main():
         data, shop, notes = base / "agent", base / "web-shop", base / "notes"
         for folder in (data, shop, notes):
             folder.mkdir()
+        (shop / "a-old.txt").write_text("older note\n", encoding="utf-8")
         (shop / "app.js").write_text("export const total = items => items.reduce((a, b) => a + b.price, 0);\n", encoding="utf-8")
         for step in (["init", "-q"], ["add", "."], ["commit", "-qm", "init"]):
             subprocess.run(["git", "-c", "user.email=check@example.com", "-c", "user.name=check"] + step, cwd=shop, check=True)
+        old_ts = time.time() - 72 * 3600
+        os.utime(shop / "a-old.txt", (old_ts, old_ts))
         (shop / "app.js").write_text("export const total = items => items.reduce((a, b) => a + b.price * b.count, 0);\n", encoding="utf-8")
         homes = Homes(temporary)
-        homes.claude_saved(shop, SAVED, "结算页金额多一位小数", 3, said=("结算页的金额有时多一位小数", "已经改成按分计算。"))
-        homes.codex_saved(shop, "019a0000-0000-7000-8000-000000000001", "补充单元测试", 6)
+        long_thought = "\n".join(f"思考步骤 {i}：核对结算金额舍入与分单位换算边界条件" for i in range(1, 21))
+        homes.claude_saved(shop, SAVED, "结算页金额多一位小数", 0.05, said=("结算页的金额有时多一位小数", "已经改成按分计算。"),
+                           worked=({"type": "thinking", "thinking": long_thought},))
+        homes.codex_saved(shop, "019a0000-0000-7000-8000-000000000001", "补充单元测试", 0.1)
         homes.codex_saved(notes, "019a0000-0000-7000-8000-000000000002", "整理周报", 50)
         model_log = base / "model.jsonl"
         environment = homes.environment(RCLI_PASSWORD=PASSWORD, STANDIN_MODEL_LOG=str(model_log))
@@ -85,10 +91,18 @@ def main():
             listed = lambda: value("fetch('../api/terminal').then(r => r.json()).then(j => j.terminals.filter(t => t.state === 'running').map(t => [t.id, t.form || '', t.session || '']))")
             errors = lambda: value("JSON.stringify(window.__errors)")
 
-            # ---- the list: conversations by project, each once
+            # ---- the list: conversations by project, each once; today badges and sidebar filters
             browser.open(origin + "/console/#p=" + PASSWORD, "document.querySelectorAll('.proj .th-row').length === 3", "the console's list", **WIDE)
             assert sorted(value(titles)) == sorted(["整理周报", "补充单元测试", "结算页金额多一位小数"]), value(titles)
             assert value("document.querySelectorAll('.proj-name').length") == 2
+            assert value("Array.from(document.querySelectorAll('.proj .th-row')).filter(n => n.querySelector('.rec-tag')).map(n => n.querySelector('.th-title').textContent).sort()") == sorted(["补充单元测试", "结算页金额多一位小数"])
+            assert value("Array.from(document.querySelectorAll('.proj')).find(n => n.querySelector('.proj-name')?.textContent === 'web-shop')?.querySelector('.proj-today')?.textContent") == "今日 2"
+            assert not value("Array.from(document.querySelectorAll('.proj')).find(n => n.querySelector('.proj-name')?.textContent === 'notes')?.querySelector('.proj-today')")
+            value("Array.from(document.querySelectorAll('.side-filters .filter-pill')).find(b => b.textContent.startsWith('今日')).click()")
+            until("document.querySelectorAll('.proj .th-row').length === 2", "today sidebar filter")
+            assert sorted(value(titles)) == sorted(["补充单元测试", "结算页金额多一位小数"]), value(titles)
+            value("Array.from(document.querySelectorAll('.side-filters .filter-pill')).find(b => b.textContent.startsWith('全部')).click()")
+            until("document.querySelectorAll('.proj .th-row').length === 3", "all sidebar filter restored")
             browser.picture(out / "list.png")
             press(".side-foot button", "设置")
             until("document.querySelectorAll('.quota-bar').length >= 4", "account quota windows")
@@ -108,9 +122,20 @@ def main():
             value("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))")
             until("!document.querySelector('.ctx-menu')", "the menu closed")
 
-            # ---- a saved conversation is gone on with by a message: a chat that runs it, listed once
+            # ---- a saved conversation is gone on with by a message: a chat that runs it, listed once; thought expands without clipping
             value("Array.from(document.querySelectorAll('.proj .th-row')).find(n => n.textContent.includes('结算页')).click()")
-            until("document.querySelectorAll('.tl-item').length === 2", "its saved messages")
+            until("document.querySelectorAll('.tl-item').length === 3 && !!document.querySelector('.thought-card')", "its saved messages with thought")
+            assert value("document.querySelector('.thought-head').getAttribute('aria-expanded')") == "false"
+            assert not value("document.querySelector('.thought-body')")
+            value("document.querySelector('.thought-head').click()")
+            until("document.querySelector('.thought-head')?.getAttribute('aria-expanded') === 'true' && !!document.querySelector('.thought-body.is-full')", "expanded full thought")
+            thought_info = value("(() => { const b = document.querySelector('.thought-body.is-full'); const cs = getComputedStyle(b); return { text: b.textContent, maxHeight: cs.maxHeight, clipped: b.scrollHeight > b.clientHeight + 2 }; })()")
+            assert "思考步骤 1：" in thought_info["text"] and "思考步骤 20：" in thought_info["text"], thought_info
+            assert thought_info["maxHeight"] == "none" and not thought_info["clipped"], thought_info
+            assert value("!!document.querySelector('.thought-foot')"), "long thought has bottom collapse button"
+            browser.picture(out / "thought.png")
+            value("document.querySelector('.thought-foot').click()")
+            until("document.querySelector('.thought-head')?.getAttribute('aria-expanded') === 'false' && !document.querySelector('.thought-body')", "collapsed thought")
             until("!!document.querySelector('.thread-head .branch .chip')", "the project's branch")
             assert on_top(".thread-head .branch .chip"), "the branch is reachable"
             value("document.querySelector('.thread-head .branch .chip').click()")
@@ -121,7 +146,7 @@ def main():
             value("document.querySelector('.composer textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))")
             until("!!document.querySelector('.ask-card')", "the chat that goes on with it, asking first")
             texts = value("Array.from(document.querySelectorAll('.tl-item')).map(n => n.innerText.trim().split('\\n')[0])")
-            assert texts[:4] == ["结算页的金额有时多一位小数", "已经改成按分计算。", "再检查一下优惠券", "我先看看。"], texts
+            assert texts[0] == "结算页的金额有时多一位小数" and "已经改成按分计算。" in texts and "再检查一下优惠券" in texts and "我先看看。" in texts, texts
             assert value(titles).count("结算页金额多一位小数") == 1, value(titles)
             chats = [t for t in listed() if t[2] == SAVED]
             assert len(chats) == 1 and chats[0][1] == "chat", chats
@@ -195,11 +220,23 @@ def main():
             assert value("document.querySelector('.new-field .cselect-val').textContent") == "notes"
             browser.picture(out / "new.png")
 
-            # ---- a file's changes, in the middle
+            # ---- a file's changes and file explorer recency/git badges, sort, filter, direct diff
             value("document.querySelector('.brand').click()")
             until("!!document.querySelector('.fc-main')", "the project's changes")
-            value("document.querySelector('.fc-main').click()")
-            until("document.querySelectorAll('.d-line.k-add').length === 1 && document.querySelectorAll('.d-line.k-del').length === 1", "the file's changes")
+            press(".insp-head .seg button", "文件")
+            until("document.querySelectorAll('.file-row-wrap').length >= 2 && !!document.querySelector('.git-st-btn.st-M')", "files with git & recency badges")
+            file_names = lambda: value("Array.from(document.querySelectorAll('.file-row-wrap .file-name')).map(n => n.textContent)")
+            assert file_names()[:2] == ["a-old.txt", "app.js"], file_names()
+            assert value("Array.from(document.querySelectorAll('.file-row-wrap')).find(n => n.querySelector('.file-name')?.textContent === 'app.js')?.querySelector('.rec-tag')?.textContent") == "刚改"
+            assert not value("Array.from(document.querySelectorAll('.file-row-wrap')).find(n => n.querySelector('.file-name')?.textContent === 'a-old.txt')?.querySelector('.rec-tag')")
+            value("document.querySelector('.files-sort-btn').click()")
+            until("Array.from(document.querySelectorAll('.file-row-wrap .file-name')).map(n => n.textContent)[0] === 'app.js'", "sorted by recent modified")
+            value("Array.from(document.querySelectorAll('.files-controls .filter-pill')).find(b => b.textContent.startsWith('今日')).click()")
+            until("document.querySelectorAll('.file-row-wrap').length === 1", "today file filter")
+            assert file_names() == ["app.js"], file_names()
+            browser.picture(out / "files.png")
+            value("document.querySelector('.git-st-btn.st-M').click()")
+            until("document.querySelectorAll('.d-line.k-add').length === 1 && document.querySelectorAll('.d-line.k-del').length === 1", "the file's changes from explorer git badge")
             browser.picture(out / "diff.png")
             assert errors() == "[]", errors()
 

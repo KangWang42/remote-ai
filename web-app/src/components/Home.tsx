@@ -1,4 +1,4 @@
-import { formatRelativeTime } from '../runtime/time';
+import { formatExactTime, formatRelativeTime, getRecencyTier, isToday } from '../runtime/time';
 import { runtimeLabel, type Thread, type ThreadModel } from '../runtime/threads';
 import { toolBadgeStyle, toolMeta, type DeviceInfo } from '../runtime/types';
 
@@ -13,16 +13,20 @@ interface Props {
 
 const NEED: Record<string, string> = { confirm: '等你确认', failed: '出错了', done: '已完成，待查看' };
 
-/** With no conversation open: what needs the owner, and what is running now. */
+/** With no conversation open: what needs the owner, what is running now, and today's active conversations. */
 export function Home({ device, model, onOpen, onMenu, onNew, onAddProject }: Props) {
+  const now = Date.now();
   const running = model.all.filter((t) => !t.needs && t.runtime !== 'idle');
+  const today = model.all.filter((t) => !t.needs && t.runtime === 'idle' && isToday(t.at, now)).slice(0, 6);
   const card = (t: Thread) => {
     const meta = toolMeta(t.tool);
+    const tier = getRecencyTier(t.at, now);
+    const todayHit = tier === 'recent' || tier === 'today';
     return (
       <button
         key={t.key}
         type="button"
-        class={`home-card${t.needs ? ` need-${t.needs}` : ''}`}
+        class={`home-card${t.needs ? ` need-${t.needs}` : ''}${todayHit ? ` is-${tier}` : ''}`}
         onClick={() => onOpen(t)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -34,7 +38,10 @@ export function Home({ device, model, onOpen, onMenu, onNew, onAddProject }: Pro
             {meta.mono}
           </span>
           <span class="home-card-title">{t.title}</span>
-          <span class="th-time">{formatRelativeTime(t.at)}</span>
+          {todayHit && <span class={`rec-tag is-${tier}`}>今日</span>}
+          <span class={`th-time is-${tier}`} title={formatExactTime(t.at) || undefined}>
+            {formatRelativeTime(t.at, now)}
+          </span>
         </span>
         <span class="home-card-where">
           {t.project || t.folder} {runtimeLabel(t) ? `· ${runtimeLabel(t)}` : ''}
@@ -82,6 +89,12 @@ export function Home({ device, model, onOpen, onMenu, onNew, onAddProject }: Pro
               <h2>正在进行</h2>
               {running.length ? <div class="home-grid">{running.map(card)}</div> : <p class="muted">没有正在运行的对话。</p>}
             </section>
+            {today.length > 0 && (
+              <section>
+                <h2>今日对话</h2>
+                <div class="home-grid">{today.map(card)}</div>
+              </section>
+            )}
           </>
         )}
       </div>

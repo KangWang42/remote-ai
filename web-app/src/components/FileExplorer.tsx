@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { fileViewerUrl, listFiles, readFileBytes } from '../runtime/api';
-import { formatRelativeTime } from '../runtime/time';
-import type { FileEntry, FilePreviewTarget } from '../runtime/types';
+import { fileViewerUrl, gitStatus, listFiles, readFileBytes } from '../runtime/api';
+import { formatExactTime, formatRelativeTime, getRecencyTier, isToday, normalizeMs } from '../runtime/time';
+import type { FileEntry, FilePreviewTarget, GitFileSummary } from '../runtime/types';
+import type { DiffTarget } from './ChangesPanel';
 import { MarkdownView } from './MarkdownView';
 import { SelectPopover } from './SelectPopover';
 
@@ -282,25 +283,66 @@ export function FilePreviewBody({ target, expanded = false, onBack, onToggleExpa
   );
 }
 
+type FileSortMode = 'name' | 'modified';
+type FileFilterMode = 'all' | 'today' | 'changed';
+
+const SORT_KEY = 'rcli-console-files-sort-v1';
+function loadFileSort(): FileSortMode {
+  try {
+    return localStorage.getItem(SORT_KEY) === 'modified' ? 'modified' : 'name';
+  } catch {
+    return 'name';
+  }
+}
+function saveFileSort(mode: FileSortMode) {
+  try {
+    localStorage.setItem(SORT_KEY, mode);
+  } catch {
+    // kept for this page only
+  }
+}
+
+const GIT_STATUS_TITLE: Record<string, string> = {
+  M: 'Git 已修改',
+  A: 'Git 新增',
+  D: 'Git 已删除',
+  R: 'Git 重命名',
+  '?': 'Git 未跟踪新文件',
+  U: 'Git 未跟踪新文件',
+};
+
 interface ExplorerProps {
   workspaces: string[];
   activeProject: string;
+  worktree?: string;
   onExpandPreview: (target: FilePreviewTarget) => void;
+  onOpenDiff?: (target: DiffTarget) => void;
   onCiteFile?: (relPath: string, projectDir: string) => void;
 }
 
-/** Full-featured project file explorer with project switcher, breadcrumbs, search, and inline preview. */
-export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCiteFile }: ExplorerProps) {
+/** Project file explorer with recency & Git change badges, sort/filter controls, breadcrumbs, and live preview. */
+export function FileExplorer({ workspaces, activeProject, worktree = '', onExpandPreview, onOpenDiff, onCiteFile }: ExplorerProps) {
   const [browseDir, setBrowseDir] = useState(activeProject || workspaces[0] || '');
   const [folderPath, setFolderPath] = useState('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [gitFilesList, setGitFilesList] = useState<GitFileSummary[]>([]);
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [search, setSearch] = useState('');
   const [showHidden, setShowHidden] = useState(false);
+  const [sortMode, setSortMode] = useState<FileSortMode>(loadFileSort);
+  const [filterMode, setFilterMode] = useState<FileFilterMode>('all');
   const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(null);
   const [tick, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  const activeWorktree = browseDir === activeProject ? worktree : '';
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Follow active project switch automatically when user jumps between projects
   useEffect(() => {
@@ -309,6 +351,7 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
       setFolderPath('');
       setPreviewTarget(null);
       setSearch('');
+      setFilterMode('all');
     } else if (!browseDir && workspaces[0]) {
       setBrowseDir(workspaces[0]);
     }
@@ -317,11 +360,13 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
   useEffect(() => {
     if (!browseDir) {
       setEntries([]);
+      setGitFilesList([]);
       return;
     }
     let alive = true;
     setLoading(true);
     setErr('');
+    setNow(Date.now());
     listFiles(browseDir, folderPath)
       .then((res) => {
         if (!alive) return;
@@ -341,17 +386,85 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
     };
   }, [browseDir, folderPath, tick]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return entries
-      .filter((e) => (showHidden || !e.hidden) && (!q || e.name.toLowerCase().includes(q)))
-      .sort((a, b) => {
-        if (a.dir !== b.dir) return a.dir ? -1 : 1;
-        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  // Fetch Git status for the selected project to surface uncommitted file & directory badges
+  useEffect(() => {
+    if (!browseDir) {
+      setGitFilesList([]);
+      return;
+    }
+    let alive = true;
+    gitStatus(browseDir, activeWorktree)
+      .then((res) => {
+        if (!alive) return;
+        setGitFilesList(res?.is_repo ? res.files || [] : []);
+      })
+      .catch(() => {
+        if (alive) setGitFilesList([]);
       });
+    return () => {
+      alive = false;
+    };
+  }, [browseDir, activeWorktree, tick]);
+
+  const { gitFileMap, gitDirCounts } = useMemo(() => {
+    const files = new Map<string, GitFileSummary>();
+    const dirs = new Map<string, number>();
+    for (const f of gitFilesList) {
+      const norm = f.path.replace(/\\/g, '/').replace(/^\/+/, '');
+      files.set(norm, f);
+      const parts = norm.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        const prefix = parts.slice(0, i).join('/');
+        dirs.set(prefix, (dirs.get(prefix) || 0) + 1);
+      }
+    }
+    return { gitFileMap: files, gitDirCounts: dirs };
+  }, [gitFilesList]);
+
+  const visibleBase = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return entries.filter((e) => (showHidden || !e.hidden) && (!q || e.name.toLowerCase().includes(q)));
   }, [entries, showHidden, search]);
 
+  const entryGitState = (entry: FileEntry) => {
+    const rel = folderPath ? `${folderPath}/${entry.name}` : entry.name;
+    const gitFile = !entry.dir ? gitFileMap.get(rel) : undefined;
+    const dirChanges = entry.dir ? gitDirCounts.get(rel) || 0 : 0;
+    return { rel, gitFile, dirChanges, hasChange: Boolean(gitFile) || dirChanges > 0 };
+  };
+
+  const todayCount = useMemo(
+    () => visibleBase.filter((e) => isToday(e.modified, now)).length,
+    [visibleBase, now],
+  );
+  const changedCount = useMemo(
+    () => visibleBase.filter((e) => entryGitState(e).hasChange).length,
+    [visibleBase, folderPath, gitFileMap, gitDirCounts],
+  );
+
+  const filtered = useMemo(() => {
+    const list = visibleBase.filter((e) => {
+      if (filterMode === 'today') return isToday(e.modified, now);
+      if (filterMode === 'changed') return entryGitState(e).hasChange;
+      return true;
+    });
+    return list.sort((a, b) => {
+      if (a.dir !== b.dir) return a.dir ? -1 : 1;
+      if (sortMode === 'modified') {
+        const diff = normalizeMs(b.modified) - normalizeMs(a.modified);
+        if (diff !== 0) return diff;
+      }
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [visibleBase, filterMode, sortMode, now, folderPath, gitFileMap, gitDirCounts]);
+
   const hiddenCount = useMemo(() => entries.filter((e) => e.hidden).length, [entries]);
+
+  const toggleSort = () => {
+    const next: FileSortMode = sortMode === 'name' ? 'modified' : 'name';
+    setSortMode(next);
+    saveFileSort(next);
+  };
 
   if (!browseDir) {
     return <div class="empty-hint">请先在左侧添加至少一个项目文件夹，即可在此快速浏览与预览所有文件。</div>;
@@ -390,6 +503,7 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
               setBrowseDir(next);
               setFolderPath('');
               setSearch('');
+              setFilterMode('all');
               setPreviewTarget(null);
             }}
           />
@@ -448,6 +562,48 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
         onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
       />
 
+      <div class="files-controls">
+        <div class="mini-pills" role="tablist" aria-label="文件筛选">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filterMode === 'all'}
+            class={`filter-pill${filterMode === 'all' ? ' on' : ''}`}
+            onClick={() => setFilterMode('all')}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filterMode === 'today'}
+            class={`filter-pill${filterMode === 'today' ? ' on' : ''}`}
+            onClick={() => setFilterMode(filterMode === 'today' ? 'all' : 'today')}
+          >
+            今日{todayCount > 0 ? <span class="pill-n">{todayCount}</span> : null}
+          </button>
+          {gitFilesList.length > 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filterMode === 'changed'}
+              class={`filter-pill${filterMode === 'changed' ? ' on' : ''}`}
+              onClick={() => setFilterMode(filterMode === 'changed' ? 'all' : 'changed')}
+            >
+              有改动{changedCount > 0 ? <span class="pill-n">{changedCount}</span> : null}
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          class={`files-sort-btn${sortMode === 'modified' ? ' on' : ''}`}
+          title={sortMode === 'modified' ? '当前按最近修改优先排序，点击切换为按名称排序' : '当前按名称排序，点击切换为最近修改优先'}
+          onClick={toggleSort}
+        >
+          {sortMode === 'modified' ? '最近修改 ↓' : '按名称'}
+        </button>
+      </div>
+
       {err && <div class="panel-feedback is-error">{err}</div>}
 
       {loading && entries.length === 0 ? (
@@ -456,9 +612,13 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
         <div class="empty-hint">
           {search
             ? `未找到包含“${search}”的文件`
-            : hiddenCount > 0 && !showHidden
-              ? `此目录仅有 ${hiddenCount} 个隐藏项，可点击上方“隐藏”按钮显示`
-              : '空目录'}
+            : filterMode === 'today'
+              ? '当前目录今日没有修改记录'
+              : filterMode === 'changed'
+                ? '当前目录没有未提交的 Git 改动'
+                : hiddenCount > 0 && !showHidden
+                  ? `此目录仅有 ${hiddenCount} 个隐藏项，可点击上方“隐藏”按钮显示`
+                  : '空目录'}
         </div>
       ) : (
         <div class="file-rows">
@@ -477,8 +637,15 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
           )}
           {filtered.map((entry) => {
             const badge = fileBadge(entry);
+            const tier = getRecencyTier(entry.modified, now);
+            const exact = formatExactTime(entry.modified);
+            const relTime = formatRelativeTime(entry.modified, now);
+            const { gitFile, dirChanges } = entryGitState(entry);
+            const gitCode = gitFile ? (gitFile.status === '?' ? 'U' : gitFile.status) : '';
+            const recClass = tier === 'recent' ? ' is-recent' : tier === 'today' ? ' is-today' : '';
+            const gitClass = gitFile || dirChanges > 0 ? ' is-git-changed' : '';
             return (
-              <div key={entry.name} class={`file-row-wrap${entry.hidden ? ' is-hidden' : ''}`}>
+              <div key={entry.name} class={`file-row-wrap${entry.hidden ? ' is-hidden' : ''}${recClass}${gitClass}`}>
                 <button
                   type="button"
                   class="file-row"
@@ -493,13 +660,44 @@ export function FileExplorer({ workspaces, activeProject, onExpandPreview, onCit
                 >
                   <span class={`file-badge ${badge.cls}`}>{badge.tag}</span>
                   <span class="file-row-text">
-                    <span class="file-name">{entry.name}</span>
+                    <span class="file-name-line">
+                      <span class="file-name">{entry.name}</span>
+                      {tier === 'recent' ? (
+                        <span class="rec-tag is-recent" title={exact ? `刚刚修改：${exact}` : '最近一小时内修改'}>
+                          刚改
+                        </span>
+                      ) : tier === 'today' ? (
+                        <span class="rec-tag is-today" title={exact ? `今日修改：${exact}` : '今日修改'}>
+                          今日
+                        </span>
+                      ) : null}
+                      {dirChanges > 0 && (
+                        <span class="git-dir-tag" title={`包含 ${dirChanges} 个未提交改动的文件`}>
+                          {dirChanges} 改
+                        </span>
+                      )}
+                    </span>
                     <span class="file-sub">
-                      {entry.dir ? formatRelativeTime(entry.modified) || '文件夹' : [formatSize(entry.size), formatRelativeTime(entry.modified)].filter(Boolean).join(' · ')}
+                      {!entry.dir && formatSize(entry.size) ? <span>{formatSize(entry.size)}</span> : null}
+                      {!entry.dir && formatSize(entry.size) && relTime ? <span> · </span> : null}
+                      <span class={`file-mtime is-${tier}`} title={exact || undefined}>
+                        {relTime || (entry.dir ? '文件夹' : '')}
+                      </span>
                     </span>
                   </span>
                   {entry.dir && <span class="file-chev">›</span>}
                 </button>
+                {gitFile && (
+                  <button
+                    type="button"
+                    class={`git-st-btn st-${gitCode}`}
+                    title={`${GIT_STATUS_TITLE[gitFile.status] || 'Git 改动'}${onOpenDiff ? ' · 点击查看 Diff' : ''}`}
+                    disabled={!onOpenDiff}
+                    onClick={() => onOpenDiff?.({ project: browseDir, worktree: activeWorktree, file: gitFile })}
+                  >
+                    {gitCode}
+                  </button>
+                )}
                 {!entry.dir && (
                   <button
                     type="button"
