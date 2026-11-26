@@ -48,8 +48,25 @@ public static class HistoryCheck {
         Require((string)t.Output[0]["data"] == "\x1b[?2004hend", "after a reset: " + ((string)t.Output[0]["data"]).Replace("\x1b", "^"));
         // nothing kept (a terminal that came back after an update): the relay's gap stays as it was, nothing is invented
         t = Terminal("only");
-        t.Output.Clear(); t.Seq = 40;
+        t.Output.Clear(); t.Seq = 40; t.BaseSeq = 40;
         Require(!TerminalAgent.Settle(t, 12, 1000) && t.Output.Count == 0, "nothing to give");
+        // a brand-new RelayLink after an update has ackSeq = 0; it must NOT mark the first post-update piece as restart
+        t.Output.Add(new Dictionary<string, object> { { "terminal", t.Id }, { "seq", ++t.Seq }, { "data", "after update" } });
+        using (var link = new RelayLink(new RelayEndpoint { Name = "local", Origin = "http://127.0.0.1:8787", Password = "p" })) {
+            var firstSend = link.SelectChunks(t, 30);
+            Require(firstSend.Count == 1 && !firstSend[0].ContainsKey("restart"), "returned terminal must not wipe relay history");
+            // explicit restart (e.g. recalled chat history on return) still passes through
+            t.Output[0]["restart"] = true;
+            var recalledSend = link.SelectChunks(t, 30);
+            Require(recalledSend.Count == 1 && true.Equals(recalledSend[0]["restart"]), "explicit restart passes through");
+        }
+        // trimmed history from this process still carries restart + modes preamble to a relay that has less
+        var trimmed = Terminal("\x1b[?1049h" + wide, "keep");
+        TerminalAgent.Settle(trimmed, 2, 10);
+        using (var link2 = new RelayLink(new RelayEndpoint { Name = "other", Origin = "http://127.0.0.1:8788", Password = "p" })) {
+            var replayed = link2.SelectChunks(trimmed, 30);
+            Require(replayed.Count == 1 && true.Equals(replayed[0]["restart"]) && ((string)replayed[0]["data"]).StartsWith("\x1b[?1049h"), "trimmed history replays with modes and restart");
+        }
         Console.WriteLine("history: kept after the relay has it, given again to a relay that has less, with the terminal modes in front when it begins later");
         return 0;
     }

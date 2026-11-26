@@ -263,18 +263,28 @@ public sealed class TerminalAgent {
         Tool kind = Tool.Of(tool);
         if (kind == null || (!kind.ReturnsUnnamed && session.Length == 0)) return; // an unnamed one cannot be found again
         string launcher = FindTool(tool);
-        var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = Convert.ToInt64(kept["seq"]) };
+        long baseSeq = Convert.ToInt64(kept["seq"]);
+        var live = new LiveTerminal { Id = id, Tool = tool, Dir = dir, Folder = dir.Length == 0 ? Get(kept, "folder") : "", Session = session, Seq = baseSeq, BaseSeq = baseSeq };
         string where = Place(live, dirs);
         if (!Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || terminals.ContainsKey(id) || launcher == null || where == null || !Directory.Exists(where) || !HasTerminalSlot()) return;
         if (Get(kept, "form") == "chat") {
             // a conversation goes on where it was; one whose tool had not named it yet cannot be found again
             if (session.Length == 0 || !kind.Chats) return;
-            live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
             string model = Get(kept, "model");
             live.Model = Models.Valid(model) ? model : "";
             live.Effort = Models.CleanEffort(Get(kept, "effort"));
             live.Pty = Chat.Open(tool, launcher, where, session, true, Get(prefs, "RemoteMaxMode"), Emitted(live), Quotas, Peers.Offer(tool, where, live.Id, live.Dir), live.Model, live.Effort);
             Heard(live);
+            // Recall saved transcript messages before the update note so returned chats keep full history
+            // (and automatically heal chats whose relay buffer was wiped by an earlier update).
+            bool recalled = Recall(live, where);
+            lock (gate) {
+                live.Pending.Append(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "Remote AI 已更新，对话已接回" }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
+                if (recalled) {
+                    Seal(live);
+                    if (live.Output.Count > 0) live.Output[0]["restart"] = true;
+                }
+            }
             terminals[id] = live;
             return;
         }
@@ -292,13 +302,17 @@ public sealed class TerminalAgent {
         };
     }
     /// What was said in a saved conversation before it is gone on with in a chat: shown above what follows.
-    void Recall(LiveTerminal live, string root) {
+    /// Returns whether any saved messages were found and emitted.
+    bool Recall(LiveTerminal live, string root) {
         try {
             string file = ConversationFile(live.Tool, live.Session, root);
-            if (file == null) return;
+            if (file == null) return false;
             var said = Said(file, live.Tool);
-            live.Chat.Before((List<Dictionary<string, object>>)said["messages"], (bool)said["more"]);
-        } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            var messages = (List<Dictionary<string, object>>)said["messages"];
+            if (messages.Count == 0) return false;
+            live.Chat.Before(messages, (bool)said["more"]);
+            return true;
+        } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
     }
     /// The file a tool keeps a conversation in; null where there is none.
     string ConversationFile(string tool, string session, string root) {
@@ -327,7 +341,7 @@ public sealed class TerminalAgent {
     readonly HashSet<string> relaying = new HashSet<string>();       // messages on their way into an idle conversation (ClaudeRelay)
     readonly object gate = new object();
     public sealed class LiveTerminal {
-        public string Id, Tool, Dir, Session = "", Status = "", Title = ""; public IRunning Pty; public long Seq;
+        public string Id, Tool, Dir, Session = "", Status = "", Title = ""; public IRunning Pty; public long Seq, BaseSeq;
         /// The model and reasoning effort a conversation was begun with (a team's member, Models.cs); "" for its tool's default.
         public string Model = "", Effort = "";
         /// How widely a conversation may work (full, edit, read), as it was begun: kept when it is started anew.

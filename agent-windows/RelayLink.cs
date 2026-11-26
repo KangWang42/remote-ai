@@ -162,8 +162,11 @@ public sealed class RelayLink : IDisposable {
 
         var result = new List<Dictionary<string, object>>();
         long firstSeq = Convert.ToInt64(all[from]["seq"]);
-        bool gap = from == 0 && firstSeq > have + 1;
         bool replay = from < t.History.Count;
+        // Only synthesize a restart reset when replaying trimmed history from this process (`firstSeq > t.BaseSeq + 1`).
+        // A terminal returned after an update starts with `BaseSeq = kept["seq"]` and empty History; marking its first
+        // post-update chunk as `restart` before the relay acks would wipe all pre-update history stored on the relay.
+        bool gap = replay && from == 0 && firstSeq > have + 1 && firstSeq > t.BaseSeq + 1;
         int count = Math.Min(limit, all.Count - from);
         for (int i = 0; i < count; i++) {
             var src = all[from + i];
