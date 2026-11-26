@@ -35,7 +35,16 @@ interface Props {
 }
 
 const MODE: Record<string, string> = { lead: '分工', review: '写审', compare: '比稿' };
-const STATE: Record<string, string> = { running: '进行中', paused: '已暂停', done: '已完成', stopped: '已停止', failed: '出错' };
+const STATE: Record<string, string> = { running: '进行中', choose: '待选方案', paused: '已暂停', done: '已完成', stopped: '已停止', failed: '出错' };
+
+function inferTool(team: Team, role: string): string {
+  const seat = team.member_sessions?.[role];
+  if (seat?.tool) return seat.tool;
+  if (role.startsWith('discuss:')) return role.slice(8);
+  if (role === 'writer' || role === 'leader') return team.tools?.[0] || '';
+  if (role === 'reviewer') return team.tools?.[1] || team.tools?.[0] || '';
+  return role;
+}
 
 function roleName(role: string): string {
   if (role === 'leader') return '领队';
@@ -109,7 +118,7 @@ export function TeamView({ id, features, onOpenMember, onGone, onChanged }: Prop
             <button type="button" class="btn quiet small" onClick={() => doWork('team_stop')}>
               暂停
             </button>
-          ) : team.state !== 'done' ? (
+          ) : team.state === 'paused' ? (
             <button type="button" class="btn quiet small" onClick={() => doWork('team_resume')}>
               继续
             </button>
@@ -147,7 +156,7 @@ export function TeamView({ id, features, onOpenMember, onGone, onChanged }: Prop
           <div class="team-members">
             {members.map(([role, terminal]) => {
               const seat = team.member_sessions?.[role];
-              const tool = seat?.tool || '';
+              const tool = inferTool(team, role);
               const waiting = (team.awaited || []).includes(role);
               const failed = team.failed?.[tool];
               return (

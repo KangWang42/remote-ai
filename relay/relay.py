@@ -170,14 +170,14 @@ def _team_roster(raw, tools, minimum=1, maximum=4):
 
 
 def _team_cards(items):
-    """The computer's collaboration tasks in short (agent-windows/Teams.cs, Cards), for the lists: what each is, how
-    it stands, whom it waits for, and whether one of them asks for a confirmation. The goal and note are cut short."""
+    """The computer's collaboration tasks in short (agent-windows/Teams.cs, agent-linux/teams.py), for the lists:
+    what each is, how it stands, whom it waits for, and whether one of them asks for a confirmation."""
     cards = []
     for c in items[:10] if isinstance(items, list) else []:
         if not (isinstance(c, dict) and isinstance(c.get("id"), str) and _id.fullmatch(c["id"]) and c.get("mode") in ("review", "lead", "compare")
                 and c.get("state") in TEAM_STATES and type(c.get("updated")) is int and c["updated"] >= 0):
             continue
-        tools = [t for t in c["tools"][:4] if t in CHAT_TOOLS] if isinstance(c.get("tools"), list) else []
+        tools = [t for t in c["tools"][:4] if t in TEAM_TOOLS] if isinstance(c.get("tools"), list) else []
         models = c.get("models") if isinstance(c.get("models"), dict) else {}
         efforts_raw = c.get("efforts") if isinstance(c.get("efforts"), dict) else {}
         efforts = {tool: e.strip().lower() for tool, e in efforts_raw.items() if tool in tools and isinstance(e, str) and e.strip() and _effort.fullmatch(e.strip().lower())}
@@ -191,7 +191,7 @@ def _team_cards(items):
             card["confirm"] = True
         if c["mode"] == "lead" and "roster" in c:
             try:
-                card["roster"] = _team_roster(c["roster"], CHAT_TOOLS)
+                card["roster"] = _team_roster(c["roster"], TEAM_TOOLS)
                 card["auto_roster"] = c.get("auto_roster") is True
             except RemoteError:
                 pass
@@ -463,6 +463,8 @@ REACH = ("say", "answer", "stop")
 # What is done to a terminal that runs a conversation through its tool's structured mode (form "chat"; docs/PROTOCOL.md,
 # "Chats"): what is said, a stop, an answer to what it asks, ending it. It has no screen to type into or size.
 CHAT_TOOLS = ("claude", "codex", "agy")
+# Tools that can participate as collaboration members (chat-capable tools, plus Linux PTY tools when advertised via `<tool>-team`).
+TEAM_TOOLS = ("claude", "codex", "agy", "opencode", "qoder", "cline", "pi")
 # a tool beyond the first two runs as a conversation only where the computer says it can (Antigravity CLI: by ACP)
 CHAT_FEATURES = {"agy": "chat-agy"}
 CHAT_ACTIONS = ("say", "stop", "answer", "close", "rename")
@@ -715,7 +717,7 @@ class Relay:
         if not isinstance(key, str) or not _terminal.fullmatch(key) or tool not in LABELS or not (_name(folder, 60) or apart) \
                 or type(created) is not int or created <= 0 or item.get("state") not in ("running", "closed"):
             return None
-        session = session if isinstance(session, str) and _session.fullmatch(session) else ""
+        session = session if isinstance(session, str) and session_id_ok(tool, session) else ""
         threads = state["threads"]
         if item["state"] == "closed":
             if session and any(t["tool"] == tool and t.get("session") == session for t in threads.values()):
@@ -1588,6 +1590,13 @@ class Relay:
                 raise RemoteError("电脑端版本不支持在手机上设置，请更新电脑端")
             return self._held(question, now, wait)
 
+    def _team_runs(self):
+        """Tools on this computer eligible to join a collaboration task."""
+        features = self._device.get("features", [])
+        runs = [t for t in CHAT_TOOLS if t in self._device["tools"] and "chat" in features and CHAT_FEATURES.get(t, "chat") in features]
+        runs += [t for t in self._device.get("tools", []) if t in TEAM_TOOLS and t not in runs and t + "-team" in features]
+        return runs
+
     def work(self, payload, now=None, wait=FILE_SECONDS):
         """The owner's work on the computer: its numbers by day ("stats"), the questions set to be asked at a time
         ("schedules", "schedule_set", "schedule_remove"), a conversation handed over to another ("handoff"), and what such
@@ -1687,7 +1696,7 @@ class Relay:
                 if not isinstance(goal, str) or not 0 < len(goal.strip()) <= 4000 or "\0" in goal:
                     raise RemoteError("目标需为 1 至 4000 字")
                 features = self._device.get("features", [])
-                runs = [t for t in CHAT_TOOLS if t in self._device["tools"] and "chat" in features and CHAT_FEATURES.get(t, "chat") in features]
+                runs = self._team_runs()
                 roster = None
                 auto_roster = item.get("auto_roster", False)
                 if type(auto_roster) is not bool:
@@ -1791,7 +1800,8 @@ class Relay:
                 if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
                     raise RemoteError("协作任务无效")
                 tool = payload.get("tool", "")
-                if not isinstance(tool, str) or (tool != "" and tool not in CHAT_TOOLS):
+                runs = self._team_runs()
+                if not isinstance(tool, str) or (tool != "" and tool not in CHAT_TOOLS and tool not in runs):
                     raise RemoteError("候选方案无效")
                 question["team"] = payload["team"]
                 question["tool"] = tool
@@ -1802,7 +1812,7 @@ class Relay:
                 if not isinstance(role, str) or len(role.strip()) > 32 or "\0" in role:
                     raise RemoteError("角色无效")
                 features = self._device.get("features", [])
-                runs = [t for t in CHAT_TOOLS if t in self._device["tools"] and "chat" in features and CHAT_FEATURES.get(t, "chat") in features]
+                runs = self._team_runs()
                 if not isinstance(tool, str) or tool not in runs:
                     raise RemoteError("这台电脑不能让这个工具参与协作")
                 if not isinstance(note, str) or len(note.strip()) > 1000 or "\0" in note:
@@ -1919,7 +1929,7 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

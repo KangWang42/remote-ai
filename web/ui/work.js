@@ -121,10 +121,12 @@
       if (!role || !['running', 'paused', 'done', 'stopped'].includes(team.state)) return null;
       return { team, role, tool: listed.tool };
     }
-    // The AIs a member's work can be handed to in its task: those the computer runs conversations of.
+    // The AIs a member's work can be handed to in its task: those advertised via `<tool>-team`, falling back to chat tools.
     teamTools() {
       const device = (this.data || {}).device || {};
-      return NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && this.has('chat') && (tool !== 'agy' || this.has('chat-agy')));
+      const feats = device.features || [];
+      const flagged = (device.tools || []).filter(tool => feats.includes(tool + '-team'));
+      return flagged.length ? flagged : NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && this.has('chat') && (tool !== 'agy' || this.has('chat-agy')));
     }
 
     // ================= handing a conversation over to another AI
@@ -220,7 +222,8 @@
           const next = done.team && done.team.members ? done.team.members[role] || done.team.members[state.to] : '';
           p.sheet.close(null, true);
           work.toast('已在协作中交给 ' + TOOLS[state.to]);
-          if (next) location.replace(work.base + 'chat/?id=' + encodeURIComponent(next) + '&team=' + encodeURIComponent(team.id));
+          const isChat = NEW_TOOLS.includes(state.to) && work.has('chat') && (state.to !== 'agy' || work.has('chat-agy'));
+          if (next) location.replace(work.base + (isChat ? 'chat/' : 'terminal/') + '?id=' + encodeURIComponent(next) + '&team=' + encodeURIComponent(team.id));
         }, { busy: '正在交接…', id: 'handoff-go' });
         p.foot.append(...go.nodes);
       } };

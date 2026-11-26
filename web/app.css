@@ -619,6 +619,10 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-chip .dot.n-cc, .team-slot-head .dot.n-cc { background: #fbe9e1; color: #a9441d; }
 .team-chip .dot.n-cx, .team-slot-head .dot.n-cx { background: #e6eefd; color: #1d4fbf; }
 .team-chip .dot.n-ag, .team-slot-head .dot.n-ag { background: #ece8fd; color: #5536c9; }
+.team-chip .dot.n-oc, .team-slot-head .dot.n-oc { background: #e6f6ec; color: #15803d; }
+.team-chip .dot.n-qd, .team-slot-head .dot.n-qd { background: #eef1ff; color: #2445c8; }
+.team-chip .dot.n-cl, .team-slot-head .dot.n-cl { background: #f3e8ff; color: #7c3aed; }
+.team-chip .dot.n-pi, .team-slot-head .dot.n-pi { background: #fef3c7; color: #9a5b00; }
 .team-chip .member-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 3px; }
 .team-chip .member-tags { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .team-chip .member-tail { flex: none; display: inline-flex; align-items: center; gap: 4px; }
@@ -706,6 +710,10 @@ html[data-theme="dark"] #chains .card.rule .tool { background: #261d4a; color: #
 .team-msg .badge.n-cc { background: #fbe9e1; color: #a9441d; }
 .team-msg .badge.n-cx { background: #e6eefd; color: #1d4fbf; }
 .team-msg .badge.n-ag { background: #ece8fd; color: #5536c9; }
+.team-msg .badge.n-oc { background: #e6f6ec; color: #15803d; }
+.team-msg .badge.n-qd { background: #eef1ff; color: #2445c8; }
+.team-msg .badge.n-cl { background: #f3e8ff; color: #7c3aed; }
+.team-msg .badge.n-pi { background: #fef3c7; color: #9a5b00; }
 .team-msg .badge.n-me { background: var(--accent); color: var(--on-accent); }
 .team-msg b { font-weight: 620; font-size: .85rem; }
 .team-msg .at { margin-left: auto; color: var(--muted); font-size: .74rem; }
@@ -746,6 +754,10 @@ dialog.rs.rs-full .rs-bar .team-menu[hidden] { display: none; }
 html[data-theme="dark"] .team-chip .dot.n-cc, html[data-theme="dark"] .team-slot-head .dot.n-cc, html[data-theme="dark"] .team-msg .badge.n-cc, html[data-theme="dark"] .share-badge.t-claude { background: #3a2318; color: #f7b593; }
 html[data-theme="dark"] .team-chip .dot.n-cx, html[data-theme="dark"] .team-slot-head .dot.n-cx, html[data-theme="dark"] .team-msg .badge.n-cx, html[data-theme="dark"] .share-badge.t-codex { background: #17284a; color: #9dbbf7; }
 html[data-theme="dark"] .team-chip .dot.n-ag, html[data-theme="dark"] .team-slot-head .dot.n-ag, html[data-theme="dark"] .team-msg .badge.n-ag, html[data-theme="dark"] .share-badge.t-agy { background: #261d4a; color: #bca9f8; }
+html[data-theme="dark"] .team-chip .dot.n-oc, html[data-theme="dark"] .team-slot-head .dot.n-oc, html[data-theme="dark"] .team-msg .badge.n-oc { background: #153224; color: #86efac; }
+html[data-theme="dark"] .team-chip .dot.n-qd, html[data-theme="dark"] .team-slot-head .dot.n-qd, html[data-theme="dark"] .team-msg .badge.n-qd { background: #1b2548; color: #9dbbf7; }
+html[data-theme="dark"] .team-chip .dot.n-cl, html[data-theme="dark"] .team-slot-head .dot.n-cl, html[data-theme="dark"] .team-msg .badge.n-cl { background: #2d1b4e; color: #d8b4fe; }
+html[data-theme="dark"] .team-chip .dot.n-pi, html[data-theme="dark"] .team-slot-head .dot.n-pi, html[data-theme="dark"] .team-msg .badge.n-pi { background: #3b2a10; color: #fcd34d; }
 html[data-theme="dark"] .t-dot.t-claude, html[data-theme="dark"] .bar-seg.t-claude, html[data-theme="dark"] .track i.t-claude { background: #f0936b; }
 html[data-theme="dark"] .t-dot.t-codex, html[data-theme="dark"] .bar-seg.t-codex, html[data-theme="dark"] .track i.t-codex { background: #6ea8fe; }
 html[data-theme="dark"] .t-dot.t-agy, html[data-theme="dark"] .bar-seg.t-agy, html[data-theme="dark"] .track i.t-agy { background: #b392f0; }

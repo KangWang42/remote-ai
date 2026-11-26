@@ -659,6 +659,47 @@ class TerminalRelayTests(unittest.TestCase):
                 stored = self.relay.overview(now=now)["device"]["team_cards"][0]
                 self.assertEqual((stored["state"], stored["phase"], stored["awaited"]), (state, expected, ["leader"]))
 
+    def test_linux_team_tool_flags_allow_pty_members_cards_pick_and_adopt(self):
+        team_id = "f" * 24
+        self.info["tools"] = ["claude", "opencode", "qoder", "cline", "pi", "shell"]
+        self.info["features"] = ["work", "chat", "teams", "teams-v2", "teams-grouped",
+                                 "claude-team", "opencode-team", "qoder-team", "cline-team", "pi-team"]
+        card = {"id": team_id, "dir": "demo", "goal": "跨工具比稿", "mode": "compare", "state": "choose",
+                "phase": "", "note": "", "updated": 1700000000, "awaited": [],
+                "tools": ["claude", "opencode", "pi", "shell"], "models": {}}
+        oc_term, cl_term = "a" * 32, "b" * 32
+        oc_sid, cl_sid = "ses_abcdef1234567890", "1730000000000_ab12cd"
+        self.relay.agent({
+            "info": dict(self.info, team_cards=[card]),
+            "terminals": [
+                {"id": oc_term, "tool": "opencode", "dir": "demo", "created": 1700000000000,
+                 "state": "running", "session": oc_sid, "team": team_id},
+                {"id": cl_term, "tool": "cline", "dir": "demo", "created": 1700000000001,
+                 "state": "running", "session": cl_sid, "team": team_id},
+            ],
+        }, now=1001)
+        overview = self.relay.overview(now=1001)
+        self.assertIn("opencode-team", overview["device"]["features"])
+        self.assertIn("pi-team", overview["device"]["features"])
+        self.assertEqual(overview["device"]["team_cards"][0]["tools"], ["claude", "opencode", "pi"])
+        adopted = {t["id"]: t for t in overview["terminals"]}
+        self.assertEqual((adopted[oc_term]["session"], adopted[oc_term]["team"]), (oc_sid, team_id))
+        self.assertEqual((adopted[cl_term]["session"], adopted[cl_term]["team"]), (cl_sid, team_id))
+
+        asked, _ = self._carried({"id": "1" * 32, "action": "team_start",
+                                  "item": {"id": team_id, "mode": "compare", "dir": "demo",
+                                           "goal": "比稿", "tools": ["opencode", "pi"], "rounds": 1}},
+                                 {"team": {"id": team_id}})
+        self.assertEqual(asked["item"]["tools"], ["opencode", "pi"])
+        asked, _ = self._carried({"id": "2" * 32, "action": "team_pick", "team": team_id, "tool": "opencode"},
+                                 {"team": {"id": team_id}})
+        self.assertEqual(asked["tool"], "opencode")
+        asked, _ = self._carried({"id": "3" * 32, "action": "team_swap", "team": team_id, "role": "writer", "tool": "qoder"},
+                                 {"team": {"id": team_id}})
+        self.assertEqual(asked["tool"], "qoder")
+        with self.assertRaises(RemoteError):
+            self.relay.work({"id": "4" * 32, "action": "team_pick", "team": team_id, "tool": "shell"}, now=1002, wait=0)
+
     def test_desktop_timeout_never_claims_not_executed(self):
         self.info["features"] = ["codex-desktop-open"]
         self.relay.agent({"info": self.info}, now=1001)

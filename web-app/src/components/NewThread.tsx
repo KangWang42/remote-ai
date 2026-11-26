@@ -27,8 +27,10 @@ export function NewThread({ device, dir: initialDir, onCancel, onAddProject, onS
   const workspaces = device?.workspaces || [];
   const tools = (device?.tools || []).filter((t) => t !== 'shell');
   const chatTools = tools.filter((t) => CHAT_TOOLS.includes(t) && features.includes('chat') && (t !== 'agy' || features.includes('chat-agy')));
+  const flaggedTeamTools = tools.filter((t) => features.includes(`${t}-team`));
+  const teamTools = flaggedTeamTools.length > 0 ? flaggedTeamTools : chatTools;
   const params = features.includes('chat-params');
-  const teams = features.includes('teams') && chatTools.length >= 2;
+  const teams = features.includes('teams') && teamTools.length >= 2;
 
   const [dir, setDir] = useState(initialDir || workspaces[0] || '');
   const [tool, setTool] = useState(() => (tools.includes('claude') ? 'claude' : tools[0] || ''));
@@ -41,11 +43,11 @@ export function NewThread({ device, dir: initialDir, onCancel, onAddProject, onS
   const [catalog, setCatalog] = useState<Record<string, ToolModelOption[]>>({});
   const [together, setTogether] = useState(false);
   const [teamMode, setTeamMode] = useState<TeamMode>('lead');
-  const [leader, setLeader] = useState(chatTools[0] || '');
-  const [members, setMembers] = useState<string[]>(chatTools.slice(1, 2));
-  const [writer, setWriter] = useState(chatTools[0] || '');
-  const [reviewer, setReviewer] = useState(chatTools[1] || chatTools[0] || '');
-  const [racers, setRacers] = useState<string[]>(chatTools.slice(0, 2));
+  const [leader, setLeader] = useState(teamTools[0] || '');
+  const [members, setMembers] = useState<string[]>(teamTools.slice(1, 2));
+  const [writer, setWriter] = useState(teamTools[0] || '');
+  const [reviewer, setReviewer] = useState(teamTools[1] || teamTools[0] || '');
+  const [racers, setRacers] = useState<string[]>(teamTools.slice(0, 2));
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const box = useRef<HTMLTextAreaElement | null>(null);
@@ -192,10 +194,10 @@ export function NewThread({ device, dir: initialDir, onCancel, onAddProject, onS
             {teamMode === 'lead' && (
               <div class="team-row">
                 <span class="team-k">领队</span>
-                <ToolChips tools={chatTools} on={[leader]} pick={(t) => setLeader(t)} />
+                <ToolChips tools={teamTools} on={[leader]} pick={(t) => setLeader(t)} />
                 <span class="team-k">成员</span>
                 <ToolChips
-                  tools={chatTools.filter((t) => t !== leader)}
+                  tools={teamTools.filter((t) => t !== leader)}
                   on={members}
                   pick={(t) => toggleIn(members, t, setMembers, 3)}
                 />
@@ -204,15 +206,15 @@ export function NewThread({ device, dir: initialDir, onCancel, onAddProject, onS
             {teamMode === 'review' && (
               <div class="team-row">
                 <span class="team-k">写</span>
-                <ToolChips tools={chatTools} on={[writer]} pick={setWriter} />
+                <ToolChips tools={teamTools} on={[writer]} pick={setWriter} />
                 <span class="team-k">审</span>
-                <ToolChips tools={chatTools} on={[reviewer]} pick={setReviewer} />
+                <ToolChips tools={teamTools} on={[reviewer]} pick={setReviewer} />
               </div>
             )}
             {teamMode === 'compare' && (
               <div class="team-row">
                 <span class="team-k">参与</span>
-                <ToolChips tools={chatTools} on={racers} pick={(t) => toggleIn(racers, t, setRacers, 3)} />
+                <ToolChips tools={teamTools} on={racers} pick={(t) => toggleIn(racers, t, setRacers, 3)} />
               </div>
             )}
           </div>

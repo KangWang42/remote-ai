@@ -11,7 +11,9 @@
   const MODES = { review: '写审', lead: '分工协作', compare: '比稿' }, ROUNDS = [1, 2, 3, 5, 10];
   const STATES = { running: ['进行中', 'starting'], choose: ['待选方案', 'confirm'], paused: ['已暂停', 'confirm'], done: ['已完成', 'ended'], stopped: ['已停止', 'ended'], failed: ['没有开始', 'ended'] };
   const ROLES = { writer: '写手', reviewer: '审查', leader: '领队', user: '你' };
-  const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', user: '你' };
+  const SHORT = { claude: 'CC', codex: 'CX', agy: 'AG', opencode: 'OC', qoder: 'QD', cline: 'CL', pi: 'PI', user: '你' };
+  const TONE = { claude: 'n-cc', codex: 'n-cx', agy: 'n-ag', opencode: 'n-oc', qoder: 'n-qd', cline: 'n-cl', pi: 'n-pi', user: 'n-me' };
+  const toneOf = tool => TONE[tool] || 'n-cx';
   const defaults = window.RemoteTeamDefaults;
   const EFFORT_LABELS = (defaults && defaults.EFFORT_LABELS) || { none: '无（none）', minimal: '极低（minimal）', low: '低（low）', medium: '中（medium）', high: '高（high）', xhigh: '极高（xhigh）', max: '最高（max）', ultra: '极致（ultra）' };
   const effortTag = level => defaults ? defaults.effortTag(level) : '思考 · ' + ((EFFORT_LABELS[String(level || '').trim().toLowerCase()] || '').replace(/（.*）/, '') || '默认');
@@ -45,7 +47,14 @@
     const round = team.round || 1;
     return isFlexRounds(team) ? '第 ' + round + ' 轮 · 自由轮数' : '第 ' + round + ' / ' + roundsOf(team) + ' 轮';
   };
-  const able = () => ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
+  // A computer names the tools that can be members (features `<tool>-team`); one that says
+  // nothing about it offers the chat trio, matching earlier Windows versions.
+  const able = () => {
+    const device = (page.data && page.data.device) || {};
+    const feats = device.features || [];
+    const flagged = (device.tools || []).filter(tool => feats.includes(tool + '-team'));
+    return flagged.length ? flagged : ['claude', 'codex', 'agy'].filter(tool => page.chatOk(tool));
+  };
   const PHASE_LABELS = new Map([['discuss', '讨论方案'], ['decision', '领队处理中'], ['verify', '领队验收']]);
   const phaseLabel = phase => PHASE_LABELS.get(phase) || '';
   const isUnverifiedStop = team => !!team && team.state === 'stopped' && team.mode === 'lead' && (team.phase === 'verify' || !!team.last);
@@ -285,8 +294,8 @@
     const rosterSupported = hasRoster();
     if (rosterSupported ? tools.length < 1 : tools.length < 2) {
       return toast(rosterSupported
-        ? '需要这台电脑能在手机上运行至少一个 AI（Claude Code、Codex、Antigravity CLI）'
-        : '需要这台电脑能在手机上运行至少两个 AI（Claude Code、Codex、Antigravity CLI）');
+        ? '需要这台电脑有至少一个可参与协作的 AI 工具'
+        : '需要这台电脑有至少两个可参与协作的 AI 工具');
     }
     if (!projects.length) return toast('请先添加一个项目');
     const savedPrefs = defaults ? defaults.readPrefs() : { models: {}, efforts: {} };
@@ -450,7 +459,7 @@
       });
       const leaderSlot = el('div', { className: 'team-slot team-leader-slot' },
         el('div', { className: 'team-slot-head' },
-          el('span', { className: 'dot ' + (plan.leader === 'claude' ? 'n-cc' : plan.leader === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[plan.leader] || 'AI' }),
+          el('span', { className: 'dot ' + toneOf(plan.leader), textContent: SHORT[plan.leader] || 'AI' }),
           el('b', { textContent: '领队' })),
         el('div', { className: 'team-slot-fields single' }, makeField('工具', leaderToolSel)),
         slotBadgeSummary(plan.leader, lm, le));
@@ -477,7 +486,7 @@
           const onRemove = plan.rosterMembers.length > 1 ? () => { plan.rosterMembers.splice(idx, 1); refreshAllSections(); } : null;
           return el('div', { className: 'team-slot' },
             el('div', { className: 'team-slot-head' },
-              el('span', { className: 'dot ' + (slot.tool === 'claude' ? 'n-cc' : slot.tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[slot.tool] || 'AI' }),
+              el('span', { className: 'dot ' + toneOf(slot.tool), textContent: SHORT[slot.tool] || 'AI' }),
               el('b', { textContent: label }),
               onRemove ? el('button', { type: 'button', id: 'team-roster-remove-' + role, className: 'team-slot-remove', 'aria-label': '移除' + label, textContent: '移除', onclick: onRemove }) : ''),
             el('div', { className: 'team-slot-fields single' }, makeField('工具', toolSel)),
@@ -527,7 +536,7 @@
         });
         slots.push(el('div', { className: 'team-slot' },
           el('div', { className: 'team-slot-head' },
-            el('span', { className: 'dot ' + (plan.leader === 'claude' ? 'n-cc' : plan.leader === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[plan.leader] || 'AI' }),
+            el('span', { className: 'dot ' + toneOf(plan.leader), textContent: SHORT[plan.leader] || 'AI' }),
             el('b', { textContent: '领队 · ' + (TOOLS[plan.leader] || plan.leader) })),
           el('div', { className: 'team-slot-fields' },
             makeField('模型', leaderModelSel),
@@ -555,7 +564,7 @@
             });
             slots.push(el('div', { className: 'team-slot' },
               el('div', { className: 'team-slot-head' },
-                el('span', { className: 'dot ' + (slot.tool === 'claude' ? 'n-cc' : slot.tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[slot.tool] || 'AI' }),
+                el('span', { className: 'dot ' + toneOf(slot.tool), textContent: SHORT[slot.tool] || 'AI' }),
                 el('b', { textContent: label + ' · ' + (TOOLS[slot.tool] || slot.tool) })),
               el('div', { className: 'team-slot-fields' },
                 makeField('模型', modelSel),
@@ -606,7 +615,7 @@
         }
         rows.push(el('div', { className: 'team-slot' },
           el('div', { className: 'team-slot-head' },
-            el('span', { className: 'dot ' + (tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }),
+            el('span', { className: 'dot ' + toneOf(tool), textContent: SHORT[tool] || 'AI' }),
             el('b', { textContent: role + ' · ' + (TOOLS[tool] || tool) })),
           el('div', { className: 'team-model-row-controls' + (fields.length === 1 ? ' single' : '') }, ...fields)));
       });
@@ -905,7 +914,7 @@
     function openMember(info) {
       if (!info || !info.canOpen) return;
       if (info.liveTerm) {
-        page.open(info.liveTerm.id, info.liveTerm.form || 'chat', { team: currentTeam.id });
+        page.open(info.liveTerm.id, info.liveTerm.form || 'terminal', { team: currentTeam.id });
         return;
       }
       if (info.sessionRef && info.sessionRef.id) {
@@ -917,14 +926,14 @@
           return;
         }
         if (info.t) {
-          page.open(info.t.id, info.t.form || 'chat', { team: currentTeam.id });
+          page.open(info.t.id, info.t.form || 'terminal', { team: currentTeam.id });
           return;
         }
         toast('当前电脑端版本不支持查看历史对话');
         return;
       }
       if (info.t) {
-        page.open(info.t.id, info.t.form || 'chat', { team: currentTeam.id });
+        page.open(info.t.id, info.t.form || 'terminal', { team: currentTeam.id });
       }
     }
 
@@ -1138,7 +1147,7 @@
             disabled: !info.canOpen,
             onclick: () => openMember(info)
           },
-            el('span', { className: 'dot ' + (info.tool === 'claude' ? 'n-cc' : info.tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[info.tool] || 'AI' }),
+            el('span', { className: 'dot ' + toneOf(info.tool), textContent: SHORT[info.tool] || 'AI' }),
             el('span', { className: 'member-main' },
               el('span', { className: 'name', textContent: roleName(team, info.role) }),
               tags.length ? el('span', { className: 'member-tags' }, ...tags) : ''),
@@ -1361,7 +1370,7 @@
                 type: 'button', className: 'compact-row',
                 onclick: () => { if (expanded.has(key)) expanded.delete(key); else expanded.add(key); renderStream('preserve'); }
               },
-                el('span', { className: 'badge ' + (tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }),
+                el('span', { className: 'badge ' + toneOf(tool), textContent: SHORT[tool] || 'AI' }),
                 el('span', { className: 'compact-who', textContent: labelText }),
                 el('span', { className: 'action-tag subtle', textContent: meta.tag }),
                 el('span', { className: 'compact-preview', textContent: summaryLine }),
@@ -1375,7 +1384,7 @@
           const contentNodes = [];
           if (stageBanner) contentNodes.push(el('div', { className: 'team-stage-pill', textContent: stageBanner }));
           contentNodes.push(el('div', { className: 'head' },
-            !isMeta ? el('span', { className: 'badge ' + (isUser ? 'n-me' : tool === 'claude' ? 'n-cc' : tool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[tool] || 'AI' }) : '',
+            !isMeta ? el('span', { className: 'badge ' + (isUser ? 'n-me' : toneOf(tool)), textContent: SHORT[tool] || 'AI' }) : '',
             el('b', { textContent: labelText }),
             el('span', { className: 'action-tag kind-' + meta.kind, textContent: meta.tag }),
             canJumpMember ? el('button', { type: 'button', className: 'team-msg-open', textContent: '查看对话', onclick: () => openMember(memberLink) }) : '',
@@ -1393,7 +1402,7 @@
               const targetTitle = roleTitle(item.role) ? roleTitle(item.role) + (targetTool ? ' · ' + (TOOLS[targetTool] || targetTool) : '') : (TOOLS[targetTool] || item.role);
               return el('div', { className: 'team-assign-card' },
                 el('div', { className: 'team-assign-head' },
-                  el('span', { className: 'badge ' + (targetTool === 'claude' ? 'n-cc' : targetTool === 'agy' ? 'n-ag' : 'n-cx'), textContent: SHORT[targetTool] || 'AI' }),
+                  el('span', { className: 'badge ' + toneOf(targetTool), textContent: SHORT[targetTool] || 'AI' }),
                   el('b', { textContent: targetTitle }),
                   el('span', { className: 'action-tag kind-dispatch', textContent: '分派任务' })),
                 useMarkdown ? renderRichBody(item.body, 'team-assign-body') : el('p', { className: 'team-assign-body', textContent: item.body }));

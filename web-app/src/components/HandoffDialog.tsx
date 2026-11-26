@@ -66,11 +66,14 @@ export function HandoffDialog({ from, device, threads, onClose, onStarted, onDon
   };
 
   const offers = useMemo<Offer[]>(() => {
-    const tools = (device?.tools || []).filter(
+    const allTools = device?.tools || [];
+    const tools = allTools.filter(
       (tool) => NEW_TOOLS.includes(tool) && features.includes('chat') && (tool !== 'agy' || features.includes('chat-agy')),
     );
+    const flaggedTeam = allTools.filter((tool) => features.includes(`${tool}-team`));
+    const teamTools = flaggedTeam.length > 0 ? flaggedTeam : tools;
     if (member) {
-      return tools
+      return teamTools
         .filter((tool) => tool !== from.tool)
         .map((tool) => ({ key: `team:${tool}`, tool, label: toolLabel(tool), detail: `在协作任务中接手${remaining(tool)}`, fresh: true }));
     }
