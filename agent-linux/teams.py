@@ -41,9 +41,21 @@ QUOTA_ERROR = re.compile(r"(hit your limit|rate[\s_-]*limit|usage[\s_-]*limit|qu
                          r"|credit balance|upgrade your plan|too many requests|\b429\b|overloaded"
                          r"|额度|限额|已达上限|额度用尽|额度已用完|额度用完)", re.IGNORECASE)
 ASSIGN_HEAD = re.compile(r"^[\s>*\-_`]*ASSIGN[*_`]*\s+[*_`]*([a-z][a-z0-9_-]*)[*_`]*\s*[:：]\s*(.*)$", re.IGNORECASE)
+ASSIGN = ASSIGN_HEAD                    # 验收解析沿用的分派行
+VERIFIED_OK = re.compile(r"^[\s>*\-_`]*VERIFIED[*_`]*\s*[:：]\s*(.*)$", re.IGNORECASE)
 DONE = re.compile(r"^[\s>*\-_`]*DONE[*_`]*\s*[:：]\s*(.*)$", re.MULTILINE | re.IGNORECASE)
 DIRECTIVE_LINE = re.compile(r"^[\s>*\-_`]*(?:ASSIGN|DONE|VERIFIED)[*_`]*(?:\s+[:：]|\s+[a-z]|[:：])", re.IGNORECASE)
 ID_OK = re.compile(r"\A[a-f0-9]{16,32}\Z")
+# 模型名与思考深度走命令行，只放工具会用的字符（与 Windows Models.Valid 同口径）
+MODEL_OK = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,79}\Z")
+EFFORT_OK = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,31}\Z")
+ROSTER_ROLES = ("leader", "member-1", "member-2", "member-3")
+MOST_NUDGES = 2
+VERIFY_REMIND = ("【协作任务 · 领队验收】这次回答里没有找到验收证据。请在回答的最后写：\n"
+                 "VERIFIED: 你实际运行的检查和看到的结果\nDONE: 总结\n"
+                 "还有问题时，用 ASSIGN 成员名: 修改内容 安排修复。")
+KEEP_AT_IT = ("【协作任务】请等到当前操作返回，继续核对、修复并复测，完成后交回结果。"
+              "确实无法继续时，写明阻塞原因和需要领队处理的事项。")
 
 REMIND = ("【协作任务】没有在你的回答里找到分派或结束。请在回答的最后按格式写：\n"
           "ASSIGN 成员名: 任务内容（可以多行）\n或单独一行：\nDONE: 总结")
@@ -105,6 +117,16 @@ def _quota_only_reply(said):
     return True
 
 
+def model_ok(value):
+    """A model name safe to put on a command line; empty means the tool's default."""
+    return isinstance(value, str) and (not value or bool(MODEL_OK.fullmatch(value)))
+
+
+def effort_ok(value):
+    """A thinking-effort level, or empty to leave the tool's default alone."""
+    return isinstance(value, str) and (not value or bool(EFFORT_OK.fullmatch(value)))
+
+
 def _bool(value):
     if isinstance(value, bool):
         return value
@@ -139,11 +161,12 @@ class Hands:
 
 class Team:
     def __init__(self):
-        self.id = self.dir = self.mode = self.goal = self.rules = ""
+        self.id = self.dir = self.mode = self.goal = self.rules = self.context = ""
         self.state = "running"
         self.note = self.phase = self.picked = ""
         self.discuss = False
-        self.reminded = False
+        self.reminded = self.last = self.spent = False
+        self.models, self.efforts = {}, {}
         self.tools = []
         self.rounds, self.round = 3, 1
         self.created = 0
@@ -155,6 +178,8 @@ class Team:
         self.past = []              # [{"id": str, "tool": str}] (conversations belonging to this task)
         self.awaited = []           # roles whose turn is awaited
         self.answers = {}           # role -> what it said this round
+        self.held = {}              # role -> the work kept when the rounds ran out ("继续" sends it)
+        self.nudged = {}            # role -> how often it was sent back this round
         self.worktrees = {}         # tool -> path (compare)
         self.base_commits = {}      # tool -> base commit sha
         self.summaries, self.stats, self.diffs = {}, {}, {}
@@ -182,7 +207,9 @@ class Team:
     def to_json(self):
         return {"id": self.id, "dir": self.dir, "mode": self.mode, "goal": self.goal, "rules": self.rules,
                 "state": self.state, "note": self.note, "phase": self.phase, "picked": self.picked,
-                "discuss": self.discuss, "reminded": self.reminded,
+                "discuss": self.discuss, "reminded": self.reminded, "last": self.last,
+                "spent": self.spent, "held": self.held,
+                "models": self.models, "efforts": self.efforts,
                 "tools": self.tools, "rounds": self.rounds, "round": self.round,
                 "created": self.created, "updated": self.updated,
                 "members": self.members, "opened": self.opened,
@@ -204,6 +231,11 @@ class Team:
         team.note, team.phase, team.picked = word("note"), word("phase"), word("picked")
         team.discuss = _bool(kept.get("discuss"))
         team.reminded = _bool(kept.get("reminded"))
+        team.last = _bool(kept.get("last"))
+        team.spent = _bool(kept.get("spent"))
+        team.models = {str(k): str(v) for k, v in (kept.get("models") or {}).items()}
+        team.efforts = {str(k): str(v) for k, v in (kept.get("efforts") or {}).items()}
+        team.held = {str(k): str(v) for k, v in (kept.get("held") or {}).items()}
         team.tools = [str(one) for one in kept.get("tools") or [] if isinstance(one, str)]
         team.members = {str(k): str(v) for k, v in (kept.get("members") or {}).items() if v}
         opened = [str(one) for one in kept.get("opened") or [] if isinstance(one, str) and one]
@@ -405,6 +437,32 @@ class Teams:
             return team.copy() if team else None
 
     # ---- what the owner does
+    def read_roster(self, rows):
+        """The phone's roster rows, checked the way the Windows client checks them."""
+        if not isinstance(rows, list) or not rows or len(rows) > len(ROSTER_ROLES):
+            raise OpError("领队和成员人数需要在 1 至 4 位之间")
+        seen, members = set(), []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise OpError("协作成员无效")
+            role, tool = row.get("role"), row.get("tool")
+            model, effort = row.get("model") or "", row.get("effort") or ""
+            role = role.strip() if isinstance(role, str) else ""
+            tool = tool.strip() if isinstance(tool, str) else ""
+            model = model.strip() if isinstance(model, str) else ""
+            effort = effort.strip().lower() if isinstance(effort, str) else ""
+            if role not in ROSTER_ROLES or role in seen or not tool:
+                raise OpError("协作成员无效")
+            if (index == 0) != (role == "leader"):
+                raise OpError("协作成员无效")   # the first row is the leader, the rest are members
+            if not model_ok(model):
+                raise OpError("模型名称无效")
+            if not effort_ok(effort):
+                raise OpError("思考深度无效")
+            seen.add(role)
+            members.append({"role": role, "tool": tool, "model": model, "effort": effort})
+        return members
+
     def start(self, given):
         word = lambda name: str(given.get(name) or "")
         tools = [str(one) for one in given.get("tools") or [] if isinstance(one, str)]
@@ -412,24 +470,67 @@ class Teams:
         rules = word("rules").strip()
         if len(rules) > 1000:
             raise OpError("分工偏好不能超过 1000 字")
+        context = word("context").strip()
+        if len(context) > 6000:
+            context = context[:6000]
         mode = word("mode")
         discuss = mode in ("review", "lead") and _bool(given.get("discuss"))
+        auto_roster = _bool(given.get("auto_roster"))
+        roster_raw = given.get("roster")
+        if (roster_raw is not None and mode != "lead") or (auto_roster and roster_raw is None):
+            raise OpError("仅分工协作支持按成员安排")
+        roster = self.read_roster(roster_raw) if isinstance(roster_raw, list) else []
+        if roster and auto_roster and len(roster) < 1:
+            raise OpError("自动组队至少要一个成员")
+        if roster and not auto_roster and len(roster) < 2:
+            raise OpError("按成员安排至少要两个角色")
+        if roster:
+            if any(not model_ok(one["model"]) for one in roster):
+                raise OpError("模型名称无效")
+            if any(not effort_ok(one["effort"]) for one in roster):
+                raise OpError("思考深度选择无效")
+            tools = [one["tool"] for one in roster]
+        models = dict(given.get("models")) if isinstance(given.get("models"), dict) else {}
+        efforts = dict(given.get("efforts")) if isinstance(given.get("efforts"), dict) else {}
+        if roster:
+            # The roster is where the owner picks a model and a thinking level for
+            # each member; there is no separate roster field on this side, so they
+            # land in the same maps the chat bridge reads. Explicit picks win.
+            for one in roster:
+                if one["model"]:
+                    models.setdefault(one["tool"], one["model"])
+                if one["effort"]:
+                    efforts.setdefault(one["tool"], one["effort"])
+        for name, value in (("models", models), ("efforts", efforts)):
+            for key, chosen in value.items():
+                if key not in tools:
+                    raise OpError("%s 选择里有不在队伍中的 AI" % ("模型" if name == "models" else "思考深度"))
+                ok = model_ok(chosen) if name == "models" else effort_ok(chosen)
+                if not ok and str(chosen).strip():
+                    raise OpError("%s 选择无效" % ("模型" if name == "models" else "思考深度"))
+        models = {tool: chosen.strip() for tool, chosen in models.items() if str(chosen).strip()}
+        efforts = {tool: chosen.strip().lower() for tool, chosen in efforts.items() if str(chosen).strip()}
         team = Team()
         team.id, team.dir, team.mode = word("id"), word("dir"), mode
-        team.goal, team.rules = word("goal").strip(), rules
+        team.goal, team.rules, team.context = word("goal").strip(), rules, context
         team.discuss, team.tools = discuss, tools
-        team.rounds = max(1, min(MOST_ROUNDS, rounds if rounds else (1 if mode == "compare" else 3)))
+        team.models, team.efforts = models, efforts
+        team.rounds = 0 if (given.get("rounds") == 0 and mode == "lead") else             max(1, min(MOST_ROUNDS, rounds if rounds else (1 if mode == "compare" else 3)))
         team.created = now_ms()
         team.touch()
         if not ID_OK.match(team.id) or team.mode not in MODES:
             raise OpError("协作任务无效")
         if not team.goal or len(team.goal) > 4000:
             raise OpError("目标需为 1 至 4000 字")
+        if given.get("rounds") == 0 and mode != "lead":
+            raise OpError("只有分工协作可以不限轮数")
         if team.mode == "review" and len(tools) != 2:
             raise OpError("写审需要一个写的 AI 和一个审查的 AI")
-        if team.mode == "lead" and (len(tools) < 2 or len(tools) > 4 or len(set(tools[1:])) != len(tools) - 1
-                                    or tools[0] in tools[1:]):
+        if team.mode == "lead" and len(tools) < 2:
             raise OpError("领队需要一个领队和 1 至 3 个不同的成员")
+        if team.mode == "lead" and not roster:
+            if len(tools) > 4 or len(set(tools[1:])) != len(tools) - 1 or tools[0] in tools[1:]:
+                raise OpError("领队需要一个领队和 1 至 3 个不同的成员")
         if team.mode == "compare" and (len(tools) < 2 or len(tools) > 3 or len(set(tools)) != len(tools)):
             raise OpError("并行比稿需要 2 至 3 个不同的 AI")
         if team.mode == "compare" and self.hands.make_worktree is None:
@@ -518,6 +619,9 @@ class Teams:
                 raise OpError("没有找到这个协作任务")
             if team.state != "paused":
                 raise OpError("这个协作任务没有暂停")
+            if team.spent:
+                self.extend(team, "")
+                return self.of(id)
             team.state = "running"
             team.note = ""
             # Clear stale failure marks on resume so paused or quota-recovered members can run again.
@@ -1233,11 +1337,39 @@ class Teams:
         self.ask(team, "writer", team.tools[0], self.writer_again(team, said), False)
 
     def led(self, team, role, said):
+        verifying = team.phase == "verify"
         if role == "leader":
             summary = self.finished(said)
-            tasks = self.assigned(said, team.tools[1:])
-            if not tasks and summary is not None:
-                self.end(team, "done", "领队确认完成：" + cut(summary, 600))
+            tasks = self.assigned(said, self.lead_members(team))
+            if verifying:
+                # the acceptance turn: only VERIFIED evidence with DONE ends the task
+                evidence = self.verified(said)
+                if summary is not None and evidence is not None:
+                    self.end(team, "done", "领队验收通过：" + cut(summary, 600))
+                    return
+                with self.gate:
+                    reminded = team.reminded
+                    team.reminded = True
+                    team.touch()
+                    self.save()
+                if reminded:
+                    if team.round >= self.cap(team):
+                        self.end(team, "stopped", "已到 " + str(team.round) + " 轮，领队没有给出验收证据")
+                        return
+                    with self.gate:
+                        team.state = "paused"
+                        team.note = "领队没有给出验收证据：点“继续”再问它一次"
+                        team.awaited.clear()
+                        team.awaited.append("leader")
+                        team.touch()
+                        self.save()
+                    self.tell_changed()
+                    return
+                self.ask(team, "leader", team.tools[0], VERIFY_REMIND, False)
+                return
+            # a DONE outside the acceptance turn opens it
+            if summary is not None and not tasks:
+                self.verify(team)
                 return
             if not tasks:
                 with self.gate:
@@ -1246,6 +1378,9 @@ class Teams:
                     team.touch()
                     self.save()
                 if reminded:
+                    if team.round >= self.cap(team):
+                        self.hold(team, {}, "仍有未完成分工，领队未给出处理决定")
+                        return
                     with self.gate:
                         team.state = "paused"
                         team.note = "领队没有分派任务，也没有结束：点“继续”再问它一次"
@@ -1279,108 +1414,69 @@ class Teams:
             team.answers.clear()
             team.touch()
             self.save()
-        if team.round >= team.rounds:
-            self.end(team, "done", "已到 " + str(team.rounds) + " 轮，成员最后的结果没有交给领队检查")
+        if team.round >= self.cap(team) and not verifying:
+            self.end(team, "done", "已到 " + str(self.cap(team)) + " 轮，成员最后的结果没有交给领队检查")
+            return
+        if verifying:
+            # the leader is accepting: the members' results join the acceptance turn
+            self.ask(team, "leader", team.tools[0],
+                     self.results(team, answers, self.safe_changes(team), self.rooms(team)), False)
+            return
+        if not self.free(team) and team.round >= team.rounds:
+            self.hold(team, answers, "成员最后的结果没有交给领队检查")
             return
         with self.gate:
             team.round += 1
-            team.touch()
             self.save()
         self.ask(team, "leader", team.tools[0],
                  self.results(team, answers, self.safe_changes(team), self.rooms(team)), False)
 
-    # ---- what the members are told
-    def safe_limits(self, tool):
-        if self.hands.limits is None:
-            return None
-        try:
-            return self.hands.limits(tool)
-        except Exception:
-            return None
+    def lead_members(self, team):
+        """The member tools of a lead team: everything but the leader's own."""
+        return team.tools[1:]
 
-    @staticmethod
-    def is_exhausted(windows):
-        return bool(windows) and any(round(one["used"]) >= 100 for one in windows)
+    def verified(self, said):
+        """What the leader says it checked (VERIFIED: …, with the lines under it up to DONE or
+        ASSIGN); None where it says nothing that could be checks and their results."""
+        lines = (said or "").replace("\r\n", "\n").split("\n")
+        for i, line in enumerate(lines):
+            found = VERIFIED_OK.match(line.strip())
+            if not found:
+                continue
+            evidence = [found.group(1).strip().strip("*_`").strip()]
+            for follow in lines[i + 1:]:
+                stripped = follow.strip()
+                if DONE.match(stripped) or ASSIGN.match(stripped) or VERIFIED_OK.match(stripped):
+                    break
+                if stripped:
+                    evidence.append(stripped)
+                if len(evidence) >= 12:
+                    break
+            text = "\n".join(one for one in evidence if one).strip()
+            plain = re.sub(r"[\s*_`>#\-.。,，:：;；!！?？()（）]", "", text)
+            return text if len(plain) >= 6 else None
+        return None
 
-    def rooms(self, team):
-        rooms = {}
+    def nudge(self, team, role):
+        """A member that handed in a note of progress is sent back to finish, where it was not
+        sent back too often in this round already."""
         with self.gate:
-            failed = dict(team.failed)
-            tools = list(dict.fromkeys(team.tools))
-        if self.hands.limits is None and not failed:
-            return rooms
-        for tool in tools:
-            is_failed = tool in failed
-            if self.hands.limits is not None:
-                room = self.room(self.safe_limits(tool))
-                rooms[tool] = room + ("；当前不可用（" + failed[tool] + "，请勿再派工）" if is_failed else "")
-            elif is_failed:
-                rooms[tool] = "不可用（" + failed[tool] + "，请勿再派工）"
-        return rooms
-
-    @staticmethod
-    def room(windows):
-        if not windows:
-            return "额度未知"
-        said = []
-        for one in windows:
-            name = {"five_hour": "5 小时窗口", "seven_day": "本周"}.get(one["name"], one["name"])
-            said.append(name + "已用 " + str(round(one["used"])) + "%" +
-                        ("（" + _when(one["resets"]) + " 重置）" if one.get("resets", 0) > 0 else ""))
-        tag = "，已用尽（不可派工）" if Teams.is_exhausted(windows) else \
-            ("，紧张" if any(round(one["used"]) >= 80 for one in windows) else "")
-        return "额度：" + "，".join(said) + tag
-
-    def fallback_tool(self, team, failed_tool, avoid_tool=""):
-        with self.gate:
-            failed = dict(team.failed)
-            candidates = [one for one in team.tools if one and one != failed_tool and one != avoid_tool]
-        if self.hands.available:
+            times = team.nudged.get(role, 0)
+            if times >= MOST_NUDGES:
+                return False
+            team.nudged[role] = times + 1
+            terminal = team.members.get(role)
+            team.touch()
+            self.save()
+        self.log(team, "继续", role + " 交回的是进度说明，已请它做完再交回")
+        if terminal:
             try:
-                for tool in self.hands.available() or []:
-                    if tool and tool != failed_tool and tool != avoid_tool and tool not in candidates:
-                        candidates.append(tool)
+                self.hands.say(terminal, KEEP_AT_IT)
+                return True
             except Exception:
                 pass
-        usable = []
-        for index, tool in enumerate(candidates):
-            if tool in failed:
-                continue
-            windows = self.safe_limits(tool)
-            if self.is_exhausted(windows):
-                continue
-            score = max((one["used"] for one in windows), default=50.0) if windows else 50.0
-            usable.append((score, index, tool))
-        return min(usable)[2] if usable else None
-
-    def safe_changes(self, team):
-        if self.hands.changes is None:
-            return ""
-        try:
-            return self.hands.changes(team.dir) or ""
-        except Exception:
-            return ""
-
-    @staticmethod
-    def extra_rules(team):
-        return "" if not team.rules else "\n\n【分工偏好】\n" + cut(team.rules, 1000)
-
-    def rooms_block(self, team, rooms):
-        if not rooms:
-            return ""
-        lines = ["- " + self.label(tool) + ("（你）" if tool == team.tools[0] else "") + "：" + rooms[tool]
-                 for tool in dict.fromkeys(team.tools) if tool in rooms]
-        return "\n\n## 当前额度\n" + "\n".join(lines) if lines else ""
-
-    def discuss_first(self, team, tool):
-        return "【协作任务 · 方案讨论（只读）】目标：" + team.goal + self.extra_rules(team) + \
-            "\n\n正式动手修改代码前，各位 AI 先只读查看相关代码并简明提出自己的方案建议（3–6 条要点：核心思路、涉及文件、潜在风险与边界条件）。不要修改任何文件。"
-
-    def writer_first(self, team, discussion=""):
-        return "【协作任务 · 写】" + team.goal + self.extra_rules(team) + \
-            ("" if not discussion else "\n\n## 前期方案讨论汇总\n" + cut(discussion, 12000)) + \
-            "\n\n请直接干脆地完成任务，完成后简明说明做了什么、改了哪些文件。之后 " + self.label(team.tools[1] if len(team.tools) > 1 else team.tools[0]) + \
-            " 会只读审查你的改动，有问题再交回修改。"
+        self.open(team, role, self.tool_of(team, role), KEEP_AT_IT, False, None)
+        return True
 
     def reviewer_ask(self, team, words, changes):
         return "【协作任务 · 审查 · 第 " + str(team.round) + " 轮】另一个 AI（" + self.label(team.tools[0]) + "）正在完成这项任务：\n" + \
@@ -1392,6 +1488,93 @@ class Teams:
         return "【协作任务 · 审查意见 · 第 " + str(team.round) + " 轮】" + \
             self.label(team.tools[1] if len(team.tools) > 1 else team.tools[0]) + " 的审查意见：\n" + cut(review, 12000) + \
             "\n\n请据此修改，完成后简要说明改了什么。"
+
+    def free(self, team):
+        return team.rounds == 0
+
+    def cap(self, team):
+        return MAX_TOTAL_ROUNDS if self.free(team) else team.rounds
+
+    def rounds_guide(self, team):
+        guide = "每轮根据实际改动和检查结果安排剩余工作，只差复核时由你复核或派一位只读成员。达标即结束。"
+        return guide + ("本任务不限轮数（最多 " + str(MAX_TOTAL_ROUNDS) + " 轮）。" if self.free(team)
+                        else "本任务最多 " + str(team.rounds) + " 轮。")
+
+    def verify_ask(self, team, changes, rooms, last):
+        return "【协作任务 · 领队验收" + (" · 最后一轮" if last else "") + "】" + \
+            "第 " + str(team.round) + (" 轮（不限轮数）。" if self.free(team) else " 轮，共 " + str(team.rounds) + " 轮。") + \
+            ("已到协作任务最多的 " + str(MAX_TOTAL_ROUNDS) + " 轮，请做最后一次验收。" if last else
+             "已到设定的 " + str(team.rounds) + " 轮上限，请做最后一次验收。") + \
+            "\n\n整体目标：" + cut(team.goal, 2000) + \
+            ("\n\n## 文件夹中的当前改动\n" + cut(changes, 20000) if changes else "") + \
+            self.rooms_block(team, rooms) + \
+            "\n\n对照用户要拿到的成品和约定的验收证据，检查实际交付及跨成员影响，亲自运行与这次改动相关的检查；" \
+            "只交付设计时，核对设计是否覆盖目标、约束和取舍，不要求代码改动。核实用户补充要求是否已落实。" \
+            "小的整合问题可直接修订并复查。成品还没齐时（例如设计已确认、实现还没做），仍需执行的工作按范围交给成员。" \
+            "\n\n验收通过时，在回答的最后写两行：\nVERIFIED: 你实际做了哪些检查、看到了什么结果（写明命令或查看的文件）\nDONE: 总结" + \
+            ("\n没有通过时，说明还差什么，并用 ASSIGN 成员名: 修改内容 写出要做的修复。轮数已经用完，这些修复先保留，"
+             "用户追加一轮后再派给成员。" if last else
+             "\n发现问题或还有下一步时，用 ASSIGN 成员名: 任务内容 派给成员，完成后会请你再次验收。")
+
+    def verify(self, team):
+        with self.gate:
+            team.phase = "verify"
+            team.last = team.round >= self.cap(team)
+            team.reminded = False
+            team.touch()
+            self.save()
+        self.log(team, "验收", "领队表示已完成，开始单独验收")
+        self.ask(team, "leader", team.tools[0],
+                 self.verify_ask(team, self.safe_changes(team), self.rooms(team), team.last), False)
+
+    def hold(self, team, held, why):
+        if team.round >= MAX_TOTAL_ROUNDS:
+            self.end(team, "stopped", "已到 " + str(team.round) + " 轮，" + why)
+            return
+        with self.gate:
+            team.state = "paused"
+            team.spent = True
+            team.held = dict(held)
+            team.note = "已到 " + str(team.round) + " 轮，" + why + "：点“继续”追加一轮" + \
+                ("，保留的修改随后派出" if held else "")
+            team.awaited.clear()
+            team.awaited.extend(held.keys() if held else ["leader"])
+            team.touch()
+            self.save()
+        self.log(team, "结果", team.note)
+        self.tell_changed()
+
+    def extend(self, team, words):
+        """One more round for work whose rounds were spent: what was kept goes out, with the
+        owner's words where there are any."""
+        held = None
+        with self.gate:
+            if not team.spent:
+                return
+            team.round += 1
+            if not self.free(team):
+                team.rounds = min(MAX_TOTAL_ROUNDS, max(team.rounds, team.round))
+            team.state = "running"
+            team.note = ""
+            team.phase = ""
+            team.last = team.reminded = team.spent = False
+            team.answers.clear()
+            team.awaited.clear()
+            team.nudged.clear()
+            held = dict(team.held)
+            team.held = {}
+            if not held:
+                held = {"leader": ""}
+            team.awaited.extend(held.keys())
+            team.touch()
+            self.save()
+        self.log(team, "继续", "追加第 " + str(team.round) + " 轮")
+        added = "\n\n【用户补充】\n" + words if words else ""
+        for role, task in held.items():
+            if role == "leader":
+                self.ask(team, "leader", team.tools[0], self.leader_first(team, self.rooms(team)) + added, False)
+            else:
+                self.ask(team, role, role, self.member_task(team, task) + added, False)
 
     def leader_first(self, team, rooms, discussion=""):
         def room(tool):
@@ -1487,6 +1670,99 @@ class Teams:
                     joined = (prev + ("\n" if prev else "") + stripped) if stripped else (prev + "\n")
                     tasks[current] = joined[:8000]
         return {tool: body.strip() for tool, body in tasks.items() if body.strip()}
+
+
+    def discuss_first(self, team, tool):
+        return "【协作任务 · 方案讨论（只读）】目标：" + team.goal + self.extra_rules(team) + \
+            "\n\n正式动手修改代码前，各位 AI 先只读查看相关代码并简明提出自己的方案建议（3–6 条要点：核心思路、涉及文件、潜在风险与边界条件）。不要修改任何文件。"
+
+    @staticmethod
+    def extra_rules(team):
+        return "" if not team.rules else "\n\n【分工偏好】\n" + cut(team.rules, 1000)
+
+    def fallback_tool(self, team, failed_tool, avoid_tool=""):
+        with self.gate:
+            failed = dict(team.failed)
+            candidates = [one for one in team.tools if one and one != failed_tool and one != avoid_tool]
+        if self.hands.available:
+            try:
+                for tool in self.hands.available() or []:
+                    if tool and tool != failed_tool and tool != avoid_tool and tool not in candidates:
+                        candidates.append(tool)
+            except Exception:
+                pass
+        usable = []
+        for index, tool in enumerate(candidates):
+            if tool in failed:
+                continue
+            windows = self.safe_limits(tool)
+            if self.is_exhausted(windows):
+                continue
+            score = max((one["used"] for one in windows), default=50.0) if windows else 50.0
+            usable.append((score, index, tool))
+        return min(usable)[2] if usable else None
+
+    @staticmethod
+    def is_exhausted(windows):
+        return bool(windows) and any(round(one["used"]) >= 100 for one in windows)
+
+    @staticmethod
+    def room(windows):
+        if not windows:
+            return "额度未知"
+        said = []
+        for one in windows:
+            name = {"five_hour": "5 小时窗口", "seven_day": "本周"}.get(one["name"], one["name"])
+            said.append(name + "已用 " + str(round(one["used"])) + "%" +
+                        ("（" + _when(one["resets"]) + " 重置）" if one.get("resets", 0) > 0 else ""))
+        tag = "，已用尽（不可派工）" if Teams.is_exhausted(windows) else \
+            ("，紧张" if any(round(one["used"]) >= 80 for one in windows) else "")
+        return "额度：" + "，".join(said) + tag
+
+    def rooms(self, team):
+        rooms = {}
+        with self.gate:
+            failed = dict(team.failed)
+            tools = list(dict.fromkeys(team.tools))
+        if self.hands.limits is None and not failed:
+            return rooms
+        for tool in tools:
+            is_failed = tool in failed
+            if self.hands.limits is not None:
+                room = self.room(self.safe_limits(tool))
+                rooms[tool] = room + ("；当前不可用（" + failed[tool] + "，请勿再派工）" if is_failed else "")
+            elif is_failed:
+                rooms[tool] = "不可用（" + failed[tool] + "，请勿再派工）"
+        return rooms
+
+    def rooms_block(self, team, rooms):
+        if not rooms:
+            return ""
+        lines = ["- " + self.label(tool) + ("（你）" if tool == team.tools[0] else "") + "：" + rooms[tool]
+                 for tool in dict.fromkeys(team.tools) if tool in rooms]
+        return "\n\n## 当前额度\n" + "\n".join(lines) if lines else ""
+
+    def safe_changes(self, team):
+        if self.hands.changes is None:
+            return ""
+        try:
+            return self.hands.changes(team.dir) or ""
+        except Exception:
+            return ""
+
+    def safe_limits(self, tool):
+        if self.hands.limits is None:
+            return None
+        try:
+            return self.hands.limits(tool)
+        except Exception:
+            return None
+
+    def writer_first(self, team, discussion=""):
+        return "【协作任务 · 写】" + team.goal + self.extra_rules(team) + \
+            ("" if not discussion else "\n\n## 前期方案讨论汇总\n" + cut(discussion, 12000)) + \
+            "\n\n请直接干脆地完成任务，完成后简明说明做了什么、改了哪些文件。之后 " + self.label(team.tools[1] if len(team.tools) > 1 else team.tools[0]) + \
+            " 会只读审查你的改动，有问题再交回修改。"
 
 
 def _when(seconds):

@@ -136,6 +136,10 @@ class TeamsTest(unittest.TestCase):
         self.assertEqual(len(self.hands.said), 1)
         self.assertIn("加法写好了", self.hands.said[0][1])
         self.teams.turned(leader, "done", "DONE: 全部完成")
+        # a bare DONE opens the acceptance phase; the leader must then show evidence
+        self.assertEqual(self.teams.of(team.id).phase, "verify")
+        self.assertEqual(self.teams.of(team.id).state, "running")
+        self.teams.turned(leader, "done", "VERIFIED: 跑了测试，全部通过\nDONE: 全部完成")
         self.assertEqual(self.teams.of(team.id).state, "done")
 
     def test_a_leader_without_assignments_is_reminded_then_the_team_pauses(self):
@@ -256,6 +260,70 @@ class TeamsTest(unittest.TestCase):
         team = self.teams.start(self.item())
         self.assertEqual(team.state, "failed")
         self.assertIn("最多同时运行 16 个终端", team.note)
+
+
+class RosterAndVerifyTest(unittest.TestCase):
+    """The Windows roster/acceptance additions now working on this machine."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.hands = FakeHands()
+        self.file = os.path.join(self.folder.name, "teams.json")
+        self.teams = teams.Teams(self.file, self.hands)
+        self.item = {"id": "b" * 24, "mode": "lead", "dir": "demo", "goal": "写加法",
+                     "tools": ["codex", "opencode"], "rounds": 3}
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def test_roster_rows_are_checked_and_kept(self):
+        given = dict(self.item, roster=[
+            {"role": "leader", "tool": "codex", "model": "gpt-5.1-codex", "effort": "high"},
+            {"role": "member-1", "tool": "opencode", "model": "", "effort": "medium"}])
+        team = self.teams.start(given)
+        self.assertEqual(team.tools, ["codex", "opencode"])
+        self.assertEqual(team.models["codex"], "gpt-5.1-codex")
+        self.assertEqual(team.efforts["opencode"], "medium")
+        self.assertEqual(teams.Team.from_json(team.to_json()).models, team.models)
+        self.assertEqual(teams.Team.from_json(team.to_json()).efforts, team.efforts)
+
+    def test_an_invalid_roster_is_refused(self):
+        bad = [
+            [{"role": "member-1", "tool": "opencode", "model": "", "effort": ""}],
+            [{"role": "leader", "tool": "codex", "model": "", "effort": ""},
+             {"role": "leader", "tool": "opencode", "model": "", "effort": ""}],
+            [{"role": "leader", "tool": "codex", "model": "", "effort": ""},
+             {"role": "member-1", "tool": "", "model": "", "effort": ""}],
+            [{"role": "leader", "tool": "codex", "model": "bad name!", "effort": ""},
+             {"role": "member-1", "tool": "opencode", "model": "", "effort": ""}],
+            [{"role": "leader", "tool": "codex", "model": "", "effort": "very high"},
+             {"role": "member-1", "tool": "opencode", "model": "", "effort": ""}],
+        ]
+        for rows in bad:
+            with self.subTest(rows=rows), self.assertRaises(teams.OpError):
+                self.teams.start(dict(self.item, roster=rows))
+
+    def test_acceptance_needs_evidence_and_survives_a_restart(self):
+        team = self.teams.start(self.item)
+        leader = self.hands.opened[0]["terminal"]
+        self.teams.turned(leader, "done", "DONE: 写好了")
+        self.assertEqual(self.teams.of(team.id).phase, "verify")
+        self.teams.turned(leader, "done", "DONE: 还是写好了")
+        self.assertTrue(self.teams.of(team.id).reminded)
+        self.assertEqual(self.teams.of(team.id).state, "running")
+        self.teams.turned(leader, "done", "VERIFIED: 跑了 unittest\nDONE: 完成")
+        self.assertEqual(self.teams.of(team.id).state, "done")
+        again = teams.Teams(self.file, FakeHands())
+        self.assertEqual(again.of(team.id).state, "done")
+
+    def test_model_and_effort_accept_only_safe_names(self):
+        self.assertTrue(teams.model_ok(""))
+        self.assertTrue(teams.model_ok("models/gemini-3-pro"))
+        self.assertTrue(teams.model_ok("sonnet[1m]"))
+        self.assertFalse(teams.model_ok("gpt 5; rm -rf /"))
+        self.assertTrue(teams.effort_ok(""))
+        self.assertTrue(teams.effort_ok("xhigh"))
+        self.assertFalse(teams.effort_ok("VERY HIGH"))
 
 
 if __name__ == "__main__":
