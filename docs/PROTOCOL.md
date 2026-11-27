@@ -886,14 +886,20 @@ sending `start` with `form: "chat"`, the target `tool`, the same `dir`, `from_to
 required `text` (the owner's next message), and optional `model`/`effort`/`mode` (without `session`, `reopen`,
 `history`, `fork`, `takeover`, or `worktree`). The relay checks the source in its listed sessions (same tool and
 project, not a collaboration member) and, if a phone terminal is running it, refuses while `busy` or `confirm` and
-counts that terminal's slot as freed for `MAX_TERMINALS`. The computer reads the source conversation, closes any idle
-phone terminal running it, starts the target tool, emits one `history` event containing the full handover line oldest
-first separated by `{role: "switch", tool, text}` rows and ending with a `switch` row for the new tool (`more: true`
-if the earliest part was truncated), and sends `Brief(source) + "\n\n【现在的要求】\n" + text` as the first turn (clients
-display only the owner's text after `【现在的要求】`). Once the new tool assigns its session id, the computer records
-`{tool, session, from_tool, from, title}` in `<data>/handovers.json` (at most 500 links, no cycles): session listings
-hide superseded sessions (`GoneOn`) and title successors with the first conversation's title, while resuming or reading
-the latest session recalls the whole line.
+counts that terminal's slot as freed for `MAX_TERMINALS`. The computer looks up `<data>/handovers.json`: if `tool`
+already participated earlier in the same handover thread and its most recent session still exists in the workspace,
+is not running in another terminal, and is not held externally, the computer resumes that prior session instead of
+opening a new one (otherwise starting a fresh session). The computer reads the source/thread turns, closes any idle
+phone terminal running the source, starts or resumes the target tool, emits one `history` event containing the full
+handover timeline in chronological order separated by `{role: "switch", tool, text}` rows and ending with a `switch`
+row for the new tool (`more: true` if the earliest visit was truncated), and sends a delta summary covering only
+the intermediate turns since `tool` paused (`ResumeBrief` / `resume_handover`) when resuming an earlier participant—or
+`Brief(source)` when joining fresh—followed by `"\n\n【现在的要求】\n" + text` (clients display only the owner's text after
+`【现在的要求】`). `<data>/handovers.json` stores `{threads: [{title, turns: [{tool, session}, ...]}]}` (up to 500
+threads and 50 turns per thread, automatically migrating v1 `links` entries on load). Reading or recalling a thread
+with repeated sessions splits transcripts at `【对话交接】...【现在的要求】\n` markers (`SplitVisits`) to preserve
+chronological order across all switches; session listings hide superseded turns (`GoneOn`, any turn before the active
+tail) and title the active session with the first turn's title.
 
 Client delivery presentation distinguishes queueing/retry, acceptance, rejection, and unknown outcome.
 An HTTP 5xx or a lost response may retry the existing operation ID and unchanged payload; it is not a

@@ -1216,6 +1216,13 @@ class Marks:
 
 HANDOVER_ASK = "【现在的要求】"
 MAX_HANDOVERS = 500
+MAX_HANDOVER_TURNS = 50
+
+
+def is_handover_message(text):
+    """True when `text` is an in-place hand-over opening message (`【对话交接】...【现在的要求】\\n...`)."""
+    return (isinstance(text, str) and text.startswith("【对话交接】")
+            and ("\n\n" + HANDOVER_ASK + "\n") in text)
 
 
 def strip_handover_ask(text):
@@ -1227,76 +1234,176 @@ def strip_handover_ask(text):
     return text[at + len(sep):] if at >= 0 else text
 
 
+def split_visits(messages, expected_visits, starts_with_handover, truncated=False):
+    """Split a tool session transcript that was resumed across non-adjacent turns using handover
+    opening messages (`【对话交接】...【现在的要求】\\n...`) as visit boundaries."""
+    if expected_visits <= 0:
+        return []
+    if expected_visits == 1:
+        return [list(messages)]
+    chunks, cur = [], []
+    for msg in messages:
+        if msg.get("role") == "user" and is_handover_message(msg.get("text")) and cur:
+            chunks.append(cur)
+            cur = []
+        cur.append(msg)
+    if cur:
+        chunks.append(cur)
+    if len(chunks) == expected_visits:
+        return chunks
+    if len(chunks) > expected_visits:
+        tail = [m for part in chunks[expected_visits - 1:] for m in part]
+        return chunks[:expected_visits - 1] + [tail]
+    head_trimmed = bool(chunks) and (truncated or (
+        not starts_with_handover and chunks[0][0].get("role") == "user"
+        and is_handover_message(chunks[0][0].get("text"))))
+    pad = [[] for _ in range(expected_visits - len(chunks))]
+    return (pad + chunks) if head_trimmed else (chunks + pad)
+
+
 class Handovers:
-    """Which conversation another AI continues in-place from which (`handovers.json`): listed once under the
-    first conversation's title, recalled as one unified timeline with `switch` dividers between parts."""
+    """Which conversations belong to the same in-place handover thread (`handovers.json`, ordered list of
+    tool+session turns): listed once under the first conversation's title, recalled chronologically, and
+    resuming an earlier tool's prior session when switched back to."""
 
     def __init__(self, data):
         self.file = os.path.join(data, "handovers.json")
         self.lock = threading.Lock()
-        self.links = []
+        self.threads = []
         try:
             with open(self.file, encoding="utf-8") as stream:
                 read = json.load(stream)
-            items = read.get("links") if isinstance(read, dict) else None
-            for one in items if isinstance(items, list) else []:
-                if not isinstance(one, dict):
-                    continue
-                link = {k: str(one.get(k) or "") for k in ("tool", "session", "from_tool", "from", "title")}
-                if self._valid(link):
-                    self.links.append(link)
-            del self.links[:-MAX_HANDOVERS]
+            if isinstance(read, dict) and isinstance(read.get("threads"), list):
+                for item in read["threads"]:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_turns = item.get("turns") if isinstance(item.get("turns"), list) else []
+                    turns = []
+                    for one in raw_turns:
+                        if not isinstance(one, dict):
+                            continue
+                        t, s = str(one.get("tool") or ""), str(one.get("session") or "")
+                        if self._valid_turn(t, s) and (not turns or not self._same(turns[-1], t, s)):
+                            turns.append({"tool": t, "session": s})
+                    if len(turns) >= 2:
+                        self.threads.append({"title": str(item.get("title") or "").strip(), "turns": turns[-MAX_HANDOVER_TURNS:]})
+                del self.threads[:-MAX_HANDOVERS]
+            elif isinstance(read, dict) and isinstance(read.get("links"), list):
+                # Migrate v1 sequential `links` entries into ordered threads.
+                pending = []
+                for one in read["links"]:
+                    if isinstance(one, dict):
+                        pending.append({k: str(one.get(k) or "") for k in ("tool", "session", "from_tool", "from", "title")})
+                while pending:
+                    progressed = False
+                    rest = []
+                    for link in pending:
+                        if self._valid_turn(link["tool"], link["session"]) and self._valid_turn(link["from_tool"], link["from"]):
+                            if self._attach(link["tool"], link["session"], link["from_tool"], link["from"], link["title"]):
+                                progressed = True
+                                continue
+                        rest.append(link)
+                    if not progressed:
+                        break
+                    pending = rest
+                del self.threads[:-MAX_HANDOVERS]
         except (OSError, ValueError):
             pass
 
     @staticmethod
-    def _valid(link):
-        return (0 < len(link["tool"]) <= 20 and 0 < len(link["from_tool"]) <= 20
-                and 0 < len(link["session"]) <= 128 and 0 < len(link["from"]) <= 128
-                and not (link["tool"] == link["from_tool"] and link["session"].lower() == link["from"].lower()))
+    def _valid_turn(tool, session):
+        return 0 < len(tool) <= 20 and 0 < len(session) <= 128
+
+    @staticmethod
+    def _same(turn, tool, session):
+        return turn["tool"] == tool and turn["session"].lower() == session.lower()
+
+    def _find_thread_idx(self, tool, session):
+        for i in range(len(self.threads) - 1, -1, -1):
+            if any(self._same(t, tool, session) for t in self.threads[i]["turns"]):
+                return i
+        return -1
+
+    def _attach(self, tool, session, from_tool, from_id, title):
+        title = str(title or "").strip()
+        if not (self._valid_turn(tool, session) and self._valid_turn(from_tool, from_id)):
+            return False
+        if tool == from_tool and session.lower() == from_id.lower():
+            return False
+        from_idx = self._find_thread_idx(from_tool, from_id)
+        to_idx = self._find_thread_idx(tool, session)
+        if from_idx >= 0:
+            thread = self.threads[from_idx]
+            if not self._same(thread["turns"][-1], from_tool, from_id):
+                return False
+            if to_idx >= 0 and to_idx != from_idx:
+                return False
+            thread["turns"].append({"tool": tool, "session": session})
+            if len(thread["turns"]) > MAX_HANDOVER_TURNS:
+                del thread["turns"][:-MAX_HANDOVER_TURNS]
+            if not thread["title"] and title:
+                thread["title"] = title
+            self.threads.append(self.threads.pop(from_idx))
+        else:
+            if to_idx >= 0:
+                return False
+            self.threads.append({
+                "title": title,
+                "turns": [{"tool": from_tool, "session": from_id}, {"tool": tool, "session": session}],
+            })
+        if len(self.threads) > MAX_HANDOVERS:
+            del self.threads[:-MAX_HANDOVERS]
+        return True
 
     def add(self, tool, session, from_tool, from_id, title):
-        link = {"tool": str(tool or ""), "session": str(session or ""),
-                "from_tool": str(from_tool or ""), "from": str(from_id or ""),
-                "title": str(title or "").strip()}
-        if not self._valid(link):
-            return False
+        tool, session = str(tool or ""), str(session or "")
+        from_tool, from_id = str(from_tool or ""), str(from_id or "")
         with self.lock:
-            if any(l["tool"] == link["tool"] and l["session"].lower() == link["session"].lower() for l in self.links):
+            if not self._attach(tool, session, from_tool, from_id, title):
                 return False
-            if any(l["from_tool"] == link["tool"] and l["from"].lower() == link["session"].lower()
-                   for l in self._line_locked(link["from_tool"], link["from"])):
-                return False
-            self.links.append(link)
-            if len(self.links) > MAX_HANDOVERS:
-                del self.links[:-MAX_HANDOVERS]
-            write_private(self.file + ".tmp", json.dumps({"links": self.links}, ensure_ascii=False))
+            write_private(self.file + ".tmp", json.dumps({"threads": self.threads}, ensure_ascii=False))
             os.replace(self.file + ".tmp", self.file)
             return True
 
-    def _line_locked(self, tool, session):
-        out = []
-        t, s = str(tool or ""), str(session or "")
-        for _ in range(50):
-            found = next((l for l in self.links if l["tool"] == t and l["session"].lower() == s.lower()), None)
-            if not found:
-                break
-            out.append(found)
-            t, s = found["from_tool"], found["from"]
-        return out
-
-    def line(self, tool, session):
+    def turns_of(self, tool, session):
+        tool, session = str(tool or ""), str(session or "")
         with self.lock:
-            return list(self._line_locked(tool, session))
+            idx = self._find_thread_idx(tool, session)
+            if idx < 0:
+                return [{"tool": tool, "session": session}] if tool and session else []
+            return [dict(t) for t in self.threads[idx]["turns"]]
+
+    def previous_session(self, from_tool, from_id, target_tool):
+        from_tool, from_id, target_tool = str(from_tool or ""), str(from_id or ""), str(target_tool or "")
+        if not (from_tool and from_id and target_tool):
+            return ""
+        with self.lock:
+            idx = self._find_thread_idx(from_tool, from_id)
+            if idx < 0:
+                return ""
+            turns = self.threads[idx]["turns"]
+            if not self._same(turns[-1], from_tool, from_id):
+                return ""
+            for t in reversed(turns[:-1]):
+                if t["tool"] == target_tool and not self._same(t, from_tool, from_id):
+                    return t["session"]
+            return ""
 
     def gone_on(self, tool, session):
-        s = str(session or "").lower()
+        tool, session = str(tool or ""), str(session or "")
+        if not (tool and session):
+            return False
         with self.lock:
-            return any(l["from_tool"] == tool and l["from"].lower() == s for l in self.links)
+            idx = self._find_thread_idx(tool, session)
+            if idx < 0:
+                return False
+            return not self._same(self.threads[idx]["turns"][-1], tool, session)
 
     def title(self, tool, session):
-        chain = self.line(tool, session)
-        return chain[-1]["title"] if chain else ""
+        tool, session = str(tool or ""), str(session or "")
+        with self.lock:
+            idx = self._find_thread_idx(tool, session)
+            return self.threads[idx]["title"] if idx >= 0 else ""
 
 
 def trash(path):
@@ -1437,28 +1544,94 @@ class Sessions:
             return 0
         return 0
 
-    def line_messages(self, session, tool, name, dirs, next_tool=""):
-        """What was said across a whole handover line, oldest first, with `switch` rows between parts."""
+    def slice_turns(self, turns, name, dirs):
+        """Split every turn of a handover thread into its own message list, reading each unique file once."""
         folder = dirs.get(name) if name else None
-        chain = self.handovers.line(tool, session) if self.handovers else []
-        parts = [(l["from_tool"], l["from"]) for l in reversed(chain)]
-        parts.append((tool, session))
-        if next_tool:
-            parts.append((next_tool, ""))
-        messages, more = [], False
-        for idx, (pt, ps) in enumerate(parts):
-            if idx > 0:
-                messages.append({"role": "switch", "tool": pt, "text": TOOL_LABELS.get(pt, pt)})
-            if not ps or not folder:
+        counts, first_at = {}, {}
+        for idx, turn in enumerate(turns):
+            t, s = turn.get("tool") or "", turn.get("session") or ""
+            if not t or not s:
+                continue
+            key = (t, s.lower())
+            counts[key] = counts.get(key, 0) + 1
+            if key not in first_at:
+                first_at[key] = (idx, s)
+        visits_by_key, more_by_key = {}, {}
+        for key, count in counts.items():
+            t = key[0]
+            first_idx, s = first_at[key]
+            if not folder:
+                visits_by_key[key], more_by_key[key] = [[] for _ in range(count)], False
                 continue
             try:
-                answer, _ = self.read_folder(ps, pt, folder)
-                messages.extend(answer.get("messages", []))
-                if idx == 0:
-                    more = bool(answer.get("more"))
+                answer, _ = self.read_folder(s, t, folder)
+                raw = list(answer.get("messages") or [])
+                raw_more = bool(answer.get("more"))
+                visits_by_key[key] = split_visits(raw, count, first_idx > 0, raw_more)
+                more_by_key[key] = raw_more
             except (OpError, OSError):
-                pass
+                visits_by_key[key], more_by_key[key] = [[] for _ in range(count)], False
+        next_idx, slices, first_more = {}, [], False
+        for idx, turn in enumerate(turns):
+            t, s = turn.get("tool") or "", turn.get("session") or ""
+            if not t or not s:
+                slices.append([])
+                continue
+            key = (t, s.lower())
+            pos = next_idx.get(key, 0)
+            next_idx[key] = pos + 1
+            parts = visits_by_key.get(key) or []
+            slices.append(list(parts[pos]) if pos < len(parts) else [])
+            if idx == 0:
+                first_more = bool(more_by_key.get(key))
+        return slices, first_more
+
+    def line_messages(self, session, tool, name, dirs, next_tool=""):
+        """What was said across a whole handover line, oldest first, with `switch` rows between parts."""
+        turns = self.handovers.turns_of(tool, session) if self.handovers else ([{"tool": tool, "session": session}] if tool and session else [])
+        slices, more = self.slice_turns(turns, name, dirs)
+        messages = []
+        for idx, turn in enumerate(turns):
+            if idx > 0:
+                messages.append({"role": "switch", "tool": turn["tool"], "text": TOOL_LABELS.get(turn["tool"], turn["tool"])})
+            messages.extend(slices[idx])
+        if next_tool:
+            messages.append({"role": "switch", "tool": next_tool, "text": TOOL_LABELS.get(next_tool, next_tool)})
         return messages, more
+
+    def delta_messages(self, from_session, from_tool, target_tool, target_session, name, dirs):
+        """What happened since `target_tool:target_session` paused in this handover thread."""
+        if not self.handovers:
+            return [], []
+        turns = self.handovers.turns_of(from_tool, from_session)
+        last_own = -1
+        for i in range(len(turns) - 1, -1, -1):
+            if turns[i]["tool"] == target_tool and turns[i]["session"].lower() == target_session.lower():
+                last_own = i
+                break
+        if last_own < 0 or last_own >= len(turns) - 1:
+            return [], []
+        slices, _ = self.slice_turns(turns, name, dirs)
+        delta, between_tools = [], []
+        for i in range(last_own + 1, len(turns)):
+            t = turns[i]["tool"]
+            if t not in between_tools:
+                between_tools.append(t)
+            delta.extend(slices[i])
+        return delta, between_tools
+
+    def open_outside(self, session, tool, terminals):
+        """Whether a saved `tool`/`session` is currently held open by an external process."""
+        session = str(session or "")
+        if not session:
+            return False
+        if tool == "claude":
+            return any(s.lower() == session.lower() for s in self._claude_open(terminals))
+        if tool == "codex":
+            root = os.path.join(os.environ.get("CODEX_HOME") or os.path.join(self.home, ".codex"), "sessions")
+            return any(os.path.basename(p)[:-6][-36:].lower() == session.lower() and owner_of(pid, terminals) is None
+                       for p, pid in self._codex_open(root).items())
+        return False
 
     def read(self, session, tool, name, dirs, since=""):
         """What was last said in a conversation of a project, for the phone to look at. A page
@@ -1469,10 +1642,23 @@ class Sessions:
         folder = dirs.get(name) if name else saved and saved["live"] and saved["folder"]
         if saved is None or not folder:
             raise OpError("电脑上没有找到这个对话，请刷新后重试")
-        chain = self.handovers.line(tool, session) if self.handovers else []
-        if chain and name:
-            _, base_stamp = self.read_folder(session, tool, folder, "")
-            stamp = "%s.h%d" % (base_stamp, len(chain))
+        turns = self.handovers.turns_of(tool, session) if self.handovers else []
+        if len(turns) > 1 and name:
+            stamp_parts, seen = [], set()
+            for turn in turns:
+                key = (turn["tool"], turn["session"].lower())
+                if not turn["session"] or key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    _, part_stamp = self.read_folder(turn["session"], turn["tool"], folder, "")
+                    stamp_parts.append(part_stamp)
+                except (OpError, OSError):
+                    pass
+            if not stamp_parts:
+                _, base_stamp = self.read_folder(session, tool, folder, "")
+                stamp_parts.append(base_stamp)
+            stamp = "%s.h%d" % (",".join(stamp_parts), len(turns))
             if since and since == stamp:
                 return {"same": True, "stamp": stamp, "title": saved["title"], "status": saved.get("status", "")}
             messages, more = self.line_messages(session, tool, name, dirs)
@@ -3810,6 +3996,38 @@ def handover(source, messages, note):
     return brief.rstrip()
 
 
+def resume_handover(source, between_tools, delta_messages):
+    """Short handover brief when switching back to an AI that paused earlier in the same handover thread."""
+    def cut(text, most):
+        text = text.strip()
+        encoded = text.encode("utf-16-le", errors="replace")
+        return text if len(encoded) <= most * 2 else encoded[:most * 2].decode("utf-16-le", errors="ignore") + "…"
+    asked = [strip_handover_ask(m["text"]) for m in delta_messages if m.get("role") == "user"]
+    asked = [q for q in asked if q.strip()]
+    answered = next((m["text"] for m in reversed(delta_messages) if m.get("role") == "assistant"), "")
+    steps = [m for m in delta_messages if m.get("role") == "tool"]
+    between = "、".join(TOOL_LABELS.get(t, t) for t in between_tools)
+    brief = "【对话交接】上面你暂停之后，我切到 %s 继续处理了一段%s，现在切回你这里接着做。\n" % (
+        between, "（项目 " + cut(source["dir"], 100) + "）" if source.get("dir") else "")
+    if len(asked) == 1:
+        brief += "\n这段期间我的要求：\n" + cut(asked[0], 800) + "\n"
+    elif len(asked) > 1:
+        brief += "\n这段期间我最初的要求：\n" + cut(asked[0], 800) + "\n"
+        brief += "\n这段期间我最近的要求：\n" + cut(asked[-1], 800) + "\n"
+    if answered:
+        brief += "\n对方最后的回答：\n" + cut(answered, 2000) + "\n"
+    if steps:
+        brief += "\n对方最近做的操作：\n"
+        for step in steps[-8:]:
+            brief += "- " + cut(step["text"], 160) + "\n"
+            result = cut(step.get("result") or "", 160)
+            if result:
+                brief += "  返回摘录：" + result.replace("\n", "\n  ") + "\n"
+            else:
+                brief += "  记录中没有返回内容\n"
+    return brief.rstrip()
+
+
 def chain_brief(source, messages, note):
     """What a chain hands over when its source has finished a turn: what the tool answered last, and the words
     the owner set with the rule. (Lighter than a hand-over: the conversation that takes it keeps its own thread.)"""
@@ -4676,6 +4894,16 @@ class Agent:
                     raise OpError("电脑上没有找到这个对话，请刷新后重试")
                 if saved["live"] or any(t.session == session and not t.closed for t in self.terminals.values()):
                     raise OpError("这个对话正在被使用，请先结束使用它的程序")
+            elif handed is not None and op.get("form") == "chat":
+                candidate = self.handovers.previous_session(handed["tool"], handed["id"], tool)
+                if (candidate and session_id_ok(tool, candidate)
+                        and not any(t.tool == tool and (t.session or "").lower() == candidate.lower() and not t.closed for t in self.terminals.values())
+                        and not self.sessions.open_outside(candidate, tool, self.terminals.values())):
+                    try:
+                        self.sessions.read_folder(candidate, tool, cwd)
+                        session = candidate
+                    except (OpError, OSError):
+                        pass
             fresh = tool in ("claude", "opencode", "qoder", "pi") and not session and not history
             if fresh:
                 # named by us, so the terminal knows its conversation at once — in the
@@ -4685,14 +4913,18 @@ class Agent:
                 # a conversation run through its tool's structured mode; the first thing to say is said at once
                 if tool not in CHAT_TOOLS or history:
                     raise OpError("对话选项无效")
-                resume = bool(op.get("session")) or source is not None     # (a new one of Claude Code's is named above, as for a terminal)
+                resume = not fresh and bool(session)     # (a new one of Claude Code's is named above, as for a terminal)
                 first_text = str(op.get("text") or "").strip()
                 handed_title, handed_msgs, handed_more = "", [], False
                 if handed is not None:
-                    read = self.sessions.read(handed["id"], handed["tool"], handed["dir"], dirs)
-                    first_text = handover(handed, read.get("messages", []), "") + "\n\n" + HANDOVER_ASK + "\n" + first_text
                     handed_title = self.handovers.title(handed["tool"], handed["id"]) or handed["title"]
                     handed_msgs, handed_more = self.sessions.line_messages(handed["id"], handed["tool"], name, dirs, next_tool=tool)
+                    delta, between = self.sessions.delta_messages(handed["id"], handed["tool"], tool, session, name, dirs) if resume else ([], [])
+                    if delta:
+                        first_text = resume_handover(handed, between, delta) + "\n\n" + HANDOVER_ASK + "\n" + first_text
+                    else:
+                        read = self.sessions.read(handed["id"], handed["tool"], handed["dir"], dirs)
+                        first_text = handover(handed, read.get("messages", []), "") + "\n\n" + HANDOVER_ASK + "\n" + first_text
                 chat = open_chat(terminal, name, cwd, tool, launcher, self.wake, session, resume,
                                  str(cfg.get("RemoteMaxMode") or ""),
                                  mcp=self.peers.offer(tool, cwd))
@@ -4705,19 +4937,24 @@ class Agent:
                                   if k != terminal and v.closed and v.tool == handed["tool"]
                                   and (v.session or "").lower() == handed["id"].lower()]:
                         self.terminals.pop(stale, None)
-                self.terminals[terminal] = chat
                 if resume:
-                    earlier_msgs, earlier_more = self.sessions.line_messages(session, tool, name, dirs)
-                    if any(m.get("role") != "switch" for m in earlier_msgs):
-                        chat.before(earlier_msgs, earlier_more)
+                    for stale in [k for k, v in self.terminals.items()
+                                  if k != terminal and v.closed and v.tool == tool
+                                  and (v.session or "").lower() == session.lower()]:
+                        self.terminals.pop(stale, None)
+                self.terminals[terminal] = chat
                 if handed is not None:
+                    if any(m.get("role") != "switch" for m in handed_msgs):
+                        chat.before(handed_msgs, handed_more)
                     if chat.session:
                         self.handovers.add(chat.tool, chat.session, handed["tool"], handed["id"], handed_title)
                         self.scan_wake.set()
                     else:
                         chat.handed_from = (handed, handed_title)
-                    if any(m.get("role") != "switch" for m in handed_msgs):
-                        chat.before(handed_msgs, handed_more)
+                elif resume:
+                    earlier_msgs, earlier_more = self.sessions.line_messages(session, tool, name, dirs)
+                    if any(m.get("role") != "switch" for m in earlier_msgs):
+                        chat.before(earlier_msgs, earlier_more)
                 if first_text:
                     chat.say(first_text, op_id)
                 return

@@ -2270,7 +2270,73 @@ class AgentTeamsAndChatIntegration(unittest.TestCase):
 
 
 class HandoversTests(unittest.TestCase):
-    def test_handover_store_sessions_and_line_recall(self):
+    def test_handover_store_threads_migration_and_split_visits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = os.path.join(tmp, "data")
+            os.makedirs(data)
+
+            store = agent.Handovers(data)
+            s1 = "11111111-2222-3333-4444-555555555555"
+            s2 = "019a0000-0000-7000-8000-000000000002"
+            s3 = "22222222-3333-4444-5555-666666666666"
+            other = "33333333-4444-5555-6666-777777777777"
+            self.assertTrue(store.add("codex", s2, "claude", s1, "最初的标题"))
+            # Switch back to Claude(s1), then back to Codex(s2) again: A -> B -> A -> B
+            self.assertTrue(store.add("claude", s1, "codex", s2, "忽略新标题"))
+            self.assertEqual(store.title("claude", s1), "最初的标题")
+            self.assertFalse(store.gone_on("claude", s1))
+            self.assertTrue(store.gone_on("codex", s2))
+            self.assertEqual(store.previous_session("claude", s1, "codex"), s2)
+            self.assertTrue(store.add("codex", s2, "claude", s1, "忽略"))
+            self.assertEqual(
+                store.turns_of("codex", s2),
+                [{"tool": "claude", "session": s1}, {"tool": "codex", "session": s2},
+                 {"tool": "claude", "session": s1}, {"tool": "codex", "session": s2}],
+            )
+            self.assertTrue(store.gone_on("claude", s1))
+            self.assertFalse(store.gone_on("codex", s2))
+            self.assertEqual(store.previous_session("codex", s2, "claude"), s1)
+            # Adjacent repeat, branch from non-tail, and cross-thread collision are rejected.
+            self.assertFalse(store.add("codex", s2, "codex", s2, "self"))
+            self.assertFalse(store.add("claude", s3, "claude", s1, "non-tail"))
+            self.assertFalse(store.add("claude", s1, "claude", other, "collision"))
+            reloaded = agent.Handovers(data)
+            self.assertEqual(reloaded.title("codex", s2), "最初的标题")
+            self.assertEqual(len(reloaded.turns_of("codex", s2)), 4)
+
+            # v1 `links` JSON migrates cleanly into v2 `threads`.
+            v1_dir = os.path.join(tmp, "v1")
+            os.makedirs(v1_dir)
+            with open(os.path.join(v1_dir, "handovers.json"), "w", encoding="utf-8") as fp:
+                json.dump({"links": [
+                    {"tool": "codex", "session": s2, "from_tool": "claude", "from": s1, "title": "旧版标题"},
+                    {"tool": "claude", "session": s3, "from_tool": "codex", "from": s2, "title": "二段标题"},
+                ]}, fp, ensure_ascii=False)
+            migrated = agent.Handovers(v1_dir)
+            self.assertEqual(migrated.title("claude", s3), "旧版标题")
+            self.assertEqual(
+                migrated.turns_of("claude", s3),
+                [{"tool": "claude", "session": s1}, {"tool": "codex", "session": s2}, {"tool": "claude", "session": s3}],
+            )
+            self.assertTrue(migrated.gone_on("codex", s2))
+            self.assertEqual(migrated.previous_session("claude", s3, "claude"), s1)
+
+            # split_visits edge cases + helpers
+            self.assertEqual(agent.strip_handover_ask("【对话交接】摘要\n\n【现在的要求】\n继续做"), "继续做")
+            self.assertEqual(agent.strip_handover_ask("普通问题"), "普通问题")
+            m0 = {"role": "user", "text": "普通问题"}
+            a0 = {"role": "assistant", "text": "回答0"}
+            m1 = {"role": "user", "text": "【对话交接】上段\n\n【现在的要求】\n回切"}
+            a1 = {"role": "assistant", "text": "回答1"}
+            m2 = {"role": "user", "text": "【对话交接】再切\n\n【现在的要求】\n再回"}
+            self.assertEqual(agent.split_visits([m0, a0, m1, a1], 2, False), [[m0, a0], [m1, a1]])
+            self.assertEqual(agent.split_visits([m0, a0], 2, False, False), [[m0, a0], []])
+            self.assertEqual(agent.split_visits([m1, a1], 2, False, False), [[], [m1, a1]])
+            self.assertEqual(agent.split_visits([m1, a1], 2, True, True), [[], [m1, a1]])
+            self.assertEqual(agent.split_visits([m1, a1], 2, True, False), [[m1, a1], []])
+            self.assertEqual(agent.split_visits([m0, m1, m2], 2, False), [[m0], [m1, m2]])
+
+    def test_handover_sessions_round_trip_recall_delta_and_stamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             data = os.path.join(tmp, "data")
             home = os.path.join(tmp, "home")
@@ -2281,54 +2347,68 @@ class HandoversTests(unittest.TestCase):
             store = agent.Handovers(data)
             s1 = "11111111-2222-3333-4444-555555555555"
             s2 = "019a0000-0000-7000-8000-000000000002"
-            s3 = "22222222-3333-4444-5555-666666666666"
-            self.assertTrue(store.add("codex", s2, "claude", s1, "最初的标题"))
-            self.assertTrue(store.add("claude", s3, "codex", s2, "后来的标题"))
-            self.assertTrue(store.gone_on("claude", s1))
-            self.assertTrue(store.gone_on("codex", s2))
-            self.assertFalse(store.gone_on("claude", s3))
-            self.assertEqual(store.title("claude", s3), "最初的标题")
-            self.assertFalse(store.add("claude", s1, "claude", s3, "cycle"))
-            self.assertFalse(store.add("claude", s1, "claude", s1, "self"))
-            reloaded = agent.Handovers(data)
-            self.assertEqual(reloaded.title("claude", s3), "最初的标题")
-            self.assertEqual(agent.strip_handover_ask("【对话交接】摘要\n\n【现在的要求】\n继续做"), "继续做")
-            self.assertEqual(agent.strip_handover_ask("普通问题"), "普通问题")
+            store.add("codex", s2, "claude", s1, "结算页问题")
 
-            # Write Claude (s1) and Codex (s2) transcripts, verify scan hides s1, titles s2 as s1, and line_messages joins them with switch.
-            data2 = os.path.join(tmp, "data2")
-            os.makedirs(data2, exist_ok=True)
-            store2 = agent.Handovers(data2)
-            store2.add("codex", s2, "claude", s1, "结算页问题")
             cdir = os.path.join(home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", proj))
             xdir = os.path.join(home, ".codex", "sessions", "2026", "11", "27")
             os.makedirs(cdir)
             os.makedirs(xdir)
-            with open(os.path.join(cdir, s1 + ".jsonl"), "w", encoding="utf-8") as fp:
+            cfile = os.path.join(cdir, s1 + ".jsonl")
+            xfile = os.path.join(xdir, "rollout-2026-11-27T10-00-00-" + s2 + ".jsonl")
+            with open(cfile, "w", encoding="utf-8") as fp:
                 fp.write(json.dumps({"type": "user", "message": {"role": "user", "content": "结算页小数错了"}}, ensure_ascii=False) + "\n")
                 fp.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "已定位到格式函数。"}]}}, ensure_ascii=False) + "\n")
                 fp.write(json.dumps({"type": "ai-title", "aiTitle": "结算页问题", "sessionId": s1}, ensure_ascii=False) + "\n")
-            with open(os.path.join(xdir, "rollout-2026-11-27T10-00-00-" + s2 + ".jsonl"), "w", encoding="utf-8") as fp:
+            with open(xfile, "w", encoding="utf-8") as fp:
                 fp.write(json.dumps({"type": "session_meta", "payload": {"id": s2, "cwd": proj}}, ensure_ascii=False) + "\n")
                 fp.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "【对话交接】摘要\n\n【现在的要求】\n继续检查优惠券"}]}}, ensure_ascii=False) + "\n")
                 fp.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"text": "优惠券也改好了。"}]}}, ensure_ascii=False) + "\n")
 
-            sessions = agent.Sessions(None, store2)
+            sessions = agent.Sessions(None, store)
             sessions.home = home
             found = sessions.scan({"demo": proj}, [])
             self.assertEqual([(s["tool"], s["id"], s["title"]) for s in found], [("codex", s2, "结算页问题")])
 
-            msgs, _ = sessions.line_messages(s2, "codex", "demo", {"demo": proj})
-            self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "switch", "user", "assistant"])
+            # Switch back from Codex(s2) to Claude(s1): delta contains only Codex(s2)'s turn.
+            delta, between = sessions.delta_messages(s2, "codex", "claude", s1, "demo", {"demo": proj})
+            self.assertEqual(between, ["codex"])
+            self.assertEqual([m["role"] for m in delta], ["user", "assistant"])
+            rbrief = agent.resume_handover(found[0], between, delta)
+            self.assertTrue(rbrief.startswith("【对话交接】上面你暂停之后，我切到 Codex"))
+            self.assertIn("这段期间我的要求：\n继续检查优惠券", rbrief)
+            self.assertIn("对方最后的回答：\n优惠券也改好了。", rbrief)
+            self.assertNotIn("结算页小数错了", rbrief)
+
+            # Complete round-trip: Claude(s1) gets visit 1 appended and becomes active in scan.
+            with open(cfile, "a", encoding="utf-8") as fp:
+                fp.write(json.dumps({"type": "user", "message": {"role": "user", "content": rbrief + "\n\n【现在的要求】\n回到 Claude 汇总确认"}}, ensure_ascii=False) + "\n")
+                fp.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "已汇总确认。"}]}}, ensure_ascii=False) + "\n")
+            store.add("claude", s1, "codex", s2, "结算页问题")
+            found2 = sessions.scan({"demo": proj}, [])
+            self.assertEqual([(s["tool"], s["id"], s["title"]) for s in found2], [("claude", s1, "结算页问题")])
+
+            msgs, _ = sessions.line_messages(s1, "claude", "demo", {"demo": proj})
+            self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "switch", "user", "assistant", "switch", "user", "assistant"])
             self.assertEqual(msgs[2], {"role": "switch", "tool": "codex", "text": "Codex"})
-            read = sessions.read(s2, "codex", "demo", {"demo": proj})
-            self.assertEqual(read["messages"][2], {"role": "switch", "tool": "codex", "text": "Codex"})
-            # Next-tool handover preview ends with the new tool's switch row and brief strips prior handover wrapper.
-            next_msgs, _ = sessions.line_messages(s2, "codex", "demo", {"demo": proj}, next_tool="claude")
-            self.assertEqual(next_msgs[-1], {"role": "switch", "tool": "claude", "text": "Claude Code"})
-            brief = agent.handover(found[0], read["messages"], "")
-            self.assertIn("我最近的要求：\n继续检查优惠券", brief)
-            self.assertNotIn("【对话交接】摘要", brief)
+            self.assertEqual(msgs[5], {"role": "switch", "tool": "claude", "text": "Claude Code"})
+            self.assertEqual(msgs[1]["text"], "已定位到格式函数。")
+            self.assertEqual(msgs[4]["text"], "优惠券也改好了。")
+            self.assertEqual(msgs[7]["text"], "已汇总确认。")
+
+            read1 = sessions.read(s1, "claude", "demo", {"demo": proj})
+            same_check = sessions.read(s1, "claude", "demo", {"demo": proj}, since=read1["stamp"])
+            self.assertTrue(same_check.get("same"))
+            # Touching the earlier Codex file invalidates the combined multi-file stamp.
+            with open(xfile, "a", encoding="utf-8") as fp:
+                fp.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"text": "补充一条备注"}]}}, ensure_ascii=False) + "\n")
+            read2 = sessions.read(s1, "claude", "demo", {"demo": proj}, since=read1["stamp"])
+            self.assertFalse(read2.get("same"))
+            self.assertNotEqual(read2["stamp"], read1["stamp"])
+
+            # Delta for switching from Claude(s1) back to Codex(s2) now includes only Claude's visit 1.
+            delta_back, between_back = sessions.delta_messages(s1, "claude", "codex", s2, "demo", {"demo": proj})
+            self.assertEqual(between_back, ["claude"])
+            self.assertEqual([m["text"] for m in delta_back if m["role"] == "assistant"], ["已汇总确认。"])
 
 
 if __name__ == "__main__":

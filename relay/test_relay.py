@@ -219,6 +219,29 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertIn(started, ids)
         self.assertNotIn(src_term, ids)
 
+        # Round-trip switch-back from Codex (codex_sid) back to Claude (resumed with original sid):
+        # all MAX_TERMINALS slots remain full and the intermediate Codex terminal slot is freed cleanly.
+        codex_sid = "01999999-8888-7777-6666-555555555555"
+        codex_session = {"id": codex_sid, "tool": "codex", "dir": "demo", "title": "结算页金额", "updated": 1005, "live": True}
+        others_after_codex = [t for t in others if t["id"] != src_term] + [
+            {"id": started, "state": "running", "form": "chat", "status": "idle", "session": codex_sid}
+        ]
+        self.relay.agent({"info": self.info, "terminals": others_after_codex, "sessions": [codex_session]}, now=1035)
+        back = {"action": "start", "id": "d" * 32, "tool": "claude", "dir": "demo", "form": "chat",
+                "from_tool": "codex", "from": codex_sid, "text": "回到 Claude 汇总确认"}
+        back_term = self.relay.command(back, now=1036)["terminal"]
+        back_op = self.relay.agent({"info": self.info, "terminals": others_after_codex, "sessions": [codex_session]}, now=1037)["operations"][-1]
+        self.assertEqual((back_op["from_tool"], back_op["from"], back_op["tool"], back_op["text"]),
+                         ("codex", codex_sid, "claude", "回到 Claude 汇总确认"))
+        self.relay.agent({"info": self.info, "acks": [{"id": back["id"]}],
+                          "terminals": [t for t in others if t["id"] != src_term] + [{"id": back_term, "state": "running", "form": "chat", "status": "busy", "session": sid}],
+                          "sessions": []}, now=1038)
+        overview_after = self.relay.overview(now=1038)["terminals"]
+        by_id = {t["id"]: t for t in overview_after}
+        self.assertIn(back_term, by_id)
+        self.assertNotIn(started, by_id)
+        self.assertEqual((by_id[back_term]["tool"], by_id[back_term]["session"]), ("claude", sid))
+
     def test_an_agy_chat_needs_a_computer_that_runs_it(self):
         # Antigravity CLI runs as a conversation by its ACP server, on a computer that says so ("chat-agy")
         self.info["tools"] = ["claude", "codex", "agy", "shell"]

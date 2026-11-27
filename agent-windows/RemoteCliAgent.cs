@@ -312,26 +312,88 @@ public sealed class TerminalAgent {
         live.Chat.Before(messages, more);
         return true;
     }
+    /// Splits every turn of a handover line into its own message list, reading each unique transcript at most once.
+    List<List<Dictionary<string, object>>> SliceTurns(string root, List<RemoteCli.Handovers.Turn> turns, out bool firstMore) {
+        firstMore = false;
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var firstAt = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < turns.Count; i++) {
+            if (String.IsNullOrEmpty(turns[i].Session)) continue;
+            string key = turns[i].Tool + "\0" + turns[i].Session.ToLowerInvariant();
+            int count;
+            counts.TryGetValue(key, out count);
+            counts[key] = count + 1;
+            if (!firstAt.ContainsKey(key)) firstAt[key] = i;
+        }
+        var visitsByKey = new Dictionary<string, List<List<Dictionary<string, object>>>>(StringComparer.Ordinal);
+        var moreByKey = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var nextIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var kv in counts) {
+            int sep = kv.Key.IndexOf('\0');
+            string t = kv.Key.Substring(0, sep);
+            string s = turns[firstAt[kv.Key]].Session;
+            var empty = new List<List<Dictionary<string, object>>>();
+            for (int k = 0; k < kv.Value; k++) empty.Add(new List<Dictionary<string, object>>());
+            try {
+                string file = ConversationFile(t, s, root);
+                if (file == null) { visitsByKey[kv.Key] = empty; moreByKey[kv.Key] = false; continue; }
+                var said = Said(file, t);
+                var raw = (List<Dictionary<string, object>>)said["messages"];
+                bool rawMore = (bool)said["more"];
+                visitsByKey[kv.Key] = RemoteCli.Handovers.SplitVisits(raw, kv.Value, firstAt[kv.Key] > 0, rawMore);
+                moreByKey[kv.Key] = rawMore;
+            } catch (IOException) { visitsByKey[kv.Key] = empty; moreByKey[kv.Key] = false; }
+            catch (UnauthorizedAccessException) { visitsByKey[kv.Key] = empty; moreByKey[kv.Key] = false; }
+        }
+        var sliced = new List<List<Dictionary<string, object>>>(turns.Count);
+        for (int i = 0; i < turns.Count; i++) {
+            if (String.IsNullOrEmpty(turns[i].Session)) { sliced.Add(new List<Dictionary<string, object>>()); continue; }
+            string key = turns[i].Tool + "\0" + turns[i].Session.ToLowerInvariant();
+            int idx;
+            nextIndex.TryGetValue(key, out idx);
+            nextIndex[key] = idx + 1;
+            var list = visitsByKey[key];
+            sliced.Add(idx < list.Count ? list[idx] : new List<Dictionary<string, object>>());
+            if (i == 0) firstMore = moreByKey[key];
+        }
+        return sliced;
+    }
     /// Collects what was said in every conversation of a handover line, oldest first, with a `switch` row where
     /// another AI took over (and a trailing `switch` row for `nextTool` when a new handover starts now).
     List<Dictionary<string, object>> LineMessages(string root, string tool, string session, string nextTool, out bool more) {
-        var parts = Handovers.Line(tool, session).Select(l => new[] { l.FromTool, l.From }).Reverse().ToList();
-        parts.Add(new[] { tool, session });
-        if (!String.IsNullOrEmpty(nextTool)) parts.Add(new[] { nextTool, "" });
+        var turns = Handovers.TurnsOf(tool, session);
+        if (turns.Count == 0 && !String.IsNullOrEmpty(tool) && !String.IsNullOrEmpty(session))
+            turns.Add(new RemoteCli.Handovers.Turn { Tool = tool, Session = session });
+        var slices = SliceTurns(root, turns, out more);
         var messages = new List<Dictionary<string, object>>();
-        more = false;
-        for (int n = 0; n < parts.Count; n++) {
-            if (n > 0) messages.Add(new Dictionary<string, object> { { "role", "switch" }, { "tool", parts[n][0] }, { "text", Label(parts[n][0]) } });
-            if (parts[n][1].Length == 0) continue;
-            try {
-                string file = ConversationFile(parts[n][0], parts[n][1], root);
-                if (file == null) continue;
-                var said = Said(file, parts[n][0]);
-                messages.AddRange((List<Dictionary<string, object>>)said["messages"]);
-                if (n == 0) more = (bool)said["more"];
-            } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        for (int n = 0; n < turns.Count; n++) {
+            if (n > 0) messages.Add(new Dictionary<string, object> { { "role", "switch" }, { "tool", turns[n].Tool }, { "text", Label(turns[n].Tool) } });
+            messages.AddRange(slices[n]);
         }
+        if (!String.IsNullOrEmpty(nextTool))
+            messages.Add(new Dictionary<string, object> { { "role", "switch" }, { "tool", nextTool }, { "text", Label(nextTool) } });
         return messages;
+    }
+    /// Collects only what happened since `targetTool:targetSession` paused (when resuming an earlier participant).
+    List<Dictionary<string, object>> DeltaMessages(string root, string fromTool, string fromSession, string targetTool, string targetSession, out List<string> betweenTools) {
+        betweenTools = new List<string>();
+        var turns = Handovers.TurnsOf(fromTool, fromSession);
+        int lastOwn = -1;
+        for (int i = turns.Count - 1; i >= 0; i--) {
+            if (turns[i].Tool == targetTool && String.Equals(turns[i].Session, targetSession, StringComparison.OrdinalIgnoreCase)) {
+                lastOwn = i;
+                break;
+            }
+        }
+        if (lastOwn < 0 || lastOwn >= turns.Count - 1) return new List<Dictionary<string, object>>();
+        bool unused;
+        var slices = SliceTurns(root, turns, out unused);
+        var delta = new List<Dictionary<string, object>>();
+        for (int i = lastOwn + 1; i < turns.Count; i++) {
+            if (!betweenTools.Contains(turns[i].Tool)) betweenTools.Add(turns[i].Tool);
+            delta.AddRange(slices[i]);
+        }
+        return delta;
     }
     /// The file a tool keeps a conversation in; null where there is none.
     string ConversationFile(string tool, string session, string root) {
@@ -890,6 +952,30 @@ public sealed class TerminalAgent {
             }
         }
         if (!String.IsNullOrWhiteSpace(note)) brief.Append("\n我的补充：\n" + cut(note, 1000) + "\n");
+        return brief.ToString().TrimEnd();
+    }
+    /// Short resume brief when switching back to an AI that paused earlier in the same handover thread:
+    /// summarizes only what happened while other AI(s) handled it since this session last paused.
+    internal static string ResumeBrief(SessionInfo from, string betweenTools, List<Dictionary<string, object>> deltaMessages) {
+        Func<string, int, string> cut = (text, most) => { text = (text ?? "").Trim(); return text.Length <= most ? text : text.Substring(0, Char.IsHighSurrogate(text[most - 1]) ? most - 1 : most) + "…"; };
+        var asked = deltaMessages.Where(m => Convert.ToString(m["role"]) == "user").Select(m => Handovers.StripAsk(Convert.ToString(m["text"]))).Where(s => !String.IsNullOrWhiteSpace(s)).ToList();
+        string answered = deltaMessages.Where(m => Convert.ToString(m["role"]) == "assistant").Select(m => Convert.ToString(m["text"])).LastOrDefault() ?? "";
+        var steps = deltaMessages.Where(m => Convert.ToString(m["role"]) == "tool").ToList();
+        var brief = new StringBuilder("【对话交接】上面你暂停之后，我切到 " + betweenTools + " 继续处理了一段" + (from.Dir.Length > 0 ? "（项目 " + cut(from.Dir, 100) + "）" : "") + "，现在切回你这里接着做。\n");
+        if (asked.Count == 1) brief.Append("\n这段期间我的要求：\n" + cut(asked[0], 800) + "\n");
+        else if (asked.Count > 1) {
+            brief.Append("\n这段期间我最初的要求：\n" + cut(asked[0], 800) + "\n");
+            brief.Append("\n这段期间我最近的要求：\n" + cut(asked[asked.Count - 1], 800) + "\n");
+        }
+        if (answered.Length > 0) brief.Append("\n对方最后的回答：\n" + cut(answered, 2000) + "\n");
+        if (steps.Count > 0) {
+            brief.Append("\n对方最近做的操作：\n");
+            foreach (var step in steps.Skip(Math.Max(0, steps.Count - 8))) {
+                brief.Append("- " + cut(Get(step, "text"), 160) + "\n");
+                string result = cut(Get(step, "result"), 160);
+                brief.Append(result.Length == 0 ? "  记录中没有返回内容\n" : "  返回摘录：" + result.Replace("\n", "\n  ") + "\n");
+            }
+        }
         return brief.ToString().TrimEnd();
     }
     DateTime nextAsking = DateTime.MinValue;
@@ -1653,12 +1739,32 @@ public sealed class TerminalAgent {
             // A page that follows a conversation asks again and again: it says what it has (`since`), and is given
             // the conversation anew only when its file has changed. How it stands goes with either answer.
             var info = new FileInfo(file);
-            var line = Handovers.Line(tool, session);
-            string stamp = info.Length + "." + info.LastWriteTimeUtc.Ticks + (line.Count > 0 ? ".h" + line.Count : ""), since = Get(op, "since");
+            var turns = Handovers.TurnsOf(tool, session);
+            string stamp;
+            if (turns.Count > 1) {
+                var stampParts = new List<string>();
+                var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var turn in turns) {
+                    if (turn.Session.Length == 0) continue;
+                    string key = turn.Tool + ":" + turn.Session.ToLowerInvariant();
+                    if (!seenFiles.Add(key)) continue;
+                    try {
+                        string tf = ConversationFile(turn.Tool, turn.Session, root);
+                        if (tf == null) continue;
+                        var ti = new FileInfo(tf);
+                        stampParts.Add(ti.Length + "." + ti.LastWriteTimeUtc.Ticks);
+                    } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                }
+                if (stampParts.Count == 0) stampParts.Add(info.Length + "." + info.LastWriteTimeUtc.Ticks);
+                stamp = String.Join(",", stampParts) + ".h" + turns.Count;
+            } else {
+                stamp = info.Length + "." + info.LastWriteTimeUtc.Ticks;
+            }
+            string since = Get(op, "since");
             var known = Reach.Of(tool, session);
             Dictionary<string, object> result;
             if (since.Length > 0 && since == stamp) result = new Dictionary<string, object> { { "same", true } };
-            else if (line.Count > 0) {
+            else if (turns.Count > 1) {
                 bool more;
                 var messages = LineMessages(root, tool, session, "", out more);
                 result = new Dictionary<string, object> { { "messages", messages }, { "more", more } };
@@ -2308,6 +2414,14 @@ public sealed class TerminalAgent {
                     session = List(prefs, "RemoteSessions").Select(Convert.ToString).Where(s => s.StartsWith(previous + "|", StringComparison.Ordinal)).Select(s => s.Substring(previous.Length + 1)).FirstOrDefault() ?? "";
                     if (session.Length == 0) throw new ArgumentException("旧对话没有会话编号，请使用历史对话入口");
                     kind.Exclusive(session, false, OwnRoots(), Parents(), "原对话仍被占用，请从项目中选择接管原对话");
+                } else if (handed != null && Get(op, "form") == "chat") {
+                    string candidate = Handovers.PreviousSession(handed.Tool, handed.Id, tool);
+                    string handedPlace = handedRuns != null && !String.IsNullOrEmpty(handedRuns.WorktreePath) && Directory.Exists(handedRuns.WorktreePath) ? handedRuns.WorktreePath : dirs[dir];
+                    if (candidate.Length > 0 && ConversationFile(tool, candidate, handedPlace) != null
+                        && !terminals.Values.Any(t => !t.Pty.Closed && t.Tool == tool && String.Equals(t.Chat != null ? t.Chat.Session : t.Session, candidate, StringComparison.OrdinalIgnoreCase))) {
+                        try { kind.Exclusive(candidate, false, OwnRoots(), Parents(), null); session = candidate; }
+                        catch (InvalidOperationException) { }
+                    }
                 }
                 bool fresh = kind.NamedAtStart && session.Length == 0 && Get(op, "history") != "True";
                 if (fresh) session = Guid.NewGuid().ToString();
@@ -2338,15 +2452,21 @@ public sealed class TerminalAgent {
                     string first = Get(op, "text").Trim();
                     string handedTitle = "";
                     if (handed != null) {
-                        // Read the source conversation before disposing its terminal or opening the new AI.
-                        var read = ReadConversation(new Dictionary<string, object> { { "session", handed.Id }, { "tool", handed.Tool }, { "dir", handed.Dir } }, prefs);
-                        first = Brief(handed, read, "") + "\n\n" + HandoverAsk + "\n" + first;
                         handedTitle = Handovers.Title(handed.Tool, handed.Id);
                         if (handedTitle.Length == 0) handedTitle = handed.Title;
                         live.Title = handedTitle;
                         if (handedRuns != null) {
                             live.WorktreeId = handedRuns.WorktreeId; live.WorktreePath = handedRuns.WorktreePath; live.Branch = handedRuns.Branch;
                             place = Place(live, dirs);
+                        }
+                        List<string> betweenTools = null;
+                        var delta = resume ? DeltaMessages(place, handed.Tool, handed.Id, tool, session, out betweenTools) : null;
+                        if (delta != null && delta.Count > 0) {
+                            first = ResumeBrief(handed, String.Join("、", betweenTools.Select(Label)), delta) + "\n\n" + HandoverAsk + "\n" + first;
+                        } else {
+                            // Read the source conversation before disposing its terminal or opening the new AI.
+                            var read = ReadConversation(new Dictionary<string, object> { { "session", handed.Id }, { "tool", handed.Tool }, { "dir", handed.Dir } }, prefs);
+                            first = Brief(handed, read, "") + "\n\n" + HandoverAsk + "\n" + first;
                         }
                     }
                     live.Pty = Chat.Open(tool, launcher, place, session, resume, live.Mode, Emitted(live), Quotas, live.Mode == "read" ? null : Peers.Offer(tool, place, live.Id, live.Dir), live.Model, live.Effort);
@@ -2359,20 +2479,28 @@ public sealed class TerminalAgent {
                         }
                         ended.RemoveAll(e => e.Tool == handed.Tool && String.Equals(e.Session, handed.Id, StringComparison.OrdinalIgnoreCase));
                     }
+                    if (resume) {
+                        foreach (string stale in terminals.Where(kv => kv.Key != terminal && kv.Value.Pty.Closed && kv.Value.Tool == tool && String.Equals(kv.Value.Session, session, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Key).ToArray()) {
+                            terminals[stale].Pty.Dispose();
+                            terminals.Remove(stale);
+                        }
+                        ended.RemoveAll(e => e.Tool == tool && String.Equals(e.Session, session, StringComparison.OrdinalIgnoreCase));
+                    }
                     terminals[terminal] = live;
-                    if (resume) Recall(live, place);
                     if (handed != null) {
+                        Recall(live, place, handed.Tool, handed.Id, false);
                         if (live.Session.Length > 0) {
                             Handovers.Add(live.Tool, live.Session, handed.Tool, handed.Id, handedTitle);
                             sessions = sessions.Where(s => !Handovers.GoneOn(s.Tool, s.Id)).ToList();
                             sessionsDirty = true;
                             nextScan = DateTime.MinValue;
                         } else live.HandedFrom = handed;
-                        Recall(live, place, handed.Tool, handed.Id, false);
+                    } else if (resume) {
+                        Recall(live, place);
                     }
                     if (first.Length > 0) live.Chat.Say(first, id);
                     // a team's member gone on with here is that member again (Teams.Rejoin)
-                    if (resume) { string chatSession = session; bool told = first.Length > 0; Task.Run(() => Teams.Rejoin(terminal, tool, chatSession, told)); }
+                    if (resume && handed == null) { string chatSession = session; bool told = first.Length > 0; Task.Run(() => Teams.Rejoin(terminal, tool, chatSession, told)); }
                 } else {
                     live.Model = Get(op, "model").Trim();
                     live.Effort = Models.CleanEffort(Get(op, "effort"));

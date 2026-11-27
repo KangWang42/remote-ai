@@ -10,6 +10,7 @@ command to the background, ends the turn, and goes on by itself when the command
 """
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -26,6 +27,35 @@ def record_standin(env_key, entry):
     with out_lock:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def append_transcript(path, entry):
+    if not path:
+        return
+    with out_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def claude_transcript_path(session, cwd):
+    if not os.environ.get("STANDIN_SAVE_TRANSCRIPT") or not session:
+        return None
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    proj = re.sub(r"[^a-zA-Z0-9]", "-", os.path.abspath(cwd or os.getcwd()))
+    return base / "projects" / proj / ("%s.jsonl" % session)
+
+
+def codex_transcript_path(session):
+    if not os.environ.get("STANDIN_SAVE_TRANSCRIPT") or not session:
+        return None
+    base = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    sessions_dir = base / "sessions"
+    if sessions_dir.is_dir():
+        existing = list(sessions_dir.rglob("rollout-*%s.jsonl" % session))
+        if existing:
+            return existing[0]
+    return sessions_dir / "2026" / "11" / "27" / ("rollout-2026-11-27T12-00-00-%s.jsonl" % session)
 
 
 def put(message):
@@ -46,6 +76,7 @@ def lines():
 def claude(args):
     record_standin("STANDIN_MODEL_LOG", args)
     session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
+    transcript = claude_transcript_path(session, os.getcwd())
     answers, stop, turns, peer_turns = {}, threading.Event(), [], [0]
 
     def said(text):
@@ -113,6 +144,8 @@ def claude(args):
         put({"type": "result", "subtype": "success", "is_error": False, "result": "测试全部通过，改了 checkout.js。", "session_id": session, "origin": "task-notification"})
 
     def turn(text):
+        record_standin("STANDIN_PROMPT_LOG", {"tool": "claude", "session": session, "args": args, "text": text})
+        append_transcript(transcript, {"type": "user", "message": {"role": "user", "content": text}, "sessionId": session, "cwd": os.getcwd()})
         put({"type": "system", "subtype": "init", "session_id": session, "cwd": ".", "tools": ["Bash"]})
         put({"type": "user", "message": {"role": "user", "content": text}, "session_id": session, "uuid": str(uuid.uuid4())})
         if "只读请教" in text or "继续请教" in text:
@@ -160,6 +193,9 @@ def claude(args):
         put({"type": "stream_event", "event": {"type": "message_start", "message": {"id": message}}})
         put({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}})
         put({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "好了：**chat-ok**"}}})
+        append_transcript(transcript, {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "我先看看。"}, {"type": "tool_use", "id": use, "name": "Bash", "input": {"command": command, "description": "运行命令"}}]}})
+        append_transcript(transcript, {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use, "content": "chat-ok", "is_error": False}]}})
+        append_transcript(transcript, {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "好了：**chat-ok**"}]}})
         put({"type": "result", "subtype": "success", "is_error": False, "result": "好了", "session_id": session})
 
     def interrupted(use, why):
@@ -208,7 +244,7 @@ def claude(args):
 
 # ---- Codex
 def codex(args):
-    state = {"thread": "", "turn": "", "next": 0, "peer_turns": 0, "sandbox": ""}
+    state = {"thread": "", "turn": "", "next": 0, "peer_turns": 0, "sandbox": "", "cwd": os.getcwd(), "mode": "", "transcript": None}
     waiting, stop = {}, threading.Event()
 
     def note(method, **params):
@@ -218,6 +254,8 @@ def codex(args):
         turn_id = state["turn"]
         note("turn/started", threadId=state["thread"], turn={"id": turn_id, "status": "inProgress", "items": []})
         note("item/started", threadId=state["thread"], turnId=turn_id, item={"type": "userMessage", "id": "u-" + uuid.uuid4().hex[:8], "clientId": client, "content": [{"type": "text", "text": text}]})
+        record_standin("STANDIN_PROMPT_LOG", {"tool": "codex", "session": state["thread"], "method": state["mode"], "text": text})
+        append_transcript(state["transcript"], {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
         if "只读请教" in text or "继续请教" in text:
             state["peer_turns"] += 1
             verdict = ""
@@ -292,6 +330,10 @@ def codex(args):
         note("item/started", item={"type": "agentMessage", "id": said, "text": ""}, threadId=state["thread"], turnId=turn_id)
         note("item/agentMessage/delta", threadId=state["thread"], turnId=turn_id, itemId=said, delta="好了：**chat-ok**")
         note("item/completed", item={"type": "agentMessage", "id": said, "text": "好了：**chat-ok**"}, threadId=state["thread"], turnId=turn_id)
+        append_transcript(state["transcript"], {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "我先看看。"}]}})
+        append_transcript(state["transcript"], {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "CommandExecution", "parsed_cmd": [{"cmd": command}], "command": [command], "exit_code": "0", "aggregated_output": "chat-ok\n"}}})
+        append_transcript(state["transcript"], {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "好了：**chat-ok**"}]}})
+        append_transcript(state["transcript"], {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn_id}})
         ended("completed", None)
 
     def ended(status, run):
@@ -322,7 +364,12 @@ def codex(args):
             ]}})
         elif method in ("thread/start", "thread/resume"):
             state["sandbox"] = params.get("sandbox") or ""
+            state["cwd"] = params.get("cwd") or os.getcwd()
+            state["mode"] = method
             state["thread"] = params.get("threadId") or "0199dddd-eeee-7fff-8000-%012d" % int(time.time() * 1000 % 10 ** 12)
+            state["transcript"] = codex_transcript_path(state["thread"])
+            if state["transcript"] and not state["transcript"].exists():
+                append_transcript(state["transcript"], {"type": "session_meta", "payload": {"id": state["thread"], "cwd": state["cwd"]}})
             cfg = params.get("config") if isinstance(params.get("config"), dict) else {}
             record_standin("STANDIN_CODEX_LOG", {"event": method, "model": params.get("model") or "", "config_effort": cfg.get("model_reasoning_effort") or ""})
             put({"id": number, "result": {"thread": {"id": state["thread"], "cwd": params.get("cwd")}, "model": params.get("model") or "gpt-6.2-sol", "reasoningEffort": cfg.get("model_reasoning_effort") or "medium"}})

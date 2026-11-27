@@ -61,7 +61,9 @@ def main():
         homes.codex_saved(shop, "019a0000-0000-7000-8000-000000000001", "补充单元测试", 0.1)
         homes.codex_saved(notes, "019a0000-0000-7000-8000-000000000002", "整理周报", 50)
         model_log = base / "model.jsonl"
-        environment = homes.environment(RCLI_PASSWORD=PASSWORD, STANDIN_MODEL_LOG=str(model_log))
+        prompt_log = base / "prompts.jsonl"
+        environment = homes.environment(RCLI_PASSWORD=PASSWORD, STANDIN_MODEL_LOG=str(model_log),
+                                        STANDIN_SAVE_TRANSCRIPT="1", STANDIN_PROMPT_LOG=str(prompt_log))
         (data / "quotas").mkdir()
         (data / "quotas" / "claude.json").write_text(json.dumps({
             "tool": "claude", "why": "", "at": int(time.time() * 1000),
@@ -285,6 +287,55 @@ def main():
             until("Array.from(document.querySelectorAll('.proj .th-row .th-title')).filter(n => n.textContent === '结算页金额多一位小数').length === 1", "handed-over conversation still listed once under original title")
             assert value("document.querySelectorAll('.proj .th-row').length") == 3, (value(titles), value("fetch('../api/terminal').then(r=>r.json()).then(j=>({terminals:j.terminals.map(t=>({id:t.id,tool:t.tool,state:t.state,session:t.session,title:t.title})),sessions:j.sessions.map(s=>({id:s.id,tool:s.tool,title:s.title,live:s.live}))}))"))
             browser.picture(out / "handover-inline.png")
+
+            # ---- switch back in-place (Codex -> Claude): resumes SAVED Claude session with delta summary in chronological order
+            until("fetch('../api/terminal').then(r => r.json()).then(j => j.sessions.some(s => s.tool === 'codex' && s.title === '结算页金额多一位小数'))",
+                  "Codex handover session indexed in relay sessions")
+            value("document.querySelector('.composer .tool-switch-btn').click()")
+            until("!!document.querySelector('.tool-switch-pop .tsp-tool-tab[data-tool=\"claude\"]')", "Claude tab in switcher")
+            value("document.querySelector('.tool-switch-pop .tsp-tool-tab[data-tool=\"claude\"]').click()")
+            until("document.querySelector('.tool-switch-pop .tsp-head span')?.textContent === 'Claude Code'", "Claude models shown")
+            value("document.querySelector('.tool-switch-pop .tsp-row[data-model=\"\"]').click()")
+            until("!document.querySelector('.tool-switch-pop') && document.querySelector('.switch-banner')?.textContent.includes('Claude Code')", "staged switch-back banner")
+            compose("回到 Claude 汇总确认")
+            until("document.querySelectorAll('.timeline-switch').length === 2 && !!document.querySelector('.ask-card')", "Claude resumed in-place with second switch divider")
+            press(".ask-card button", "允许")
+            until("document.querySelector('.run-status')?.textContent === '等待消息'", "Claude finished round-trip handover turn")
+
+            dividers = value("Array.from(document.querySelectorAll('.timeline-switch')).map(n => n.textContent)")
+            assert len(dividers) == 2 and "以下由 Codex 继续" in dividers[0] and "以下由 Claude Code 继续" in dividers[1], dividers
+            timeline_rows = value("Array.from(document.querySelectorAll('.timeline-switch, .msg-user .msg-bubble')).map(n => n.textContent)")
+            idx_early = next(i for i, t in enumerate(timeline_rows) if "再检查一下优惠券" in t)
+            idx_div_codex = next(i for i, t in enumerate(timeline_rows) if "以下由 Codex 继续" in t)
+            idx_codex = next(i for i, t in enumerate(timeline_rows) if "继续核对优惠券边界" in t)
+            idx_div_claude = next(i for i, t in enumerate(timeline_rows) if "以下由 Claude Code 继续" in t)
+            idx_claude = next(i for i, t in enumerate(timeline_rows) if "回到 Claude 汇总确认" in t)
+            assert idx_early < idx_div_codex < idx_codex < idx_div_claude < idx_claude, timeline_rows
+            user_bubbles_2 = value("Array.from(document.querySelectorAll('.msg-user .msg-bubble')).map(n => n.textContent)")
+            assert "继续核对优惠券边界" in user_bubbles_2 and "回到 Claude 汇总确认" in user_bubbles_2 and not any("【对话交接】" in b for b in user_bubbles_2), user_bubbles_2
+            assert value("document.querySelectorAll('.proj .th-row').length") == 3
+            assert value("Array.from(document.querySelectorAll('.proj .th-row .th-title')).filter(n => n.textContent === '结算页金额多一位小数').length") == 1
+            until("fetch('../api/terminal').then(r => r.json()).then(j => j.terminals.some(t => t.state === 'running' && t.tool === 'claude' && t.session === %s) && j.sessions.some(s => s.tool === 'claude' && s.id === %s && s.title === '结算页金额多一位小数'))" % (q(SAVED), q(SAVED)),
+                  "resumed Claude terminal running with SAVED session and original title")
+            browser.picture(out / "handover-roundtrip.png")
+
+            disk_read = value("fetch('../api/conversation', { method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ id: '9'.repeat(32), session: %s }) }).then(r => r.json())" % q(SAVED))
+            disk_roles = [(m.get("role"), m.get("tool")) for m in disk_read.get("messages", [])]
+            assert [m for m in disk_roles if m[0] == "switch"] == [("switch", "codex"), ("switch", "claude")], disk_roles
+
+            value("Array.from(document.querySelectorAll('.proj .th-row')).find(n => n.textContent.includes('补充单元测试')).click()")
+            until("document.querySelector('.head-title')?.textContent === '补充单元测试'", "switched to another thread")
+            value("Array.from(document.querySelectorAll('.proj .th-row')).find(n => n.textContent.includes('结算页')).click()")
+            until("document.querySelector('.head-title')?.textContent === '结算页金额多一位小数' && document.querySelectorAll('.timeline-switch').length === 2", "returning still shows both chronological dividers")
+
+            prompts = [json.loads(line) for line in prompt_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+            claude_prompts = [p for p in prompts if p.get("tool") == "claude"]
+            assert claude_prompts, prompts
+            last_claude = claude_prompts[-1]
+            assert "--resume" in last_claude["args"] and last_claude["args"][last_claude["args"].index("--resume") + 1] == SAVED, last_claude["args"]
+            assert last_claude["text"].startswith("【对话交接】上面你暂停之后，我切到 Codex"), last_claude["text"]
+            assert "继续核对优惠券边界" in last_claude["text"] and "【现在的要求】\n回到 Claude 汇总确认" in last_claude["text"], last_claude["text"]
+            assert "下面是我在另一段对话里的进展" not in last_claude["text"], last_claude["text"]
 
             # ---- a new conversation: the project picker opens over the page and chooses
             value("document.querySelector('.new-btn').click()")
