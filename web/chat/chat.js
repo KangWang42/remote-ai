@@ -176,6 +176,13 @@
     mine.forEach(p => { p.node = null; });
   }
   // What the user said: the words, then the pictures the computer named in lines of their own (ui/attach.js).
+  const HANDOVER_SEP = '\n\n【现在的要求】\n';
+  function shownUserText(text) {
+    const raw = String(text || '');
+    if (!raw.startsWith('【对话交接】')) return raw;
+    const at = raw.indexOf(HANDOVER_SEP);
+    return at >= 0 ? raw.slice(at + HANDOVER_SEP.length) : raw;
+  }
   const shotsOf = names => RemoteAttach.shots(names, { base: '../', dir: terminal ? terminal.dir : '', from: 'terminal' });
   function userNode(text) {
     const { text: words, names } = RemoteAttach.split(text);
@@ -276,7 +283,8 @@
       });
       if (changed) saveMine();
       endTurn(lastWords); lastWords = null;
-      node = userNode(item.text);
+      item.shown = shownUserText(item.text);
+      node = userNode(item.shown);
     } else if (e.kind === 'text') {
       node = el('div', { className: 'text md' });
       setText(node, item.text, true);
@@ -293,7 +301,7 @@
     items.set(e.id, item);
     if (e.kind === 'step' || e.kind === 'thought') intoSteps(said, node);
     else said.append(node);
-    if (e.kind === 'user') said.append(metaNode(item.text, item.at, true));
+    if (e.kind === 'user') said.append(metaNode(item.shown, item.at, true));
     if (e.kind === 'text' || e.kind === 'thought') write(e.id);
     return item;
   }
@@ -332,7 +340,13 @@
     let words = null;      // the last answer before the next message, which gets the meta line
     const close = () => { if (words) words.node.after(metaNode(words.text, 0, false)); words = null; };
     (messages || []).forEach(m => {
-      if (m.role === 'user') { close(); box.append(userNode(m.text), metaNode(m.text, 0, true)); }
+      if (m.role === 'user') { const shown = shownUserText(m.text); close(); box.append(userNode(shown), metaNode(shown, 0, true)); }
+      else if (m.role === 'switch') {
+        close();
+        const t = m.tool || '';
+        const mark = ['claude', 'codex', 'agy'].includes(t) ? el('span', { className: 'switch-mark tool-' + t, html: icon(t, 14), ariaHidden: 'true' }) : '';
+        box.append(el('p', { className: 'divide switch' }, mark, el('span', { textContent: '以下由 ' + (m.text || TOOLS[t] || t) + ' 继续' })));
+      }
       else if (m.role === 'assistant') { const node = el('div', { className: 'text md' }); setText(node, m.text, false); box.append(node); if (m.text.trim()) words = { node, text: m.text }; }
       else if (m.role === 'thought') intoSteps(box, thoughtNode({ kind: 'thought', text: m.text || '' }));
       else if (m.role === 'tool') {
@@ -341,7 +355,7 @@
       }
     });
     close();
-    if (messages && messages.length) box.append(el('p', { className: 'divide', textContent: '在手机上继续' }));
+    if (messages && messages.length && messages[messages.length - 1].role !== 'switch') box.append(el('p', { className: 'divide', textContent: '在手机上继续' }));
     said.prepend(box);
   }
   function apply(e) {
@@ -406,23 +420,42 @@
     // the round button at the end: a stop while it works and nothing is written, the arrow otherwise
     const working = kind === 'busy' || kind === 'confirm', typed = !!$('box').value.trim() || !!(picker && picker.count);
     $('stop').hidden = !working;
-    $('send').hidden = working && !typed && !sendingPictures;
+    $('send').hidden = working && !typed && !sendingPictures && !handingOver;
     $('send').classList.toggle('ready', typed);
     $('again').hidden = !(ended && terminal.session);
     drawParams(ended);
     $('write').hidden = !!ended;
-    $('go').hidden = !(kind === 'idle' && (lastEnd === 'stopped' || lastEnd === 'failed') && !typed);
-    $('send').disabled = kind === 'off';
-    $('send').classList.toggle('going', sendingPictures);
+    $('go').hidden = !(kind === 'idle' && (lastEnd === 'stopped' || lastEnd === 'failed') && !typed && !pendingSwitch);
+    $('send').disabled = kind === 'off' || handingOver;
+    $('send').classList.toggle('going', sendingPictures || handingOver);
   }
-  // The model button at the end of the box: the tool's icon, tinted where a model or effort of its own is chosen.
-  let paramsDrawn = '';
+  // The model button at the end of the box: the active (or staged) tool's icon, tinted when customized or switching AI.
+  let paramsDrawn = '', pendingSwitch = null, handingOver = false;
+  function setPendingSwitch(next) {
+    pendingSwitch = next && terminal && next.tool && next.tool !== terminal.tool ? next : null;
+    stands();
+    if (pendingSwitch) setTimeout(() => box.focus(), 60);
+  }
   function drawParams(ended) {
-    const button = $('params-btn'), tool = terminal && ['claude', 'codex', 'agy'].includes(terminal.tool) ? terminal.tool : '';
+    const button = $('params-btn'), bar = $('switch-bar');
+    const baseTool = terminal && ['claude', 'codex', 'agy'].includes(terminal.tool) ? terminal.tool : '';
+    const tool = pendingSwitch && !ended ? pendingSwitch.tool : baseTool;
     button.hidden = !tool || ended;
+    if (bar) {
+      const showBar = !!(pendingSwitch && !ended);
+      bar.hidden = !showBar;
+      if (showBar) {
+        const d = window.RemoteTeamDefaults;
+        const mLabel = pendingSwitch.model ? (d ? d.modelLabel(pendingSwitch.tool, pendingSwitch.model, modelCatalog) : pendingSwitch.model) : '';
+        bar.className = 'tool-' + pendingSwitch.tool;
+        $('switch-bar-icon').innerHTML = icon(pendingSwitch.tool, 16);
+        $('switch-bar-text').textContent = '下一条由 ' + (TOOLS[pendingSwitch.tool] || pendingSwitch.tool) + (mLabel ? ' · ' + mLabel : '') + ' 继续';
+      }
+      box.placeholder = showBar ? '发消息，由 ' + (TOOLS[pendingSwitch.tool] || pendingSwitch.tool) + ' 继续' : '发消息';
+    }
     if (button.hidden) return;
-    const label = paramsSummary();
-    button.className = 'tool-' + tool + (label ? ' custom' : '');
+    const label = pendingSwitch ? ('下一条由 ' + (TOOLS[pendingSwitch.tool] || pendingSwitch.tool) + ' 继续') : paramsSummary();
+    button.className = 'tool-' + tool + (label || pendingSwitch ? ' custom' : '');
     button.setAttribute('aria-label', (TOOLS[tool] || tool) + ' · ' + (label || '默认模型'));
     button.title = label || TOOLS[tool];
     if (paramsDrawn !== tool) { $('params-icon').innerHTML = icon(tool, 18); paramsDrawn = tool; }
@@ -580,10 +613,33 @@
     pictureAsked = true;
     work.ensure().then(data => { knowRoot(data); picker.enabled = !!(data && terminal.dir && (data.device.features || []).includes('attachments')); }, () => { pictureAsked = false; });
   }
+  async function handoverSend(words, target) {
+    if (!words || !terminal || terminal.state === 'closed') return;
+    handingOver = true; stands();
+    try {
+      const payload = { action: 'start', tool: target.tool, dir: terminal.dir, form: 'chat', from: terminal.session, from_tool: terminal.tool, text: words };
+      if (target.model) payload.model = target.model;
+      if (target.effort) payload.effort = target.effort;
+      const started = await work.terminal(payload);
+      draft.clear(box.value);
+      pendingSwitch = null;
+      const tail = bridge().teamQuery ? bridge().teamQuery() : (new URLSearchParams(location.search).get('from') === 'bench' ? '&from=bench' : '');
+      location.replace('?id=' + encodeURIComponent(started.terminal) + tail);
+    } catch (error) {
+      toast(error.message || '切换失败');
+    } finally {
+      handingOver = false; stands();
+    }
+  }
   $('write').addEventListener('submit', async event => {
     event.preventDefault();
-    if (sendingPictures) return;
+    if (sendingPictures || handingOver) return;
     if (!box.value.trim() && !picker.count) return box.focus();
+    if (pendingSwitch && terminal && terminal.state !== 'closed') {
+      if (picker.count) return toast('换 AI 的第一条消息暂不支持图片，请先发送文字');
+      if (state === 'busy' || state === 'confirm') return toast('请等这一轮结束后再切换 AI');
+      return handoverSend(box.value.trim(), pendingSwitch);
+    }
     if (!picker.count) { say(box.value); grow(); return; }
     if (!terminal || terminal.state === 'closed') return;
     if (Array.from(mine.values()).some(p => sameMessage(p, box.value.trim(), picker.names))) return toast('这条消息正在确认送达，请先查看它的状态');
@@ -595,6 +651,7 @@
     } catch (error) { toast(error.message); }
     finally { sendingPictures = false; $('send-done').hidden = true; stands(); }
   });
+  if ($('switch-cancel')) $('switch-cancel').onclick = () => setPendingSwitch(null);
   $('go').onclick = () => say('继续');
   $('stop').onclick = () => { $('stop').disabled = true; bridge().send({ action: 'stop' }); setTimeout(() => { $('stop').disabled = false; }, 2500); };
   $('again').onclick = () => bridge().again();
@@ -604,7 +661,12 @@
     if (!terminal) return;
     if (!device.online) return toast('电脑离线');
     work.ensure();
-    RemoteSheet.open(RemoteSwitch.page(work, of(), { reopen: choice => reopen('chat', choice), busy: () => state === 'busy' || state === 'confirm' ? '这一轮结束后再换模型' : '' }), '切换模型');
+    RemoteSheet.open(RemoteSwitch.page(work, of(), {
+      reopen: choice => reopen('chat', choice),
+      stage: setPendingSwitch,
+      pending: pendingSwitch,
+      busy: () => state === 'busy' || state === 'confirm' ? '这一轮结束后再切换' : ''
+    }), '切换 AI 与模型');
   };
   if ($('team-bar')) $('team-bar').onclick = () => { if (terminal && terminal.team) openTeam(terminal.team); };
 

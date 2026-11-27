@@ -585,7 +585,14 @@
   async function writeSaid(box, messages, toolName, phoneTexts, cache) {
     await loadMarkdown();
     const set = text => markdownNode(text, cache);
-    let run = null, last = '';
+    const stripHandover = text => {
+      const raw = String(text || '');
+      if (!raw.startsWith('【对话交接】')) return raw;
+      const sep = '\n\n【现在的要求】\n';
+      const at = raw.indexOf(sep);
+      return at >= 0 ? raw.slice(at + sep.length) : raw;
+    };
+    let run = null, last = '', speaker = toolName;
     const keyed = (node, value) => { node.readKey = JSON.stringify(value); return node; };
     messages.forEach(m => {
       if (m.role === 'tool') {
@@ -601,21 +608,28 @@
         return;
       }
       run = null;
+      if (m.role === 'switch') {
+        speaker = m.text || m.tool || speaker;
+        box.append(keyed(el('p', { className: 'divide switch', textContent: '以下由 ' + speaker + ' 继续' }), m));
+        last = '';
+        return;
+      }
       // what the tool said of its work between its steps: a quieter line of its own, under the tool's name like its answers
       if (m.role === 'thought') {
-        box.append(keyed(el('div', { className: 'turn assistant thought' }, last !== 'assistant' ? el('b', { textContent: toolName }) : '', el('div', { className: 'plain', textContent: m.text }), m.truncated ? el('small', { className: 'quiet', textContent: '这段内容超长，剩余部分请在电脑上查看' }) : ''), [m, last]));
+        box.append(keyed(el('div', { className: 'turn assistant thought' }, last !== 'assistant' ? el('b', { textContent: speaker }) : '', el('div', { className: 'plain', textContent: m.text }), m.truncated ? el('small', { className: 'quiet', textContent: '这段内容超长，剩余部分请在电脑上查看' }) : ''), [m, last, speaker]));
         last = 'assistant';
         return;
       }
       const mine = m.role === 'user';
-      const fromPhone = mine && phoneTexts && phoneTexts.has(String(m.text || '').trim());
+      const shown = mine ? stripHandover(m.text) : m.text;
+      const fromPhone = mine && phoneTexts && phoneTexts.has(String(shown || '').trim());
       box.append(keyed(el('div', { className: 'turn ' + (mine ? 'user' : 'assistant') },
-        !mine && last !== 'assistant' ? el('b', { textContent: toolName }) : '', set(m.text),
+        !mine && last !== 'assistant' ? el('b', { textContent: speaker }) : '', set(shown),
         m.truncated ? el('small', { className: 'quiet', textContent: '这条消息超长，剩余部分请在电脑上查看' }) : '',
-        fromPhone ? el('small', { className: 'phone-delivery', textContent: '手机消息' }) : ''), [m, last, !!fromPhone]));
+        fromPhone ? el('small', { className: 'phone-delivery', textContent: '手机消息' }) : ''), [m, last, speaker, !!fromPhone]));
       last = m.role;
     });
-    const texts = new Set(messages.map(m => m.text));
+    const texts = new Set(messages.map(m => m.role === 'user' ? stripHandover(m.text) : m.text));
     for (const key of cache.keys()) if (!texts.has(key)) cache.delete(key);
   }
   // For how long: 0:07, 3:25, 1:02:10.

@@ -181,7 +181,8 @@ export interface ChatMessageItem {
   id: string;
   op?: string;
   ops?: string[];
-  role: 'user' | 'assistant' | 'tool' | 'thought' | 'note' | 'ask' | 'error';
+  role: 'user' | 'assistant' | 'tool' | 'thought' | 'note' | 'ask' | 'error' | 'switch';
+  tool?: string;
   text: string;
   title?: string;
   detail?: string;

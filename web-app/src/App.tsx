@@ -526,7 +526,7 @@ export function App() {
       onHandOff={() => setHandoff(t.key)}
       onHandedTo={(terminal) => {
         openTerminal(terminal);
-        say('已交给新的对话');
+        say('已切换 AI 继续');
       }}
       onOpenFiles={() => (setBrowse(''), setInspectorTab('files'), setInspector(true))}
       onToggleInspector={() => setInspector((v) => !v)}

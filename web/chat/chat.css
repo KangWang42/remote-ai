@@ -54,6 +54,11 @@ header h1 { font-size: 1rem; font-weight: 600; line-height: 1.3; letter-spacing:
 .earlier { align-self: center; color: var(--muted); font-size: .78rem; }
 .divide { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .76rem; }
 .divide::before, .divide::after { content: ""; flex: 1; border-top: 1px solid var(--divider, var(--line)); }
+.divide.switch { gap: 8px; margin: 6px 0; font-weight: 600; color: var(--ink); }
+.divide.switch .switch-mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--tool-tint, var(--accent)); background: color-mix(in srgb, var(--tool-tint, var(--accent)) 14%, transparent); }
+.divide.switch .switch-mark.tool-claude { --tool-tint: #d97757; }
+.divide.switch .switch-mark.tool-codex { --tool-tint: var(--accent); }
+.divide.switch .switch-mark.tool-agy { --tool-tint: #6366f1; }
 
 .user.failed { box-shadow: inset 0 0 0 1px var(--bad); }
 .user small { display: block; margin-top: 3px; color: var(--muted); font-size: .74rem; }
@@ -130,6 +135,14 @@ main > .attach-tray { margin: 4px 12px 0; padding-left: 4px; }
 #standing { font-weight: 600; color: var(--ink); flex: none; }
 #clock { font-variant-numeric: tabular-nums; font-size: .84rem; font-weight: 600; flex: none; }
 #again { margin-left: auto; min-height: 36px; padding: 0 14px; border-radius: 999px; font-size: .84rem; font-weight: 600; transition: transform .1s, opacity .12s; }
+#switch-bar { display: flex; align-items: center; gap: 8px; margin: 2px 12px 0; padding: 7px 10px 7px 12px; border-radius: 14px; background: color-mix(in srgb, var(--tool-tint, var(--accent)) 11%, var(--panel)); border: 1px solid color-mix(in srgb, var(--tool-tint, var(--accent)) 28%, var(--line)); font-size: .82rem; color: var(--ink); }
+#switch-bar.tool-claude { --tool-tint: #d97757; }
+#switch-bar.tool-codex { --tool-tint: var(--accent); }
+#switch-bar.tool-agy { --tool-tint: #6366f1; }
+#switch-bar-icon { flex: none; display: grid; place-items: center; color: var(--tool-tint, var(--accent)); }
+#switch-bar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+#switch-cancel { flex: none; padding: 3px 9px; border-radius: 999px; font-size: .78rem; font-weight: 600; color: var(--muted); background: color-mix(in srgb, var(--panel) 80%, transparent); }
+#switch-cancel:active { background: var(--raised); }
 /* the composer: one rounded box; pictures at its start, the words, then at its end the model (the tool's icon) and one
    round button, the arrow that sends or the square that stops */
 #write { display: flex; align-items: flex-end; gap: 2px; margin: 6px 12px 12px; padding: 4px; border: 1px solid var(--chat-composer-border, var(--card-border, var(--line))); border-radius: 24px; background: var(--chat-composer-bg, var(--bg)); transition: border-color .15s, box-shadow .15s; }

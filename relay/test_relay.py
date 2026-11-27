@@ -169,6 +169,56 @@ class TerminalRelayTests(unittest.TestCase):
         result = next(t for t in self.relay.overview(now=1009)["terminals"] if t["id"] == reopened)
         self.assertEqual((result["session"], result["mode"], result["model"], result["effort"]), (session, "read", "sonnet", "high"))
 
+    def test_handover_starts_another_ai_in_place_and_frees_source_slot(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        self.info["features"] = ["chat"]
+        session_entry = {"id": sid, "tool": "claude", "dir": "demo", "title": "结算页金额", "updated": 1000, "live": True}
+        self.relay.agent({"info": self.info, "sessions": [session_entry]}, now=1001)
+        start_src = {"action": "start", "id": "a" * 32, "tool": "claude", "dir": "demo", "form": "chat", "text": "查一下结算页"}
+        src_term = self.relay.command(start_src, now=1002)["terminal"]
+        listed_src = {"id": src_term, "state": "running", "form": "chat", "status": "idle", "session": sid}
+        self.relay.agent({"info": self.info, "acks": [{"id": start_src["id"]}], "terminals": [listed_src], "sessions": [session_entry]}, now=1003)
+
+        hand = {"action": "start", "id": "b" * 32, "tool": "codex", "dir": "demo", "form": "chat",
+                "from_tool": "claude", "from": sid, "text": "继续检查优惠券", "model": "gpt-5.4"}
+        with self.assertRaisesRegex(RemoteError, "同对话换 AI"):
+            self.relay.command(hand, now=1004)
+
+        self.info["features"] = ["chat", "handover"]
+        self.relay.agent({"info": self.info, "terminals": [dict(listed_src, status="busy")], "sessions": [session_entry]}, now=1005)
+        with self.assertRaisesRegex(RemoteError, "正在执行或等待确认"):
+            self.relay.command(hand, now=1006)
+
+        self.relay.agent({"info": self.info, "terminals": [listed_src], "sessions": [dict(session_entry, team="1" * 16)]}, now=1007)
+        with self.assertRaisesRegex(RemoteError, "协作里换 AI"):
+            self.relay.command(hand, now=1008)
+
+        # Fill all MAX_TERMINALS slots: handover still succeeds because the source terminal will be closed.
+        self.relay.agent({"info": self.info, "terminals": [listed_src], "sessions": [session_entry]}, now=1009)
+        others = [listed_src]
+        for i in range(15):
+            op = {"action": "start", "id": f"{i:032x}", "tool": "shell", "dir": "demo"}
+            tid = self.relay.command(op, now=1010 + i)["terminal"]
+            others.append({"id": tid, "state": "running"})
+        self.relay.agent({"info": self.info, "terminals": others, "sessions": [session_entry]}, now=1030)
+
+        for bad in ({"text": "  "}, {"form": ""}, {"session": sid}, {"reopen": src_term}, {"from": "00000000-0000-0000-0000-000000000000"}):
+            with self.assertRaises(RemoteError):
+                self.relay.command(dict(hand, id="c" * 32, **bad), now=1031)
+
+        started = self.relay.command(hand, now=1032)["terminal"]
+        new_term = next(t for t in self.relay.overview(now=1032)["terminals"] if t["id"] == started)
+        self.assertEqual((new_term["tool"], new_term["title"], new_term["model"], new_term["session"]), ("codex", "结算页金额", "gpt-5.4", ""))
+        op_sent = self.relay.agent({"info": self.info, "terminals": others, "sessions": [session_entry]}, now=1033)["operations"][-1]
+        self.assertEqual((op_sent["from_tool"], op_sent["from"], op_sent["text"]), ("claude", sid, "继续检查优惠券"))
+        # Once the computer acknowledges handover start, the superseded source terminal is removed from overview.
+        self.relay.agent({"info": self.info, "acks": [{"id": hand["id"]}],
+                          "terminals": [t for t in others if t["id"] != src_term] + [{"id": started, "state": "running", "form": "chat", "status": "busy"}],
+                          "sessions": []}, now=1034)
+        ids = {t["id"] for t in self.relay.overview(now=1034)["terminals"]}
+        self.assertIn(started, ids)
+        self.assertNotIn(src_term, ids)
+
     def test_an_agy_chat_needs_a_computer_that_runs_it(self):
         # Antigravity CLI runs as a conversation by its ACP server, on a computer that says so ("chat-agy")
         self.info["tools"] = ["claude", "codex", "agy", "shell"]

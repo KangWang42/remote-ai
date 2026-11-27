@@ -2269,5 +2269,67 @@ class AgentTeamsAndChatIntegration(unittest.TestCase):
         self.assertEqual(heard[-1], ("done", "ASSIGN opencode: 实现功能"))
 
 
+class HandoversTests(unittest.TestCase):
+    def test_handover_store_sessions_and_line_recall(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = os.path.join(tmp, "data")
+            home = os.path.join(tmp, "home")
+            proj = os.path.join(tmp, "proj")
+            os.makedirs(data)
+            os.makedirs(proj)
+
+            store = agent.Handovers(data)
+            s1 = "11111111-2222-3333-4444-555555555555"
+            s2 = "019a0000-0000-7000-8000-000000000002"
+            s3 = "22222222-3333-4444-5555-666666666666"
+            self.assertTrue(store.add("codex", s2, "claude", s1, "最初的标题"))
+            self.assertTrue(store.add("claude", s3, "codex", s2, "后来的标题"))
+            self.assertTrue(store.gone_on("claude", s1))
+            self.assertTrue(store.gone_on("codex", s2))
+            self.assertFalse(store.gone_on("claude", s3))
+            self.assertEqual(store.title("claude", s3), "最初的标题")
+            self.assertFalse(store.add("claude", s1, "claude", s3, "cycle"))
+            self.assertFalse(store.add("claude", s1, "claude", s1, "self"))
+            reloaded = agent.Handovers(data)
+            self.assertEqual(reloaded.title("claude", s3), "最初的标题")
+            self.assertEqual(agent.strip_handover_ask("【对话交接】摘要\n\n【现在的要求】\n继续做"), "继续做")
+            self.assertEqual(agent.strip_handover_ask("普通问题"), "普通问题")
+
+            # Write Claude (s1) and Codex (s2) transcripts, verify scan hides s1, titles s2 as s1, and line_messages joins them with switch.
+            data2 = os.path.join(tmp, "data2")
+            os.makedirs(data2, exist_ok=True)
+            store2 = agent.Handovers(data2)
+            store2.add("codex", s2, "claude", s1, "结算页问题")
+            cdir = os.path.join(home, ".claude", "projects", re.sub("[^a-zA-Z0-9]", "-", proj))
+            xdir = os.path.join(home, ".codex", "sessions", "2026", "11", "27")
+            os.makedirs(cdir)
+            os.makedirs(xdir)
+            with open(os.path.join(cdir, s1 + ".jsonl"), "w", encoding="utf-8") as fp:
+                fp.write(json.dumps({"type": "user", "message": {"role": "user", "content": "结算页小数错了"}}, ensure_ascii=False) + "\n")
+                fp.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "已定位到格式函数。"}]}}, ensure_ascii=False) + "\n")
+                fp.write(json.dumps({"type": "ai-title", "aiTitle": "结算页问题", "sessionId": s1}, ensure_ascii=False) + "\n")
+            with open(os.path.join(xdir, "rollout-2026-11-27T10-00-00-" + s2 + ".jsonl"), "w", encoding="utf-8") as fp:
+                fp.write(json.dumps({"type": "session_meta", "payload": {"id": s2, "cwd": proj}}, ensure_ascii=False) + "\n")
+                fp.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "【对话交接】摘要\n\n【现在的要求】\n继续检查优惠券"}]}}, ensure_ascii=False) + "\n")
+                fp.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"text": "优惠券也改好了。"}]}}, ensure_ascii=False) + "\n")
+
+            sessions = agent.Sessions(None, store2)
+            sessions.home = home
+            found = sessions.scan({"demo": proj}, [])
+            self.assertEqual([(s["tool"], s["id"], s["title"]) for s in found], [("codex", s2, "结算页问题")])
+
+            msgs, _ = sessions.line_messages(s2, "codex", "demo", {"demo": proj})
+            self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "switch", "user", "assistant"])
+            self.assertEqual(msgs[2], {"role": "switch", "tool": "codex", "text": "Codex"})
+            read = sessions.read(s2, "codex", "demo", {"demo": proj})
+            self.assertEqual(read["messages"][2], {"role": "switch", "tool": "codex", "text": "Codex"})
+            # Next-tool handover preview ends with the new tool's switch row and brief strips prior handover wrapper.
+            next_msgs, _ = sessions.line_messages(s2, "codex", "demo", {"demo": proj}, next_tool="claude")
+            self.assertEqual(next_msgs[-1], {"role": "switch", "tool": "claude", "text": "Claude Code"})
+            brief = agent.handover(found[0], read["messages"], "")
+            self.assertIn("我最近的要求：\n继续检查优惠券", brief)
+            self.assertNotIn("【对话交接】摘要", brief)
+
+
 if __name__ == "__main__":
     unittest.main()

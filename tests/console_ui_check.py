@@ -188,10 +188,12 @@ def main():
             until("Array.from(document.querySelectorAll('.thread-head .seg button')).some(b => b.textContent === '终端' && !b.disabled)", "the turn ended: it can be shown the other way")
 
             # Switch the model from the conversation and check the actual tool invocation.
-            # the button at the end of the box: the tool's mark; its list has the tool's models and the AI to hand over to
+            # the button at the end of the box: AI tabs on top, and only the selected AI's models below
             value("document.querySelector('.composer .tool-switch-btn').click()")
-            until("!!document.querySelector('.tool-switch-pop .tsp-row[data-model=\"sonnet\"]')", "the tool's model list")
-            assert value("Array.from(document.querySelectorAll('.tool-switch-pop .tsp-head')).map(n => n.textContent)")[0] == "Claude Code"
+            until("!!document.querySelector('.tool-switch-pop .tsp-row[data-model=\"sonnet\"]') && document.querySelectorAll('.tool-switch-pop .tsp-tool-tab').length >= 2", "the tool's model list with AI tabs")
+            tabs = value("Array.from(document.querySelectorAll('.tool-switch-pop .tsp-tool-tab')).map(n => n.dataset.tool)")
+            assert "claude" in tabs and "codex" in tabs, tabs
+            assert value("document.querySelector('.tool-switch-pop .tsp-head span').textContent") == "Claude Code"
             browser.picture(out / "switch.png")
             value("document.querySelector('.tool-switch-pop .tsp-row[data-model=\"sonnet\"]').click()")
             until("!document.querySelector('.tool-switch-pop') && document.querySelector('.tool-switch-btn')?.textContent.includes('Sonnet')", "the original chat on the new model")
@@ -265,6 +267,24 @@ def main():
             assert on_top(".dlg .pick"), "the dialog is on top"
             browser.picture(out / "handoff.png")
             press(".dlg-foot button", "取消")
+
+            # ---- in-place AI switch (Claude -> Codex): same conversation, switch divider, clean user bubble, single list item
+            value("document.querySelector('.composer .tool-switch-btn').click()")
+            until("!!document.querySelector('.tool-switch-pop .tsp-tool-tab[data-tool=\"codex\"]')", "Codex tab in switcher")
+            value("document.querySelector('.tool-switch-pop .tsp-tool-tab[data-tool=\"codex\"]').click()")
+            until("document.querySelector('.tool-switch-pop .tsp-head span')?.textContent === 'Codex'", "Codex models shown")
+            value("document.querySelector('.tool-switch-pop .tsp-row[data-model=\"\"]').click()")
+            until("!document.querySelector('.tool-switch-pop') && document.querySelector('.switch-banner')?.textContent.includes('Codex')", "staged in-place switch banner")
+            compose("继续核对优惠券边界")
+            until("!!document.querySelector('.timeline-switch') && !!document.querySelector('.ask-card')", "Codex took over in-place with switch divider")
+            assert "以下由 Codex 继续" in value("document.querySelector('.timeline-switch').textContent")
+            user_bubbles = value("Array.from(document.querySelectorAll('.msg-user .msg-bubble')).map(n => n.textContent)")
+            assert "继续核对优惠券边界" in user_bubbles and not any("【对话交接】" in b for b in user_bubbles), user_bubbles
+            press(".ask-card button", "允许")
+            until("document.querySelector('.run-status')?.textContent === '等待消息'", "Codex finished handover turn")
+            until("Array.from(document.querySelectorAll('.proj .th-row .th-title')).filter(n => n.textContent === '结算页金额多一位小数').length === 1", "handed-over conversation still listed once under original title")
+            assert value("document.querySelectorAll('.proj .th-row').length") == 3, (value(titles), value("fetch('../api/terminal').then(r=>r.json()).then(j=>({terminals:j.terminals.map(t=>({id:t.id,tool:t.tool,state:t.state,session:t.session,title:t.title})),sessions:j.sessions.map(s=>({id:s.id,tool:s.tool,title:s.title,live:s.live}))}))"))
+            browser.picture(out / "handover-inline.png")
 
             # ---- a new conversation: the project picker opens over the page and chooses
             value("document.querySelector('.new-btn').click()")

@@ -353,13 +353,17 @@ def main():
             assert value("document.querySelector('.text code.file-ref')?.dataset.path") == "src/cart/formatPrice.js"
             # the model button at the end of the box: the tool's icon
             assert value("(b => !b.hidden && b.classList.contains('tool-claude') && !!b.querySelector('#params-icon svg'))(document.getElementById('params-btn'))") is True
-            # pressed, it opens the switcher: this tool's models (the one in use ticked), and the other AI to hand over to
+            # pressed, it opens the switcher: horizontal AI tabs on top, and only the selected AI's models below
             value("document.getElementById('params-btn').click()")
-            until("document.querySelector('dialog.rs[open] h2, dialog.rs[open] .rs-title')?.textContent === '切换模型' && document.querySelectorAll('dialog.rs[open] .rs-label').length === 2", "the switcher")
-            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-label')).map(n => n.textContent)") == ["Claude Code", "转交给"]
+            until("document.querySelector('dialog.rs[open] h2, dialog.rs[open] .rs-title')?.textContent === '切换 AI 与模型' && document.querySelectorAll('dialog.rs[open] .rs-agent-tab').length === 2", "the switcher")
+            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-agent-tab .rs-agent-name')).map(n => n.textContent)") == ["Claude", "Codex"]
+            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-label')).map(n => n.textContent)") == ["Claude Code"]
             assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-row[aria-checked=true] b')).map(n => n.textContent)") == ["工具默认"]
-            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-section')).pop().innerText.includes('Codex')") is True
             picture("chat-switch.png")
+            # tapping Codex on top switches immediately to Codex's model list
+            value("document.querySelector('dialog.rs[open] .rs-agent-tab[data-tool=\"codex\"]').click()")
+            until("document.querySelector('dialog.rs[open] .rs-label')?.textContent.startsWith('Codex')", "switched to Codex models")
+            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-row b')).map(n => n.textContent)") == ["工具默认"]
             value("history.back()")
             until("!document.querySelector('dialog.rs[open]')", "the switcher closed")
             picture("chat-done.png")

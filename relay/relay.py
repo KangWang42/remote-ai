@@ -812,8 +812,35 @@ class Relay:
             raise RemoteError("协作任务中的对话不能切换视图")
         return source
 
+    def _handed(self, state, payload, tool, folder, chat):
+        """Validate an in-place AI switch (`from` + `from_tool`) on a project chat."""
+        if "handover" not in self._device.get("features", []):
+            raise RemoteError("电脑端版本不支持同对话换 AI，请更新电脑端")
+        allowed = {"id", "action", "tool", "dir", "form", "from", "from_tool", "text", "model", "effort", "mode"}
+        if not chat or not folder or set(payload) - allowed:
+            raise RemoteError("换 AI 的选项无效")
+        if not _words(payload.get("text")):
+            raise RemoteError("请写下要交给它的话")
+        from_tool, from_id = payload.get("from_tool"), payload.get("from")
+        if not isinstance(from_tool, str) or not isinstance(from_id, str) or not session_id_ok(from_tool, from_id):
+            raise RemoteError("换 AI 的选项无效")
+        saved = next((s for s in self._sessions if s["id"].lower() == from_id.lower() and s["tool"] == from_tool and s["dir"] == folder), None)
+        if not saved:
+            raise RemoteError("电脑上没有找到原来的对话，请刷新后重试")
+        if saved.get("team"):
+            raise RemoteError("协作任务中的对话请在协作里换 AI")
+        running = next((t for t in state["threads"].values()
+                        if t["state"] in ("starting", "running") and t["tool"] == from_tool
+                        and (t.get("session") or "").lower() == from_id.lower()), None)
+        if running:
+            if running.get("team"):
+                raise RemoteError("协作任务中的对话请在协作里换 AI")
+            if running.get("status") in ("busy", "confirm") or running.get("phase") in ("busy", "confirm"):
+                raise RemoteError("对话正在执行或等待确认，请等这一轮结束或先停止")
+        return saved, running
+
     def _public(self, term):
-        shown = {k: v for k, v in term.items() if k not in ("output", "instance", "size", "out_at", "touched", "calm_until", "modes", "modes_rest", "asking", "_asks_cache")}
+        shown = {k: v for k, v in term.items() if k not in ("output", "instance", "size", "out_at", "touched", "calm_until", "modes", "modes_rest", "asking", "_asks_cache", "handed_from")}
         shown["team"] = term.get("team", "")
         # Until the owner names a terminal, it carries the name of the conversation it has open.
         if not term.get("renamed"):
@@ -1039,6 +1066,7 @@ class Relay:
                         raise RemoteError("内容为空、超过 8000 字或含有控制字符")
                 # Reuse the source session and workspace on both view switches and chat model changes.
                 source = self._reopened(state, payload, tool, folder, chat) if "reopen" in payload else None
+                handed, handed_src = self._handed(state, payload, tool, folder, chat) if ("from" in payload or "from_tool" in payload) else (None, None)
                 session = source["session"] if source else payload.get("session", "")
                 if tool == "agy" and (payload.get("history") or (payload.get("takeover") and not session)):
                     raise RemoteError("请在项目中选择具体的 Antigravity 对话，或新建终端")
@@ -1050,6 +1078,8 @@ class Relay:
                     raise RemoteError("电脑端不支持这个副本选项，请更新电脑后台")
                 if source:
                     where, called = source.get("folder", ""), self._public(source)["title"]
+                elif handed:
+                    where, called = handed.get("folder", ""), self._public(handed_src)["title"] if handed_src else handed["title"]
                 elif session:
                     saved = next((s for s in self._sessions if s["id"] == session and s["tool"] == tool and s["dir"] == folder), None)                     if isinstance(session, str) and session_id_ok(tool, session) else None
                     if not saved:
@@ -1068,8 +1098,8 @@ class Relay:
                     raise RemoteError("电脑没有报告这个工具或目录")
                 if apart:
                     asked, payload = payload, dict(payload, folder=where)       # what the viewer sent is kept, to know the same request again
-                # (the terminal a reopened conversation leaves is ended by the computer before the new one starts)
-                if sum(t["state"] in ("starting", "running") for t in state["threads"].values()) - (1 if source else 0) >= MAX_TERMINALS:
+                # (the terminal a reopened or handed-over conversation leaves is ended by the computer before the new one starts)
+                if sum(t["state"] in ("starting", "running") for t in state["threads"].values()) - (1 if (source or handed_src) else 0) >= MAX_TERMINALS:
                     raise RemoteError(f"最多同时运行 {MAX_TERMINALS} 个终端，请先结束一个")
                 terminal = uuid.uuid4().hex
                 if chat and not called and payload.get("text"):
@@ -1090,6 +1120,10 @@ class Relay:
                     term.update(form="chat", touched=True)
                 if source and source.get("renamed"):
                     term.update(title=source["title"], renamed=True)
+                elif handed_src and handed_src.get("renamed"):
+                    term.update(title=handed_src["title"], renamed=True)
+                if handed:
+                    term["handed_from"] = [handed["tool"], handed["id"].lower()]
                 state["threads"][terminal] = term
                 _room(state)
             else:
@@ -1933,7 +1967,7 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
@@ -1979,6 +2013,14 @@ class Relay:
                         term.update(state="closed", error=op["error"])
                         _trim(term)
                         dirty = True
+                    elif term and op["payload"]["action"] == "start" and not op["error"] and "from" in op["payload"]:
+                        from_tool, from_id = op["payload"].get("from_tool"), str(op["payload"].get("from") or "").lower()
+                        for old_id in [tid for tid, old in state["threads"].items()
+                                       if tid != op["terminal"] and old.get("tool") == from_tool
+                                       and (old.get("session") or "").lower() == from_id]:
+                            state["threads"].pop(old_id, None)
+                            dirty = True
+                            list_dirty = True
             reported = payload.get("terminals") if isinstance(payload.get("terminals"), list) else None
             if reported is not None:
                 # The computer names every terminal it has. One that is listed here as running and is no longer among
@@ -1990,11 +2032,15 @@ class Relay:
                         _trim(term)
                         dirty = True
             # Closed terminals awaiting their last output must not displace running ones in a report.
+            superseded = {tuple(t["handed_from"]) for t in state["threads"].values()
+                          if isinstance(t.get("handed_from"), list) and len(t["handed_from"]) == 2}
             listings = [item for item in (reported or [])[:200] if isinstance(item, dict)]
             listings.sort(key=lambda item: item.get("state") != "running")
             for item in listings[:MAX_TERMINALS + MAX_HISTORY]:
                 term = state["threads"].get(item.get("id")) if isinstance(item.get("id"), str) else None
                 if term is None and isinstance(item.get("id"), str):
+                    if (item.get("tool"), str(item.get("session") or "").lower()) in superseded:
+                        continue
                     term = self._adopt(state, item, instance)
                     dirty = dirty or term is not None
                 if term and term.get("instance") == instance:

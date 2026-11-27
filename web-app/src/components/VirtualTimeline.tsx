@@ -1,6 +1,7 @@
 import { memo } from 'preact/compat';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatMessageItem, SessionAsk } from '../runtime/types';
+import { toolBadgeStyle, toolMeta } from '../runtime/types';
 import { MarkdownView } from './MarkdownView';
 import { ThoughtBlock } from './ThoughtBlock';
 
@@ -86,6 +87,14 @@ const TimelineRow = memo(function TimelineRow({
         </div>
       </div>
     );
+  } else if (item.role === 'switch') {
+    const sm = toolMeta(item.tool || '');
+    content = (
+      <div class="timeline-switch">
+        <span class="tool-mark" style={toolBadgeStyle(item.tool || '')}>{sm.mono}</span>
+        <span>以下由 {item.text || sm.label} 继续</span>
+      </div>
+    );
   } else if (item.role === 'note' || item.role === 'error') {
     content = <div class={`timeline-note${item.role === 'error' ? ' is-error' : ''}`}>{item.text}</div>;
   } else if (item.role === 'thought') {
@@ -119,7 +128,7 @@ const TimelineRow = memo(function TimelineRow({
 
 /** Role & length bucket estimator so unmeasured items avoid scroll jumping in 500+ turn chats. */
 function estimateHeight(item: ChatMessageItem, expanded: boolean, thoughtExpanded?: boolean): number {
-  if (item.role === 'note' || item.role === 'error') return 42;
+  if (item.role === 'note' || item.role === 'error' || item.role === 'switch') return 42;
   if (item.role === 'tool') return expanded && item.output ? 240 : 62;
   if (item.role === 'ask') return 180;
   if (item.role === 'thought') {

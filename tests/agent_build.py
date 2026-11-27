@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPILER = Path(os.environ.get("WINDIR", "C:/Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-AGENT = ["RemoteCliAgent", "ProcessText", "WorkspaceSnapshot", "RelayLink", "RouteDiscovery", "GitReview", "Antigravity", "AntigravityDesktop", "Chats", "ClaudePermissions", "CodexSessions", "SessionLocks", "Transcripts", "Reach", "Outbox", "Running", "Stats", "Schedules", "Chains", "Marks",
+AGENT = ["RemoteCliAgent", "ProcessText", "WorkspaceSnapshot", "RelayLink", "RouteDiscovery", "GitReview", "Antigravity", "AntigravityDesktop", "Chats", "ClaudePermissions", "CodexSessions", "SessionLocks", "Transcripts", "Reach", "Outbox", "Running", "Stats", "Schedules", "Chains", "Marks", "Handovers",
          "ClaudeRelay", "Folders", "FileTransfers", "Removal", "CodexQueue", "DesktopAdapters", "Ways", "CodexDesktopControl", "Tools", "AcpChat", "Quotas", "CodexApiBalance", "Teams", "Models", "Peers", "Worktrees",
          "Organizer", "OrganizeHistory", "OrganizeSource", "CodexOrganizer", "ClaudeOrganizer", "AgyOrganizer", "ApiOrganizer", "Attachments"]
 REFERENCES = ["System.Management", "System.Net.Http", "System.Web.Extensions", "System.Web", "System.Security"]

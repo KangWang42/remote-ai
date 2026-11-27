@@ -98,6 +98,16 @@ button.rs-row:active, label.rs-row:active { background: var(--raised); }
 .rs-seg button:active { transform: scale(.97); }
 .rs-seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 650; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent); }
 
+/* horizontal AI selector bar at the top of the model/AI switcher sheet */
+.rs-agent-bar { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+.rs-agent-tab { display: grid; justify-items: center; align-content: center; gap: 3px; min-height: 62px; padding: 8px 6px; border-radius: 16px; background: var(--panel); border: 1.5px solid var(--card-border, var(--line)); color: var(--muted); transition: border-color .15s, background .15s, color .15s, transform .1s; }
+.rs-agent-tab:active { transform: scale(.97); }
+.rs-agent-tab .rs-agent-ico { display: grid; place-items: center; color: var(--tint, var(--accent)); }
+.rs-agent-tab .rs-agent-name { font-size: .84rem; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.rs-agent-tab .rs-agent-quota { font-size: .7rem; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.rs-agent-tab[aria-selected="true"] { border-color: var(--tint, var(--accent)); background: color-mix(in srgb, var(--tint, var(--accent)) 10%, var(--panel)); box-shadow: 0 2px 10px color-mix(in srgb, var(--tint, var(--accent)) 18%, transparent); }
+.rs-agent-tab[aria-selected="true"] .rs-agent-name { color: var(--tint, var(--accent)); }
+
 /* a switch */
 .rs-switch { position: relative; flex: none; width: 51px; height: 31px; border-radius: 16px; background: color-mix(in srgb, var(--muted) 30%, var(--raised)); transition: background .2s; }
 .rs-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 5px rgb(0 0 0 / .25); transition: transform .2s cubic-bezier(.3, .8, .3, 1); }

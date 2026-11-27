@@ -10,7 +10,7 @@ import { BranchMenu } from './BranchMenu';
 import { Composer } from './Composer';
 import { Dots } from './Sidebar';
 import { VirtualTimeline } from './VirtualTimeline';
-import { ToolSwitch } from './ToolSwitch';
+import { ToolSwitch, type PendingSwitch } from './ToolSwitch';
 import { RunStatus } from './RunStatus';
 
 interface Props {
@@ -54,6 +54,7 @@ export function ThreadView(p: Props) {
   const [stoppingNow, setStoppingNow] = useState(false);
   const [flushingNow, setFlushingNow] = useState(false);
   const [recallInsert, setRecallInsert] = useState<{ nonce: number; text: string } | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
   const searchBox = useRef<HTMLInputElement | null>(null);
 
   const waitingPending = pending.filter((m) => m.state === 'waiting');
@@ -71,6 +72,7 @@ export function ThreadView(p: Props) {
     setProblem('');
     setStoppingNow(false);
     setRecallInsert(null);
+    setPendingSwitch(null);
   }, [t.key]);
 
   useEffect(() => {
@@ -514,23 +516,41 @@ export function ThreadView(p: Props) {
               </div>
             )}
           </div>
+          {pendingSwitch && (
+            <div class="switch-banner">
+              <span class="tool-mark" style={toolBadgeStyle(pendingSwitch.tool)}>
+                {toolMeta(pendingSwitch.tool).mono}
+              </span>
+              <span class="switch-banner-text">
+                下一条消息将由 {toolLabel(pendingSwitch.tool)}
+                {pendingSwitch.model ? `（${pendingSwitch.model}）` : ''} 在当前对话里继续
+              </span>
+              <button type="button" class="link-btn" onClick={() => setPendingSwitch(null)}>
+                取消
+              </button>
+            </div>
+          )}
           <Composer
             draftKey={`rcli-draft:${t.key}`}
             placeholder={
-              t.runtime === 'idle'
-                ? `接着这段对话说点什么，${toolLabel(t.tool)} 会在这里继续`
-                : stoppingNow
-                  ? '输入新指令，发送后会立即执行'
-                  : working
-                    ? '补充要求（可多条累计，或点“停止并发送”立即执行）'
-                    : '说点什么'
+              pendingSwitch
+                ? `输入消息，发送后由 ${toolLabel(pendingSwitch.tool)} 继续`
+                : t.runtime === 'idle'
+                  ? `接着这段对话说点什么，${toolLabel(t.tool)} 会在这里继续`
+                  : stoppingNow
+                    ? '输入新指令，发送后会立即执行'
+                    : working
+                      ? '补充要求（可多条累计，或点“停止并发送”立即执行）'
+                      : '说点什么'
             }
-            pictureDir={t.runtime === 'chat' && t.project ? t.project : ''}
+            pictureDir={t.runtime === 'chat' && t.project && !pendingSwitch ? t.project : ''}
             tail={
               <ToolSwitch
                 thread={t}
                 device={p.device}
                 blocked={working || phase === 'confirm' || phase === 'starting' || pending.length > 0 || queued.length > 0}
+                pending={pendingSwitch}
+                onStageSwitch={setPendingSwitch}
                 onChanged={p.onChanged}
                 onHandedTo={p.onHandedTo}
                 onHandOff={p.onHandOff}
@@ -538,11 +558,19 @@ export function ThreadView(p: Props) {
             }
             busy={working}
             canStop={canStopChat}
-            queueMode={queueMode}
+            queueMode={queueMode && !pendingSwitch}
             stopping={stoppingNow}
             disabled={phase === 'confirm' ? '先回答它的确认请求' : composerDisabled}
             insert={composerInsert}
             onSend={async (text, pictures) => {
+              if (pendingSwitch) {
+                if (pictures.length > 0) throw new Error('换 AI 的第一条消息暂不支持图片，请先发送文字');
+                if (working || phase === 'confirm' || phase === 'starting') throw new Error('请等这一轮结束后再切换 AI');
+                const nextTerm = await act.handover(t, pendingSwitch.tool, text, pendingSwitch.model, pendingSwitch.effort);
+                setPendingSwitch(null);
+                p.onHandedTo(nextTerm);
+                return;
+              }
               if (t.runtime === 'chat' && t.terminal) {
                 if ((working || phase === 'starting') && !stoppingNow) {
                   chatOutbox.enqueue(t.terminal.id, text, pictures);

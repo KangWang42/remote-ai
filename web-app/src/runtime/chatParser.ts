@@ -12,6 +12,13 @@ function boundToolOutput(prev: string, added: string): string {
 }
 
 const DECIDED: Record<string, string> = { allow: '已允许', always: '已总是允许', deny: '已拒绝', gone: '已不再等待' };
+const HANDOVER_SEP = '\n\n【现在的要求】\n';
+
+function stripHandoverAsk(text: string): string {
+  if (!text.startsWith('【对话交接】')) return text;
+  const at = text.indexOf(HANDOVER_SEP);
+  return at >= 0 ? text.slice(at + HANDOVER_SEP.length) : text;
+}
 
 /**
  * Folds a chat's events (docs/PROTOCOL.md, "Chats": one JSON object a line, `t` naming the kind) into the
@@ -111,7 +118,7 @@ export class ChatTimelineReducer {
             role: 'user',
             op: ev.op,
             ops: Array.isArray(ev.ops) ? ev.ops.map(String) : undefined,
-            text: String(ev.text || ''),
+            text: stripHandoverAsk(String(ev.text || '')),
             at: ev.at,
           });
         }
@@ -172,12 +179,15 @@ export function parseTranscriptMessages(reply: any): ChatMessageItem[] {
     const role = String(m.role || '').toLowerCase();
     const id = String(m.id || `m${i}`);
     const at = typeof m.at === 'number' ? m.at : undefined;
+    if (role === 'switch')
+      return { id, role: 'switch', tool: String(m.tool || ''), text: String(m.text || ''), at };
     if (role === 'tool')
       return { id, role: 'tool', title: String(m.text || '操作'), text: String(m.detail || ''), output: m.result ? boundToolOutput('', String(m.result)) : '', status: 'done', at };
     if (role === 'thought')
       return { id, role: 'thought', text: String(m.text || ''), at };
     if (role === 'note' || role === 'error')
       return { id, role, text: String(m.text || ''), at };
-    return { id, role: role === 'user' ? 'user' : 'assistant', text: String(m.text || ''), at };
+    const text = String(m.text || '');
+    return { id, role: role === 'user' ? 'user' : 'assistant', text: role === 'user' ? stripHandoverAsk(text) : text, at };
   });
 }

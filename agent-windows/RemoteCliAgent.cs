@@ -189,6 +189,7 @@ public sealed class TerminalAgent {
         Teams.Changed += Wake;
         Reach.Finished += (tool, session) => { lock (rested) rested.Enqueue(new[] { tool, session }); Wake(); };
         Marks = new Marks(Path.Combine(dataDir, "conversation-marks.json"));
+        Handovers = new Handovers(Path.Combine(dataDir, "handovers.json"));
         string organizing = Path.Combine(dataDir, "organize");
         Organizer = new Organizer(Path.Combine(dataDir, "conversation-organize.json"),
             since => OrganizeHistory.List(AllDirs(Preferences()), sessions, since, organizing), OrganizeReadable, OrganizeBusy,
@@ -301,18 +302,36 @@ public sealed class TerminalAgent {
             Wake();
         };
     }
-    /// What was said in a saved conversation before it is gone on with in a chat: shown above what follows.
+    /// What was said in a saved conversation (or its whole handover line) before it is gone on with in a chat.
     /// Returns whether any saved messages were found and emitted.
-    bool Recall(LiveTerminal live, string root) {
-        try {
-            string file = ConversationFile(live.Tool, live.Session, root);
-            if (file == null) return false;
-            var said = Said(file, live.Tool);
-            var messages = (List<Dictionary<string, object>>)said["messages"];
-            if (messages.Count == 0) return false;
-            live.Chat.Before(messages, (bool)said["more"]);
-            return true;
-        } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
+    bool Recall(LiveTerminal live, string root) { return Recall(live, root, live.Tool, live.Session, true); }
+    bool Recall(LiveTerminal live, string root, string tool, string session, bool own) {
+        bool more;
+        var messages = LineMessages(root, tool, session, own ? "" : live.Tool, out more);
+        if (!messages.Any(m => Convert.ToString(m["role"]) != "switch")) return false;
+        live.Chat.Before(messages, more);
+        return true;
+    }
+    /// Collects what was said in every conversation of a handover line, oldest first, with a `switch` row where
+    /// another AI took over (and a trailing `switch` row for `nextTool` when a new handover starts now).
+    List<Dictionary<string, object>> LineMessages(string root, string tool, string session, string nextTool, out bool more) {
+        var parts = Handovers.Line(tool, session).Select(l => new[] { l.FromTool, l.From }).Reverse().ToList();
+        parts.Add(new[] { tool, session });
+        if (!String.IsNullOrEmpty(nextTool)) parts.Add(new[] { nextTool, "" });
+        var messages = new List<Dictionary<string, object>>();
+        more = false;
+        for (int n = 0; n < parts.Count; n++) {
+            if (n > 0) messages.Add(new Dictionary<string, object> { { "role", "switch" }, { "tool", parts[n][0] }, { "text", Label(parts[n][0]) } });
+            if (parts[n][1].Length == 0) continue;
+            try {
+                string file = ConversationFile(parts[n][0], parts[n][1], root);
+                if (file == null) continue;
+                var said = Said(file, parts[n][0]);
+                messages.AddRange((List<Dictionary<string, object>>)said["messages"]);
+                if (n == 0) more = (bool)said["more"];
+            } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+        return messages;
     }
     /// The file a tool keeps a conversation in; null where there is none.
     string ConversationFile(string tool, string session, string root) {
@@ -346,6 +365,8 @@ public sealed class TerminalAgent {
         public string Model = "", Effort = "";
         /// How widely a conversation may work (full, edit, read), as it was begun: kept when it is started anew.
         public string Mode = "";
+        /// The conversation this one goes on from when another AI took over in-place, until its session id is linked.
+        public SessionInfo HandedFrom;
         /// How often its program was started anew in this terminal (RestartMember): what an earlier one still says is dropped.
         public int Generation;
         /// A conversation run through its tool's structured mode (Chats.cs) rather than a screen; null for a screen.
@@ -373,6 +394,20 @@ public sealed class TerminalAgent {
 
     void RequireTerminalSlot() {
         if (!HasTerminalSlot()) throw new InvalidOperationException("最多同时运行 " + MaxTerminals + " 个终端，请先结束一个");
+    }
+    /// The line that sets the owner's message apart from the hand-over summary before it; the UI shows what follows it.
+    internal const string HandoverAsk = Handovers.AskMarker;
+    /// Locate the source conversation for an in-place AI switch (`from`, `from_tool`): listed, in the same project,
+    /// and not a member of a collaboration task. The new chat begins with the owner's next message (`text`).
+    SessionInfo Handed(Dictionary<string, object> op, string tool, string dir, string session) {
+        if (Get(op, "form") != "chat" || session.Length > 0 || op.ContainsKey("reopen") || dir.Length == 0) throw new ArgumentException("换 AI 的选项无效");
+        if (Get(op, "text").Trim().Length == 0) throw new ArgumentException("请写下要交给它的话");
+        string fromTool = Get(op, "from_tool"), fromId = Get(op, "from");
+        var from = sessions.FirstOrDefault(s => s.Tool == fromTool && String.Equals(s.Id, fromId, StringComparison.OrdinalIgnoreCase));
+        if (from == null) throw new ArgumentException("电脑上没有找到原来的对话，请刷新后重试");
+        if (from.Dir != dir) throw new ArgumentException("只能在同一个项目里换 AI");
+        if (Teams.TeamOf("", from.Tool, from.Id).Length > 0) throw new InvalidOperationException("协作任务中的对话请在协作里换 AI");
+        return from;
     }
     /// Locate the idle conversation whose view or model is changing, before ending its process.
     LiveTerminal Reopening(Dictionary<string, object> op, string tool, string dir) {
@@ -427,6 +462,8 @@ public sealed class TerminalAgent {
     public string DataFolder { get { return dataDir; } }
     /// What the owner said of single conversations from the phone: pinned, hidden (Marks.cs).
     public readonly Marks Marks;
+    /// Which conversation another AI continues from which (Handovers.cs): shown as one conversation.
+    public readonly Handovers Handovers;
     readonly Organizer Organizer;
 
     Dictionary<string, object>[] OrganizeModels(string tool) {
@@ -836,7 +873,7 @@ public sealed class TerminalAgent {
     internal static string Brief(SessionInfo from, Dictionary<string, object> read, string note) {
         var said = ((System.Collections.IEnumerable)read["messages"]).Cast<Dictionary<string, object>>().ToList();
         Func<string, int, string> cut = (text, most) => { text = (text ?? "").Trim(); return text.Length <= most ? text : text.Substring(0, Char.IsHighSurrogate(text[most - 1]) ? most - 1 : most) + "…"; };
-        var asked = said.Where(m => Convert.ToString(m["role"]) == "user").Select(m => Convert.ToString(m["text"])).ToList();
+        var asked = said.Where(m => Convert.ToString(m["role"]) == "user").Select(m => Handovers.StripAsk(Convert.ToString(m["text"]))).ToList();
         string answered = said.Where(m => Convert.ToString(m["role"]) == "assistant").Select(m => Convert.ToString(m["text"])).LastOrDefault() ?? "";
         var steps = said.Where(m => Convert.ToString(m["role"]) == "tool").ToList();
         var brief = new StringBuilder("【对话交接】下面是我在另一段对话里的进展（" + Label(from.Tool) + "，“" + cut(from.Title, 100) + "”" + (from.Dir.Length > 0 ? "，项目 " + cut(from.Dir, 100) : "") + "），请接着处理。\n");
@@ -1145,7 +1182,9 @@ public sealed class TerminalAgent {
             .Select(member => member.Tool + ":" + member.Id), StringComparer.OrdinalIgnoreCase);
         var members = found.Where(s => memberSessions.Contains(s.Tool + ":" + s.Id))
             .GroupBy(s => s.Tool + ":" + s.Id, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderByDescending(s => s.Updated).First());
-        var others = Single(found.Where(s => !memberSessions.Contains(s.Tool + ":" + s.Id)))
+        // A line of conversations handed from one AI to another is listed once: its latest, under its first name.
+        foreach (var s in found) { string first = Handovers.Title(s.Tool, s.Id); if (first.Length > 0) s.Title = first; }
+        var others = Single(found.Where(s => !memberSessions.Contains(s.Tool + ":" + s.Id) && !Handovers.GoneOn(s.Tool, s.Id)))
             .OrderByDescending(s => s.Live || Marks.Is("pinned", s.Tool, s.Id)).ThenByDescending(s => s.Updated);
         sessions = members.Concat(others).Take(200).ToList();
         foreach (var s in sessions) { string root; s.ControlFolder = dirs.TryGetValue(s.Dir, out root) ? root : s.Folder; }       // the folder it is in: its project's, or the one it was found open in
@@ -1614,9 +1653,16 @@ public sealed class TerminalAgent {
             // A page that follows a conversation asks again and again: it says what it has (`since`), and is given
             // the conversation anew only when its file has changed. How it stands goes with either answer.
             var info = new FileInfo(file);
-            string stamp = info.Length + "." + info.LastWriteTimeUtc.Ticks, since = Get(op, "since");
+            var line = Handovers.Line(tool, session);
+            string stamp = info.Length + "." + info.LastWriteTimeUtc.Ticks + (line.Count > 0 ? ".h" + line.Count : ""), since = Get(op, "since");
             var known = Reach.Of(tool, session);
-            var result = since.Length > 0 && since == stamp ? new Dictionary<string, object> { { "same", true } } : Said(file, tool);
+            Dictionary<string, object> result;
+            if (since.Length > 0 && since == stamp) result = new Dictionary<string, object> { { "same", true } };
+            else if (line.Count > 0) {
+                bool more;
+                var messages = LineMessages(root, tool, session, "", out more);
+                result = new Dictionary<string, object> { { "messages", messages }, { "more", more } };
+            } else result = Said(file, tool);
             result["stamp"] = stamp; result["title"] = title; result["status"] = known != null ? known.Status : saved.Status;
             var native = NativeState(saved);
             if (native != null) result["status"] = native.Busy ? "busy" : native.Ready ? "waiting" : "confirm";
@@ -2226,7 +2272,15 @@ public sealed class TerminalAgent {
                     if (!op.ContainsKey("model")) { op["model"] = left.Model; op["effort"] = left.Effort; }
                     op["mode"] = left.Mode;
                 }
-                else RequireTerminalSlot();
+                // Another AI goes on with a conversation in-place: its source, and the phone's terminal running it if any.
+                SessionInfo handed = (op.ContainsKey("from") || op.ContainsKey("from_tool")) ? Handed(op, tool, dir, session) : null;
+                LiveTerminal handedRuns = handed == null ? null : terminals.Values.FirstOrDefault(t => !t.Pty.Closed && t.Tool == handed.Tool
+                    && String.Equals(t.Chat != null ? t.Chat.Session : t.Session, handed.Id, StringComparison.OrdinalIgnoreCase));
+                if (handedRuns != null) {
+                    string was = handedRuns.Chat != null ? handedRuns.Chat.Status : handedRuns.Status;
+                    if (was == "busy" || was == "confirm") throw new InvalidOperationException("对话正在执行或等待确认，请等这一轮结束或先停止");
+                }
+                if (left == null && handedRuns == null) RequireTerminalSlot();
                 Tool kind = Tool.Named(tool);
                 if (Get(op, "history") == "True" && session.Length == 0 && previous.Length == 0) throw new ArgumentException("请选择具体历史对话，或重新新建对话");
                 bool fork = Get(op, "fork") == "True";
@@ -2281,11 +2335,41 @@ public sealed class TerminalAgent {
                     if (live.Model.Length > 0 && !Models.Valid(live.Model)) throw new ArgumentException("模型名称无效");
                     if (Get(op, "effort").Trim().Length > 0 && live.Effort.Length == 0) throw new ArgumentException("思考深度无效");
                     live.Mode = requestedMode.Length > 0 ? ClampMode(requestedMode, maxMode) : (before != null && before.Mode == "read" ? "read" : ClampMode("", maxMode));
+                    string first = Get(op, "text").Trim();
+                    string handedTitle = "";
+                    if (handed != null) {
+                        // Read the source conversation before disposing its terminal or opening the new AI.
+                        var read = ReadConversation(new Dictionary<string, object> { { "session", handed.Id }, { "tool", handed.Tool }, { "dir", handed.Dir } }, prefs);
+                        first = Brief(handed, read, "") + "\n\n" + HandoverAsk + "\n" + first;
+                        handedTitle = Handovers.Title(handed.Tool, handed.Id);
+                        if (handedTitle.Length == 0) handedTitle = handed.Title;
+                        live.Title = handedTitle;
+                        if (handedRuns != null) {
+                            live.WorktreeId = handedRuns.WorktreeId; live.WorktreePath = handedRuns.WorktreePath; live.Branch = handedRuns.Branch;
+                            place = Place(live, dirs);
+                        }
+                    }
                     live.Pty = Chat.Open(tool, launcher, place, session, resume, live.Mode, Emitted(live), Quotas, live.Mode == "read" ? null : Peers.Offer(tool, place, live.Id, live.Dir), live.Model, live.Effort);
                     Heard(live);
+                    if (handedRuns != null) { handedRuns.Pty.Dispose(); terminals.Remove(handedRuns.Id); }
+                    if (handed != null) {
+                        foreach (string stale in terminals.Where(kv => kv.Key != terminal && kv.Value.Pty.Closed && kv.Value.Tool == handed.Tool && String.Equals(kv.Value.Session, handed.Id, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Key).ToArray()) {
+                            terminals[stale].Pty.Dispose();
+                            terminals.Remove(stale);
+                        }
+                        ended.RemoveAll(e => e.Tool == handed.Tool && String.Equals(e.Session, handed.Id, StringComparison.OrdinalIgnoreCase));
+                    }
                     terminals[terminal] = live;
-                    if (resume) Recall(live, Place(live, dirs));
-                    string first = Get(op, "text").Trim();
+                    if (resume) Recall(live, place);
+                    if (handed != null) {
+                        if (live.Session.Length > 0) {
+                            Handovers.Add(live.Tool, live.Session, handed.Tool, handed.Id, handedTitle);
+                            sessions = sessions.Where(s => !Handovers.GoneOn(s.Tool, s.Id)).ToList();
+                            sessionsDirty = true;
+                            nextScan = DateTime.MinValue;
+                        } else live.HandedFrom = handed;
+                        Recall(live, place, handed.Tool, handed.Id, false);
+                    }
                     if (first.Length > 0) live.Chat.Say(first, id);
                     // a team's member gone on with here is that member again (Teams.Rejoin)
                     if (resume) { string chatSession = session; bool told = first.Length > 0; Task.Run(() => Teams.Rejoin(terminal, tool, chatSession, told)); }
@@ -2450,6 +2534,10 @@ public sealed class TerminalAgent {
             foreach (string key in finished) {
                 var over = terminals[key]; over.Pty.Dispose(); terminals.Remove(key);
                 ended.RemoveAll(e => e.Session.Length > 0 && e.Tool == over.Tool && e.Session == over.Session);
+                if (over.Session.Length > 0 && Handovers.GoneOn(over.Tool, over.Session)) {
+                    foreach (var link in currentLinks) link.ForgetTerminal(over.Id);
+                    continue;
+                }
                 lock (gate) Settle(over, over.Seq, KeepEnded);
                 ended.Add(over); if (ended.Count > EndedMost) {
                     var dropped = ended[0]; ended.RemoveAt(0);
@@ -2497,10 +2585,21 @@ public sealed class TerminalAgent {
                 if (enabled && tools.Contains("codex")) Quotas.AskCodex(FindTool("codex"));      // (at most once in ten minutes)
                 if (enabled && tools.Contains("agy")) Quotas.AskAgy(FindTool("agy"));            // (at most once in ten minutes)
             }
-            // An ended terminal whose conversation runs in a terminal again is no longer one of the recent ones.
-            ended.RemoveAll(e => e.Session.Length > 0 && terminals.Values.Any(t => !t.Pty.Closed && t.Tool == e.Tool && t.Session == e.Session));
+            // An ended terminal whose conversation runs in a terminal again or was handed over is no longer one of the recent ones.
+            ended.RemoveAll(e => e.Session.Length > 0 && (Handovers.GoneOn(e.Tool, e.Session)
+                || terminals.Values.Any(t => (!t.Pty.Closed && t.Tool == e.Tool && String.Equals(t.Session, e.Session, StringComparison.OrdinalIgnoreCase))
+                    || (t.HandedFrom != null && t.HandedFrom.Tool == e.Tool && String.Equals(t.HandedFrom.Id, e.Session, StringComparison.OrdinalIgnoreCase)))));
             // a conversation says itself how it stands and which it is
             foreach (var t in terminals.Values.Where(t => t.Chat != null)) { t.Status = t.Chat.Status == "ended" ? "" : t.Chat.Status; if (t.Chat.Session.Length > 0) t.Session = t.Chat.Session; }
+            // A conversation another AI continues in-place is linked once its tool assigns a session id.
+            foreach (var t in terminals.Values.Where(t => t.HandedFrom != null && t.Session.Length > 0)) {
+                string firstTitle = t.Title.Length > 0 ? t.Title : (Handovers.Title(t.HandedFrom.Tool, t.HandedFrom.Id).Length > 0 ? Handovers.Title(t.HandedFrom.Tool, t.HandedFrom.Id) : t.HandedFrom.Title);
+                Handovers.Add(t.Tool, t.Session, t.HandedFrom.Tool, t.HandedFrom.Id, firstTitle);
+                t.HandedFrom = null;
+                sessions = sessions.Where(s => !Handovers.GoneOn(s.Tool, s.Id)).ToList();
+                sessionsDirty = true;
+                nextScan = DateTime.MinValue;
+            }
             // a team's member says which conversation it is, kept with the task for its history (Teams.Learn)
             foreach (var t in terminals.Values.Concat(ended).Where(t => t.Session.Length > 0)) Teams.Learn(t.Id, t.Tool, t.Session);
             lock (gate) foreach (var t in terminals.Values) Seal(t);
@@ -2509,7 +2608,7 @@ public sealed class TerminalAgent {
                 instance = instance, environment_id = EnvironmentId, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools,
                 agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                 max_mode = ClampMode("", Get(prefs, "RemoteMaxMode")),
-                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "reopen", "organize", "routes", "git", "worktree" }
+                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "organize", "routes", "git", "worktree" }
                     .Concat(Desktop.Tools.Select(tool => tool + "-desktop-open"))
                     .Concat(Settled != null ? new[] { "projects" } : new string[0])
                     .Concat(UpdateRequested != null ? new[] { "update" } : new string[0])

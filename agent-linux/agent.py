@@ -191,7 +191,7 @@ FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
 TOOL_LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}
-FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "reopen", "teams", "teams-v2", "teams-grouped"]
+FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "handover", "reopen", "teams", "teams-v2", "teams-grouped"]
 CLAUDE_READ_ONLY_TOOLS = frozenset(("Read", "Glob", "Grep", "LS", "NotebookRead"))
 ATTACHMENT_LIMIT = 20 * 1024 * 1024
 ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
@@ -1214,6 +1214,91 @@ class Marks:
         return True
 
 
+HANDOVER_ASK = "【现在的要求】"
+MAX_HANDOVERS = 500
+
+
+def strip_handover_ask(text):
+    """Returns the owner's own words from an in-place hand-over opening message, or `text` unchanged."""
+    if not isinstance(text, str) or not text.startswith("【对话交接】"):
+        return text if isinstance(text, str) else ""
+    sep = "\n\n" + HANDOVER_ASK + "\n"
+    at = text.find(sep)
+    return text[at + len(sep):] if at >= 0 else text
+
+
+class Handovers:
+    """Which conversation another AI continues in-place from which (`handovers.json`): listed once under the
+    first conversation's title, recalled as one unified timeline with `switch` dividers between parts."""
+
+    def __init__(self, data):
+        self.file = os.path.join(data, "handovers.json")
+        self.lock = threading.Lock()
+        self.links = []
+        try:
+            with open(self.file, encoding="utf-8") as stream:
+                read = json.load(stream)
+            items = read.get("links") if isinstance(read, dict) else None
+            for one in items if isinstance(items, list) else []:
+                if not isinstance(one, dict):
+                    continue
+                link = {k: str(one.get(k) or "") for k in ("tool", "session", "from_tool", "from", "title")}
+                if self._valid(link):
+                    self.links.append(link)
+            del self.links[:-MAX_HANDOVERS]
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def _valid(link):
+        return (0 < len(link["tool"]) <= 20 and 0 < len(link["from_tool"]) <= 20
+                and 0 < len(link["session"]) <= 128 and 0 < len(link["from"]) <= 128
+                and not (link["tool"] == link["from_tool"] and link["session"].lower() == link["from"].lower()))
+
+    def add(self, tool, session, from_tool, from_id, title):
+        link = {"tool": str(tool or ""), "session": str(session or ""),
+                "from_tool": str(from_tool or ""), "from": str(from_id or ""),
+                "title": str(title or "").strip()}
+        if not self._valid(link):
+            return False
+        with self.lock:
+            if any(l["tool"] == link["tool"] and l["session"].lower() == link["session"].lower() for l in self.links):
+                return False
+            if any(l["from_tool"] == link["tool"] and l["from"].lower() == link["session"].lower()
+                   for l in self._line_locked(link["from_tool"], link["from"])):
+                return False
+            self.links.append(link)
+            if len(self.links) > MAX_HANDOVERS:
+                del self.links[:-MAX_HANDOVERS]
+            write_private(self.file + ".tmp", json.dumps({"links": self.links}, ensure_ascii=False))
+            os.replace(self.file + ".tmp", self.file)
+            return True
+
+    def _line_locked(self, tool, session):
+        out = []
+        t, s = str(tool or ""), str(session or "")
+        for _ in range(50):
+            found = next((l for l in self.links if l["tool"] == t and l["session"].lower() == s.lower()), None)
+            if not found:
+                break
+            out.append(found)
+            t, s = found["from_tool"], found["from"]
+        return out
+
+    def line(self, tool, session):
+        with self.lock:
+            return list(self._line_locked(tool, session))
+
+    def gone_on(self, tool, session):
+        s = str(session or "").lower()
+        with self.lock:
+            return any(l["from_tool"] == tool and l["from"].lower() == s for l in self.links)
+
+    def title(self, tool, session):
+        chain = self.line(tool, session)
+        return chain[-1]["title"] if chain else ""
+
+
 def trash(path):
     """Moves a file or a folder into the user's trash, the way the desktop's file managers do
     (the XDG trash: the thing itself, and a note of where it lay). Nothing is destroyed."""
@@ -1245,8 +1330,9 @@ class Sessions:
     program has open in a folder that is no project is listed too, without a project
     (dir "") and with its folder: the phone can look at it, and make the folder a project."""
 
-    def __init__(self, marks=None):
+    def __init__(self, marks=None, handovers=None):
         self.marks = marks
+        self.handovers = handovers
         self.home = os.path.expanduser("~")
         self.titles = {}                # path -> (mtime, size, title)
         self.folders = {}               # codex rollout path -> the folder it worked in
@@ -1351,6 +1437,29 @@ class Sessions:
             return 0
         return 0
 
+    def line_messages(self, session, tool, name, dirs, next_tool=""):
+        """What was said across a whole handover line, oldest first, with `switch` rows between parts."""
+        folder = dirs.get(name) if name else None
+        chain = self.handovers.line(tool, session) if self.handovers else []
+        parts = [(l["from_tool"], l["from"]) for l in reversed(chain)]
+        parts.append((tool, session))
+        if next_tool:
+            parts.append((next_tool, ""))
+        messages, more = [], False
+        for idx, (pt, ps) in enumerate(parts):
+            if idx > 0:
+                messages.append({"role": "switch", "tool": pt, "text": TOOL_LABELS.get(pt, pt)})
+            if not ps or not folder:
+                continue
+            try:
+                answer, _ = self.read_folder(ps, pt, folder)
+                messages.extend(answer.get("messages", []))
+                if idx == 0:
+                    more = bool(answer.get("more"))
+            except (OpError, OSError):
+                pass
+        return messages, more
+
     def read(self, session, tool, name, dirs, since=""):
         """What was last said in a conversation of a project, for the phone to look at. A page
         that follows it says what it has (`since`): it is given the conversation anew only
@@ -1360,6 +1469,14 @@ class Sessions:
         folder = dirs.get(name) if name else saved and saved["live"] and saved["folder"]
         if saved is None or not folder:
             raise OpError("电脑上没有找到这个对话，请刷新后重试")
+        chain = self.handovers.line(tool, session) if self.handovers else []
+        if chain and name:
+            _, base_stamp = self.read_folder(session, tool, folder, "")
+            stamp = "%s.h%d" % (base_stamp, len(chain))
+            if since and since == stamp:
+                return {"same": True, "stamp": stamp, "title": saved["title"], "status": saved.get("status", "")}
+            messages, more = self.line_messages(session, tool, name, dirs)
+            return {"messages": messages, "more": more, "stamp": stamp, "title": saved["title"], "status": saved.get("status", "")}
         answer, stamp = self.read_folder(session, tool, folder, since)
         return dict(answer, stamp=stamp, title=saved["title"], status=saved.get("status", ""))
 
@@ -1481,6 +1598,12 @@ class Sessions:
         candidates = [dict(c, tools=" ".join(c["tools"])) for c in sorted(
             (c for c in offers.values() if elsewhere(c["path"]) and c["path"] not in dirs.values() and self.exists(c["path"])),
             key=lambda c: (not c["live"], -c["updated"]))[:40]]
+        if self.handovers:
+            for entry in found:
+                first_title = self.handovers.title(entry["tool"], entry["id"])
+                if first_title:
+                    entry["title"] = first_title
+            found = [entry for entry in found if not self.handovers.gone_on(entry["tool"], entry["id"])]
         for entry in found:
             for kind in MARKS:
                 entry[kind] = bool(self.marks and self.marks.has(kind, entry["tool"], entry["id"]))
@@ -3661,7 +3784,7 @@ def handover(source, messages, note):
         # The phone and Windows count the 8,000-character input limit in UTF-16 units.
         encoded = text.encode("utf-16-le", errors="replace")
         return text if len(encoded) <= most * 2 else encoded[:most * 2].decode("utf-16-le", errors="ignore") + "…"
-    asked = [m["text"] for m in messages if m.get("role") == "user"]
+    asked = [strip_handover_ask(m["text"]) for m in messages if m.get("role") == "user"]
     answered = next((m["text"] for m in reversed(messages) if m.get("role") == "assistant"), "")
     steps = [m for m in messages if m.get("role") == "tool"]
     label = TOOL_LABELS.get(source["tool"], source["tool"])
@@ -3709,7 +3832,8 @@ class Agent:
         self.instance = secrets.token_hex(16)
         self.projects = Projects(data)
         self.marks = Marks(data)
-        self.sessions = Sessions(self.marks)
+        self.handovers = Handovers(data)
+        self.sessions = Sessions(self.marks, self.handovers)
         self.uploads = Uploads()
         # the owner's work: in numbers, and the questions asked at a set time
         self.stats = Stats(self.sessions.claude_home, lambda: os.environ.get("CODEX_HOME") or os.path.join(self.sessions.home, ".codex"))
@@ -3887,6 +4011,12 @@ class Agent:
             for live in self.terminals.values():
                 if live.session:
                     self.teams.learn(live.id, live.tool, live.session)
+                    hf = getattr(live, "handed_from", None)
+                    if hf is not None:
+                        src, first_title = hf
+                        self.handovers.add(live.tool, live.session, src["tool"], src["id"], first_title)
+                        live.handed_from = None
+                        self.scan_wake.set()
             team_features = [one for one in TEAM_FEATURES if one[:-5] in self.tools[0]]
             payload = {
                 "info": {"instance": self.instance, "enabled": enabled, "tools": self.tools[0],
@@ -4482,6 +4612,28 @@ class Agent:
             raise OpError("协作任务的成员对话暂不支持切换视图")
         return source
 
+    def handed(self, op, tool, name):
+        """Locate the source conversation for an in-place AI switch (`from` + `from_tool`) on a project chat."""
+        if op.get("form") != "chat" or op.get("session") or "reopen" in op or not name:
+            raise OpError("换 AI 的选项无效")
+        if not str(op.get("text") or "").strip():
+            raise OpError("请写下要交给它的话")
+        from_tool, from_id = str(op.get("from_tool") or ""), str(op.get("from") or "")
+        saved = next((s for s in self.sessions.found
+                      if s["tool"] == from_tool and s["id"].lower() == from_id.lower()), None)
+        if saved is None:
+            raise OpError("电脑上没有找到原来的对话，请刷新后重试")
+        if saved["dir"] != name:
+            raise OpError("只能在同一个项目里换 AI")
+        if self.teams.team_of_session(saved["tool"], saved["id"]):
+            raise OpError("协作任务中的对话请在协作里换 AI")
+        running = next((t for t in self.terminals.values()
+                        if not t.closed and t.closing_at is None and t.tool == saved["tool"]
+                        and (t.session or "").lower() == saved["id"].lower()), None)
+        if running is not None and running.status in ("busy", "confirm"):
+            raise OpError("对话正在执行或等待确认，请等这一轮结束或先停止")
+        return saved, running
+
     def start_terminal(self, op, dirs, terminal, op_id=""):
         if terminal in self.terminals:
             return                              # already started; the operation is a repeat
@@ -4496,7 +4648,8 @@ class Agent:
             raise OpError("电脑上没有这个文件夹")
         # the same conversation shown the other way: the terminal it leaves is ended below, once all else is certain
         source = self.reopening(op, tool, name) if "reopen" in op else None
-        if sum(1 for live in self.terminals.values() if not live.closed) - (1 if source else 0) >= MAX_TERMINALS:
+        handed, handed_runs = self.handed(op, tool, name) if ("from" in op or "from_tool" in op) else (None, None)
+        if sum(1 for live in self.terminals.values() if not live.closed) - (1 if (source or handed_runs) else 0) >= MAX_TERMINALS:
             raise OpError("最多同时运行 %d 个终端，请先结束一个" % MAX_TERMINALS)
         cfg = read_config(self.data)
         session = ""
@@ -4533,16 +4686,40 @@ class Agent:
                 if tool not in CHAT_TOOLS or history:
                     raise OpError("对话选项无效")
                 resume = bool(op.get("session")) or source is not None     # (a new one of Claude Code's is named above, as for a terminal)
+                first_text = str(op.get("text") or "").strip()
+                handed_title, handed_msgs, handed_more = "", [], False
+                if handed is not None:
+                    read = self.sessions.read(handed["id"], handed["tool"], handed["dir"], dirs)
+                    first_text = handover(handed, read.get("messages", []), "") + "\n\n" + HANDOVER_ASK + "\n" + first_text
+                    handed_title = self.handovers.title(handed["tool"], handed["id"]) or handed["title"]
+                    handed_msgs, handed_more = self.sessions.line_messages(handed["id"], handed["tool"], name, dirs, next_tool=tool)
                 chat = open_chat(terminal, name, cwd, tool, launcher, self.wake, session, resume,
                                  str(cfg.get("RemoteMaxMode") or ""),
                                  mcp=self.peers.offer(tool, cwd))
                 chat.quotas_note = self.quotas.note
+                if handed_runs is not None:
+                    handed_runs.kill()
+                    self.terminals.pop(handed_runs.id, None)
+                if handed is not None:
+                    for stale in [k for k, v in self.terminals.items()
+                                  if k != terminal and v.closed and v.tool == handed["tool"]
+                                  and (v.session or "").lower() == handed["id"].lower()]:
+                        self.terminals.pop(stale, None)
                 self.terminals[terminal] = chat
                 if resume:
-                    earlier = self.sessions.read(session, tool, name, dirs)
-                    chat.before(earlier.get("messages", []), bool(earlier.get("more")))
-                if str(op.get("text") or "").strip():
-                    chat.say(str(op["text"]).strip(), op_id)
+                    earlier_msgs, earlier_more = self.sessions.line_messages(session, tool, name, dirs)
+                    if any(m.get("role") != "switch" for m in earlier_msgs):
+                        chat.before(earlier_msgs, earlier_more)
+                if handed is not None:
+                    if chat.session:
+                        self.handovers.add(chat.tool, chat.session, handed["tool"], handed["id"], handed_title)
+                        self.scan_wake.set()
+                    else:
+                        chat.handed_from = (handed, handed_title)
+                    if any(m.get("role") != "switch" for m in handed_msgs):
+                        chat.before(handed_msgs, handed_more)
+                if first_text:
+                    chat.say(first_text, op_id)
                 return
             argv = tool_argv(tool, launcher, session, history, str(cfg.get("RemoteMaxMode") or ""), fresh)
         self.terminals[terminal] = Live(terminal, name, cwd, 80, 24, argv, self.wake, tool, session)

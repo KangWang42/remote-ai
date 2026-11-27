@@ -182,6 +182,22 @@ export async function brief(t: Thread, note: string): Promise<string> {
   return String(reply.text || '');
 }
 
+/** Continues the conversation in-place with another AI: sends the handover summary + owner's next message. */
+export async function handover(t: Thread, tool: string, text: string, model = '', effort = ''): Promise<string> {
+  const started = await terminalOp({
+    action: 'start',
+    tool,
+    dir: t.project,
+    form: 'chat',
+    from: t.session,
+    from_tool: t.tool,
+    text,
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  });
+  return started.terminal;
+}
+
 /** Begins a new conversation of `tool` in the same project with the hand-over as its first message. */
 export async function handToNew(t: Thread, tool: string, note: string): Promise<string> {
   const text = (await brief(t, note)).slice(0, 8000);
