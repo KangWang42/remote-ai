@@ -191,7 +191,8 @@ FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
 TOOL_LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}
-FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "handover", "reopen", "teams", "teams-v2", "teams-grouped"]
+FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "handover", "reopen", "teams", "teams-v2", "teams-grouped",
+            "teams-roster"]
 CLAUDE_READ_ONLY_TOOLS = frozenset(("Read", "Glob", "Grep", "LS", "NotebookRead"))
 ATTACHMENT_LIMIT = 20 * 1024 * 1024
 ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
