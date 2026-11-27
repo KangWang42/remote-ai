@@ -1414,6 +1414,10 @@ class EndToEnd(unittest.TestCase):
 
         # 6. the owner's work in numbers, asked for as the phone's page asks: the last seven days, today the last
         self.assertIn("work", self.overview()["device"]["features"])
+        # the phone can only offer a roster and per-member model/effort when this
+        # computer says it understands them; the Windows side reports all three.
+        for flag in ("teams-roster", "teams-models", "teams-effort"):
+            self.assertIn(flag, self.overview()["device"]["features"])
         status, numbers = request("POST", self.base + "/api/work", {"id": secrets.token_hex(16), "action": "stats", "days": 7}, token=self.token, timeout=40)
         self.assertEqual((status, numbers.get("ready"), len(numbers.get("days", [])), len(numbers.get("hours", []))), (200, True, 7, 24), numbers)
         self.assertEqual(numbers["days"][-1]["date"], time.strftime("%Y-%m-%d"))
