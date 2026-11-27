@@ -51,7 +51,7 @@
 | 电脑端运行对话 | `agent-windows/Chats.cs`：`Chat`（事件、状态、确认）和 `ClaudeChat`、`CodexChat` 两个驱动；作为手机终端的另一种运行方式（`IRunning`），沿用编号输出、重放、多端查看、列表和更新后接回 | `tests/chat_check.py`（真实中转和电脑端，两个工具的替身 `tests/chat_standin.py`）；在真实的 Claude Code 2.1.283 和 Codex 0.163.0 上经中转和电脑端各跑通新建、确认、停止、续聊和带历史继续 |
 | Linux 电脑端 | `agent-linux/agent.py` 的 `Chat`、`ClaudeChat`、`CodexChat`（0.7.0） | `agent-linux/test_agent.py` 的 `Chats`（在 Linux 测试服务器上运行） |
 | 中转 | `relay/relay.py`：`form: "chat"` 的终端，`say`/`stop`/`answer`，列表的状态和确认取自电脑端；WebSocket 接受这三个操作 | `relay/test_relay.py` |
-| 对话页 | `web/chat/`：边写边显示、步骤与实时输出、确认按钮、停止、继续、断线续读；连接沿用 `web/terminal/bridge.js` | `tests/chat_ui_check.py`（真实中转，电脑端由测试扮演；三种状态的截图） |
+| 对话页 | `web/chat/`：边写边显示、步骤与思考排成一行一项的列表（按类别显示图标）、消息下方的复制与时间、回答中的项目文件可点开、确认按钮、停止、继续、断线续读；输入框右下角的工具图标打开 `web/ui/switch.js`（换模型、转交给其它 AI，与 `ui/work.js` 的交接共用 `handToNew`）；连接沿用 `web/terminal/bridge.js`。总控台输入框用 `web-app/src/components/ToolSwitch.tsx` 做同样的切换 | `tests/chat_ui_check.py`（真实中转，电脑端由测试扮演；三种状态的截图和切换面板）、`tests/console_ui_check.py` |
 | 入口 | `web/begin.js`：“应用”点一下即开始对话，长按改为在桌面应用中打开；`web/app.js`：历史对话按所选方式继续，长按换另一种；Android 列表直接打开对话页 | `tests/chat_ui_check.py`、`tests/android_aggregate_check.py` |
 
 ## 已完成（1.7.16）：底部面板与对话菜单

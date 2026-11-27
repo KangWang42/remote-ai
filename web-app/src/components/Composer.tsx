@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { uploadImageAttachment } from '../runtime/api';
 
@@ -19,6 +20,8 @@ interface Props {
   onSend: (text: string, pictures: string[]) => Promise<void>;
   onStop: () => Promise<void>;
   onStopAndSend?: (text: string, pictures: string[]) => Promise<void>;
+  /** What stands at the end of the box before the round button (the tool and its model). */
+  tail?: ComponentChildren;
 }
 
 const MAX_PICTURES = 4;
@@ -217,11 +220,7 @@ export function Composer(p: Props) {
             <span class="composer-hint">{hintText}</span>
           </div>
           <div class="composer-right">
-            {p.busy && p.canStop && (
-              <button type="button" class="btn quiet" disabled={sending} onClick={stop}>
-                停止
-              </button>
-            )}
+            {p.tail}
             {p.busy && p.canStop && p.onStopAndSend && hasDraft && (
               <button
                 type="button"
@@ -233,13 +232,25 @@ export function Composer(p: Props) {
                 停止并发送
               </button>
             )}
-            <button
-              type="submit"
-              class="btn primary"
-              disabled={sending || uploading || Boolean(p.disabled) || !hasDraft}
-            >
-              {sending ? '发送中' : p.queueMode ? '加入待发' : '发送'}
-            </button>
+            {p.busy && p.canStop && (
+              <button type="button" class="round-btn stop" title="停止" disabled={sending} onClick={stop}>
+                <span class="stop-mark" aria-hidden="true" />
+                <span class="vh">停止</span>
+              </button>
+            )}
+            {(!p.busy || !p.canStop || hasDraft) && (
+              <button
+                type="submit"
+                class={`round-btn send${hasDraft ? ' ready' : ''}`}
+                title={p.queueMode ? '加入待发' : '发送'}
+                disabled={sending || uploading || Boolean(p.disabled) || !hasDraft}
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path d="M12 19V5.5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span class="vh">{sending ? '发送中' : p.queueMode ? '加入待发' : '发送'}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

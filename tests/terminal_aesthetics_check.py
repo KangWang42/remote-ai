@@ -52,7 +52,8 @@ assert 'href="../conversation.css"' in chat_html
 assert ":is(#said, #sheet-form .said" in conv_css and ") .md" in conv_css
 assert "--chat-user-bg" in conv_css and "--chat-code-bg" in conv_css
 assert "--term-dock" in term_css and "--term-key-bg" in term_css
-assert "#said .step," in conv_css and "#sheet-form .said details.did" in conv_css
+# the phone chat draws its steps as one list of rows (web/chat/chat.css); the conversation window keeps its cards
+assert "#sheet-form .said details.did" in conv_css and ".steps {" in (ROOT / "web/chat/chat.css").read_text(encoding="utf-8")
 assert "dialog.window .bar .head-dot" in conv_css
 
 # Verify auto skin resolution in Node VM for both light and dark system preferences.

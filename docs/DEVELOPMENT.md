@@ -8,7 +8,7 @@ Android 构建同时把 `web/` 打进 APK，`EmbeddedPages` 按 `PageAssets` 解
 
 会话窗口沿用现有主题，手机端保持全宽，宽屏正文居中限宽。输入与发送按钮共用一个容器，送达状态附在对应消息下，正式记录出现后按同文消息的出现次数移除临时气泡；即使发送回执晚于正文、后续轮询返回 `same`，也不保留重复消息。`tests/desktop_ui_check.py` 覆盖即时回显、相同提示词多次发送、回执查询和滚动；`tests/tabs_ui_check.py` 覆盖大量手机空闲会话下的电脑对话排序。
 
-界面参考：[Open WebUI 的排队消息组件](https://github.com/open-webui/open-webui/blob/main/src/lib/components/chat/MessageInput/QueuedMessageItem.svelte)用于比较正文与发送状态的层级；[LibreChat](https://github.com/LibreChat-AI/LibreChat)用于比较聊天产品的信息组织。仅借鉴交互原则，不引入其代码、素材或依赖；保留本项目的原生页面、主题和电脑连接操作。
+界面参考：[Open WebUI 的排队消息组件](https://github.com/open-webui/open-webui/blob/main/src/lib/components/chat/MessageInput/QueuedMessageItem.svelte)用于比较正文与发送状态的层级；[LibreChat](https://github.com/LibreChat-AI/LibreChat)用于比较聊天产品的信息组织；T3 Code 的手机对话界面用于比较步骤列表、消息下方的复制与时间、文件链接，以及输入框右下角的工具图标（切换模型和转交给其它 AI）。仅借鉴交互原则，不引入其代码、素材或依赖；保留本项目的原生页面、主题和电脑连接操作。
 
 “停止回答”仅在电脑端提供可用的停止通道时显示；Codex 桌面通道还需具有明确的执行轮次。Positron 等编辑器里的 Codex CLI 不显示无效的停止按钮，窗口内说明限制；可安全结束进程时另外显示“结束”，须确认后才关闭整个会话。“停止回答”的进度、结果与失败原因显示在对话窗口内。点击时能力或轮次已过期则先刷新一次，仍不可用时不发送无效请求。Claude Code 钩子的停止请求表示在下一次工具操作前停止，不等同于立即终止正在输出的文字。浏览器回归覆盖实际点击、轮次延迟、停止不可用，以及 Positron CLI 在有无进程结束权限下的操作。
 
@@ -102,7 +102,7 @@ python tests\reach_e2e_check.py [chrome.exe [输出文件夹]]  # 同一件事�
 python tests\session_copies_check.py                      # 同一段对话只列一次，用虚构的对话文件
 python tests\said_check.py                                # 手机上看到的对话内容：问了什么、答了什么、做了什么，用虚构的对话文件
 python tests\chat_check.py [电脑端程序所在文件夹]            # 手机上的对话（Chats.cs）：经真实的中转和电脑端，两个工具各一遍：带第一句话新建、手机编号随原话返回、回答分段到达、执行前的确认和回答、执行中停止、拒绝、结束；带历史继续保存过的对话。工具是按两者协议说话的替身（tests\chat_standin.py），对话目录是编造的
-python tests\chat_ui_check.py <chrome.exe> <输出文件夹>   # 对话页：边写边显示、步骤和实时输出、确认按钮、发消息、停止、继续、结束后再打开；终端页把对话交给对话页；“应用”一点即开始、长按改在桌面应用打开；历史对话按所选方式继续。真实中转，电脑由测试扮演；截图 chat-ask.png、chat-busy.png（即 docs\images\chat.png）、chat-done.png、chat-dark.png
+python tests\chat_ui_check.py <chrome.exe> <输出文件夹>   # 对话页：边写边显示、步骤和实时输出、确认按钮、发消息、停止、继续、结束后再打开；终端页把对话交给对话页；“应用”一点即开始、长按改在桌面应用打开；历史对话按所选方式继续。真实中转，电脑由测试扮演；截图 chat-ask.png、chat-busy.png（即 docs\images\chat.png）、chat-done.png、chat-dark.png、chat-switch.png（切换模型与转交）
 python tests\look_check.py                                # 先看对话再接手、票据登录、手机和电脑共用一个终端；真实的中转和电脑端
 python tests\tunnel_check.py --local                      # 直连回显延迟
 python tests\tunnel_download_check.py --bash <bash路径>    # 四种 Linux 架构及 Windows 下载校验：正确文件通过、损坏文件拒绝、临时文件清理；Windows 上需 Git Bash

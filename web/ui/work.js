@@ -144,18 +144,10 @@
           // a member of a collaboration task is handed over within it: the task goes on with the AI that takes over
           if (state.member) { work.teamHandoffPage(state.member, state).build(p); return; }
           if (from.terminal && state.member === undefined) { p.body.append(ui.loading(), ui.loading()); return; }
-          const data = work.data || { device: {} }, device = data.device || {};
           const listed = work.find(from.id);
           const takers = work.list().filter(c => c.open && c.id !== from.id && work.sayable(c));
-          // a new conversation of a tool the computer has, in the same project: begun with the hand-over as its first message
-          const fresh = from.dir && work.has('chat') ? NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && (tool !== 'agy' || work.has('chat-agy'))) : [];
-          // how much of its limits each tool has left, where the computer knows it (primary pool first)
-          const remaining = tool => {
-            const q = (device.quotas || []).find(one => one.tool === tool);
-            const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
-            const least = pool.length ? Math.min(...pool.map(w => Math.max(0, Math.min(100, 100 - (Number(w.used) || 0))))) : null;
-            return least === null ? '' : ' · 剩余额度 ' + Math.round(least) + '%';
-          };
+          const fresh = work.freshTools(from);
+          const remaining = tool => { const left = work.quotaLeft(tool); return left === null ? '' : ' · 剩余额度 ' + left + '%'; };
           const offers = fresh.map(tool => ({ key: 'new:' + tool, tool, label: '新对话 · ' + TOOLS[tool], detail: '在 ' + from.dir + ' 中开始' + (tool === from.tool ? ' · 同一工具，重新开始' : '') + remaining(tool), tint: tool, icon: tool }))
             .concat(takers.map(c => ({ key: c.id, c, label: c.title || TOOLS[c.tool], detail: c.where + (c.place ? ' · ' + c.place : ''), tint: tint(c.tool), icon: ['claude', 'codex', 'agy'].includes(c.tool) ? c.tool : 'chat' })));
           // another tool before the one it was in: the usual reason is that one has run out
@@ -185,11 +177,9 @@
             const target = offers.find(o => o.key === state.to);
             if (!target) throw new Error('请选择接手的一方');
             if (target.tool) {
-              if (!work.has('brief')) throw new Error('电脑端或中转服务版本较旧，暂不能开始新对话，请更新');
-              const brief = await work.work('brief', { from: from.id, note: state.note.trim() });
-              const started = await work.terminal({ action: 'start', tool: target.tool, dir: from.dir, history: false, form: 'chat', text: String(brief.text || '').slice(0, 8000) });
-              p.sheet.close({ started: started.terminal, tool: target.tool }, true);
-              work.leaveTo(started.terminal);
+              const started = await work.handToNew(from, target.tool, state.note.trim());
+              p.sheet.close({ started, tool: target.tool }, true);
+              work.leaveTo(started);
               return;
             }
             await work.work('handoff', { from: from.id, to: target.key, note: state.note.trim() });
@@ -200,6 +190,26 @@
         }
       };
       return sheetOrNull ? sheetOrNull.push(page) : window.RemoteSheet.open(page);
+    }
+    // The tools a new conversation can be begun with in the conversation's project, the hand-over its first message.
+    freshTools(from) {
+      const device = (this.data || {}).device || {};
+      return from.dir && this.has('chat') ? NEW_TOOLS.filter(tool => (device.tools || []).includes(tool) && (tool !== 'agy' || this.has('chat-agy'))) : [];
+    }
+    // How much of its limits a tool has left in percent, where the computer knows it (primary pool first), or null.
+    quotaLeft(tool) {
+      const device = (this.data || {}).device || {};
+      const q = (device.quotas || []).find(one => one.tool === tool);
+      const all = (q && q.windows) || [], main = all.filter(w => !w.group), pool = main.length ? main : all;
+      return pool.length ? Math.round(Math.min(...pool.map(w => Math.max(0, Math.min(100, 100 - (Number(w.used) || 0)))))) : null;
+    }
+    // A new conversation of `tool` in the same project, begun with the computer's summary of this one (`brief`):
+    // answers the phone's terminal that runs it.
+    async handToNew(from, tool, note) {
+      if (!this.has('brief')) throw new Error('电脑端或中转服务版本较旧，暂不能开始新对话，请更新');
+      const brief = await this.work('brief', { from: from.id, note: note || '' });
+      const started = await this.terminal({ action: 'start', tool, dir: from.dir, history: false, form: 'chat', text: String(brief.text || '').slice(0, 8000) });
+      return started.terminal;
     }
     // A team member's work given to another AI in the same task (`team_swap`): it takes over with the task's record and
     // the folder's changes, and the conversation that takes over is shown in place of this one.

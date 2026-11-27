@@ -188,11 +188,13 @@ def main():
             until("Array.from(document.querySelectorAll('.thread-head .seg button')).some(b => b.textContent === '终端' && !b.disabled)", "the turn ended: it can be shown the other way")
 
             # Switch the model from the conversation and check the actual tool invocation.
-            value("document.querySelector('.model-picker').click()")
-            until("!!document.querySelector('.dlg select option[value=\"sonnet\"]')", "the tool's model list")
-            value("(s => { s.value = 'sonnet'; s.dispatchEvent(new Event('change', {bubbles:true})); })(document.querySelector('.dlg select'))")
-            press(".dlg-foot button", "应用模型")
-            until("!document.querySelector('.dlg') && document.querySelector('.model-picker')?.textContent.includes('sonnet')", "the original chat on the new model")
+            # the button at the end of the box: the tool's mark; its list has the tool's models and the AI to hand over to
+            value("document.querySelector('.composer .tool-switch-btn').click()")
+            until("!!document.querySelector('.tool-switch-pop .tsp-row[data-model=\"sonnet\"]')", "the tool's model list")
+            assert value("Array.from(document.querySelectorAll('.tool-switch-pop .tsp-head')).map(n => n.textContent)")[0] == "Claude Code"
+            browser.picture(out / "switch.png")
+            value("document.querySelector('.tool-switch-pop .tsp-row[data-model=\"sonnet\"]').click()")
+            until("!document.querySelector('.tool-switch-pop') && document.querySelector('.tool-switch-btn')?.textContent.includes('Sonnet')", "the original chat on the new model")
             until("fetch('../api/terminal').then(r=>r.json()).then(j=>j.terminals.some(t=>t.state==='running' && t.model==='sonnet' && t.session===%s))" % q(SAVED), "running model")
             def compose(text, button="发送"):
                 value("(b => { b.value = %s; b.dispatchEvent(new Event('input', {bubbles:true})); })(document.querySelector('.composer textarea'))" % q(text))
@@ -206,7 +208,10 @@ def main():
             until("!!document.querySelector('[role=timer]')", "elapsed running time")
             first = value("document.querySelector('[role=timer]').textContent")
             until("!!document.querySelector('[role=timer]') && document.querySelector('[role=timer]').textContent !== %s" % q(first), "clock ticks")
-            assert value("document.querySelector('.model-picker').disabled")
+            # at work the model is not changed: the list says why
+            value("document.querySelector('.composer .tool-switch-btn').click()")
+            until("Array.from(document.querySelectorAll('.tool-switch-pop .tsp-note')).some(n => n.textContent.includes('这一轮结束'))", "why the model waits")
+            value("document.querySelector('.composer .tool-switch-btn').click()")
             compose("随后检查第二项", "加入待发")
             compose("顺便核对第三项", "加入待发")
             compose("临时误发", "加入待发")

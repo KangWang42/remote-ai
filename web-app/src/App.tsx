@@ -515,6 +515,7 @@ export function App() {
       key={isSplit ? `split:${t.key}` : t.key}
       thread={t}
       features={features}
+      device={device}
       inspectorOpen={inspector}
       terminalOpen={termOpen}
       insert={isSplit ? null : insert}
@@ -523,6 +524,10 @@ export function App() {
       onReopen={(to) => reopenThread(t, to)}
       onTakeOver={async (text) => openTerminal(await act.takeOver(t, text))}
       onHandOff={() => setHandoff(t.key)}
+      onHandedTo={(terminal) => {
+        openTerminal(terminal);
+        say('已交给新的对话');
+      }}
       onOpenFiles={() => (setBrowse(''), setInspectorTab('files'), setInspector(true))}
       onToggleInspector={() => setInspector((v) => !v)}
       onToggleTerminal={() => setTermOpen((v) => !v)}

@@ -31,6 +31,8 @@ main { position: fixed; inset: var(--vv-top, 0px) 0 auto 0; height: var(--vv-h, 
 main > * { flex: none; }
 header { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 6px; background: color-mix(in srgb, var(--chat-bg, var(--reader-bg, var(--bg))) 90%, transparent); border-bottom: 1px solid var(--divider, var(--line)); backdrop-filter: saturate(1.4) blur(20px); -webkit-backdrop-filter: saturate(1.4) blur(20px); }
 header .who { flex: 1; min-width: 0; padding: 0 4px; }
+header .tools { flex: none; display: flex; align-items: center; padding: 2px; border-radius: 999px; border: 1px solid var(--card-border, var(--line)); background: color-mix(in srgb, var(--panel) 80%, transparent); }
+header .tools .icon { width: 40px; height: 38px; }
 header h1 { font-size: 1rem; font-weight: 600; line-height: 1.3; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #where { display: flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--muted); font-size: .78rem; line-height: 1.35; white-space: nowrap; overflow: hidden; }
 #where-text { overflow: hidden; text-overflow: ellipsis; }
@@ -64,26 +66,47 @@ main > .attach-tray { margin: 4px 12px 0; padding-left: 4px; }
 .text { overflow-wrap: anywhere; }
 .text.writing::after { content: ""; display: inline-block; width: .45em; height: 1em; margin-left: 2px; vertical-align: -.12em; background: var(--accent); opacity: .75; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
-.thought.writing::before { content: "思考中 · "; font-weight: 600; }
 .note { align-self: center; max-width: 92%; padding: 6px 13px; border-radius: 999px; background: var(--surface-sub, var(--raised)); color: var(--muted); font-size: .8rem; text-align: center; overflow-wrap: anywhere; }
 .note.bad { color: var(--bad); background: var(--bad-soft); }
 
-/* ---- rounded tool-step cards (design 18px radius + 30px mint check badge) */
-.step { display: grid; gap: 6px; padding: 10px 14px 11px; }
-.step > button { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 36px; padding: 0; text-align: left; flex-wrap: wrap; }
-.step .mark { flex: none; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; font-size: 12px; font-weight: 700; line-height: 1; }
-.step.run .mark { border: 2px solid color-mix(in srgb, var(--busy-dot, var(--busy)) 35%, transparent); border-top-color: var(--busy-dot, var(--busy)); border-radius: 50%; width: 20px; height: 20px; margin: 4px; animation: spin .9s linear infinite; }
-.step.ok .mark { background: var(--good-soft); color: var(--good-ink, var(--good)); }
-.step.ok .mark::before { content: "✓"; }
-.step.fail .mark { background: var(--bad-soft); color: var(--bad); }
-.step.fail .mark::before { content: "✕"; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.step .what { flex: 1; min-width: 0; font-weight: 600; font-size: .88rem; white-space: normal; overflow-wrap: anywhere; }
-.step .more { color: var(--muted); font-size: .76rem; }
-@media (max-width: 430px) { .step .more { flex-basis: 100%; padding-left: 38px; } }
-.step code { display: block; font-family: var(--mono); font-size: .84em; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
-.step pre { margin: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--chat-code-border, transparent); background: var(--chat-code-bg, var(--surface-sub, var(--bg))); font-family: var(--mono); font-size: .84em; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
+/* ---- what was done between the words: one hairline list of rows, an icon for the kind of step, a chevron to open */
+.steps { display: grid; gap: 0; border-top: 1px solid var(--divider, var(--line)); border-bottom: 1px solid var(--divider, var(--line)); font-size: .86rem; line-height: 1.5; }
+.steps > [hidden] { display: none; }
+.step, .thought { display: grid; gap: 6px; min-width: 0; padding: 2px 0; }
+.steps > * + * { border-top: 1px solid color-mix(in srgb, var(--divider, var(--line)) 60%, transparent); }
+.step > button, .thought > button { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 40px; padding: 0 2px; text-align: left; color: var(--muted); }
+.step .mark, .thought .mark { flex: none; width: 18px; height: 18px; display: grid; place-items: center; color: var(--muted); }
+.step .mark svg, .thought .mark svg { display: block; }
+.step.run .mark { color: var(--busy-dot, var(--busy)); animation: working 1.2s ease-in-out infinite; }
+.step.run .what { color: var(--ink); }
+.step.fail .mark, .step.fail .more { color: var(--bad); }
+.step .what, .thought .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.step.shut .what, .thought.shut .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thought .what { white-space: pre-wrap; }
+.step .more { flex: none; font-size: .78rem; font-weight: 600; }
+.chev { flex: none; color: var(--muted); opacity: .7; display: grid; place-items: center; transform: rotate(-90deg); transition: transform .18s ease; }
+.chev svg { display: block; }
+.shut > button .chev { transform: rotate(90deg); }
+.thought:not(.shut) > button { align-items: flex-start; padding-top: 10px; padding-bottom: 8px; }
+.thought:not(.shut) .mark { margin-top: 1px; }
+.thought.writing .mark { color: var(--accent); animation: working 1.2s ease-in-out infinite; }
+.step code { display: block; margin: 0 0 2px 30px; font-family: var(--mono); font-size: .84em; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
+.step pre { margin: 0 0 8px 30px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--chat-code-border, transparent); background: var(--chat-code-bg, var(--surface-sub, var(--bg))); font-family: var(--mono); font-size: .84em; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
 .step.shut pre, .step.shut code { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- under a message: when it was said and a copy button; an answer's on the left, the user's on the right */
+.meta { display: flex; align-items: center; gap: 2px; height: 28px; margin: -14px 0 -6px -8px; color: var(--muted); font-size: .76rem; font-variant-numeric: tabular-nums; }
+.meta.mine { justify-content: flex-end; margin: -14px -8px -6px 0; }
+.meta time { padding: 0 6px; }
+.meta .copy { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); transition: background .12s, transform .1s; }
+.meta .copy:active { background: var(--raised); transform: scale(.92); }
+
+/* ---- a file the answer names: opened in the project's files by a tap */
+#said .text.md .file-ref { display: inline; padding: 0; border: 0; background: none; color: var(--accent-ink, var(--accent)); font-family: inherit; font-size: inherit; cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 30%, transparent); text-underline-offset: 3px; }
+#said .text.md code.file-ref { font-family: var(--mono); font-size: .88em; word-break: break-all; }
+.file-mark { display: inline-block; margin-right: 3px; vertical-align: -.16em; opacity: .8; }
+.file-mark svg { display: block; }
 
 /* ---- approvals above composer */
 #asks { display: grid; gap: 8px; padding: 10px 14px 8px; border-top: 1px solid color-mix(in srgb, var(--bad) 24%, var(--divider, var(--line))); background: var(--bad-soft); }
@@ -105,29 +128,39 @@ main > .attach-tray { margin: 4px 12px 0; padding-left: 4px; }
 #stands.idle .dot { background: var(--good-dot, var(--good)); opacity: 1; box-shadow: 0 0 0 3px var(--good-soft); }
 @keyframes working { 50% { opacity: .35; } }
 #standing { font-weight: 600; color: var(--ink); flex: none; }
-#clock { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: .82rem; flex: none; }
-#params-btn { display: inline-flex; align-items: center; gap: 4px; max-width: 56%; min-height: 28px; padding: 0 10px; border-radius: 999px; background: var(--surface-sub, var(--raised)); border: 1px solid var(--card-border, var(--line)); color: var(--muted); font-size: .76rem; font-weight: 600; transition: transform .12s ease, background-color .15s ease, color .15s ease, border-color .15s ease; }
-#params-btn.custom { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 28%, var(--card-border, var(--line))); color: var(--accent-ink, var(--accent)); }
-#params-btn:active { transform: scale(.95); }
-#params-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.params-chev { flex: none; opacity: .72; font-size: .74rem; }
-#stop, #again { min-height: 36px; padding: 0 14px; border-radius: 999px; font-size: .84rem; font-weight: 600; transition: transform .1s, opacity .12s; }
-#again { margin-left: auto; }
-#stop { background: var(--ink-solid, var(--bad)); color: var(--on-ink-solid, #ffffff); }
-#stop:active { transform: scale(.96); opacity: .88; }
+#clock { font-variant-numeric: tabular-nums; font-size: .84rem; font-weight: 600; flex: none; }
+#again { margin-left: auto; min-height: 36px; padding: 0 14px; border-radius: 999px; font-size: .84rem; font-weight: 600; transition: transform .1s, opacity .12s; }
+/* the composer: one rounded box; pictures at its start, the words, then at its end the model (the tool's icon) and one
+   round button, the arrow that sends or the square that stops */
+#write { display: flex; align-items: flex-end; gap: 2px; margin: 6px 12px 12px; padding: 4px; border: 1px solid var(--chat-composer-border, var(--card-border, var(--line))); border-radius: 24px; background: var(--chat-composer-bg, var(--bg)); transition: border-color .15s, box-shadow .15s; }
+#write:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+#write .attach-pick { align-self: flex-end; width: 40px; height: 40px; }
+#box { flex: 1 1 auto; width: auto; min-width: 0; min-height: 40px; max-height: 160px; padding: 8px 6px 8px 10px; border: 0; border-radius: 18px; background: transparent; caret-color: var(--accent); line-height: 1.5; resize: none; overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; font-size: .96rem; }
+#write .attach-pick:not([hidden]) + #box { padding-left: 2px; }
+#box:focus, #box:focus-visible { outline: none; }
+#write-end { flex: none; display: flex; align-items: center; gap: 4px; min-height: 40px; }
+#params-btn { display: inline-flex; align-items: center; gap: 1px; height: 36px; padding: 0 4px 0 8px; border-radius: 18px; color: var(--muted); transition: transform .12s ease, background-color .15s ease, color .15s ease; }
+#params-btn:active { transform: scale(.94); background: var(--raised); }
+#params-icon { display: grid; place-items: center; color: var(--tool-tint, var(--accent)); }
+#params-icon svg { display: block; }
+#params-btn.tool-claude { --tool-tint: #d97757; }
+#params-btn.tool-codex { --tool-tint: var(--accent); }
+#params-btn.tool-agy { --tool-tint: #6366f1; }
+#params-btn.custom { background: color-mix(in srgb, var(--tool-tint) 12%, transparent); }
+.params-chev { flex: none; opacity: .75; }
+#write .round { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; transition: transform .1s, opacity .15s, background-color .15s, color .15s; }
+#write .round:active { transform: scale(.92); }
+#send { position: relative; background: var(--raised); color: var(--muted); }
+#send.ready, #send.going { background: var(--accent); color: var(--on-accent); }
+#send svg { display: block; }
+#send.going svg { visibility: hidden; }
+#send-done { position: absolute; inset: 0; display: grid; place-items: center; font-size: .7rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+#stop { background: var(--bad-soft); color: var(--bad); }
+.stop-mark { width: 12px; height: 12px; border-radius: 3px; background: currentColor; }
+#go { flex: none; min-height: 34px; padding: 0 13px; border-radius: 18px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); font-size: .86rem; font-weight: 600; }
 #again { background: var(--accent); color: var(--on-accent); }
 #again:active { transform: scale(.96); }
-#write { display: flex; flex-direction: column; gap: 2px; margin: 6px 12px 12px; padding: 6px 6px 6px 8px; border: 1px solid var(--chat-composer-border, var(--card-border, var(--line))); border-radius: 22px; background: var(--chat-composer-bg, var(--bg)); transition: border-color .15s, box-shadow .15s; }
-#write:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
-#write-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.write-gap { flex: 1 1 auto; }
-#write-row .attach-pick { align-self: center; }
-#box { width: 100%; min-width: 0; min-height: 40px; max-height: 160px; padding: 8px 6px; border: 0; border-radius: 18px; background: transparent; caret-color: var(--accent); line-height: 1.5; resize: none; overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; font-size: .96rem; }
 #box:focus, #box:focus-visible { outline: none; }
-#send { flex: none; min-height: 36px; padding: 0 18px; border-radius: 20px; background: var(--accent); color: var(--on-accent); font-weight: 600; transition: transform .1s, opacity .15s; }
-#send:active { transform: scale(.95); }
-#send.going { min-width: 64px; font-variant-numeric: tabular-nums; }
-#go { flex: none; min-height: 36px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); font-weight: 600; }
 
 #toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 20; max-width: min(88vw, 480px); padding: 10px 18px; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: .88rem; font-weight: 600; box-shadow: 0 10px 30px rgba(14, 17, 22, .28); text-align: center; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

@@ -209,8 +209,8 @@ class Computer:
         self.emit(terminal, t="state", state="busy", at=now())
         self.emit(terminal, t="item", id="u1", kind="user", text=op["text"], op=op["id"])
         self.emit(terminal, t="item", id="t1", kind="text", text="")
-        for piece in ("我先看看", "金额是在哪一步换算的，", "再对比两版的输出。\n\n- 第一步：**读代码**\n- 第二步：跑测试"):
-            time.sleep(0.4)
+        for n, piece in enumerate(("我先看看", "金额是在哪一步换算的，", "再对比两版的输出。\n\n- 第一步：**读代码**\n- 第二步：跑测试")):
+            time.sleep(0.4 if n != 1 else 3)
             self.emit(terminal, t="more", id="t1", text=piece)
         self.emit(terminal, t="item", id="s1", kind="step", text="Bash：对比两版的金额", detail="node compare.js --old 2.0 --new 4.0", state="run", name="Bash")
         for line in ("2.0: 12.50\n", "4.0: 12.5\n", "differs in 3 of 40 rows\n"):
@@ -225,7 +225,7 @@ class Computer:
             return
         self.emit(terminal, t="done", id="s2", ok=True, result="已修改 1 处")
         self.emit(terminal, t="item", id="t2", kind="text", text="")
-        self.emit(terminal, t="more", id="t2", text="问题在 `formatPrice`：已经固定为两位小数。")
+        self.emit(terminal, t="more", id="t2", text="问题在 `formatPrice`（`D:\\work\\web-shop\\src\\cart\\formatPrice.js:12`）：已经固定为两位小数。")
         self.emit(terminal, t="turn", end="done", at=now())
         self.emit(terminal, t="state", state="idle", at=now())
 
@@ -318,7 +318,7 @@ def main():
             # the answer as it is written: a part of it first, then the whole, set as Markdown
             until("(t => t && t.textContent.includes('我先看看') && !t.textContent.includes('再对比'))(document.querySelector('.text'))", "a part of the answer while it is written")
             until("document.querySelector('.text strong')?.textContent === '读代码'", "the whole answer, set as Markdown")
-            until("document.querySelector('#stands').className === 'busy' && document.getElementById('standing').textContent === '正在执行' && !document.getElementById('stop').hidden", "at work, with a stop")
+            until("document.querySelector('#stands').className === 'busy' && document.getElementById('standing').textContent === '已工作' && / 秒$/.test(document.getElementById('clock').textContent) && !document.getElementById('stop').hidden && document.getElementById('send').hidden", "at work, with a stop in place of the arrow")
             # a step with its command, and what it prints as it prints it
             until("(s => s && s.textContent.includes('node compare.js') && s.querySelector('pre')?.textContent.includes('differs in 3 of 40 rows'))(document.querySelector('.step'))", "the step, its command and its output")
             # what it asks, above the box; answered from here
@@ -342,6 +342,26 @@ def main():
             assert value("document.querySelector('.step button').getAttribute('aria-expanded')") == "true"
             assert value("!document.querySelector('.step pre').hidden")
             value("document.querySelector('.step button').click()")
+            # the steps stand in one list, each with the icon of its kind; the step named by a tool's English word in Chinese
+            assert value("Array.from(document.querySelectorAll('.steps')).map(list => Array.from(list.querySelectorAll('.step')).map(s => s.dataset.kind))") == [["term", "pen"]]
+            assert value("document.querySelectorAll('.step .what')[1].textContent") == "修改 src/cart/formatPrice.js"
+            # the turn's last answer ends with a copy button; the user's words have one too
+            assert value("(t => t.nextElementSibling?.matches('.meta:not(.mine)') && !!t.nextElementSibling.querySelector('button.copy'))(document.querySelectorAll('.text')[1])") is True
+            assert value("document.querySelector('.user').nextElementSibling.matches('.meta.mine')") is True
+            assert value("document.querySelectorAll('.text')[0].nextElementSibling?.matches('.meta')") is False
+            # a file of the project the answer names opens in its files, at that file
+            assert value("document.querySelector('.text code.file-ref')?.dataset.path") == "src/cart/formatPrice.js"
+            # the model button at the end of the box: the tool's icon
+            assert value("(b => !b.hidden && b.classList.contains('tool-claude') && !!b.querySelector('#params-icon svg'))(document.getElementById('params-btn'))") is True
+            # pressed, it opens the switcher: this tool's models (the one in use ticked), and the other AI to hand over to
+            value("document.getElementById('params-btn').click()")
+            until("document.querySelector('dialog.rs[open] h2, dialog.rs[open] .rs-title')?.textContent === '切换模型' && document.querySelectorAll('dialog.rs[open] .rs-label').length === 2", "the switcher")
+            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-label')).map(n => n.textContent)") == ["Claude Code", "转交给"]
+            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-row[aria-checked=true] b')).map(n => n.textContent)") == ["工具默认"]
+            assert value("Array.from(document.querySelectorAll('dialog.rs[open] .rs-section')).pop().innerText.includes('Codex')") is True
+            picture("chat-switch.png")
+            value("history.back()")
+            until("!document.querySelector('dialog.rs[open]')", "the switcher closed")
             picture("chat-done.png")
 
             # ---- a message: it stands at once, and is the tool's once given back
@@ -384,7 +404,7 @@ def main():
             says = len([op for op in computer.seen if op["action"] == "say"])
             value("document.getElementById('write').requestSubmit()")
             until("!document.getElementById('toast').hidden && document.getElementById('toast').textContent.includes('磁盘空间不足')", "the reason the pictures did not go")
-            until("document.getElementById('send').textContent === '发送'", "the send button again")
+            until("!document.getElementById('send').classList.contains('going') && document.getElementById('send-done').hidden", "the send button again")
             assert value("document.getElementById('box').value") == "按截图里的样子改" and value(tray) == 2
             assert len([op for op in computer.seen if op["action"] == "say"]) == says and not computer.files, "nothing said or kept after a failed upload"
             # sent: up first, into the project's attachments, then named in the message

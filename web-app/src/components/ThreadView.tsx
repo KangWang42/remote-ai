@@ -5,17 +5,18 @@ import { chatOutbox, usePending } from '../runtime/chatOutbox';
 import { normalizeMs } from '../runtime/time';
 import { canReopen, canSay, canStop, canTakeOver, type Thread } from '../runtime/threads';
 import { useConversation } from '../runtime/useConversation';
-import { toolBadgeStyle, toolLabel, toolMeta } from '../runtime/types';
+import { toolBadgeStyle, toolLabel, toolMeta, type DeviceInfo } from '../runtime/types';
 import { BranchMenu } from './BranchMenu';
 import { Composer } from './Composer';
 import { Dots } from './Sidebar';
 import { VirtualTimeline } from './VirtualTimeline';
-import { ThreadModelPicker } from './ThreadModelPicker';
+import { ToolSwitch } from './ToolSwitch';
 import { RunStatus } from './RunStatus';
 
 interface Props {
   thread: Thread;
   features: string[];
+  device: DeviceInfo | null;
   inspectorOpen: boolean;
   terminalOpen: boolean;
   insert?: { nonce: number; text: string } | null;
@@ -24,6 +25,8 @@ interface Props {
   onReopen: (to: 'chat' | 'screen') => Promise<void>;
   onTakeOver: (text?: string) => Promise<void>;
   onHandOff: () => void;
+  /** A new conversation of another AI was begun from this one (the switcher in the box): its terminal. */
+  onHandedTo: (terminal: string) => void;
   onOpenFiles: () => void;
   onToggleInspector: () => void;
   onToggleTerminal: () => void;
@@ -239,7 +242,6 @@ export function ThreadView(p: Props) {
             </button>
           )}
           {t.project && <BranchMenu project={t.project} worktree={t.worktree} known={t.branch} />}
-          <ThreadModelPicker thread={t} features={p.features} blocked={working || phase === 'confirm' || phase === 'starting' || pending.length > 0 || queued.length > 0} onChanged={p.onChanged} />
           {t.terminal?.mode === 'read' && <span class="chip soft">只读</span>}
         </div>
         <div class="head-actions">
@@ -524,6 +526,16 @@ export function ThreadView(p: Props) {
                     : '说点什么'
             }
             pictureDir={t.runtime === 'chat' && t.project ? t.project : ''}
+            tail={
+              <ToolSwitch
+                thread={t}
+                device={p.device}
+                blocked={working || phase === 'confirm' || phase === 'starting' || pending.length > 0 || queued.length > 0}
+                onChanged={p.onChanged}
+                onHandedTo={p.onHandedTo}
+                onHandOff={p.onHandOff}
+              />
+            }
             busy={working}
             canStop={canStopChat}
             queueMode={queueMode}

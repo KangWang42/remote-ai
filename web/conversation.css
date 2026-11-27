@@ -52,11 +52,9 @@ dialog.window #sheet-form .said > * { min-width: 0; flex-shrink: 0; }
 #said .user.going,
 #sheet-form .said .turn.going { opacity: .6; }
 
-#said .thought,
 #sheet-form .said .turn.thought .plain { color: var(--muted); font-size: .9em; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; padding-left: 12px; border-left: 2px solid var(--chat-thought-border, var(--divider, var(--line))); }
 
 /* ---- Unified rounded operation / tool-step cards (chat .step + dialog.window details.did) */
-#said .step,
 #sheet-form .said details.did { min-width: 0; border-radius: 18px; border: 1px solid var(--chat-step-border, var(--card-border, var(--line))); background: var(--chat-step-bg, var(--panel)); box-shadow: none; font-size: .85rem; line-height: 1.5; overflow: hidden; }
 #sheet-form .said details.did { padding: 0; color: var(--ink); overflow-wrap: anywhere; }
 #sheet-form .said details.did summary { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; font-weight: 600; color: var(--ink); list-style: none; min-height: 48px; }
