@@ -1,13 +1,14 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { uploadImageAttachment } from '../runtime/api';
+import { uploadAttachment } from '../runtime/api';
 
 interface Props {
   /** Drafts are kept per conversation under this key. */
   draftKey: string;
   placeholder: string;
-  /** Where pictures are uploaded to (a project); none: no pictures. */
-  pictureDir: string;
+  /** Project receiving uploaded attachments. Empty when this conversation cannot take files. */
+  attachmentDir: string;
+  allowFiles: boolean;
   busy: boolean;
   canStop: boolean;
   /** True when submitting appends to the local pending batch instead of firing a separate turn now. */
@@ -24,7 +25,7 @@ interface Props {
   tail?: ComponentChildren;
 }
 
-const MAX_PICTURES = 4;
+const MAX_ATTACHMENTS = 4;
 
 /** The box a message is written in: the words take the whole width, what is done with them sits under them. */
 export function Composer(p: Props) {
@@ -70,18 +71,21 @@ export function Composer(p: Props) {
     }
   };
 
-  const addPictures = async (files: File[]) => {
-    if (!p.pictureDir) return;
-    const chosen = files.filter((f) => f.type.startsWith('image/')).slice(0, MAX_PICTURES - pictures.length);
+  const addFiles = async (files: File[]) => {
+    if (!p.attachmentDir || uploading || sending) return;
+    const chosen = files.slice(0, MAX_ATTACHMENTS - pictures.length);
     if (chosen.length === 0) return;
     setUploading(true);
-    setNote('');
+    setNote(files.length > chosen.length ? '最多添加 4 个附件' : '');
+    const projectBox = box.current;
     try {
-      const added: string[] = [];
-      for (const f of chosen) added.push(await uploadImageAttachment(p.pictureDir, f));
-      setPictures((prev) => [...prev, ...added].slice(0, MAX_PICTURES));
+      for (const file of chosen) {
+        const path = await uploadAttachment(p.attachmentDir, file, p.allowFiles);
+        if (box.current !== projectBox) break;
+        setPictures(prev => [...prev, path]);
+      }
     } catch (err: any) {
-      setNote(err?.message || '图片上传失败');
+      setNote(err?.message || '附件上传失败');
     } finally {
       setUploading(false);
     }
@@ -130,7 +134,7 @@ export function Composer(p: Props) {
 
   const hasDraft = Boolean(text.trim() || pictures.length > 0);
   const hintText = uploading
-    ? '正在上传图片…'
+    ? '正在上传附件…'
     : p.stopping
       ? '已请求停止 · 现在发送将立即执行新指令'
       : p.queueMode
@@ -152,7 +156,7 @@ export function Composer(p: Props) {
         <div class="composer-pics">
           {pictures.map((path) => (
             <span key={path} class="pic-chip">
-              {path.split('/').pop()}
+              {window.RemoteAttachmentNames.label(path.split('/').pop() || '') || path.split('/').pop()}
               <button type="button" aria-label="移除" onClick={() => setPictures((prev) => prev.filter((x) => x !== path))}>
                 ×
               </button>
@@ -180,39 +184,45 @@ export function Composer(p: Props) {
               .filter((i) => i.type.startsWith('image/'))
               .map((i) => i.getAsFile())
               .filter(Boolean) as File[];
-            if (files.length && p.pictureDir) {
+            if (files.length && p.attachmentDir) {
               e.preventDefault();
-              addPictures(files);
+              addFiles(files);
             }
           }}
         />
         <div class="composer-row">
           <div class="composer-left">
-            {p.pictureDir && (
+            {p.attachmentDir && (
               <>
                 <input
                   ref={picker}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  accept={p.allowFiles ? undefined : "image/png,image/jpeg,image/webp,image/gif"}
                   multiple
                   hidden
                   onChange={(e) => {
                     const input = e.target as HTMLInputElement;
-                    if (input.files) addPictures(Array.from(input.files));
+                    if (input.files) addFiles(Array.from(input.files));
                     input.value = '';
                   }}
                 />
                 <button
                   type="button"
                   class="icon-btn"
-                  title="添加图片（也可以直接粘贴）"
-                  disabled={uploading || pictures.length >= MAX_PICTURES}
+                  title={p.allowFiles ? "添加文件" : "添加图片（也可以直接粘贴）"}
+                  disabled={sending || uploading || pictures.length >= MAX_ATTACHMENTS}
                   onClick={() => picker.current?.click()}
                 >
                   <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-                    <rect x="3" y="4.5" width="14" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
-                    <circle cx="7.5" cy="8.5" r="1.3" fill="currentColor" />
-                    <path d="m4 14 4-3.5 3 2.5 2.5-2 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                    {p.allowFiles ? (
+                      <path d="m7 11 6-6a2 2 0 0 1 3 3l-7 7a3.5 3.5 0 0 1-5-5l7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />
+                    ) : (
+                      <>
+                        <rect x="3" y="4.5" width="14" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+                        <circle cx="7.5" cy="8.5" r="1.3" fill="currentColor" />
+                        <path d="m4 14 4-3.5 3 2.5 2.5-2 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                      </>
+                    )}
                   </svg>
                 </button>
               </>

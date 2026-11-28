@@ -1,3 +1,4 @@
+import '../../../web/ui/attachment-names.js';
 import type {
   ChatChunk,
   FileEntry,
@@ -421,20 +422,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** Uploads an image attachment into .remote-ai/attachments/ using the existing chunked /api/files protocol. */
-export async function uploadImageAttachment(dir: string, file: File): Promise<string> {
-  const mimeMap: Record<string, string> = {
-    'image/png': 'png',
-    'image/jpeg': 'jpg',
-    'image/webp': 'webp',
-    'image/gif': 'gif',
-  };
-  const ext = mimeMap[file.type] || 'png';
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const hex = opId().slice(0, 6);
-  const relPath = `.remote-ai/attachments/${stamp}-${hex}.${ext}`;
+declare global {
+  interface Window {
+    RemoteAttachmentNames: { storedName(file: File, allowFiles: boolean): string; label(name: string): string };
+  }
+}
+
+/** Uploads a chat attachment into .remote-ai/attachments/ using the existing chunked /api/files protocol. */
+export async function uploadAttachment(dir: string, file: File, allowFiles: boolean): Promise<string> {
+  const name = window.RemoteAttachmentNames.storedName(file, allowFiles);
+  if (!name) throw new Error('此电脑仅支持 PNG、JPG、WebP 或 GIF 图片');
+  if (file.size > 20 * 1024 * 1024) throw new Error('单个附件不能超过 20 MB');
+  const relPath = `.remote-ai/attachments/${name}`;
   const upload = opId();
   const buf = new Uint8Array(await file.arrayBuffer());
 

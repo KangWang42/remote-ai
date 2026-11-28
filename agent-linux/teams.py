@@ -554,7 +554,7 @@ class Teams:
         target = (target or "").strip()
         attachments = list(attachments or [])
         if (not text and not attachments) or len(text) > 4000:
-            raise OpError("请输入文字或添加图片，文字最多 4000 字")
+            raise OpError("请输入文字或添加附件，文字最多 4000 字")
         with self.gate:
             team = next((one for one in self.items if one.id == id), None)
             if team is None:
@@ -621,7 +621,7 @@ class Teams:
                 team.touch()
                 self.save()
 
-        shown_text = text or ("发送了 %d 张附图" % len(attachments))
+        shown_text = "\n\n".join(part for part in (text, "\n".join(one["reference"] for one in attachments)) if part)
         self.log(team, "user", ("@" + self.label(self.tool_of(team, self.resolve_role(team, target) or target)) + " "
                                 if target else "") + shown_text)
 
@@ -882,7 +882,7 @@ class Teams:
             self.hands.say_with_attachments(terminal, words, attachments)
             return
         if attachments:
-            suffix = "\n".join("附图：" + one["absolute"] for one in attachments)
+            suffix = "\n".join(one["reference"] for one in attachments)
             words = (words + "\n\n" + suffix).strip() if words else suffix
         self.hands.say(terminal, words)
 
@@ -911,7 +911,7 @@ class Teams:
         else:
             prompt = "【协作任务】继续完成这项工作：" + team.goal + "\n\n" + words
         if attachments:
-            suffix = "\n".join("附图：" + one["absolute"] for one in attachments)
+            suffix = "\n".join(one["reference"] for one in attachments)
             prompt = prompt + "\n\n" + suffix
         self.open(team, role, tool, prompt, read, wt)
 
@@ -967,7 +967,7 @@ class Teams:
             except Exception:
                 pass            # its conversation was closed: begun anew
         if attachments:
-            suffix = "\n".join("附图：" + one["absolute"] for one in attachments)
+            suffix = "\n".join(one["reference"] for one in attachments)
             words = words + "\n\n" + suffix
         self.open(team, role, tool, words, read, folder_override)
 

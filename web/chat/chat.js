@@ -347,6 +347,7 @@
     else said.append(node);
     if (e.kind === 'user' && !RELAYED.test(item.shown)) said.append(metaNode(item.shown, item.at, true));
     if (e.kind === 'text' || e.kind === 'thought') write(e.id);
+    else if (writing) write('');
     return item;
   }
   // the item that is being written: marked so, until another one is, or the turn ends
@@ -659,7 +660,7 @@
   function canPicture() {
     if (pictureAsked || !terminal) return;
     pictureAsked = true;
-    work.ensure().then(data => { knowRoot(data); picker.enabled = !!(data && terminal.dir && (data.device.features || []).includes('attachments')); }, () => { pictureAsked = false; });
+    work.ensure().then(data => { knowRoot(data); picker.allowFiles = !!data?.device.features?.includes('file-attachments'); picker.enabled = !!(data && terminal.dir && (data.device.features || []).includes('attachments')); }, () => { pictureAsked = false; });
   }
   async function handoverSend(words, target) {
     if (!words || !terminal || terminal.state === 'closed') return;
@@ -684,7 +685,7 @@
     if (sendingPictures || handingOver) return;
     if (!box.value.trim() && !picker.count) return box.focus();
     if (pendingSwitch && terminal && terminal.state !== 'closed') {
-      if (picker.count) return toast('换 AI 的第一条消息暂不支持图片，请先发送文字');
+      if (picker.count) return toast('换 AI 的第一条消息暂不支持附件，请先发送文字');
       if (state === 'busy' || state === 'confirm') return toast('请等这一轮结束后再切换 AI');
       return handoverSend(box.value.trim(), pendingSwitch);
     }

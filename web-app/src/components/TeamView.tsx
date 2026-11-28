@@ -229,11 +229,13 @@ export function TeamView({ id, features, onOpenMember, onGone, onChanged }: Prop
         <Composer
           draftKey={`rcli-draft:team:${id}`}
           placeholder={running ? '对整个协作补充要求' : '发新的要求，协作会接着做'}
-          pictureDir=""
+          key={id}
+          allowFiles={features.includes('file-attachments')}
+          attachmentDir={features.includes('attachments') ? team.dir : ''}
           busy={false}
           canStop={false}
-          onSend={async (text) => {
-            await workAction('team_say', { team: id, text });
+          onSend={async (text, attachments) => {
+            await workAction('team_say', { team: id, text, ...(attachments.length ? { attachments } : {}) });
             load();
             onChanged();
           }}

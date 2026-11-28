@@ -272,6 +272,14 @@ class TerminalRelayTests(unittest.TestCase):
         self.relay.command(dict(request, id="e" * 32, text=""), now=1005)
         operation = self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]
         self.assertEqual((operation["text"], operation["attachments"]), ("", [path]))
+        document = ".remote-ai/attachments/20261121-123456-abcdef-会议记录.txt"
+        mixed = dict(request, id="1" * 32, attachments=[document, path])
+        with self.assertRaisesRegex(RemoteError, "更新电脑端"):
+            self.relay.command(mixed, now=1005)
+        self.info["features"].append("file-attachments")
+        self.relay.agent({"info": self.info}, now=1005)
+        self.relay.command(mixed, now=1005)
+        self.assertEqual(self.relay.pull({"instance": self.info["instance"], "wait": 0})["operations"][0]["attachments"], [document, path])
         with self.assertRaises(RemoteError):
             self.relay.command({"action": "say", "id": "f" * 32, "terminal": terminal, "text": ""}, now=1005)
         for bad in (
@@ -562,7 +570,7 @@ class TerminalRelayTests(unittest.TestCase):
                 self.relay.work({"id": "7" * 32, "action": "team_start", "item": wrong}, now=1005, wait=0)
         asked, got = carried({"id": "8" * 32, "action": "team_start", "item": dict(item, mode="compare", tools=["claude", "codex", "agy"], rounds=1)}, {"team": {"state": "running"}})
         self.assertEqual((asked["item"]["mode"], asked["item"]["tools"]), ("compare", ["claude", "codex", "agy"]))
-        with self.assertRaisesRegex(RemoteError, "请输入文字或添加图片"):
+        with self.assertRaisesRegex(RemoteError, "请输入文字或添加附件"):
             self.relay.work({"id": "9" * 32, "action": "team_say", "team": "d" * 32, "text": "   "}, now=1005, wait=0)
         with self.assertRaisesRegex(RemoteError, "候选方案无效"):
             self.relay.work({"id": "9" * 32, "action": "team_pick", "team": "d" * 32, "tool": "shell"}, now=1005, wait=0)

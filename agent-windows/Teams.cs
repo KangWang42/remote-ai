@@ -632,13 +632,15 @@ public sealed class Teams {
     static string CutKeepingAttachments(string text, int most) {
         text = text ?? "";
         int marker = text.IndexOf("\n\n\u9644\u56fe\uff1a", StringComparison.Ordinal);
+        int fileMarker = text.IndexOf("\n\n附件：", StringComparison.Ordinal);
+        if (marker < 0 || (fileMarker >= 0 && fileMarker < marker)) marker = fileMarker;
         if (marker < 0 || text.Length <= most) return Cut(text, most);
         string images = text.Substring(marker);
         if (images.Length >= most) return ProcessText.SliceSafeChars(images, most);
         return ProcessText.SliceSafeChars(text, most - images.Length) + images;
     }
     static string WithoutAttachments(string text, IEnumerable<Attachment> images) {
-        var lines = new HashSet<string>(images.Select(image => "\u9644\u56fe\uff1a" + image.AbsolutePath), StringComparer.Ordinal);
+        var lines = new HashSet<string>(images.Select(image => image.Reference), StringComparer.Ordinal);
         return String.Join("\n", text.Split('\n').Where(line => !lines.Contains(line)));
     }
     static string Short(string text, int most) { return ProcessText.TruncateSafe(text, most, "…"); }
@@ -938,7 +940,7 @@ public sealed class Teams {
         text = (text ?? "").Trim();
         target = (target ?? "").Trim();
         if ((text.Length == 0 && (attachments == null || attachments.Count == 0)) || text.Length > 4000)
-            throw new ArgumentException("请输入文字或添加图片，文字最多 4000 字");
+            throw new ArgumentException("请输入文字或添加附件，文字最多 4000 字");
         Team team; string state, phase, mode; List<string> targets = new List<string>();
         var stopTerminals = new List<string>();
         bool hadFailed = false, redirectedToLeader = false;

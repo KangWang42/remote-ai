@@ -192,10 +192,10 @@ FILE_ACTIONS = ("file_list", "file_read", "file_find") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
 TOOL_LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}
-FEATURES = ["terminal-exit", "files", "file-upload", "file-find", "tasks", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "handover", "reopen", "teams", "teams-v2", "teams-grouped"]
+FEATURES = ["terminal-exit", "files", "file-upload", "file-find", "tasks", "attachments", "file-attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "handover", "reopen", "teams", "teams-v2", "teams-grouped"]
 CLAUDE_READ_ONLY_TOOLS = frozenset(("Read", "Glob", "Grep", "LS", "NotebookRead"))
 ATTACHMENT_LIMIT = 20 * 1024 * 1024
-ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
+ATTACHMENT_PATH = re.compile(r'^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}(?:\.(?:png|jpg|jpeg|webp|gif)|-[^<>:"/\\|?*\x00-\x1f\x7f-\x9f\u2028\u2029]{1,60}(?<![. ]))$')
 # What the phone asks about the owner's work (docs/PROTOCOL.md, `/api/work`). Passing on when a conversation stops
 # ("chains") is seen by watching the conversation's record grow and then go quiet — the tools' own hooks, which
 # tell the Windows program of it at once, are not there on Linux.
@@ -672,46 +672,49 @@ def read_attachments(root, value):
     if value is None:
         return []
     if not isinstance(value, list):
-        raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+        raise OpError("附件无效、过大或已被删除")
     if len(value) > 4:
-        raise OpError("\u9644\u56fe\u6700\u591a 4 \u5f20")
+        raise OpError("最多添加 4 个附件")
     result = []
     root = os.path.realpath(root)
     for relative in value:
         if not isinstance(relative, str) or not ATTACHMENT_PATH.fullmatch(relative):
-            raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+            raise OpError("附件无效、过大或已被删除")
         absolute = os.path.normpath(os.path.join(root, relative))
         real = os.path.realpath(absolute)
         if absolute != os.path.join(root, relative) or not absolute.startswith(root.rstrip("/") + "/") \
                 or real != absolute or not real.startswith(root.rstrip("/") + "/"):
-            raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+            raise OpError("附件无效、过大或已被删除")
         try:
             info = os.stat(absolute, follow_symlinks=False)
             if not stat.S_ISREG(info.st_mode) or info.st_size > ATTACHMENT_LIMIT:
-                raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
-            with open(absolute, "rb") as stream:
-                data = stream.read()
+                raise OpError("附件无效、过大或已被删除")
+            media = attachment_media(absolute) if os.path.basename(relative)[22] == "." else ""
+            data = None
+            if media:
+                with open(absolute, "rb") as stream:
+                    data = stream.read()
         except (FileNotFoundError, PermissionError, OSError):
-            raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
-        result.append({"relative": relative, "absolute": absolute, "media": attachment_media(absolute), "data": data})
+            raise OpError("附件无效、过大或已被删除")
+        result.append({"relative": relative, "absolute": absolute, "media": media, "data": data, "reference": ("附图：" if media else "附件：") + absolute})
     return result
 
 
 def attachment_text(text, attachments):
-    return text if not attachments else text + "\n\n" + "\n".join("\u9644\u56fe\uff1a" + one["absolute"] for one in attachments)
+    return text if not attachments else text + "\n\n" + "\n".join(one["reference"] for one in attachments)
 
 
 def claude_content(text, attachments):
     return [{"type": "text", "text": text}] + [
         {"type": "image", "source": {"type": "base64", "media_type": one["media"],
                                      "data": base64.b64encode(one["data"]).decode("ascii")}}
-        for one in attachments
+        for one in attachments if one["media"]
     ]
 
 
 def codex_content(text, attachments):
     return [{"type": "text", "text": text, "text_elements": []}] + [
-        {"type": "localImage", "path": one["absolute"]} for one in attachments
+        {"type": "localImage", "path": one["absolute"]} for one in attachments if one["media"]
     ]
 
 
@@ -813,12 +816,12 @@ class Uploads:
         relative = str(op.get("path") or "")
         if ATTACHMENT_PATH.fullmatch(relative):
             if size > ATTACHMENT_LIMIT:
-                raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+                raise OpError("附件无效、过大或已被删除")
             remote = os.path.join(os.path.normpath(root), ".remote-ai")
             attachments = os.path.join(remote, "attachments")
             for directory in (remote, attachments):
                 if os.path.lexists(directory) and (os.path.islink(directory) or not os.path.isdir(directory)):
-                    raise OpError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+                    raise OpError("附件无效、过大或已被删除")
                 os.makedirs(directory, mode=0o700, exist_ok=True)
             ignore = os.path.join(remote, ".gitignore")
             if not os.path.exists(ignore):

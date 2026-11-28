@@ -2803,7 +2803,7 @@ public sealed class TerminalAgent {
                 instance = instance, environment_id = EnvironmentId, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools,
                 agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                 max_mode = ClampMode("", Get(prefs, "RemoteMaxMode")),
-                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "file-find", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "organize", "routes", "git", "worktree", "tasks" }
+                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "file-find", "attachments", "file-attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "organize", "routes", "git", "worktree", "tasks" }
                     .Concat(Desktop.Tools.Select(tool => tool + "-desktop-open"))
                     .Concat(Settled != null ? new[] { "projects" } : new string[0])
                     .Concat(UpdateRequested != null ? new[] { "update" } : new string[0])

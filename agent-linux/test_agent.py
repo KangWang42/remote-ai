@@ -71,6 +71,22 @@ def free_port():
 class Pure(unittest.TestCase):
     """The pieces that need no network and no processes."""
 
+    def test_document_and_image_in_one_prompt(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = ".remote-ai/attachments/"
+            os.makedirs(os.path.join(root, directory))
+            document = directory + "20261129-003442-abcdef-会议记录.txt"
+            image = directory + "20261129-003442-012abc.png"
+            for relative in (document, image):
+                with open(os.path.join(root, relative), "wb") as stream:
+                    stream.write(b"data")
+            items = agent.read_attachments(root, [document, image])
+            shown = agent.attachment_text("总结", items)
+            self.assertIn("附件：" + os.path.join(root, document), shown)
+            self.assertIsNone(items[0]["data"])
+            self.assertEqual([item["type"] for item in agent.claude_content(shown, items)], ["text", "image"])
+            self.assertEqual([item["type"] for item in agent.codex_content(shown, items)], ["text", "localImage"])
+
     def test_normal_folder(self):
         self.assertEqual(agent.normal_folder("/home/you/demo "), "/home/you/demo")
         self.assertEqual(agent.normal_folder("/a/./b/../c"), "/a/c")

@@ -546,7 +546,9 @@ export function ThreadView(p: Props) {
                       ? '补充要求（可多条累计，或点“停止并发送”立即执行）'
                       : '说点什么'
             }
-            pictureDir={t.runtime === 'chat' && t.project && !pendingSwitch ? t.project : ''}
+            key={t.key}
+            allowFiles={p.features.includes('file-attachments')}
+            attachmentDir={p.features.includes('attachments') && t.runtime === 'chat' && t.project && !pendingSwitch ? t.project : ''}
             tail={
               <ToolSwitch
                 thread={t}
@@ -567,7 +569,7 @@ export function ThreadView(p: Props) {
             insert={composerInsert}
             onSend={async (text, pictures) => {
               if (pendingSwitch) {
-                if (pictures.length > 0) throw new Error('换 AI 的第一条消息暂不支持图片，请先发送文字');
+                if (pictures.length > 0) throw new Error('换 AI 的第一条消息暂不支持附件，请先发送文字');
                 if (working || phase === 'confirm' || phase === 'starting') throw new Error('请等这一轮结束后再切换 AI');
                 const nextTerm = await act.handover(t, pendingSwitch.tool, text, pendingSwitch.model, pendingSwitch.effort);
                 setPendingSwitch(null);

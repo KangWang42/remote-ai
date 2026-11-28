@@ -38,6 +38,8 @@ def main():
     data.mkdir(); shop.mkdir(parents=True)
     image = ".remote-ai/attachments/20261121-123456-a1b2c3.png"
     (shop / image).parent.mkdir(parents=True)
+    document = ".remote-ai/attachments/20261121-123456-cab123-会议记录.txt"
+    (shop / document).write_text("议题", encoding="utf-8")
     (shop / image).write_bytes(base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
     ))
@@ -166,9 +168,9 @@ def main():
             # ---- a refusal: the step does not run, the turn goes on to its end
             n = len(read.events)
             if tool == "claude":
-                op(action="say", terminal=terminal, text="", attachments=[image])
+                op(action="say", terminal=terminal, text="", attachments=[document, image])
                 user = read.until(lambda e: e in read.events[n:] and e["t"] == "item" and e["kind"] == "user", "the screenshot echoed as a file reference")
-                assert user["text"].strip() == "附图：" + str(shop / image), user
+                assert user["text"].strip().splitlines() == ["附件：" + str(shop / document), "附图：" + str(shop / image)], user
             else:
                 op(action="say", terminal=terminal, text="再检查一次")
             ask = read.until(lambda e: e in read.events[n:] and e["t"] == "ask", "the third question")

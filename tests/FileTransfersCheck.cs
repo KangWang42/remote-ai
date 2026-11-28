@@ -67,6 +67,14 @@ public static class FileTransfersCheck {
             Require(Attachments.ClaudeContent("hello", images).Count == 2, "claude image block");
             Require(Attachments.WithText("hello", images).Contains(images[0].AbsolutePath), "codex text fallback");
             Require(Convert.ToString(((Dictionary<string, object>)Attachments.AcpContent("hello", images)[1])["type"]) == "image", "acp image block");
+            string document = ".remote-ai/attachments/20261121-123456-abcdef-会议记录.txt";
+            files.Run(root, Op("start", document, 3));
+            files.Run(root, Op("chunk", document, 3, 0, "YWJj"));
+            files.Run(root, Op("finish", document, 3, 3));
+            var mixed = Attachments.Read(root, new object[] { document, screenshot });
+            Require(File.ReadAllText(mixed[0].AbsolutePath) == "abc" && mixed[0].Data == null, "document available by path");
+            Require(Attachments.WithText("总结", mixed).Contains("附件：" + mixed[0].AbsolutePath), "document reference");
+            Require(Attachments.ClaudeContent("总结", mixed).Count == 2 && Attachments.AcpContent("总结", mixed).Count == 2, "only the picture becomes an image block");
             foreach (string bad in new[] {
                 ".remote-ai/attachments/20261121-123456-a1b2c3.txt",
                 ".remote-ai/attachments/20261121-123456-A1b2c3.png",

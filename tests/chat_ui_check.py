@@ -178,7 +178,9 @@ class Computer:
         elif action == "say":
             self.emit(terminal, t="state", state="busy", at=int(time.time() * 1000))
             # the computer names each picture after the words, in a line of its own
-            shown = "\n".join(([op["text"]] if op["text"] else []) + ["附图：" + PROJECT + "\\" + path.replace("/", "\\") for path in op.get("attachments", [])])
+            shown = "\n".join(([op["text"]] if op["text"] else []) + [
+                ("附件：" if path.endswith(".txt") else "附图：") + PROJECT + "\\" + path.replace("/", "\\")
+                for path in op.get("attachments", [])])
             self.emit(terminal, t="item", id="u-" + op["id"], kind="user", text=shown, op=op["id"])
             if "慢慢" in op["text"]:
                 self.emit(terminal, t="item", id="s3", kind="step", text="Bash：等待部署", detail="npm run deploy:staging", state="run", name="Bash")
@@ -292,7 +294,7 @@ def main():
                     if found:
                         return found
                     time.sleep(0.1)
-                raise AssertionError((why, value("({url: location.href, body: document.body.innerText.slice(0, 1500)})"), problems[-2:]))
+                raise AssertionError((why, value("({url: location.href, body: document.body.innerText.slice(0, 1500), thumbnails: [...document.querySelectorAll('.attach-shot')].map(b => [b.className, b.dataset.name, b.firstChild.naturalWidth])})"), problems[-2:]))
 
             def picture(name):
                 (out / name).write_bytes(base64.b64decode(ask("Page.captureScreenshot", format="png")["data"]))
@@ -379,7 +381,7 @@ def main():
             # ---- pictures with a message (ui/attach.js): no picture button where the computer does not take them
             time.sleep(1.2)
             assert value("document.querySelector('#write .attach-pick').hidden") is True, "no picture button without the attachments feature"
-            computer.features += ["file-upload", "attachments"]
+            computer.features += ["file-upload", "attachments", "file-attachments"]
             time.sleep(0.5)
             ask("Page.reload")
             until("!document.querySelector('#write .attach-pick')?.hidden && document.querySelectorAll('.user').length === 2", "the picture button where the computer takes pictures")
@@ -401,6 +403,12 @@ def main():
             value("document.querySelector('.attach-tray .attach-chip .attach-remove').click()")
             until(tray + " === 1", "one picture removed")
             assert value(pick % json.dumps(["#ea8c00"])) == 2
+            assert value("""(() => {
+              const input = document.querySelector('#write input[type=file]'), transfer = new DataTransfer();
+              transfer.items.add(new File(['test document'], '会议记录.txt'));
+              input.files = transfer.files; input.dispatchEvent(new Event('change'));
+              return !input.accept && document.querySelector('.attach-file-chip')?.textContent.includes('会议记录.txt');
+            })()""")
             value("document.getElementById('box').value = '按截图里的样子改'; document.getElementById('box').dispatchEvent(new Event('input'))")
             picture("chat-tray-light.png")
             # a failed upload keeps the words and the pictures
@@ -409,7 +417,7 @@ def main():
             value("document.getElementById('write').requestSubmit()")
             until("!document.getElementById('toast').hidden && document.getElementById('toast').textContent.includes('磁盘空间不足')", "the reason the pictures did not go")
             until("!document.getElementById('send').classList.contains('going') && document.getElementById('send-done').hidden", "the send button again")
-            assert value("document.getElementById('box').value") == "按截图里的样子改" and value(tray) == 2
+            assert value("document.getElementById('box').value") == "按截图里的样子改" and value(tray) == 3
             assert len([op for op in computer.seen if op["action"] == "say"]) == says and not computer.files, "nothing said or kept after a failed upload"
             # sent: up first, into the project's attachments, then named in the message
             computer.refuse_upload = ""
@@ -417,8 +425,11 @@ def main():
             value("document.getElementById('write').requestSubmit()")
             until("document.querySelectorAll('.user.with-shots:not(.going) .attach-shot').length === 2", "the message given back with its two pictures", 20)
             sent = [op for op in computer.seen if op["action"] == "say"][-1]
-            assert sent["text"] == "按截图里的样子改" and len(sent["attachments"]) == names == 2, sent
-            for path in sent["attachments"]:
+            assert sent["text"] == "按截图里的样子改" and len(sent["attachments"]) == 3 and names == 2, sent
+            document = sent["attachments"][-1]
+            assert document.endswith("-会议记录.txt") and computer.files[document] == b"test document"
+            assert value("document.querySelector('.user .attach-file').innerText") == "会议记录.txt"
+            for path in sent["attachments"][:2]:
                 assert re.fullmatch(r"\.remote-ai/attachments/\d{8}-\d{6}-[0-9a-f]{6}\.png", path), path
                 assert computer.files[path][:8] == b"\x89PNG\r\n\x1a\n", path
             assert value(tray) == 0 and value("document.querySelector('main > .attach-tray').hidden") and value("document.getElementById('box').value") == ""
@@ -537,6 +548,9 @@ def main():
             assert value("selectedAnswer.textContent.trim()") == '保留这段选中文字'
             value("getSelection().removeAllRanges()")
             until("selectedAnswer.textContent.includes('新内容继续到达')", "deferred selected text update")
+            assert value("getComputedStyle(selectedAnswer, '::after').content === 'none' && getComputedStyle(selectedAnswer.lastElementChild, '::after').borderLeftWidth === '2px'")
+            computer.emit(terminal, t="item", id="after-selection", kind="step", text="读取项目文件")
+            until("!selectedAnswer.classList.contains('writing')", "cursor removed when a tool starts")
 
             # The shared reader retains unchanged native-message nodes, open details and focus.
             assert value("""(() => {

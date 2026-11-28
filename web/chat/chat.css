@@ -69,7 +69,7 @@ header h1 { font-size: 1rem; font-weight: 600; line-height: 1.3; letter-spacing:
 .user .words { white-space: pre-wrap; }
 main > .attach-tray { margin: 4px 12px 0; padding-left: 4px; }
 .text { overflow-wrap: anywhere; }
-.text.writing::after { content: ""; display: inline-block; width: .45em; height: 1em; margin-left: 2px; vertical-align: -.12em; background: var(--accent); opacity: .75; animation: blink 1s steps(2) infinite; }
+.text.plain.writing::after, .text.md.writing > p:last-child::after { content: ""; display: inline; border-left: 2px solid var(--accent); margin-left: 1px; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .note { align-self: center; max-width: 92%; padding: 6px 13px; border-radius: 999px; background: var(--surface-sub, var(--raised)); color: var(--muted); font-size: .8rem; text-align: center; overflow-wrap: anywhere; }
 .note.bad { color: var(--bad); background: var(--bad-soft); }

@@ -469,18 +469,20 @@ TEAM_TOOLS = ("claude", "codex", "agy", "opencode", "qoder", "cline", "pi")
 CHAT_FEATURES = {"agy": "chat-agy"}
 CHAT_ACTIONS = ("say", "stop", "answer", "close", "rename")
 CHAT_DECISIONS = re.compile(r"^(allow|always|deny|choice:[0-9]{1,2})$")
-ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
+ATTACHMENT_PATH = re.compile(r'^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}(?:\.(?:png|jpg|jpeg|webp|gif)|-[^<>:"/\\|?*\x00-\x1f\x7f-\x9f\u2028\u2029]{1,60}(?<![. ]))$')
 
 
-def _attachments(payload):
+def _attachments(payload, features):
     """Checks the reserved screenshot paths before handing a chat request to a computer."""
     if "attachments" not in payload:
         return None
     attachments = payload.get("attachments")
     if not isinstance(attachments, list) or not 1 <= len(attachments) <= 4:
-        raise RemoteError("\u9644\u56fe\u6700\u591a 4 \u5f20")
+        raise RemoteError("最多添加 4 个附件")
     if any(not isinstance(path, str) or not ATTACHMENT_PATH.fullmatch(path) for path in attachments):
-        raise RemoteError("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664")
+        raise RemoteError("附件无效、过大或已被删除")
+    if "attachments" not in features or ("file-attachments" not in features and any(path.rsplit("/", 1)[1][22] == "-" for path in attachments)):
+        raise RemoteError("请先更新电脑端")
     return attachments
 # Conversation organization is a computer-side queue. The relay validates the
 # request and keeps the result only while the held request is waiting.
@@ -1144,12 +1146,10 @@ class Relay:
                     if action not in CHAT_ACTIONS:
                         raise RemoteError("这段对话不支持此操作")
                     if action == "say":
-                        attachments = _attachments(payload)
+                        attachments = _attachments(payload, self._device.get("features", []))
                         text = _words(payload.get("text"), allow_empty=bool(attachments))
                         if text is None:
                             raise RemoteError("内容为空、超过 8000 字或含有控制字符")
-                        if attachments is not None and "attachments" not in self._device.get("features", []):
-                            raise RemoteError("\u8bf7\u5148\u66f4\u65b0\u7535\u8111\u7aef")
                         asked, payload = payload, {"id": op_id, "action": "say", "terminal": terminal, "text": text}
                         if attachments is not None:
                             payload["attachments"] = attachments
@@ -1823,13 +1823,11 @@ class Relay:
                 if not isinstance(payload.get("team"), str) or not _id.fullmatch(payload["team"]):
                     raise RemoteError("协作任务无效")
                 text, target = payload.get("text"), payload.get("target", "")
-                attachments = _attachments(payload)
+                attachments = _attachments(payload, self._device.get("features", []))
                 if not isinstance(text, str) or len(text.strip()) > 4000 or "\0" in text or (not text.strip() and not attachments):
-                    raise RemoteError("请输入文字或添加图片，文字最多 4000 字")
+                    raise RemoteError("请输入文字或添加附件，文字最多 4000 字")
                 if not isinstance(target, str) or len(target.strip()) > 32 or "\0" in target:
                     raise RemoteError("发送对象无效")
-                if attachments is not None and "attachments" not in self._device.get("features", []):
-                    raise RemoteError("\u8bf7\u5148\u66f4\u65b0\u7535\u8111\u7aef")
                 question["team"] = payload["team"]
                 question["text"] = text.strip()
                 if attachments is not None:
@@ -1969,7 +1967,7 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "file-find", "tasks") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "file-attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "file-find", "tasks") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],

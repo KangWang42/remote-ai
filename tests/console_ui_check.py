@@ -186,6 +186,16 @@ def main():
             chats = [t for t in listed() if t[2] == SAVED]
             assert len(chats) == 1 and chats[0][1] == "chat", chats
             browser.picture(out / "chat.png")
+            value("""(() => {
+              const input = document.querySelector('.composer input[type=file]');
+              const transfer = new DataTransfer();
+              transfer.items.add(new File(['sample'], '会议记录.txt', {type: 'text/plain'}));
+              input.files = transfer.files; input.dispatchEvent(new Event('change', {bubbles: true}));
+            })()""")
+            until("document.querySelector('.pic-chip')?.textContent.includes('会议记录.txt')", "document attached in the desktop composer")
+            uploaded, = (shop / ".remote-ai" / "attachments").glob("*-会议记录.txt")
+            assert uploaded.read_bytes() == b"sample"
+            value("document.querySelector('.pic-chip button').click()")
             press(".ask-card button", "允许")
             until("Array.from(document.querySelectorAll('.thread-head .seg button')).some(b => b.textContent === '终端' && !b.disabled)", "the turn ended: it can be shown the other way")
 

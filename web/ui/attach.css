@@ -10,6 +10,8 @@
 .attach-tray[hidden] { display: none; }
 .attach-chip { position: relative; flex: none; width: 64px; height: 64px; border-radius: 14px; overflow: hidden; background: var(--raised); border: 1px solid var(--card-border, var(--line)); }
 .attach-chip img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.attach-file-chip, .attach-file { width: auto; max-width: 100%; height: auto; min-height: 36px; padding: 7px 32px 7px 10px; align-self: center; text-align: start; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.attach-file { padding: 7px 12px; background: var(--raised); color: var(--ink); border: 1px solid var(--card-border, var(--line)); border-radius: 10px; }
 .attach-remove { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border: 0; border-radius: 50%; display: grid; place-items: center; padding: 0; background: rgb(14 17 22 / .66); color: #ffffff; cursor: pointer; }
 .attach-remove::before { content: ""; position: absolute; inset: -9px; }
 .attach-remove:disabled { opacity: .5; cursor: default; }

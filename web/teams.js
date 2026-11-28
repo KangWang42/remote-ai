@@ -1718,6 +1718,7 @@
         const hadFocus = document.activeElement === input;
         if (input.placeholder !== placeholder) input.placeholder = placeholder;
         form.syncTargets(targets);
+        form.picker.allowFiles = page.has('file-attachments');
         form.picker.enabled = page.has('attachments') && !!team.dir;
         form.showAction();
         if (hadFocus) input.focus();
@@ -1811,6 +1812,7 @@
       form.picker = new RemoteAttach.Picker({ form, before: null, dir: () => currentTeam.dir, toast, changed: () => { pictures = form.picker.items; form.showAction(); } });
       toolsBox.prepend(form.picker.button);
       form.picker.items = pictures;
+      form.picker.allowFiles = page.has('file-attachments');
       form.picker.enabled = page.has('attachments') && !!team.dir;
       form.picker.draw();
       grow();

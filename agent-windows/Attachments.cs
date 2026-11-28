@@ -6,12 +6,14 @@ using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace RemoteCli {
-/// Validated screenshots attached to a chat message.
+/// Validated files attached to a chat message.
 public sealed class Attachment {
     public string RelativePath { get; private set; }
     public string AbsolutePath { get; private set; }
     public string MediaType { get; private set; }
     public byte[] Data { get; private set; }
+
+    public string Reference { get { return (MediaType.Length == 0 ? "附件：" : "附图：") + AbsolutePath; } }
 
     internal Attachment(string relativePath, string absolutePath, string mediaType, byte[] data) {
         RelativePath = relativePath;
@@ -24,7 +26,7 @@ public sealed class Attachment {
 public static class Attachments {
     public const long Limit = 20L * 1024 * 1024;
     public const int MaxCount = 4;
-    static readonly Regex Name = new Regex(@"\A[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(png|jpg|jpeg|webp|gif)\z", RegexOptions.None);
+    static readonly Regex Name = new Regex(@"\A[0-9]{8}-[0-9]{6}-[0-9a-f]{6}(?:\.(?:png|jpg|jpeg|webp|gif)|-[^<>:""/\\|?*\x00-\x1f\x7f-\x9f\u2028\u2029]{1,60}(?<![. ]))\z", RegexOptions.None);
     static readonly Regex Path = new Regex(@"\A\.remote-ai/attachments/([^/]+)\z", RegexOptions.None);
 
     static string Media(string extension) {
@@ -38,7 +40,7 @@ public static class Attachments {
         }
     }
 
-    static ArgumentException Missing() { return new ArgumentException("\u9644\u56fe\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"); }
+    static ArgumentException Missing() { return new ArgumentException("附件无效、过大或已被删除"); }
 
     /// Validates and reads the attachments in one pass, so a later protocol writer uses
     /// the same bytes and path that were checked here.
@@ -47,7 +49,7 @@ public static class Attachments {
         if (value == null) return new List<Attachment>();
         if (items == null || value is string) throw Missing();
         var raw = items.Cast<object>().ToList();
-        if (raw.Count > MaxCount) throw new ArgumentException("\u9644\u56fe\u6700\u591a 4 \u5f20");
+        if (raw.Count > MaxCount) throw new ArgumentException("最多添加 4 个附件");
         string fullRoot;
         try { fullRoot = System.IO.Path.GetFullPath(root).TrimEnd('\\'); } catch { throw Missing(); }
         var result = new List<Attachment>();
@@ -63,9 +65,11 @@ public static class Attachments {
                 var info = new FileInfo(absolute);
                 string parent = System.IO.Path.GetDirectoryName(absolute);
                 if (!info.Exists || info.Length > Limit || (File.GetAttributes(absolute) & FileAttributes.ReparsePoint) != 0 ||
-                    (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0) throw Missing();
-                byte[] data = File.ReadAllBytes(absolute);
-                result.Add(new Attachment(relative, absolute, Media(System.IO.Path.GetExtension(absolute)), data));
+                    (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0 ||
+                    (File.GetAttributes(System.IO.Path.GetDirectoryName(parent)) & FileAttributes.ReparsePoint) != 0) throw Missing();
+                string media = match.Groups[1].Value[22] == '.' ? Media(System.IO.Path.GetExtension(absolute)) : "";
+                byte[] data = media.Length > 0 ? File.ReadAllBytes(absolute) : null;
+                result.Add(new Attachment(relative, absolute, media, data));
             } catch (ArgumentException) { throw; }
             catch (IOException) { throw Missing(); }
             catch (UnauthorizedAccessException) { throw Missing(); }
@@ -75,7 +79,7 @@ public static class Attachments {
 
     public static string WithText(string text, IEnumerable<Attachment> images) {
         var list = (images ?? new Attachment[0]).ToList();
-        return list.Count == 0 ? text : text + "\n\n" + String.Join("\n", list.Select(one => "\u9644\u56fe\uff1a" + one.AbsolutePath));
+        return list.Count == 0 ? text : text + "\n\n" + String.Join("\n", list.Select(one => one.Reference));
     }
 
     public static List<object> ClaudeContent(string text, IEnumerable<Attachment> images) {
@@ -83,6 +87,7 @@ public static class Attachments {
             new Dictionary<string, object> { { "type", "text" }, { "text", text } }
         };
         foreach (Attachment image in images ?? new Attachment[0]) {
+            if (image.MediaType.Length == 0) continue;
             content.Add(new Dictionary<string, object> {
                 { "type", "image" },
                 { "source", new Dictionary<string, object> {
@@ -99,6 +104,7 @@ public static class Attachments {
             new Dictionary<string, object> { { "type", "text" }, { "text", text } }
         };
         foreach (Attachment image in images ?? new Attachment[0]) {
+            if (image.MediaType.Length == 0) continue;
             content.Add(new Dictionary<string, object> {
                 { "type", "image" }, { "data", Convert.ToBase64String(image.Data) }, { "mimeType", image.MediaType }
             });
