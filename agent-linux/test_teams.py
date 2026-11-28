@@ -325,6 +325,50 @@ class RosterAndVerifyTest(unittest.TestCase):
         self.assertTrue(teams.effort_ok("xhigh"))
         self.assertFalse(teams.effort_ok("VERY HIGH"))
 
+    def test_auto_roster_accepts_a_leader_only_phone_roster(self):
+        # The phone sends one leader row plus auto_roster when it asks the
+        # computer to pick the members; this is not the manual two-role case.
+        given = dict(self.item, roster=[{"role": "leader", "tool": "codex", "model": "", "effort": ""}],
+                     auto_roster=True)
+        team = self.teams.start(given)
+        self.assertEqual(team.tools, ["codex"])
+        self.assertEqual(team.state, "running")
+
+    def test_a_roster_tool_must_be_one_this_computer_has(self):
+        rows = [{"role": "leader", "tool": "codex", "model": "", "effort": ""},
+                {"role": "member-1", "tool": "not-a-tool", "model": "", "effort": ""}]
+        with self.assertRaises(teams.OpError):
+            self.teams.start(dict(self.item, roster=rows))
+
+    def test_a_non_list_roster_is_refused_not_ignored(self):
+        with self.assertRaises(teams.OpError):
+            self.teams.start(dict(self.item, roster={"role": "leader", "tool": "codex"}))
+
+    def test_assignment_in_the_acceptance_turn_is_not_lost(self):
+        team = self.teams.start(self.item)
+        leader = self.hands.opened[0]["terminal"]
+        self.teams.turned(leader, "done", "DONE: 写好了")
+        self.assertEqual(self.teams.of(team.id).phase, "verify")
+        self.teams.turned(leader, "done",
+                          "VERIFIED: 跑了 unittest\nDONE: 还有问题\nASSIGN opencode: 修掉失败的用例")
+        state = self.teams.of(team.id)
+        self.assertNotEqual(state.state, "done")   # a fix was asked for; it must run first
+        self.assertEqual(state.awaited, ["opencode"])
+
+    def test_metadata_reaches_the_phone_and_survives_a_restart(self):
+        given = dict(self.item, roster=[
+            {"role": "leader", "tool": "codex", "model": "gpt-5.1-codex", "effort": "high"},
+            {"role": "member-1", "tool": "opencode", "model": "", "effort": "medium"}],
+            context="只用标准库")
+        team = self.teams.start(given)
+        shown = teams.Teams.shown(team)
+        for key in ("roster", "auto_roster", "models", "efforts", "context"):
+            self.assertIn(key, shown)
+        cards = {card["id"]: card for card in self.teams.cards()}
+        self.assertEqual(cards[team.id]["models"], team.models)
+        again = teams.Teams(self.file, FakeHands()).of(team.id)
+        self.assertEqual(again.context, "只用标准库")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -167,6 +167,7 @@ class Team:
         self.discuss = False
         self.reminded = self.last = self.spent = False
         self.models, self.efforts = {}, {}
+        self.roster, self.auto_roster = [], False
         self.tools = []
         self.rounds, self.round = 3, 1
         self.created = 0
@@ -208,8 +209,9 @@ class Team:
         return {"id": self.id, "dir": self.dir, "mode": self.mode, "goal": self.goal, "rules": self.rules,
                 "state": self.state, "note": self.note, "phase": self.phase, "picked": self.picked,
                 "discuss": self.discuss, "reminded": self.reminded, "last": self.last,
-                "spent": self.spent, "held": self.held,
+                "context": self.context, "spent": self.spent, "held": self.held,
                 "models": self.models, "efforts": self.efforts,
+                "roster": self.roster, "auto_roster": self.auto_roster,
                 "tools": self.tools, "rounds": self.rounds, "round": self.round,
                 "created": self.created, "updated": self.updated,
                 "members": self.members, "opened": self.opened,
@@ -229,12 +231,16 @@ class Team:
         team.id, team.dir, team.mode = word("id"), word("dir"), word("mode")
         team.goal, team.rules, team.state = word("goal"), word("rules"), word("state") or "running"
         team.note, team.phase, team.picked = word("note"), word("phase"), word("picked")
+        team.context = word("context")
         team.discuss = _bool(kept.get("discuss"))
         team.reminded = _bool(kept.get("reminded"))
         team.last = _bool(kept.get("last"))
         team.spent = _bool(kept.get("spent"))
         team.models = {str(k): str(v) for k, v in (kept.get("models") or {}).items()}
         team.efforts = {str(k): str(v) for k, v in (kept.get("efforts") or {}).items()}
+        team.roster = [dict(one) for one in kept.get("roster") or []
+                       if isinstance(one, dict) and one.get("role") and one.get("tool")]
+        team.auto_roster = _bool(kept.get("auto_roster"))
         team.held = {str(k): str(v) for k, v in (kept.get("held") or {}).items()}
         team.tools = [str(one) for one in kept.get("tools") or [] if isinstance(one, str)]
         team.members = {str(k): str(v) for k, v in (kept.get("members") or {}).items() if v}
@@ -350,6 +356,8 @@ class Teams:
         shown = {"id": team.id, "dir": team.dir, "mode": team.mode, "goal": team.goal, "rules": team.rules,
                  "state": team.state, "note": team.note, "phase": team.phase, "discuss": team.discuss,
                  "picked": team.picked, "tools": list(team.tools), "rounds": team.rounds, "round": team.round,
+                 "roster": [dict(one) for one in team.roster], "auto_roster": team.auto_roster,
+                 "models": dict(team.models), "efforts": dict(team.efforts), "context": team.context,
                  "created": team.created, "members": dict(team.members),
                  "member_sessions": {role: dict(seat) for role, seat in team.sessions.items()},
                  "awaited": list(team.awaited), "failed": dict(team.failed),
@@ -371,7 +379,9 @@ class Teams:
                 card = {"id": team.id, "dir": team.dir, "goal": short_text(team.goal, 200),
                         "mode": team.mode, "state": team.state, "phase": team.phase,
                         "note": short_text(team.note, 200), "updated": max(0, int(team.updated)),
-                        "awaited": list(team.awaited), "tools": list(team.tools), "models": {}}
+                        "awaited": list(team.awaited), "tools": list(team.tools),
+                        "models": dict(team.models), "efforts": dict(team.efforts),
+                        "auto_roster": team.auto_roster}
                 awaited_terms = [team.members[role] for role in team.awaited if team.members.get(role)] \
                     if team.state == "running" else []
                 snapshot.append((card, awaited_terms))
@@ -441,6 +451,7 @@ class Teams:
         """The phone's roster rows, checked the way the Windows client checks them."""
         if not isinstance(rows, list) or not rows or len(rows) > len(ROSTER_ROLES):
             raise OpError("领队和成员人数需要在 1 至 4 位之间")
+        available = self.hands.available() if callable(getattr(self.hands, "available", None)) else []
         seen, members = set(), []
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
@@ -452,6 +463,8 @@ class Teams:
             model = model.strip() if isinstance(model, str) else ""
             effort = effort.strip().lower() if isinstance(effort, str) else ""
             if role not in ROSTER_ROLES or role in seen or not tool:
+                raise OpError("协作成员无效")
+            if available and tool not in available:
                 raise OpError("协作成员无效")
             if (index == 0) != (role == "leader"):
                 raise OpError("协作成员无效")   # the first row is the leader, the rest are members
@@ -479,7 +492,9 @@ class Teams:
         roster_raw = given.get("roster")
         if (roster_raw is not None and mode != "lead") or (auto_roster and roster_raw is None):
             raise OpError("仅分工协作支持按成员安排")
-        roster = self.read_roster(roster_raw) if isinstance(roster_raw, list) else []
+        if roster_raw is not None and not isinstance(roster_raw, list):
+            raise OpError("协作成员无效")
+        roster = self.read_roster(roster_raw) if roster_raw is not None else []
         if roster and auto_roster and len(roster) < 1:
             raise OpError("自动组队至少要一个成员")
         if roster and not auto_roster and len(roster) < 2:
@@ -514,6 +529,7 @@ class Teams:
         team.id, team.dir, team.mode = word("id"), word("dir"), mode
         team.goal, team.rules, team.context = word("goal").strip(), rules, context
         team.discuss, team.tools = discuss, tools
+        team.roster, team.auto_roster = roster, auto_roster
         team.models, team.efforts = models, efforts
         team.rounds = 0 if (given.get("rounds") == 0 and mode == "lead") else             max(1, min(MOST_ROUNDS, rounds if rounds else (1 if mode == "compare" else 3)))
         team.created = now_ms()
@@ -526,7 +542,7 @@ class Teams:
             raise OpError("只有分工协作可以不限轮数")
         if team.mode == "review" and len(tools) != 2:
             raise OpError("写审需要一个写的 AI 和一个审查的 AI")
-        if team.mode == "lead" and len(tools) < 2:
+        if team.mode == "lead" and len(tools) < 2 and not auto_roster:
             raise OpError("领队需要一个领队和 1 至 3 个不同的成员")
         if team.mode == "lead" and not roster:
             if len(tools) > 4 or len(set(tools[1:])) != len(tools) - 1 or tools[0] in tools[1:]:
@@ -1342,6 +1358,11 @@ class Teams:
             summary = self.finished(said)
             tasks = self.assigned(said, self.lead_members(team))
             if verifying:
+                # a fix asked for in the acceptance turn still has to run: never
+                # call the task done while the leader is assigning more work
+                if tasks:
+                    self.verify_assign(team, tasks)
+                    return
                 # the acceptance turn: only VERIFIED evidence with DONE ends the task
                 evidence = self.verified(said)
                 if summary is not None and evidence is not None:
@@ -1515,6 +1536,26 @@ class Teams:
             ("\n没有通过时，说明还差什么，并用 ASSIGN 成员名: 修改内容 写出要做的修复。轮数已经用完，这些修复先保留，"
              "用户追加一轮后再派给成员。" if last else
              "\n发现问题或还有下一步时，用 ASSIGN 成员名: 任务内容 派给成员，完成后会请你再次验收。")
+
+    def verify_assign(self, team, tasks):
+        """A fix asked during acceptance: send it back to work, never call it done."""
+        if team.round >= self.cap(team):
+            self.hold(team, tasks, "领队验收时仍要求修改，还没有通过验收")
+            return
+        with self.gate:
+            team.round += 1
+            team.phase = ""
+            team.reminded = False
+            team.answers.clear()
+            team.awaited.clear()
+            team.nudged.clear()
+            for member in tasks:
+                if member not in team.awaited:
+                    team.awaited.append(member)
+            team.touch()
+            self.save()
+        for member, task in tasks.items():
+            self.ask(team, member, member, self.member_task(team, task), False)
 
     def verify(self, team):
         with self.gate:
