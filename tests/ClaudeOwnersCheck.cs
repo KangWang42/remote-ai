@@ -77,6 +77,7 @@ public static class ClaudeOwnersCheck {
             Require(refused && !busyProcess.HasExited && !idleProcess.HasExited, "duplicate takeover must refuse before terminating any process");
             var idleHook = new Reach.Open { Status = "idle" };
             Require(Ways.Of(listed, idleHook, null).Status == "busy", "phone status must not be replaced by an idle copy's hook");
+            Require(Ways.Of(listed, new Reach.Open { Status = "waiting" }, null).Status == "busy", "a waiting copy does not finish another owner's work");
             Require(Ways.Of(listed, new Reach.Open { Status = "confirm" }, null).Status == "confirm", "permission request still takes priority");
 
             var phone = new TerminalAgent.LiveTerminal { Id = "phone", Tool = "claude", Dir = "demo", Session = session, Status = "idle", Pty = new Transport(idleProcess), Started = DateTime.UtcNow };

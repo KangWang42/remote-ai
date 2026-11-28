@@ -307,6 +307,10 @@ dialog.window .confirm:not(.state):not(.head-dot) .answers .no { color: var(--ba
 .card .ask .answers button.choice-opt:active { background: var(--accent-soft); }
 .card .ask .answers button.choice-opt > span { color: var(--accent-ink, var(--accent)); font-weight: 650; }
 .card .ask .answers button.choice-opt small { font-size: .78rem; font-weight: 400; color: var(--muted); line-height: 1.35; }
+@media (max-width: 600px) {
+  .card:has(> .side.say):not(.choosable) { flex-wrap: wrap; justify-content: flex-end; padding-bottom: 10px; }
+  .card:has(> .side.say):not(.choosable) > button.open { flex: 0 0 100%; }
+}
 .card .ask .answers.choices .no { width: 100%; }
 #sheet-form button.choice.desktop-fallback { justify-content: center; background: var(--panel); color: var(--accent-ink, var(--accent)); font-size: .88rem; font-weight: 600; min-height: 46px; }
 @media (max-width: 360px) { .seg button { min-width: 36px; padding: 0 8px; font-size: .82rem; } }

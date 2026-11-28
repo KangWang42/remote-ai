@@ -29,7 +29,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='remote-ai-ways-ui-') as temporary:
         relay = Relay(str(Path(temporary) / 'relay.json'))
         info = {'instance': 'c' * 32, 'enabled': True, 'tools': ['claude', 'codex'], 'workspaces': [PROJECT],
-                'features': ['peek', 'reach', 'end', 'outbox', 'codex-desktop-control', 'codex-desktop-open', 'claude-desktop-open']}
+                'features': ['peek', 'reach', 'end', 'outbox', 'organize', 'codex-desktop-control', 'codex-desktop-open', 'claude-desktop-open']}
         now = int(time.time() * 1000)
         usual = dict(dir=PROJECT, updated=now, live=True, host='shared', status='busy')
         sessions = [
@@ -244,6 +244,10 @@ def main():
                 ask('Emulation.setDeviceMetricsOverride', width=width, height=844, deviceScaleFactor=1, mobile=width < 500)
                 geometry = value("({width:innerWidth, client:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth, body:document.body.scrollWidth})")
                 assert geometry['width'] == width and max(geometry['scroll'], geometry['body']) <= geometry['client'] + 1, geometry
+                if width < 500:
+                    assert value("document.querySelector('#active .card:has(.end-session)').querySelectorAll('.side').length") == 3
+                    assert value("""Array.from(document.querySelectorAll('#unseen .card > .side, #active .card > .side.say'))
+                        .every(b => b.getBoundingClientRect().top >= b.parentNode.querySelector('.open').getBoundingClientRect().bottom - 1)""")
                 # Login and signed-in content each own a heading/landmark; only one is visible at a time.
                 assert value("Array.from(document.querySelectorAll('h1')).filter(e => e.getClientRects().length).length") == 1
                 assert value("Array.from(document.querySelectorAll('main')).filter(e => e.getClientRects().length).length") == 1
@@ -252,6 +256,8 @@ def main():
                 picture('board-%d.png' % width)
             (out / 'board-layout.json').write_text(json.dumps(geometries, indent=2), encoding='utf-8')
             ask('Emulation.setDeviceMetricsOverride', width=390, height=844, deviceScaleFactor=1, mobile=True)
+            value("document.querySelector('#active .card:has(.end-session)').scrollIntoView({block:'center'})")
+            picture('task-actions-390.png')
             value("document.getElementById('opened').scrollIntoView()")
             picture('board-opened.png')
             value("scrollTo(0, 0)")
@@ -370,6 +376,8 @@ def main():
                                ways={'say': 'codex-desktop', 'stop': '', 'answer': '', 'end': ''}, why={})
             window(OUTSIDE)
             assert not value("document.querySelector('#sheet .write').hidden"), 'project membership is not required for the composer'
+            until("!!document.querySelector('#sheet button.go:not([hidden])')")
+            assert value("document.querySelector('#sheet button.go').getBoundingClientRect().bottom <= document.querySelector('#sheet .write button.solid').getBoundingClientRect().top")
             write('项目外也能接着问')
             until("document.querySelector('#sheet .said').textContent.includes('项目外也能接着问')")
             until("document.querySelector('#sheet .write button.solid').disabled === false")

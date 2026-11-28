@@ -2046,6 +2046,11 @@ class Relay:
                 if term and term.get("instance") == instance:
                     status = item.get("state")
                     if status in ("running", "closed") and status != term["state"]:
+                        if status == "running" and term["state"] == "closed":
+                            # An update can resume a terminal under its original id.
+                            term.pop("exit_code", None)
+                            term["error"] = ""
+                            term["done"] = False
                         term["state"] = status
                         _trim(term)
                         dirty = True

@@ -41,6 +41,7 @@ public abstract class Chat : IRunning {
     Stream input;
     bool disposed;
     int? exit;
+    bool closingProcess;
     readonly Timer flusher;
     // a run of pieces of one text, gathered so that a fast writer gives a few lines a second rather than one a word
     string gatherKind = "", gatherId = "";
@@ -274,11 +275,13 @@ public abstract class Chat : IRunning {
     }
     protected virtual void OnEnded() { }
     void Ended() {
-        try { process.WaitForExit(5000); exit = process.ExitCode; } catch { }
+        int? processExit = null;
+        try { process.WaitForExit(5000); processExit = process.ExitCode; } catch { }
         Action<string, string> notify = null;
         string crashNote = "";
         var droppedReplies = new List<Action<string>>();
         lock (gate) {
+            exit = closingProcess ? 0 : processExit;
             OnEnded();
             foreach (var one in asks.Values.ToArray()) {
                 Event(new Dictionary<string, object> { { "t", "answered" }, { "id", one.Id }, { "decision", "gone" } });
@@ -310,11 +313,16 @@ public abstract class Chat : IRunning {
     public void Write(string text) { throw new InvalidOperationException("对话不接受终端输入"); }
     public void Resize(int cols, int rows) { }
     public void Dispose() {
-        lock (gate) { if (disposed) return; disposed = true; Flush(); }
+        lock (gate) {
+            if (disposed) return;
+            disposed = true;
+            closingProcess = process != null && !process.HasExited;
+            Flush();
+        }
         flusher.Dispose();
         var seat = Interlocked.Exchange(ref mcp, null);
         if (seat != null) seat.Dispose();
-        try { if (process != null && !process.HasExited) ProcessText.KillProcessTree(process.Id, 10000); } catch { }
+        try { if (closingProcess) ProcessText.KillProcessTree(process.Id, 10000); } catch { }
         if (process == null) { Closed = true; Drained = true; }
     }
 
@@ -387,9 +395,6 @@ public abstract class Chat : IRunning {
     /// A permission request arrived (id, kind, title, text); told on a thread of its own outside the lock so an
     /// automated listener (such as a read-only peer consultant) can call Answer immediately.
     public event Action<string, string, string, string> AskedFor;
-    int background;
-    /// How many commands the tool now runs in the background of this conversation, as the tool says it.
-    protected void Background(int running) { background = Math.Max(0, running); }
     protected void Note(string text) { Event(new Dictionary<string, object> { { "t", "note" }, { "text", text }, { "at", Now() } }); }
     protected void TurnEndedQuiet(string how, string error) {
         LastError = error ?? "";
@@ -400,7 +405,6 @@ public abstract class Chat : IRunning {
     }
     protected void TurnEnded(string how, string error) {
         TurnEndedQuiet(how, error);
-        if (how == "done" && background > 0) return;
         var turned = Turned;
         if (turned != null) {
             string said = words.ToString();
@@ -467,6 +471,7 @@ public abstract class Chat : IRunning {
 /// computer, whether a step may run (`--permission-prompt-tool stdio`: a `can_use_tool` request, answered with the
 /// decision). Run on Claude Code 2.1.283 (docs/PROTOCOL.md, "Chats").
 public sealed class ClaudeChat : Chat {
+    bool backgroundWork;
     public ClaudeChat(string folder, Action<string> emit) : base("claude", folder, emit) { }
     string messageId = "";
     readonly HashSet<string> streamed = new HashSet<string>();       // messages whose text came in pieces
@@ -528,7 +533,7 @@ public sealed class ClaudeChat : Chat {
             else if (Text(m, "subtype") == "background_tasks_changed") {
                 // Watchers stay alive across turns. An awaited agent reports into its tool
                 // call. Neither produces a later turn for the collaboration to wait for.
-                Background(Many(m, "tasks").Count(task => !true.Equals(At(task, "ambient")) && !true.Equals(At(task, "awaited"))));
+                backgroundWork = Many(m, "tasks").Any(task => !true.Equals(At(task, "ambient")) && !true.Equals(At(task, "awaited")));
             }
             return;
         }
@@ -586,8 +591,13 @@ public sealed class ClaudeChat : Chat {
                 State(asks.Count > 0 ? "confirm" : "busy");
                 return;
             }
-            TurnEnded(stopping && !ok ? "stopped" : ok ? "done" : "failed", ok || stopping ? "" : Text(m, "result").Length > 0 ? Cut(Text(m, "result"), 600) : subtype);
             blocks.Clear();
+            if (ok && backgroundWork && !stopping) {
+                TurnEndedQuiet("done", "");
+                State(asks.Count > 0 ? "confirm" : "busy");
+                return;
+            }
+            TurnEnded(stopping && !ok ? "stopped" : ok ? "done" : "failed", ok || stopping ? "" : Text(m, "result").Length > 0 ? Cut(Text(m, "result"), 600) : subtype);
             State(asks.Count > 0 ? "confirm" : "idle");
         }
     }

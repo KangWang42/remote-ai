@@ -56,7 +56,8 @@ def check_chat_restart(agent_exe, hidden):
             client = Client(origin, timeout=10)
             await_ready(lambda: client.call("/api/login", {"password": password}), "chat relay")
             agent = start_agent()
-            await_ready(lambda: client.call("/api/terminal")["device"]["workspaces"], "chat agent")
+            await_ready(lambda: any(s["id"] == SAVED_CHAT for s in client.call("/api/terminal")["sessions"]),
+                        "saved conversation available to resume")
             terminal = client.call("/api/terminal", operation(
                 "", "start", tool="claude", dir="demo", form="chat", session=SAVED_CHAT))["terminal"]
             look = lambda after=0: client.call("/api/terminal?terminal=%s&after=%d" % (terminal, after))

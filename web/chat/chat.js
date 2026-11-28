@@ -415,7 +415,7 @@
     const ended = terminal && terminal.state === 'closed', line = $('stands');
     const kind = ended ? 'ended' : !device.online ? 'off' : terminal && terminal.state === 'starting' ? 'starting' : state;
     line.className = kind;
-    $('standing').textContent = { ended: '对话已结束', off: '电脑离线', starting: '正在启动', busy: '已工作', confirm: '等你确认', idle: lastEnd === 'stopped' ? '已停止' : '等你的消息' }[kind] || '';
+    $('standing').textContent = { ended: '对话已结束', off: '电脑离线', starting: '正在启动', busy: '已工作', confirm: '等你确认', idle: idleLabel() }[kind] || '';
     $('clock').textContent = kind === 'busy' && since ? worked(Date.now() - since) : '';
     // the round button at the end: a stop while it works and nothing is written, the arrow otherwise
     const working = kind === 'busy' || kind === 'confirm', typed = !!$('box').value.trim() || !!(picker && picker.count);
@@ -428,6 +428,9 @@
     $('go').hidden = !(kind === 'idle' && (lastEnd === 'stopped' || lastEnd === 'failed') && !typed && !pendingSwitch);
     $('send').disabled = kind === 'off' || handingOver;
     $('send').classList.toggle('going', sendingPictures || handingOver);
+  }
+  function idleLabel() {
+    return { done: '本轮已完成', stopped: '已停止', failed: '本轮未完成' }[lastEnd] || '等你的消息';
   }
   // The model button at the end of the box: the active (or staged) tool's icon, tinted when customized or switching AI.
   let paramsDrawn = '', pendingSwitch = null, handingOver = false;
@@ -721,7 +724,8 @@
     const { ui } = RemoteSheet;
     return { title: '对话', build(p) {
       const ended = terminal.state === 'closed', kind = ended ? 'ended' : terminal.state === 'starting' ? 'starting' : state;
-      const [standing, colour] = STATE[kind] || STATE.idle;
+      const [label, colour] = STATE[kind] || STATE.idle;
+      const standing = kind === 'idle' ? idleLabel() : label;
       p.body.append(ui.who({ icon: ['claude', 'agy'].includes(terminal.tool) ? terminal.tool : 'codex', tint: ['claude', 'agy'].includes(terminal.tool) ? terminal.tool : 'codex', title: terminal.title || TOOLS[terminal.tool] || '对话',
         line: (TOOLS[terminal.tool] || terminal.tool) + (terminal.dir ? ' · ' + terminal.dir : '') + ' · ' + (device.online ? standing : '电脑离线'), state: device.online ? colour : 'var(--bad)' }));
       const noSession = terminal.session ? '' : '发出第一条消息后才能使用';

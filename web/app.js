@@ -943,7 +943,8 @@
       box.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); send.click(); } });
       // a conversation that has stopped is most often told to go on: one press, beside what is typed
       const goOn = el('button', { type: 'button', className: 'go', textContent: '继续', hidden: true, onclick: () => { if (!box.value.trim()) { box.value = '继续'; send.click(); } else box.focus(); } });
-      write.append(goOn, box, send);
+      write.before(goOn);
+      write.append(box, send);
       let shown = '';
       function show() {
         // how it stands is what the computer said of it last: with the conversation itself, or in the lists

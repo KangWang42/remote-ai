@@ -938,7 +938,9 @@ commands in `system` / `background_tasks_changed` (`tasks`, the whole list each 
 (Teams.cs) takes a member's turn as over only when nothing it started still runs in the background, and passes on
 what it said at the end of the turn that follows. Entries marked `ambient` (for example, live-update watchers)
 do not hold a member's result. A subagent marked `awaited` reports to its waiting tool call and does not start
-a follow-up turn, so it does not hold the result either.
+a follow-up turn, so it does not hold the result either. The chat stays `busy` between the intermediate
+`result` and the result of the follow-up turn. A requested Windows chat closure reports a normal exit,
+while an independent process exit retains the tool's exit code.
 
 On Windows (`agent-windows/Peers.cs`), a chat can consult another installed chat-capable AI in the same project
 mid-turn through a per-conversation local MCP server (`remote_ai`, tool `ask_ai(tool, question, fresh?)`) bridged by

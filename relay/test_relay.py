@@ -868,6 +868,17 @@ class TerminalRelayTests(unittest.TestCase):
         self.assertIn("代码 7", record["terminal"]["error"])
         self.assertEqual(record["chunks"][0]["data"], "startup failed")
 
+    def test_resumed_terminal_does_not_inherit_old_exit_code(self):
+        self.start()
+        def report(at, state, **fields):
+            self.relay.agent({"info": self.info, "terminals": [dict(id=self.terminal, state=state, **fields)]}, now=at)
+            return self.relay.overview(self.terminal, now=at)["terminal"]
+        self.assertEqual(report(1004, "closed", exit_code=1)["phase"], "failed")
+        resumed = report(1005, "running", status="busy")
+        self.assertEqual((resumed["phase"], resumed["error"]), ("busy", ""))
+        self.assertNotIn("exit_code", resumed)
+        self.assertEqual(report(1006, "closed", exit_code=0)["phase"], "ended")
+
     def test_start_retry_and_input_delivery_are_idempotent_and_ordered(self):
         payload = self.start()
         self.assertEqual(len(self.relay.overview(now=1004)["terminals"]), 1)

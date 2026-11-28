@@ -2946,6 +2946,8 @@ class ClaudeChat(Chat):
     """Claude Code in --print mode with JSON lines both ways, as its SDK drives it: told what to say on its standard
     input, stopped by a control request, asked by it whether a step may run (--permission-prompt-tool stdio)."""
 
+    background_work = False
+
     def start(self, launcher, session, resume, mode):
         if not session:
             if resume:
@@ -2993,6 +2995,9 @@ class ClaudeChat(Chat):
                 self.known(m.get("session_id") or "")
             elif m.get("subtype") == "status" and m.get("status") == "requesting" and self.status == "idle":
                 self.state("busy")
+            elif m.get("subtype") == "background_tasks_changed" and isinstance(m.get("tasks"), list):
+                self.background_work = any(isinstance(task, dict) and not task.get("ambient") and not task.get("awaited")
+                                           for task in m["tasks"])
         elif kind == "stream_event":
             self.streamed_event(m.get("event") or {})
         elif kind == "assistant":
@@ -3013,9 +3018,13 @@ class ClaudeChat(Chat):
                 self.state("busy")
         elif kind == "result":
             ok = m.get("subtype") == "success" and not m.get("is_error")
+            self.blocks = {}
+            if ok and self.background_work and not self.halting:
+                self.event(t="turn", end="done", at=int(time.time() * 1000))
+                self.state("confirm" if self.asks else "busy")
+                return
             how = "stopped" if self.halting and not ok else "done" if ok else "failed"
             self.turn_ended(how, "" if ok or how == "stopped" else str(m.get("result") or m.get("subtype") or "")[:600])
-            self.blocks = {}
             self.state("confirm" if self.asks else "idle")
 
     def streamed_event(self, e):

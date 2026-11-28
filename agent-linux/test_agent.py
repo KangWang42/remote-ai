@@ -2211,8 +2211,15 @@ class AgentTeamsAndChatIntegration(unittest.TestCase):
                                                          "delta": {"type": "text_delta", "text": "REVIEW: PASS\n"}}})
         chat.received({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
                                                          "delta": {"type": "text_delta", "text": "没有问题"}}})
+        chat.received({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "tests"}]})
+        chat.received({"type": "result", "subtype": "success", "is_error": False})
+        self.assertEqual(chat.status, "busy")
+        self.assertFalse(done.is_set())
+        chat.received({"type": "system", "subtype": "background_tasks_changed",
+                       "tasks": [{"ambient": True}, {"awaited": True}]})
         chat.received({"type": "result", "subtype": "success", "is_error": False})
         self.assertTrue(done.wait(3))
+        self.assertEqual(chat.status, "idle")
         self.assertEqual(heard[-1], ("done", "REVIEW: PASS\n没有问题"))
 
         # Error text on failure reaches turned() so quota failover works.

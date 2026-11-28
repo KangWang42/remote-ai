@@ -56,6 +56,7 @@
     <section id="asks" aria-label="等你确认" hidden></section>
     <div id="stands" class="idle">
       <span class="dot" aria-hidden="true"></span><span id="standing"></span><span id="clock"></span>
+      <button type="button" id="go" hidden>继续</button>
       <button type="button" id="again" hidden>继续这段对话</button>
     </div>
     <div id="switch-bar" hidden>
@@ -66,7 +67,6 @@
     <form id="write">
       <textarea id="box" rows="1" maxlength="8000" placeholder="发消息" spellcheck="false" autocapitalize="off" aria-label="消息"></textarea>
       <div id="write-end">
-        <button type="button" id="go" hidden>继续</button>
         <button type="button" id="params-btn" hidden aria-label="模型与参数"><span id="params-icon" aria-hidden="true"></span><svg class="params-chev" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button type="button" id="stop" class="round" hidden aria-label="停止"><span class="stop-mark" aria-hidden="true"></span></button>
         <button type="submit" id="send" class="round" aria-label="发送"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 19V5.5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="send-done" hidden></span></button>

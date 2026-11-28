@@ -170,7 +170,7 @@ main > .attach-tray { margin: 4px 12px 0; padding-left: 4px; }
 #send-done { position: absolute; inset: 0; display: grid; place-items: center; font-size: .7rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 #stop { background: var(--bad-soft); color: var(--bad); }
 .stop-mark { width: 12px; height: 12px; border-radius: 3px; background: currentColor; }
-#go { flex: none; min-height: 34px; padding: 0 13px; border-radius: 18px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); font-size: .86rem; font-weight: 600; }
+#go { flex: none; margin-left: auto; min-height: 34px; padding: 0 13px; border-radius: 18px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); font-size: .86rem; font-weight: 600; }
 #again { background: var(--accent); color: var(--on-accent); }
 #again:active { transform: scale(.96); }
 #box:focus, #box:focus-visible { outline: none; }

@@ -144,6 +144,8 @@ def claude(args):
         put({"type": "result", "subtype": "success", "is_error": False, "result": "测试全部通过，改了 checkout.js。", "session_id": session, "origin": "task-notification"})
 
     def turn(text):
+        if text == "standin-exit-1":
+            os._exit(1)
         record_standin("STANDIN_PROMPT_LOG", {"tool": "claude", "session": session, "args": args, "text": text})
         append_transcript(transcript, {"type": "user", "message": {"role": "user", "content": text}, "sessionId": session, "cwd": os.getcwd()})
         put({"type": "system", "subtype": "init", "session_id": session, "cwd": ".", "tools": ["Bash"]})

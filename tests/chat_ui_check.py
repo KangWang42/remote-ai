@@ -334,7 +334,7 @@ def main():
             answered = [op for op in computer.seen if op["action"] == "answer"]
             assert answered and answered[0]["decision"] == "allow" and answered[0]["ask"] == "a1b2c3d4e5f60718", answered
             until("document.querySelectorAll('.text')[1]?.querySelector('code')?.textContent === 'formatPrice'", "the answer after the step")
-            until("document.getElementById('standing').textContent === '等你的消息' && document.getElementById('stop').hidden", "waiting once the turn has ended")
+            until("document.getElementById('standing').textContent === '本轮已完成' && document.getElementById('stop').hidden", "completed turn")
             # Successful steps collapse fully; their header remains a keyboard/touch control.
             assert value("document.querySelectorAll('.step')[0].className") == "step ok shut"
             assert value("document.querySelector('.step button').getAttribute('aria-expanded')") == "false"
@@ -484,6 +484,7 @@ def main():
             until("Array.from(document.querySelectorAll('.note')).some(n => n.textContent === '已停止') && document.getElementById('standing').textContent === '已停止'", "stopped")
             assert any(op["action"] == "stop" for op in computer.seen)
             until("!document.getElementById('go').hidden", "继续 beside the box")
+            assert value("document.querySelector('#go').getBoundingClientRect().bottom <= document.querySelector('#send').getBoundingClientRect().top")
             assert value("document.querySelectorAll('.step')[2].className") == "step fail"
 
             # ---- read again from the start (a page opened later): the same conversation

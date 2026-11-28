@@ -129,7 +129,6 @@ dialog.window #sheet-form .confirm { margin: 4px 14px 6px; border: 1px solid var
 dialog.window #sheet-form .write { margin: 6px 12px 12px; padding: 6px 6px 6px 10px; border: 1px solid var(--chat-composer-border, var(--card-border, var(--line))); border-radius: 26px; background: var(--chat-composer-bg, var(--bg)); box-shadow: none; transition: border-color .15s, box-shadow .15s; }
 dialog.window #sheet-form .write:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 dialog.window #sheet-form .write textarea { border: 0; border-radius: 18px; background: transparent; box-shadow: none; outline: none; padding: 8px 6px; min-height: 40px; max-height: 144px; caret-color: var(--accent); overflow-y: auto; overscroll-behavior: contain; user-select: text; -webkit-user-select: text; touch-action: auto; font-size: .96rem; }
-dialog.window #sheet-form .write .go { flex: none; min-height: 40px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); color: var(--ink); font-weight: 600; transition: transform .1s; }
-dialog.window #sheet-form .write .go:active { transform: scale(.96); }
+dialog.window #sheet-form button.go { align-self: flex-start; margin: 0 14px; min-height: 40px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--card-border, var(--line)); background: var(--panel); color: var(--ink); font-weight: 600; }
 dialog.window #sheet-form .write button.solid { border-radius: 20px; min-height: 40px; padding: 0 18px; background: var(--accent); color: var(--on-accent); transition: transform .1s; }
 dialog.window #sheet-form .write button.solid:active { transform: scale(.95); }

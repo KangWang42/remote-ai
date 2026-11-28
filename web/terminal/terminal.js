@@ -932,9 +932,10 @@
       if ($('shared').hidden !== hideShared) $('shared').hidden = hideShared;
       const loading = restoring && more ? `载入输出 ${Math.round(100 * (payload.after - start) / Math.max(1, t.seq - start))}%` : '';
       show($('title'), t.title);
-      show(status, where + ' · ' + (loading || (!device.online ? '电脑离线，等待重连' : !device.enabled ? '电脑远控已关闭' : t.state === 'starting' ? '正在启动'
-        : ended ? '已结束' : t.status === 'busy' ? '正在执行' : t.status === 'idle' ? '等待输入' : '已连接')));
-      const mark = live ? (t.status === 'busy' ? 'busy' : 'ready') : '';
+      const phase = t.phase || t.status;
+      const label = { busy: '正在执行', confirm: '等你确认', idle: t.done ? '本轮已完成' : '等待输入' }[phase] || '已连接';
+      show(status, where + ' · ' + (ended ? (phase === 'failed' ? '异常退出' : '已结束') : loading || (!device.online ? '电脑离线，等待重连' : !device.enabled ? '电脑远控已关闭' : t.state === 'starting' ? '正在启动' : label)));
+      const mark = live ? (phase === 'busy' ? 'busy' : 'ready') : '';
       if (dot.className !== mark) dot.className = mark;
       show(notice, t.error || '');
       if ($('ended').hidden !== (!ended || more)) $('ended').hidden = !ended || more;

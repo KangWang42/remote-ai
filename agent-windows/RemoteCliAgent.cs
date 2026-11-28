@@ -43,7 +43,7 @@ public sealed class PseudoTerminal : IRunning {
     IntPtr console;
     FileStream input, output;
     Process process;
-    bool disposed;
+    bool disposed, closingProcess;
     public int Id { get { return process.Id; } }
     public bool Closed { get; private set; }
     public bool Drained { get; private set; }   // the reader has delivered everything the program wrote
@@ -86,8 +86,12 @@ public sealed class PseudoTerminal : IRunning {
             }
             CloseHandle(inRead); inRead = IntPtr.Zero;
             CloseHandle(outWrite); outWrite = IntPtr.Zero;
-            CloseHandle(info.process); CloseHandle(info.thread);
-            process = Process.GetProcessById(info.processId); Cols = cols; Rows = rows;
+            try {
+                process = Process.GetProcessById(info.processId);
+                // Keep a handle while the child is alive so its exit code remains readable after it exits.
+                GC.KeepAlive(process.Handle);
+            } finally { CloseHandle(info.process); CloseHandle(info.thread); }
+            Cols = cols; Rows = rows;
             Task.Run(delegate {
                 // Coalesce bursty ConPTY micro-reads into bounded frames (4ms / 24KB) so high-throughput builds
                 // do not cause lock contention or tiny-chunk storms while keeping interactive typing < 4ms.
@@ -129,7 +133,7 @@ public sealed class PseudoTerminal : IRunning {
                     }
                 }
             });
-            Task.Run(delegate { try { process.WaitForExit(); ExitCode = process.ExitCode; } catch { } finally { CloseConsole(); Closed = true; } });
+            Task.Run(delegate { try { process.WaitForExit(); lock (gate) ExitCode = closingProcess ? 0 : process.ExitCode; } catch { } finally { CloseConsole(); Closed = true; } });
         } catch { Dispose(); throw; }
         finally {
             foreach (IntPtr h in new[] { inRead, inWrite, outRead, outWrite }) if (h != IntPtr.Zero) CloseHandle(h);
@@ -142,8 +146,8 @@ public sealed class PseudoTerminal : IRunning {
     public void Resize(int cols, int rows) { lock (gate) { if (console == IntPtr.Zero) return; Marshal.ThrowExceptionForHR(ResizePseudoConsole(console, new Coord(cols, rows))); Cols = cols; Rows = rows; } }
     void CloseConsole() { IntPtr h; lock (gate) { h = console; console = IntPtr.Zero; } if (h != IntPtr.Zero) ClosePseudoConsole(h); }
     public void Dispose() {
-        lock (gate) { if (disposed) return; disposed = true; }
-        try { if (process != null && !process.HasExited) { using (Process kill = Process.Start(new ProcessStartInfo("taskkill.exe", "/PID " + process.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true })) kill.WaitForExit(10000); } } catch { }
+        lock (gate) { if (disposed) return; disposed = true; closingProcess = Alive; }
+        if (closingProcess) ProcessText.KillProcessTree(process.Id, 10000);
         CloseConsole();
         if (input != null) input.Dispose();
         if (output != null) output.Dispose();
@@ -513,7 +517,7 @@ public sealed class TerminalAgent {
     public sealed class SessionInfo { public bool Now, Wakes, MultipleOwners, Named; public string Kind = ""; public string Id, Tool, Dir, Folder = "", ControlFolder = "", Title, Status = "", Host = "", Origin = ""; public long Updated; public DateTime Created; public bool Live, CanTakeover, OwnershipKnown; public string TakeoverReason = "", Same = ""; }
     public static string ObservedStatus(SessionInfo s, Reach.Open known) {
         // Hooks are keyed by conversation, not process: an idle copy cannot stop the busy copy.
-        if (s.MultipleOwners && s.Status == "busy" && (known == null || known.Status == "idle")) return s.Status;
+        if (s.MultipleOwners && s.Status == "busy" && (known == null || known.Status == "idle" || known.Status == "waiting")) return s.Status;
         return known != null ? known.Status : s.Status;
     }
     /// The conversations the tools' own hooks tell of (Reach.cs). The window around this agent may put the hooks into
@@ -1769,7 +1773,7 @@ public sealed class TerminalAgent {
                 var messages = LineMessages(root, tool, session, "", out more);
                 result = new Dictionary<string, object> { { "messages", messages }, { "more", more } };
             } else result = Said(file, tool);
-            result["stamp"] = stamp; result["title"] = title; result["status"] = known != null ? known.Status : saved.Status;
+            result["stamp"] = stamp; result["title"] = title; result["status"] = ObservedStatus(saved, known);
             var native = NativeState(saved);
             if (native != null) result["status"] = native.Busy ? "busy" : native.Ready ? "waiting" : "confirm";
             return result;
