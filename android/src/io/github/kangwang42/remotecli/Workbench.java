@@ -576,12 +576,21 @@ final class Workbench {
             JSONObject project = projects.optJSONObject(i);
             if (project != null) names.add(project.optString("name"));
         }
+        // A task another conversation gave out is found in that conversation's card, unless it waits for the user.
+        Set<String> terminalIds = new HashSet<>(), givenOut = new HashSet<>();
+        JSONArray running = data.optJSONArray("terminals");
+        for (int i = 0; running != null && i < running.length(); i++) { JSONObject one = running.optJSONObject(i); if (one != null) terminalIds.add(one.optString("id")); }
+        for (int i = 0; running != null && i < running.length(); i++) {
+            JSONObject one = running.optJSONObject(i);
+            if (one != null && terminalIds.contains(one.optString("parent")) && !"confirm".equals(one.optString("status"))) givenOut.add(one.optString("id"));
+        }
         for (boolean terminal : new boolean[]{true, false}) {
             JSONArray source = data.optJSONArray(terminal ? "terminals" : "sessions");
             for (int i = 0; source != null && i < source.length(); i++) {
                 JSONObject entry = source.optJSONObject(i);
                 if (entry == null) continue;
                 if (terminal) alive.add(entry.optString("id"));
+                if (givenOut.contains(entry.optString(terminal ? "id" : "terminal"))) continue;
                 AggregateSessions.Entry made = new AggregateSessions.Entry(terminal, entry.optString("id"), entry.optString("dir"),
                     entry.optString("title"), entry.optString("tool"), entry.optString("state"),
                     entry.optString("phase"), entry.optString("status"), entry.optBoolean("live"),

@@ -27,6 +27,8 @@ interface Props {
   onHandOff: () => void;
   /** A new conversation of another AI was begun from this one (the switcher in the box): its terminal. */
   onHandedTo: (terminal: string) => void;
+  /** Opens the conversation of a task this one gave out. */
+  onOpenTerminal: (terminal: string) => void;
   onOpenFiles: () => void;
   onToggleInspector: () => void;
   onToggleTerminal: () => void;
@@ -352,6 +354,7 @@ export function ThreadView(p: Props) {
             highlightIndex={hits.length ? hits[cursor] : null}
             jumpRequest={jump}
             onScrollStateChange={conv.saveScroll}
+            onOpenTask={p.onOpenTerminal}
             onAnswer={async (ask, decision) => {
               try {
                 await act.answer(t, ask, decision);

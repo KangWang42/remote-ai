@@ -42,6 +42,8 @@
     return tail;
   };
   const leave = () => {
+    // a task opened from the card in the conversation that gave it out goes back to that conversation
+    if (new URLSearchParams(location.search).get('from') === 'task' && history.length > 1) { history.back(); return; }
     if (fromTeam) {
       let target = '../?' + (returnProject ? 'project=' + encodeURIComponent(returnProject) : 'tab=' + (returnTab || 'together'))
         + '&do=team&item=' + encodeURIComponent(fromTeam);

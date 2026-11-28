@@ -221,6 +221,56 @@ public static class PeersCheck {
             }
         }
 
+        // 3b. Task tools (`delegate_task`, `task_status`, `task_cancel`, `task_answer`): offered to a conversation the
+        //     phone runs, not to one that is a task itself; a call over the pipe reaches Delegations and is said in words.
+        string pipe3 = Peers.PipeName(root + "-tasks");
+        var begun = new List<Delegations.Opening>();
+        var delegations = new Delegations(new Delegations.Hands {
+            Begin = one => { begun.Add(one); return new Delegations.Began { Terminal = "child-" + begun.Count }; },
+            StateOf = t => t == "term-9" ? "busy" : t.StartsWith("child-") ? "busy" : "",
+            Say = (t, w) => { }, Stop = t => { }, Close = t => { }, Answer = (t, a, d) => false, Card = (t, c) => { } });
+        using (var taskPeers = new Peers(pipe3, t => launchers.ContainsKey(t) ? launchers[t] : null, quotas, mcpDir, selfExe, 20, null, delegations)) {
+            var giver = taskPeers.Offer("claude", workDir, "term-9", "demo-proj");
+            var child = taskPeers.Offer("codex", workDir, "child-x", "demo-proj", true);
+            Func<Chat.McpServer, Process> bridgeOf = s => Process.Start(new ProcessStartInfo(s.Command, String.Join(" ", s.Args.Select(a => "\"" + a + "\""))) {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false) });
+            using (var b1 = bridgeOf(giver))
+            using (var b2 = bridgeOf(child)) {
+                try {
+                    Func<Process, List<string>> names = b => (At(At(Rpc(b, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 1 }, { "method", "tools/list" } }), "result"), "tools") as IEnumerable)
+                        .Cast<object>().Select(t => Text(t, "name")).ToList();
+                    var given = names(b1);
+                    Require(given.Contains(Peers.DelegateToolName) && given.Contains(Peers.StatusToolName) && given.Contains(Peers.CancelToolName) && given.Contains(Peers.AnswerToolName) && given.Contains(Peers.ToolName),
+                        "the giver is offered the task tools: " + String.Join(",", given));
+                    var childTools = names(b2);
+                    Require(childTools.SequenceEqual(new[] { Peers.ToolName }), "a task's conversation is offered ask_ai only: " + String.Join(",", childTools));
+                    var listed = (At(At(Rpc(b1, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 2 }, { "method", "tools/list" } }), "result"), "tools") as IEnumerable).Cast<object>()
+                        .First(t => Text(t, "name") == Peers.DelegateToolName);
+                    string about = Text(listed, "description");
+                    Require(about.Contains("不要查询或等待") && about.Contains("简单的活自己做") && about.Contains("- claude（Claude Code") && about.Contains("已用 92%"), "delegate_task says its rules and the tools: " + about);
+                    bool isErr;
+                    string said = CallText(Rpc(b1, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 3 }, { "method", "tools/call" },
+                        { "params", new Dictionary<string, object> { { "name", Peers.DelegateToolName }, { "arguments", new Dictionary<string, object> { { "tool", "codex" }, { "task", "实现导出\n细节" }, { "title", "实现导出" } } } } } }), out isErr);
+                    Require(!isErr && said.Contains("已派出子任务") && said.Contains("Codex · 实现导出") && begun.Count == 1 && begun[0].Parent == "term-9" && begun[0].Tool == "codex", "delegate_task over the pipe: " + said);
+                    string id = delegations.Given("term-9")[0].Id;
+                    string status = CallText(Rpc(b1, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 4 }, { "method", "tools/call" },
+                        { "params", new Dictionary<string, object> { { "name", Peers.StatusToolName }, { "arguments", new Dictionary<string, object> { { "task_id", id } } } } } }), out isErr);
+                    Require(!isErr && status.Contains("进行中") && status.Contains("不必再查询"), "task_status said: " + status);
+                    string refused = CallText(Rpc(b2, new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", 5 }, { "method", "tools/call" },
+                        { "params", new Dictionary<string, object> { { "name", Peers.DelegateToolName }, { "arguments", new Dictionary<string, object> { { "tool", "claude" }, { "task", "再派" } } } } } }), out isErr);
+                    Require(isErr && refused.Contains("不能派出子任务") && begun.Count == 1, "a task cannot give work out: " + refused);
+                } finally {
+                    foreach (var b in new[] { b1, b2 }) { try { b.StandardInput.Close(); } catch { } if (!b.WaitForExit(3000)) try { b.Kill(); } catch { } }
+                    giver.Dispose(); child.Dispose();
+                }
+            }
+        }
+        // how the drivers name these steps
+        string shownDetail;
+        Require(Peers.OwnTool("mcp__remote_ai__delegate_task") == Peers.DelegateToolName && Peers.OwnTool("remote_ai_task_answer") == Peers.AnswerToolName && Peers.OwnTool("Bash") == "", "own tools told by name");
+        Require(Peers.StepOf(Peers.DelegateToolName, new Dictionary<string, object> { { "tool", "agy" }, { "task", "复核界面文字" } }, out shownDetail) == "派给 Antigravity CLI：复核界面文字" && shownDetail == "复核界面文字", "delegate step title");
+
         // 4. Chat.Confirm end-to-end on a live Chat: emits ask card without `always`, unblocks on Answer("allow"/"deny"),
         //    and withdraws cleanly on cancellation.
         var confirmEvents = new List<string>();

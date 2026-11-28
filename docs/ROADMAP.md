@@ -78,6 +78,14 @@
 | 工具用量额度显示 | `agent-windows/Quotas.cs` 采集 Claude Code（对话事件与状态栏套壳）、Codex（app-server）与 Antigravity CLI（`agy -p /usage --output-format json`，默认显示 Gemini/Neon 主池，其余模型池按需展开）的额度窗口与重置时间；中转透传；手机页 `web/me.js`、`web/ui/work.js` 与 Android 原生 `QuotaLines.java` / `AppPages.java` 顶部显示进度条（超 90% 标红） | `tests/quotas_check.py`、`relay/test_relay.py`、`tests/tabs_ui_check.py`、`tests/android_aggregate_check.py` |
 | 多 AI 协作任务（写审 / 领队） | `agent-windows/Teams.cs` 实现写审（`review`，写手 + 只读审查员 + `git diff` 循环）与领队（`lead`，拆分分派 + 并行执行 + 汇总验收），加密持久化并支持重启暂停后继续；中转 `/api/work` 新增 `teams` 能力与 5 个动作；手机页 `web/teams.js`、`web/together.js` 与 Android 原生 `AppPages.java` 支持新建、查看、直达详情和启停删除 | `tests/teams_check.py`、`relay/test_relay.py`、`tests/together_ui_check.py`、`tests/android_aggregate_check.py` |
 
+## 已完成（2026-11-28）：对话派出子任务、按文件名打开文件
+
+| 项目 | 做法与文件 | 检查 |
+| --- | --- | --- |
+| 派出子任务（`tasks`） | 参考 T3 Code 的 `delegate_task`：工具调用立即返回，子任务各自结束时把结果送回原对话（原对话忙时等这一轮结束，几份结果合成一条），不按轮次等齐。Windows `Delegations.cs`、Linux `delegations.py` 管任务；`Peers.cs`、`peers.py` 在 `remote_ai` 里提供 `delegate_task`、`task_status`、`task_cancel`、`task_answer`，工具说明即派工规则；`Chats.cs`、`AcpChat.cs`、`agent.py` 统一用 `Peers.StepOf` 命名这些步骤；中转保留终端的 `parent`、`task` | `tests/delegations_check.py`、`tests/peers_check.py`、`agent-linux/test_delegations.py`；真实工具 `tests/delegations_live.py`：Claude Code→Codex、Codex→Antigravity CLI、Antigravity CLI→Claude Code 各一次（均未轮询，结果送回后原对话报出只有子任务读到的内容），Claude Code 和 Codex 遇到简单问题各一次（未派出） |
+| 子任务卡片 | `web/chat/chat.js`（Android 对话页）、`web-app`（总控台与 iPhone）：卡片取代“派给 …”那一步，原地更新状态，点开子任务对话；送回的结果折叠显示；列表里不单列子任务（`web/app.js`、`Workbench.java`、`threads.ts`），等确认的除外 | `tests/tasks_ui_check.py`；原生列表只通过了编译 |
+| 按文件名打开文件（`file-find`） | 回答里只写文件名时，文件页向电脑查找同名文件：Windows `FileSearch.cs`、Linux `find_file`、中转 `file_find`；`web/files/files.js` 一个就打开，多个列出 | `tests/files_check.py`、`agent-linux/test_agent.py` |
+
 ## 未完成
 
 | 项目 | 现状 | 怎样继续 |

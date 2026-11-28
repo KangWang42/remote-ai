@@ -84,6 +84,9 @@ export function buildThreads(
 
   // Terminals first: a running one is how its conversation runs now; of ended ones the relay keeps the last.
   const ordered = [...terminals].sort((a, b) => Number(LIVE(b)) - Number(LIVE(a)) || b.created - a.created);
+  // A task another conversation gave out is found in that conversation's card, unless it waits for the user.
+  const ids = new Set(terminals.map((t) => t.id));
+  const givenOut = new Set(terminals.filter((t) => t.parent && ids.has(t.parent) && t.status !== 'confirm').map((t) => t.id));
   for (const t of ordered) {
     if (t.tool === 'shell') {
       if (LIVE(t)) shells.push(t);
@@ -116,7 +119,8 @@ export function buildThreads(
     byKey.set(key, thread);
   }
 
-  const all = [...byKey.values()].sort(order);
+  // (opened from the card; not listed)
+  const all = [...byKey.values()].filter((t) => !(t.terminal && givenOut.has(t.terminal.id))).sort(order);
   const attention = all.filter((t) => t.needs !== null);
 
   const groups = new Map<string, ProjectGroup>();

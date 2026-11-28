@@ -183,6 +183,50 @@
     const at = raw.indexOf(HANDOVER_SEP);
     return at >= 0 ? raw.slice(at + HANDOVER_SEP.length) : raw;
   }
+  // What Remote AI brought back from the tasks this conversation gave out: folded, it is not the user's words.
+  const RELAYED = /^【子任务(结果|提问)】/;
+  function relayedNode(text) {
+    const kind = RELAYED.exec(text)[1];
+    const body = el('div', { className: 'text md', hidden: true });
+    const head = el('button', { type: 'button', ariaExpanded: 'false' }, el('span', { className: 'mark', ariaHidden: 'true', html: icon('many', 16) }),
+      el('span', { className: 'what', textContent: kind === '结果' ? '子任务的结果已送回' : '子任务在等回答' }), chev());
+    head.onclick = () => {
+      const open = body.hidden;
+      if (open && !body.readText) setText(body, text, false);
+      body.hidden = !open; head.setAttribute('aria-expanded', String(open)); node.classList.toggle('shut', !open);
+    };
+    const node = el('div', { className: 'relayed shut' }, head, body);
+    return node;
+  }
+  // ---- the tasks this conversation gave out (`task` events): one card each, brought up to date in place; a tap opens
+  // the task's own conversation.
+  const tasks = new Map();
+  const TASK_STATES = { running: '进行中', waiting: '等回答', completed: '已完成', failed: '未完成', cancelled: '已停止' };
+  function tookOf(e) {
+    if (!e.ended || !e.started) return '';
+    const s = Math.max(0, Math.round((e.ended - e.started) / 1000));
+    return s < 60 ? s + ' 秒' : Math.floor(s / 60) + ' 分 ' + (s % 60) + ' 秒';
+  }
+  function taskCard(e) {
+    let card = tasks.get(e.id);
+    if (!card) {
+      const tool = ['claude', 'codex', 'agy'].includes(e.tool) ? e.tool : '';
+      card = { node: el('button', { type: 'button', className: 'task' }), mark: el('span', { className: 'mark tool-' + tool, ariaHidden: 'true', html: icon(tool || 'spark', 16) }),
+        title: el('b'), line: el('span', { className: 'line' }), state: el('span', { className: 'state' }) };
+      card.node.append(card.mark, el('span', { className: 'body' }, card.title, card.line), card.state, chev());
+      tasks.set(e.id, card);
+      // the card takes the place of the step that gave the task out: it says the same, and more
+      const step = Array.from(said.querySelectorAll('.step:not([data-task])')).reverse().find(n => /^派给 /.test((n.querySelector('.what') || {}).textContent || ''));
+      if (step) { step.dataset.task = e.id; step.after(card.node); step.hidden = true; }
+      else intoSteps(said, card.node);
+    }
+    card.node.onclick = () => { if (e.terminal) location.href = '?id=' + encodeURIComponent(e.terminal) + '&from=task'; };
+    card.node.dataset.state = e.state;
+    card.title.textContent = (TOOLS[e.tool] || e.tool) + ' · ' + (e.title || '子任务');
+    card.line.textContent = e.state === 'completed' ? (e.said || '已交回结果') : e.state === 'waiting' ? '在等回答：' + (e.question || '') : e.state === 'running' ? (e.worktree ? '在独立工作树里进行' : '正在进行') : (e.error || '');
+    const took = tookOf(e);
+    card.state.textContent = (TASK_STATES[e.state] || e.state) + (took ? ' · ' + took : '');
+  }
   const shotsOf = names => RemoteAttach.shots(names, { base: '../', dir: terminal ? terminal.dir : '', from: 'terminal' });
   function userNode(text) {
     const { text: words, names } = RemoteAttach.split(text);
@@ -284,7 +328,7 @@
       if (changed) saveMine();
       endTurn(lastWords); lastWords = null;
       item.shown = shownUserText(item.text);
-      node = userNode(item.shown);
+      node = RELAYED.test(item.shown) ? relayedNode(item.shown) : userNode(item.shown);
     } else if (e.kind === 'text') {
       node = el('div', { className: 'text md' });
       setText(node, item.text, true);
@@ -301,7 +345,7 @@
     items.set(e.id, item);
     if (e.kind === 'step' || e.kind === 'thought') intoSteps(said, node);
     else said.append(node);
-    if (e.kind === 'user') said.append(metaNode(item.shown, item.at, true));
+    if (e.kind === 'user' && !RELAYED.test(item.shown)) said.append(metaNode(item.shown, item.at, true));
     if (e.kind === 'text' || e.kind === 'thought') write(e.id);
     return item;
   }
@@ -340,7 +384,7 @@
     let words = null;      // the last answer before the next message, which gets the meta line
     const close = () => { if (words) words.node.after(metaNode(words.text, 0, false)); words = null; };
     (messages || []).forEach(m => {
-      if (m.role === 'user') { const shown = shownUserText(m.text); close(); box.append(userNode(shown), metaNode(shown, 0, true)); }
+      if (m.role === 'user') { const shown = shownUserText(m.text); close(); if (RELAYED.test(shown)) box.append(relayedNode(shown)); else box.append(userNode(shown), metaNode(shown, 0, true)); }
       else if (m.role === 'switch') {
         close();
         const t = m.tool || '';
@@ -386,6 +430,7 @@
         if (e.end === 'stopped') said.append(el('div', { className: 'note', textContent: '已停止' }));
         else if (e.end === 'failed') said.append(el('div', { className: 'note bad', textContent: e.error ? '没有完成：' + e.error : '没有完成' }));
         break;
+      case 'task': taskCard(e); break;
       case 'note': said.append(el('div', { className: 'note', textContent: e.text })); break;
     }
   }

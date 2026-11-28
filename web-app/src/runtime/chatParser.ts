@@ -1,4 +1,4 @@
-import type { ChatChunk, ChatMessageItem } from './types';
+import type { ChatChunk, ChatMessageItem, TaskCard } from './types';
 
 const MAX_TOOL_OUTPUT_CHARS = 32 * 1024;
 const TOOL_HEAD_CHARS = 16 * 1024;
@@ -13,6 +13,9 @@ function boundToolOutput(prev: string, added: string): string {
 
 const DECIDED: Record<string, string> = { allow: '已允许', always: '已总是允许', deny: '已拒绝', gone: '已不再等待' };
 const HANDOVER_SEP = '\n\n【现在的要求】\n';
+
+/** What Remote AI brought back from the tasks a conversation gave out: shown folded, not as the user's words. */
+export const RELAYED = /^【子任务(结果|提问)】/;
 
 function stripHandoverAsk(text: string): string {
   if (!text.startsWith('【对话交接】')) return text;
@@ -30,6 +33,8 @@ export class ChatTimelineReducer {
   private turnStarted = 0;
   private items: ChatMessageItem[] = [];
   private index = new Map<string, number>();
+  /** A task's card (by its event id) and the item it is shown as. */
+  private cards = new Map<string, string>();
   private lastSeq = 0;
   private rest = '';
   private cache: ChatMessageItem[] = [];
@@ -40,6 +45,7 @@ export class ChatTimelineReducer {
     this.turnStarted = 0;
     this.items = [];
     this.index.clear();
+    this.cards.clear();
     this.lastSeq = 0;
     this.rest = '';
     this.cache = [];
@@ -113,12 +119,13 @@ export class ChatTimelineReducer {
             this.turnStarted = Number(ev.at);
             this.phase = { state: 'busy', at: this.turnStarted };
           }
+          const text = stripHandoverAsk(String(ev.text || ''));
           this.add({
             id,
-            role: 'user',
+            role: RELAYED.test(text) ? 'relayed' : 'user',
             op: ev.op,
             ops: Array.isArray(ev.ops) ? ev.ops.map(String) : undefined,
-            text: stripHandoverAsk(String(ev.text || '')),
+            text,
             at: ev.at,
           });
         }
@@ -168,6 +175,20 @@ export class ChatTimelineReducer {
       case 'note':
         this.add({ id: key, role: 'note', text: String(ev.text || ''), at: ev.at });
         return;
+      case 'task': {
+        // one card per task, brought up to date in place; it takes the place of the step that gave the task out
+        const card = ev as TaskCard, placed = this.cards.get(id);
+        if (placed !== undefined) { this.change(placed, () => ({ task: card })); return; }
+        const step = [...this.items].reverse().find((it) => it.role === 'tool' && (it.title || '').startsWith('派给 '));
+        if (step) {
+          this.cards.set(id, step.id);
+          this.change(step.id, () => ({ role: 'task', task: card }));
+        } else {
+          this.cards.set(id, id);
+          this.add({ id, role: 'task', text: '', task: card, at: ev.started });
+        }
+        return;
+      }
     }
   }
 }
@@ -188,6 +209,7 @@ export function parseTranscriptMessages(reply: any): ChatMessageItem[] {
     if (role === 'note' || role === 'error')
       return { id, role, text: String(m.text || ''), at };
     const text = String(m.text || '');
+    if (role === 'user' && RELAYED.test(text)) return { id, role: 'relayed', text, at };
     return { id, role: role === 'user' ? 'user' : 'assistant', text: role === 'user' ? stripHandoverAsk(text) : text, at };
   });
 }

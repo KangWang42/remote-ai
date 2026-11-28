@@ -125,6 +125,9 @@ export interface TerminalEntry {
   team?: string;
   worktree?: string;
   branch?: string;
+  /** A task another conversation gave out: that conversation's terminal, and the task's id. */
+  parent?: string;
+  task?: string;
 }
 
 export interface SessionAsk {
@@ -181,8 +184,10 @@ export interface ChatMessageItem {
   id: string;
   op?: string;
   ops?: string[];
-  role: 'user' | 'assistant' | 'tool' | 'thought' | 'note' | 'ask' | 'error' | 'switch';
+  role: 'user' | 'assistant' | 'tool' | 'thought' | 'note' | 'ask' | 'error' | 'switch' | 'task' | 'relayed';
   tool?: string;
+  /** role `task`: a task this conversation gave out, as its last `task` event says it stands. */
+  task?: TaskCard;
   text: string;
   title?: string;
   detail?: string;
@@ -191,6 +196,20 @@ export interface ChatMessageItem {
   at?: number;
   askId?: string;
   options?: Array<{ id: string; label: string; detail?: string }>;
+}
+
+export interface TaskCard {
+  task_id: string;
+  tool: string;
+  title: string;
+  state: 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | string;
+  terminal: string;
+  started?: number;
+  ended?: number;
+  said?: string;
+  error?: string;
+  question?: string;
+  worktree?: string;
 }
 
 export interface GitFileSummary {

@@ -6,6 +6,9 @@ Peer chats are opened without MCP so consultation never recurses, their permissi
 answered automatically (reads allowed, everything else denied), and all peer chats and
 temporary config files are disposed when the caller chat ends.
 
+A conversation the phone runs may also hand work to another AI (`delegate_task`, `task_status`, `task_cancel`,
+`task_answer`, kept by delegations.py); a conversation that is such a task is not offered them.
+
 A tool reaches it through a stdio MCP bridge this agent runs as
 `python3 agent.py --mcp <socket> <token>`: the bridge speaks the MCP protocol on its standard
 input and output and forwards the calls to the socket, one length-prefixed frame per request.
@@ -19,8 +22,12 @@ import sys
 import threading
 import time
 
+import delegations as delegations_mod
+
 SERVER_NAME = "remote_ai"
 TOOL_NAME = "ask_ai"
+TASK_TOOLS = (delegations_mod.DELEGATE, delegations_mod.STATUS, delegations_mod.CANCEL, delegations_mod.ANSWER)
+TOOL_NAMES = (TOOL_NAME,) + TASK_TOOLS
 MCP_FLAG = "--mcp"
 DEFAULT_TIMEOUT_SECONDS = 240
 MAX_FRAME_BYTES = 16 * 1024 * 1024
@@ -62,6 +69,35 @@ def step_title(peer_tool, question):
     if len(first) > 140:
         first = first[:140] + "…"
     return "请教 " + who + ("：" + first if first else "")
+
+
+def own_tool(name):
+    """Which of this server's tools a chat driver's step calls, by the name its tool gives it; "" for none."""
+    name = name or ""
+    for one in TOOL_NAMES:
+        if name == one or name.endswith("__" + one) or name.endswith("_" + one):
+            return one
+    return ""
+
+
+def step_of(tool, given):
+    """The title of a step that calls one of this server's tools, and what it shows unfolded."""
+    given = given if isinstance(given, dict) else {}
+    word = lambda key: str(given.get(key) or "")
+    if tool == TOOL_NAME:
+        return step_title(word("tool"), word("question")), word("question")
+    if tool == delegations_mod.DELEGATE:
+        title = word("title").strip() or next((l.strip() for l in word("task").replace("\r\n", "\n").split("\n") if l.strip()), "")
+        if len(title) > 60:
+            title = title[:60] + "…"
+        return "派给 " + peers_label(word("tool")) + ("：" + title if title else ""), word("task")
+    if tool == delegations_mod.STATUS:
+        return "查看子任务 " + word("task_id"), ""
+    if tool == delegations_mod.CANCEL:
+        return "停止子任务 " + word("task_id"), word("reason")
+    if tool == delegations_mod.ANSWER:
+        return "回答子任务 " + word("task_id") + ("：" + word("answer") if word("answer") else ""), word("answer")
+    return tool, ""
 
 
 def peers_label(tool, labels=None):
@@ -114,7 +150,7 @@ class Peers:
     """The seats of this machine, and the Unix-domain socket that serves them."""
 
     def __init__(self, sock_path, find_tool, quota_of=None, config_dir="", labels=None,
-                 open_read_only=None, chat_tools=("claude", "codex"), bridge_script=None):
+                 open_read_only=None, chat_tools=("claude", "codex"), bridge_script=None, delegations=None):
         self.path = sock_path
         self.find_tool = find_tool or (lambda tool: None)
         self.quota_of = quota_of or (lambda tool: [])
@@ -123,6 +159,7 @@ class Peers:
         self.open_read_only = open_read_only      # (tool, launcher, folder) -> a Chat without MCP
         self.chat_tools = tuple(chat_tools)
         self.bridge_script = os.path.abspath(bridge_script or sys.argv[0])
+        self.delegations = delegations
         self.timeout_seconds = DEFAULT_TIMEOUT_SECONDS
         self.gate = threading.RLock()
         self.seats = {}
@@ -138,15 +175,16 @@ class Peers:
             self.listener.listen(8)
             threading.Thread(target=self._accept, daemon=True, name="peers").start()
 
-    def offer(self, caller_tool, folder):
-        """Offers `ask_ai` to a conversation of caller_tool working in folder. None when no
-        other read-only peer tool is installed here."""
-        if self.disposed or not folder or not self.available_peers(caller_tool):
+    def offer(self, caller_tool, folder, terminal="", child=False):
+        """Offers `ask_ai` to a conversation of caller_tool working in folder, and to one the phone runs (`terminal`)
+        that is no task itself (`child`) the task tools. None when there is nothing to offer."""
+        tasks = self.delegations is not None and bool(terminal) and not child and bool(self.available_tools())
+        if self.disposed or not folder or not (self.available_peers(caller_tool) or tasks):
             return None
         token = secrets.token_hex(16)
         command, args = self.bridge_command(token)
         config_file = self._write_claude_config(token, command, args)
-        seat = {"token": token, "caller_tool": caller_tool or "", "folder": folder,
+        seat = {"token": token, "caller_tool": caller_tool or "", "folder": folder, "terminal": terminal or "", "child": bool(child),
                 "config_file": config_file, "consultants": {}, "closed": False}
         with self.gate:
             if self.disposed:
@@ -218,19 +256,19 @@ class Peers:
         if self.path:
             self._delete_quietly(self.path)
 
-    def available_peers(self, caller_tool):
-        peers = []
-        for tool in self.chat_tools:
-            if tool != caller_tool and self.find_tool(tool):
-                peers.append(tool)
-        return peers
+    def available_tools(self):
+        return [tool for tool in self.chat_tools if self.find_tool(tool)]
 
-    def tool_definitions(self, seat):
-        peers = self.available_peers(seat["caller_tool"])
-        if not peers:
-            return []
+    def available_peers(self, caller_tool):
+        return [tool for tool in self.available_tools() if tool != caller_tool]
+
+    def can_delegate(self, seat):
+        return self.delegations is not None and bool(seat.get("terminal")) and not seat.get("child") and bool(self.available_tools())
+
+    def tool_lines(self, tools):
+        """One line per tool for the lists the AI reads: its name, what it is good at, and how much is left."""
         lines = []
-        for peer in peers:
+        for peer in tools:
             strength = "，" + STRENGTHS[peer] if peer in STRENGTHS else ""
             quota = ""
             try:
@@ -240,6 +278,14 @@ class Peers:
             if room != "额度未知":
                 quota = "；" + room + ("（非必要请勿调用）" if room.endswith("紧张") else "")
             lines.append("- " + peer + "（" + peers_label(peer, self.labels) + strength + quota + "）")
+        return lines
+
+    def tool_definitions(self, seat):
+        tasks = self.task_tool_definitions(self.available_tools()) if self.can_delegate(seat) else []
+        peers = self.available_peers(seat["caller_tool"])
+        if not peers:
+            return tasks
+        lines = self.tool_lines(peers)
         description = ("向同一项目中的另一位 AI 只读请教或请求交叉审查（例如架构权衡、疑难排查、方案复核或代码审查）。"
                        "对方默认只读，只给意见、不修改文件；同一段对话内再次请教同一 AI 会延续上下文，传入 fresh=true 可开启新上下文。\n"
                        "当前可请教的 AI：\n" + "\n".join(lines) +
@@ -254,7 +300,52 @@ class Peers:
                                "description": "为 true 时不延续本次对话里与该 AI 之前的请教记录，另起一段新的只读上下文（默认 false）"}},
                      "required": ["tool", "question"], "additionalProperties": False},
                  "annotations": {"title": "请教另一位 AI（只读）", "readOnlyHint": True,
-                                 "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}}]
+                                 "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}}] + tasks
+
+    def task_tool_definitions(self, tools):
+        """The task tools (the same words as agent-windows/Peers.cs): their descriptions are the rules the AI works by."""
+        schema = lambda properties, required: {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
+        text = lambda about: {"type": "string", "description": about}
+        marks = lambda title, read_only, destructive: {"title": title, "readOnlyHint": read_only, "destructiveHint": destructive,
+                                                       "idempotentHint": read_only, "openWorldHint": False}
+        task_id = text("delegate_task 返回的 task_id")
+        about = ("派一位 AI 在这台电脑上独立完成一项子任务。它是一段新的对话，看不到你的对话历史，task 里要写清背景、范围、负责的文件和要交回的验收证据。"
+                 "调用会立即返回 task_id，子任务在后台进行，完成后结果会作为一条消息自动送回这段对话：不要查询或等待，继续做其它事，没有其它事就结束本轮回答。\n"
+                 "适合：需要另一种工具的长处；几块互不依赖的工作要并行；需要独立的 Git 工作树（isolation=worktree，改动不进主目录）。\n"
+                 "不适合：简单的活自己做，不为分工而拆分；同一工具、同一模型的小活用你自带的子代理或自己做；审查意见里的小问题自己改。"
+                 "每次复审都派一个新的子任务，写明要点、已有发现和异议。用户明确要求“协作任务”时才用 start_collaboration。\n"
+                 "子任务的权限不超过本对话；本对话被停止或结束时，子任务一并停止。\n"
+                 "可派的 AI：\n" + "\n".join(self.tool_lines(tools)))
+        return [
+            {"name": delegations_mod.DELEGATE, "description": about, "inputSchema": schema({
+                "tool": {"type": "string", "enum": list(tools), "description": "做这项子任务的 AI：" + " / ".join(tools)},
+                "task": text("完整的任务说明：背景与已定约束、成品与范围（负责哪些文件、不碰哪些）、接口约定、已有线索、要交回的验收证据"),
+                "title": text("卡片上显示的简短标题，不超过 20 字"),
+                "model": text("选填：该工具提供的模型名；省略用工具默认模型"),
+                "isolation": {"type": "string", "enum": list(delegations_mod.ISOLATIONS),
+                              "description": "shared（默认）：在本项目目录里工作；worktree：在新的独立 Git 工作树里工作，改动不进主目录"}}, ["tool", "task"]),
+             "annotations": marks("派出子任务", False, False)},
+            {"name": delegations_mod.STATUS, "description": "读取你派出的一个子任务的状态和结果。只在送回的消息说“用 task_status 读取”或用户问起时用；不要用来轮询进行中的子任务。",
+             "inputSchema": schema({"task_id": task_id}, ["task_id"]), "annotations": marks("查看子任务", True, False)},
+            {"name": delegations_mod.CANCEL, "description": "停止你派出的一个子任务：不再需要、要换人重做或用户要求少派时。已经结束的子任务保留结果。",
+             "inputSchema": schema({"task_id": task_id, "reason": text("选填：停止的原因")}, ["task_id"]), "annotations": marks("停止子任务", False, True)},
+            {"name": delegations_mod.ANSWER, "description": "回答子任务提出的问题（送回的消息会列出问题和选项）。答案能从任务和用户的要求推出时才代答，推不出时先问用户。",
+             "inputSchema": schema({"task_id": task_id, "answer": text("选项的序号（从 1 开始）或选项原文")}, ["task_id", "answer"]),
+             "annotations": marks("回答子任务的问题", False, False)}]
+
+    def task_call(self, seat, name, args):
+        if not self.can_delegate(seat):
+            return self._fail("这段对话不能派出子任务")
+        args = args if isinstance(args, dict) else {}
+        d, task_id = self.delegations, str(args.get("task_id") or "")
+        back = (d.start(seat["terminal"], seat["caller_tool"], args) if name == delegations_mod.DELEGATE
+                else d.status(seat["terminal"], task_id) if name == delegations_mod.STATUS
+                else d.cancel(seat["terminal"], task_id, str(args.get("reason") or "")) if name == delegations_mod.CANCEL
+                else d.answer(seat["terminal"], task_id, str(args.get("answer") if args.get("answer") is not None else "")) if name == delegations_mod.ANSWER
+                else self._fail("不支持的工具：" + str(name)))
+        if back.get("ok") is not True:
+            return back
+        return {"ok": True, "text": d.said(name, back)}
 
     def room(self, windows):
         if not windows:
@@ -396,6 +487,8 @@ class Peers:
             return {"ok": True, "tools": self.tool_definitions(seat)}
         if op == "call":
             return self.ask(seat, _text(req, "tool"), _text(req, "question"), _at(req, "fresh") is True)
+        if op == "task":
+            return self.task_call(seat, _text(req, "name"), _at(req, "args"))
         return self._fail("不支持的请求")
 
     # ---- the socket server: one frame in, one reply out (as the Windows pipe serves)
@@ -466,7 +559,7 @@ def bridge(sock_path, token, input=None, output=None, call_handler=None):
     def dispatch_call(request_id, payload):
         back = pipe_call(payload, (DEFAULT_TIMEOUT_SECONDS + 30) * 1000)
         ok = bool(back and _at(back, "ok") is True)
-        text = _text(back, "text") if ok else (_text(back, "error") or "请教失败") if back else "电脑端协作服务暂时不可用或调用已取消"
+        text = _text(back, "text") if ok else (_text(back, "error") or ("请教失败" if payload["op"] == "call" else "子任务操作失败")) if back else "电脑端协作服务暂时不可用或调用已取消"
         reply(request_id, tool_result(text, not ok))
 
     for raw in stream_in:
@@ -499,13 +592,14 @@ def bridge(sock_path, token, input=None, output=None, call_handler=None):
         elif method == "tools/call":
             name = _text(params, "name")
             arguments = _at(params, "arguments") or {}
-            if name != TOOL_NAME:
+            if name not in TOOL_NAMES:
                 fail(request_id, -32602, "不支持的工具：" + name)
                 continue
             payload = {"op": "call", "token": token,
                        "tool": _text(arguments, "tool"),
                        "question": _text(arguments, "question"),
-                       "fresh": _at(arguments, "fresh") is True}
+                       "fresh": _at(arguments, "fresh") is True} if name == TOOL_NAME else \
+                {"op": "task", "token": token, "name": name, "args": arguments if isinstance(arguments, dict) else {}}
             threading.Thread(target=dispatch_call, args=(request_id, payload), daemon=True).start()
         else:
             fail(request_id, -32601, "Method not found")

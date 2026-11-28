@@ -437,6 +437,19 @@ class Pure(unittest.TestCase):
                 agent.files(root, path, action, 0)
         with self.assertRaises(agent.OpError):
             agent.files(root, ".hidden", "file_read", 5)
+        # a file named without its folder, as answers name them, is found by that name: nearest first, no links followed
+        os.makedirs(root + "/另/子")
+        with open(root + "/另/子/文件.bin", "w") as stream:
+            stream.write("x")
+        os.makedirs(root + "/node_modules/子")
+        with open(root + "/node_modules/子/文件.bin", "w") as stream:
+            stream.write("x")
+        self.assertEqual(agent.find_file(root, "文件.bin"), {"found": ["子/文件.bin", "另/子/文件.bin"], "more": False})
+        self.assertEqual(agent.find_file(root, "另\\子\\文件.BIN")["found"], ["另/子/文件.bin"])
+        self.assertEqual(agent.find_file(root, "secret")["found"], [])
+        for given in ("", "../x", "a//b"):
+            with self.assertRaises(agent.OpError, msg=given):
+                agent.find_file(root, given)
 
     def test_tool_argv(self):
         sid = "11111111-2222-3333-4444-555555555555"

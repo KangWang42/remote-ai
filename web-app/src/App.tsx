@@ -161,7 +161,7 @@ export function App() {
   const features = device?.features || [];
 
   const findThread = (key: string, terminal: string): Thread | null =>
-    model.byKey.get(key) || (terminal ? model.all.find((t) => t.terminal?.id === terminal) || null : null);
+    model.byKey.get(key) || (terminal ? [...model.byKey.values()].find((t) => t.terminal?.id === terminal) || null : null);
   const current = center.kind === 'thread' ? findThread(sel.key, sel.terminal) : null;
   const splitThread = split && current ? model.byKey.get(split) || null : null;
 
@@ -528,6 +528,7 @@ export function App() {
         openTerminal(terminal);
         say('已切换 AI 继续');
       }}
+      onOpenTerminal={openTerminal}
       onOpenFiles={() => (setBrowse(''), setInspectorTab('files'), setInspector(true))}
       onToggleInspector={() => setInspector((v) => !v)}
       onToggleTerminal={() => setTermOpen((v) => !v)}

@@ -1128,10 +1128,13 @@
       }
     });
     const out = [];
+    const terminalIds = new Set((data.terminals || []).map(t => t.id));
     (data.terminals || []).forEach(t => {
       const s = t.session ? saved[t.tool + ':' + t.session] || null : null;
       const belongs = (t.team && teamIds.has(t.team)) || (s && s.team && teamIds.has(s.team));
       if (belongs) return;
+      // a task another conversation gave out is found in that conversation's card, unless it waits for the user
+      if (t.parent && terminalIds.has(t.parent) && phaseOf(t) !== 'confirm') return;
       const phase = phaseOf(t), live = running(t), tool = isAgyShell(t) ? 'agy' : t.tool;
       // an ended terminal whose conversation is listed is found there, to be gone on with: it is not listed twice
       out.push({ t, s, tool, title: t.title, place: t.dir || base(t.folder), project: t.dir, apart: !t.dir, live, phase, rank: PHASE[phase][1], at: t.phase_at || t.created,

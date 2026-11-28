@@ -311,13 +311,21 @@ Linux `RemoteMaxMode=read` starts Qoder with `--permission-mode plan` and Cline 
 
 ### Files
 
-`POST /api/files` `{"id": "<16 to 32 hex digits>", "action": "file_list" | "file_read", "dir": "<workspace>", "path": "sub/folder", "offset": 0}`
+`POST /api/files` `{"id": "<16 to 32 hex digits>", "action": "file_list" | "file_read" | "file_find", "dir": "<workspace>", "path": "sub/folder", "offset": 0}`
 is held until the computer has answered, at most 25 seconds; it needs the `files` capability. `path` is relative
 to the project folder, with `/`.
 
 - `file_list` → `{"path", "entries": [{"name", "dir", "size", "modified" (ms), "hidden"}], "more"}`; at most 3,000 entries.
 - `file_read` → `{"path", "size", "modified", "offset", "data" (base64), "end"}`; one piece is at most 737,280 bytes,
   the next is asked for with `offset` advanced by the bytes received.
+- `file_find` (capability `file-find`; Windows program and Linux Python agent) → `{"found": ["a/b/Peers.cs", ...], "more"}`:
+  the project's files whose path ends with `path` (a bare name such as `Peers.cs`, or a tail such as `chat/chat.js`;
+  case-insensitive, `\` read as `/`), nearest to the project folder first, at most 20. The folder is walked breadth first
+  without following links and without entering `node_modules`, `bin`, `obj`, `dist`, `build`, `target`, `__pycache__`,
+  `venv` or hidden folders (unless `path` names one), and stops after 200,000 entries or 3 seconds (`more` is then
+  true). The files page asks it when a file opened by a link is not where the link says: an answer naming one file
+  opens it in place (`history.replaceState`), several are listed to choose from. A computer without the capability is
+  refused by the relay and the page shows the original error.
 
 A refusal is `400 {"error": "..."}`. The computer answers only for paths inside the project folder and refuses a
 path whose real location, after links and junctions, is outside it. The relay keeps nothing of an answer.
@@ -964,6 +972,46 @@ peer runs in `read` mode without MCP (preventing recursion), receives a compact 
 turn, automatically denies write/command permission prompts
 (allowing only read/search inspection on ACP), reuses its read-only session for follow-ups unless `fresh: true`, and is
 disposed together with any temporary config file when the caller chat closes.
+
+#### Tasks a conversation gives out (`delegate_task`)
+
+A conversation the phone runs (a chat with a terminal id, not one in read mode) is also offered four task tools by the
+same `remote_ai` server (`agent-windows/Delegations.cs`, `agent-linux/delegations.py`; capability `tasks`). A
+conversation that is itself such a task is offered `ask_ai` only, so work is given out one level deep.
+
+- `delegate_task(tool, task, title?, model?, isolation?)`: begins a new conversation of `tool` (any installed chat tool,
+  the caller's own included) in the caller's folder, or with `isolation: "worktree"` in a new Git worktree of the project
+  (`Worktrees.CreateSessionWorktree` on Windows, a detached worktree on Linux). Its permission mode is the caller's,
+  never wider than `RemoteMaxMode`. Its first words are `【子任务】<caller> 在另一段对话里把这项工作派给你…` followed by
+  `task` and how to report. The call returns at once: `已派出子任务 <id>（<tool> · <title>）` and the instruction not to
+  wait or poll. At most 6 tasks of one conversation run at once.
+- `task_status(task_id)`: state and, once ended, the result (folded to 24,000 characters); marks it delivered.
+- `task_cancel(task_id, reason?)`: stops and closes the task's conversation; an ended task keeps its result.
+- `task_answer(task_id, answer)`: answers the question with choices a task asks, by the choice's number (from 1) or
+  words. Approvals (commands, edits) are not answerable here: they stay on the phone.
+
+When a task's turn ends (`done` → completed, `stopped` → cancelled, `failed`), its conversation is closed and its
+result is told to the giver with `say`: at once where the giver is `idle`, else when the giver's turn ends; results of
+several tasks that ended meanwhile go in one message. The message begins `【子任务结果】…由 Remote AI 送回，不是用户的新要求`,
+gives each task as `## 子任务 <id>（<tool> · <title>）已完成，用时 N 秒` and its result (12,000 characters in all; a
+longer one is folded where it is alone, else pointed to `task_status`), says how many still run, and asks to go on with
+the work. A question with choices from a task is told the same way, beginning `【子任务提问】`. The giver stopped
+(`turn` `stopped`) or ended stops its open tasks. A task whose conversation ends by itself fails and is told.
+
+What the phone sees:
+
+- The giver's stream carries a `task` event per change: `{"t": "task", "id": "task-<id>", "task_id", "tool", "title",
+  "state": "running" | "waiting" | "completed" | "failed" | "cancelled", "terminal" (the task's conversation),
+  "started", "ended"?, "model"?, "error"?, "worktree"?, "branch"?, "question"? and "choices"? (while waiting),
+  "said"? (first line of the result)}`. The same `id` again updates the card in place.
+- The task's terminal in the list carries `parent` (the giver's terminal id) and `task` (the 8-hex id); the relay keeps
+  both. The pages leave a task out of the lists while its giver is listed, unless it waits for a confirmation.
+- The conversation pages show the card in place of the `派给 …` step of the call, open the task's conversation from it
+  (`chat/?id=<terminal>&from=task`, whose back arrow returns), and fold user items that begin with `【子任务结果】` or
+  `【子任务提问】`.
+
+Tasks are kept in memory: the program restarts for an update only when every conversation is quiet, so no task is
+running then.
 
 Claude permission suggestions are validated by the computer before offering `always`, both for chats
 (Windows and Python Linux) and Windows `PermissionRequest` hooks. Only a complete `addRules` / `allow`

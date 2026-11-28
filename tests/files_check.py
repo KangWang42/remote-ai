@@ -186,6 +186,9 @@ def main():
         if os.environ.get(wanted) and kind in made:
             (project / made[kind]).write_bytes(Path(os.environ[wanted]).read_bytes())
     (outside / "secret.txt").write_text("not part of the project")
+    for twin in ("twins/a", "twins/b"):         # two files of one name, for finding a file by its name
+        (project / twin).mkdir(parents=True, exist_ok=True)
+        (project / twin / "same.txt").write_text(twin)
     linked = subprocess.run(["cmd", "/c", "mklink", "/J", str(project / "link"), str(outside)], capture_output=True).returncode == 0
     (data / "config.json").write_text(json.dumps({"Server": "http://127.0.0.1:%d" % PORT, "RemoteEnabled": True, "RemoteMaxMode": "full", "RemoteDirs": ["cohort-study=%s" % project]}), encoding="utf-8")
     hidden = {"creationflags": subprocess.CREATE_NO_WINDOW}
@@ -272,6 +275,14 @@ def main():
             assert "之外" in files("file_list", "link", expect=400)["error"] and "之外" in files("file_read", "link/secret.txt", expect=400)["error"]
         assert "没有这个项目" in files("file_list", folder="other", expect=400)["error"]
         assert "不存在" in files("file_read", "missing.txt", expect=400)["error"]
+        # a file named without its folder, as answers name them, is found by that name: nearest first, never outside
+        assert "file-find" in features
+        assert files("file_find", "cohort.csv") == {"found": ["data/cohort.csv"], "more": False}
+        assert files("file_find", "DATA\\Cohort.CSV")["found"] == ["data/cohort.csv"]
+        assert files("file_find", "same.txt")["found"] == ["twins/a/same.txt", "twins/b/same.txt"]
+        assert files("file_find", "missing.txt")["found"] == [] and files("file_find", "secret.txt")["found"] == []
+        for path in ("", "../outside/secret.txt", "a//b.txt"):
+            assert "无效" in files("file_find", path, expect=400)["error"], path
         assert "文件夹" in files("file_read", "data", expect=400)["error"] and "不是文件夹" in files("file_list", "analysis.py", expect=400)["error"]
         cookie.clear()
         call("/api/files", {"id": secrets.token_hex(16), "action": "file_list", "dir": "cohort-study", "path": ""}, 401)
@@ -337,6 +348,11 @@ def main():
                          "slides": "document.querySelectorAll('.slide-looks .pptx-preview-wrapper > *').length >= 2", "notebook": "!!document.querySelector('.notebook .code')", "code": "!!document.querySelector('.code .hljs-keyword')",
                          "unknown": "!!document.querySelector('.unknown')"}
                 shot(base + "/?project=cohort-study", "project.png", "!document.getElementById('project').hidden")
+                # a link that names a file without its folder opens the one file of that name, or offers the several
+                shot(base + "/files/?dir=cohort-study&from=terminal&file=cohort.csv", "found.png", "document.querySelectorAll('.grid td').length > 8")
+                assert ask("Runtime.evaluate", expression="location.search", returnByValue=True)["result"]["value"].endswith("&path=data&file=cohort.csv")
+                shot(base + "/files/?dir=cohort-study&from=terminal&file=same.txt", "found-several.png", "document.querySelectorAll('#entries li').length === 2")
+                assert ask("Runtime.evaluate", expression="[...document.querySelectorAll('#entries .meta')].map(m => m.textContent).join('|')", returnByValue=True)["result"]["value"] == "twins/a|twins/b"
                 shot(base + "/files/?dir=cohort-study", "folder.png", "document.querySelectorAll('#entries li').length > 5")
                 # No boxed action toolbar: upload lives in header.top, root hides #crumbs, and #entries uses .group.
                 folder_chrome = ask("Runtime.evaluate", expression="""(() => {

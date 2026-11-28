@@ -416,7 +416,7 @@ def _public_session(session, terminal=""):
 
 
 UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish", "file_upload_cancel")
-FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
+FILE_ACTIONS = ("file_list", "file_read", "file_find") + UPLOAD_ACTIONS
 FILE_SECONDS = 25
 WAKE_SECONDS = 85       # a message that is handed to a conversation where it sits idle takes a short run of its tool on the computer
 _ROUTE_URL = re.compile(r"^https?://[^/\s]+(?:/c/[a-f0-9]{20})?$")
@@ -1238,6 +1238,8 @@ class Relay:
                 raise RemoteError("电脑未连接或远控已关闭，请等待电脑上线后重试")
             if "files" not in self._device.get("features", []):
                 raise RemoteError("电脑端版本不支持查看文件，请更新电脑端")
+            if action == "file_find" and "file-find" not in self._device.get("features", []):
+                raise RemoteError("电脑端版本不支持按文件名查找，请更新电脑端")
             if action in UPLOAD_ACTIONS and "file-upload" not in self._device.get("features", []):
                 raise RemoteError("这台电脑暂不支持上传文件，请更新 Windows 电脑端")
             if folder not in self._device["workspaces"]:
@@ -1967,7 +1969,7 @@ class Relay:
             self._device.update(seen=now, instance=instance, enabled=info.get("enabled") is True,
                            version=str(info.get("version") or "")[:20], newer=str(info.get("newer") or "")[:20], shell=_shell(info.get("shell")),
                            max_mode=info.get("max_mode") if info.get("max_mode") in ("full", "edit", "read") else "",
-                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
+                           features=[x for x in info.get("features", []) if x in ("codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "update", "peek", "organize", "settings", "routes", "git", "worktree", "reach", "marks", "delete", "projects", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "file-find", "tasks") + tuple(tool + "-desktop-open" for tool in DESKTOP_TOOLS) + tuple(tool + "-team" for tool in TEAM_TOOLS)],
                            tools=[x for x in info.get("tools", []) if isinstance(x, str) and x in LABELS],
                            agy_external=[x for x in info["agy_external"][:16] if type(x) is int and 0 < x < 8640000000000000]
                            if info.get("enabled") is True and isinstance(info.get("agy_external"), list) else [],
@@ -2073,7 +2075,10 @@ class Relay:
                                      ("effort", lambda v: isinstance(v, str) and (not v or bool(_effort.fullmatch(v.lower())))),
                                      ("mode", lambda v: v in ("", "full", "edit", "read")),
                                      ("branch", lambda v: isinstance(v, str) and len(v) <= 120),
-                                     ("worktree", lambda v: isinstance(v, str) and len(v) <= 80)):
+                                     ("worktree", lambda v: isinstance(v, str) and len(v) <= 80),
+                                     # a task another conversation gave out: that conversation's terminal, and the task's id
+                                     ("parent", lambda v: isinstance(v, str) and (not v or bool(re.fullmatch(r"[a-f0-9]{32}", v)))),
+                                     ("task", lambda v: isinstance(v, str) and (not v or bool(re.fullmatch(r"[a-f0-9]{8}", v))))):
                         if k in item and check(item[k]):
                             val = item[k].strip().lower() if k == "effort" else item[k].strip()
                             if val != term.get(k, ""):

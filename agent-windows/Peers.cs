@@ -17,10 +17,16 @@ namespace RemoteCli {
 /// cross-review (`ask_ai`), delivered as a local MCP server over a named pipe. Each caller conversation gets its own
 /// seat (token, project folder, and cached read-only peer chats for follow-ups); peer chats are opened without MCP so
 /// consultation never recurses, and all peer chats and temporary config files are disposed when the caller chat ends.
+/// A conversation the phone runs may also hand work to another AI (`delegate_task`, `task_status`, `task_cancel`,
+/// `task_answer`, kept by Delegations.cs); a conversation that is such a task is not offered them.
 public sealed class Peers : IDisposable {
     public const string ServerName = "remote_ai";
     public const string ToolName = "ask_ai";
     public const string CollabToolName = "start_collaboration";
+    public const string DelegateToolName = "delegate_task", StatusToolName = "task_status", CancelToolName = "task_cancel", AnswerToolName = "task_answer";
+    static readonly string[] TaskTools = { DelegateToolName, StatusToolName, CancelToolName, AnswerToolName };
+    /// Every tool this server offers.
+    public static readonly string[] ToolNames = { ToolName, CollabToolName, DelegateToolName, StatusToolName, CancelToolName, AnswerToolName };
     public const string Flag = "--mcp";
     public const int DefaultTimeoutSeconds = 240;
     /// Antigravity CLI hard-aborts MCP tool calls at 180s and spills outputs over ~10 KB UTF-8 to disk.
@@ -54,6 +60,8 @@ public sealed class Peers : IDisposable {
 
     sealed class Seat {
         public string Token = "", CallerTool = "", Folder = "", ConfigFile = "", TerminalId = "", ProjectDir = "";
+        /// The conversation is itself a task another one gave out: it does the work, it gives none out.
+        public bool Child;
         public readonly object Gate = new object();
         public readonly Dictionary<string, Consultant> Consultants = new Dictionary<string, Consultant>();
         public bool Closed;
@@ -72,6 +80,7 @@ public sealed class Peers : IDisposable {
     readonly string program;
     readonly int timeoutSeconds;
     readonly CollabHooks collab;
+    readonly Delegations delegations;
     readonly object gate = new object();
     readonly Dictionary<string, Seat> seats = new Dictionary<string, Seat>();
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 };
@@ -79,7 +88,7 @@ public sealed class Peers : IDisposable {
 
     public string Pipe { get { return pipe; } }
 
-    public Peers(string pipeName, Func<string, string> findTool, Quotas quotas, string configDir, string program = null, int timeoutSeconds = DefaultTimeoutSeconds, CollabHooks collab = null) {
+    public Peers(string pipeName, Func<string, string> findTool, Quotas quotas, string configDir, string program = null, int timeoutSeconds = DefaultTimeoutSeconds, CollabHooks collab = null, Delegations delegations = null) {
         pipe = pipeName;
         this.findTool = findTool ?? (_ => null);
         this.quotas = quotas;
@@ -87,6 +96,7 @@ public sealed class Peers : IDisposable {
         this.program = String.IsNullOrWhiteSpace(program) ? DefaultProgram() : program;
         this.timeoutSeconds = Math.Max(2, timeoutSeconds);
         this.collab = collab;
+        this.delegations = delegations;
         new Thread(Listen) { IsBackground = true, Name = "peers" }.Start();
     }
 
@@ -95,17 +105,18 @@ public sealed class Peers : IDisposable {
         return File.Exists(beside) ? beside : null;
     }
 
-    /// Offers `remote_ai` MCP tools (`ask_ai` and, for promotable project chats, `start_collaboration`) to a
-    /// conversation of `callerTool` working in `folder`.
-    public Chat.McpServer Offer(string callerTool, string folder, string terminalId = "", string projectDir = "") {
+    /// Offers `remote_ai` MCP tools (`ask_ai`; for project chats the phone runs `start_collaboration`; for chats the
+    /// phone runs the task tools) to a conversation of `callerTool` working in `folder`. `child`: it is a task itself.
+    public Chat.McpServer Offer(string callerTool, string folder, string terminalId = "", string projectDir = "", bool child = false) {
         if (disposed || String.IsNullOrEmpty(program) || !File.Exists(program) || String.IsNullOrEmpty(folder)) return null;
         bool hasPeers = AvailablePeers(callerTool).Length > 0;
-        bool hasPromote = collab != null && !String.IsNullOrEmpty(terminalId) && !String.IsNullOrEmpty(projectDir) && AvailableTools().Length > 0;
-        if (!hasPeers && !hasPromote) return null;
+        bool hasPromote = !child && collab != null && !String.IsNullOrEmpty(terminalId) && !String.IsNullOrEmpty(projectDir) && AvailableTools().Length > 0;
+        bool hasTasks = !child && delegations != null && !String.IsNullOrEmpty(terminalId) && AvailableTools().Length > 0;
+        if (!hasPeers && !hasPromote && !hasTasks) return null;
         string token = Guid.NewGuid().ToString("N");
         string[] args = { Flag, pipe, token };
         string configFile = WriteClaudeConfig(token, program, args);
-        var seat = new Seat { Token = token, CallerTool = callerTool ?? "", Folder = folder, ConfigFile = configFile, TerminalId = terminalId ?? "", ProjectDir = projectDir ?? "" };
+        var seat = new Seat { Token = token, CallerTool = callerTool ?? "", Folder = folder, ConfigFile = configFile, TerminalId = terminalId ?? "", ProjectDir = projectDir ?? "", Child = child };
         lock (gate) {
             if (disposed) { DeleteQuietly(configFile); return null; }
             seats[token] = seat;
@@ -166,8 +177,11 @@ public sealed class Peers : IDisposable {
     string[] AvailablePeers(string callerTool) {
         return AvailableTools().Where(t => t != callerTool).ToArray();
     }
+    bool CanDelegate(Seat seat) {
+        return delegations != null && !seat.Child && !String.IsNullOrEmpty(seat.TerminalId) && AvailableTools().Length > 0;
+    }
     bool CanPromoteSeat(Seat seat) {
-        return collab != null && collab.Promote != null && !String.IsNullOrEmpty(seat.TerminalId) && !String.IsNullOrEmpty(seat.ProjectDir)
+        return !seat.Child && collab != null && collab.Promote != null && !String.IsNullOrEmpty(seat.TerminalId) && !String.IsNullOrEmpty(seat.ProjectDir)
             && AvailableTools().Length > 0 && (collab.CanPromote == null || collab.CanPromote(seat.TerminalId));
     }
 
@@ -176,19 +190,7 @@ public sealed class Peers : IDisposable {
         var defs = new List<object>();
         string[] peers = AvailablePeers(seat.CallerTool);
         if (peers.Length > 0) {
-            var lines = new List<string>();
-            foreach (string peer in peers) {
-                string label = Tool.LabelOf(peer);
-                string strength = Strengths.ContainsKey(peer) ? "，" + Strengths[peer] : "";
-                string quota = "";
-                if (quotas != null) {
-                    Quotas.Window[] windows = null;
-                    try { windows = quotas.Of(peer); } catch (Exception) { }
-                    string room = Teams.Room(windows);
-                    if (room != "额度未知") quota = "；" + room + (room.EndsWith("紧张", StringComparison.Ordinal) ? "（非必要请勿调用）" : "");
-                }
-                lines.Add("- " + peer + "（" + label + strength + quota + "）");
-            }
+            var lines = ToolLines(peers);
             string description = "向同一项目中的另一位 AI 只读请教或请求交叉审查（例如架构权衡、疑难排查、方案复核或代码审查）。"
                 + "对方默认只读，只给意见、不修改文件；同一段对话内再次请教同一 AI 会延续上下文，传入 fresh=true 可开启新上下文。\n"
                 + "当前可请教的 AI：\n" + String.Join("\n", lines)
@@ -216,7 +218,7 @@ public sealed class Peers : IDisposable {
         if (CanPromoteSeat(seat)) {
             string[] allTools = AvailableTools();
             string desc = "将当前对话原地升级为多 AI 协作任务（保留当前对话全部上下文，当前对话担任分工协作的领队或写审的写手）。"
-                + "仅在用户明确要求开启协作时调用，不要未经用户请求擅自发起。调用时会先在用户手机上弹出确认卡片，用户允许后才正式开启。\n"
+                + "仅在用户明确要求开启协作任务时调用，不要未经用户请求擅自发起；只是把一项工作交给另一位 AI，用 delegate_task。调用时会先在用户手机上弹出确认卡片，用户允许后才正式开启。\n"
                 + "默认方式为分工协作（mode=\"lead\"，自动组队，自由轮数）。请务必在 context 中精炼总结前期已与用户确认的背景、方案、约束、关键文件路径和已完成进展，以便系统同步给新加入的成员。\n"
                 + "当前可用工具：" + String.Join(" / ", allTools.Select(t => t + "（" + Tool.LabelOf(t) + "）")) + "。";
             var schema = new Dictionary<string, object> {
@@ -243,7 +245,83 @@ public sealed class Peers : IDisposable {
                 { "inputSchema", schema },
                 { "annotations", annotations } });
         }
+        if (CanDelegate(seat)) defs.AddRange(TaskToolDefinitions(AvailableTools()));
         return defs.ToArray();
+    }
+
+    /// One line per tool for the lists the AI reads: its name, what it is good at, and how much of its limits is left.
+    List<string> ToolLines(IEnumerable<string> tools) {
+        var lines = new List<string>();
+        foreach (string tool in tools) {
+            string strength = Strengths.ContainsKey(tool) ? "，" + Strengths[tool] : "";
+            string quota = "";
+            if (quotas != null) {
+                Quotas.Window[] windows = null;
+                try { windows = quotas.Of(tool); } catch (Exception) { }
+                string room = Teams.Room(windows);
+                if (room != "额度未知") quota = "；" + room + (room.EndsWith("紧张", StringComparison.Ordinal) ? "（非必要请勿调用）" : "");
+            }
+            lines.Add("- " + tool + "（" + Tool.LabelOf(tool) + strength + quota + "）");
+        }
+        return lines;
+    }
+
+    /// The task tools. Their descriptions are the rules the AI works by: hand work out where another tool's strength,
+    /// parallel parts or a separate worktree help, do simple work itself, never wait on a task or poll it.
+    object[] TaskToolDefinitions(string[] tools) {
+        Func<Dictionary<string, object>, string[], Dictionary<string, object>> schema = (properties, required) => new Dictionary<string, object> {
+            { "type", "object" }, { "properties", properties }, { "required", required }, { "additionalProperties", false } };
+        Func<string, string, Dictionary<string, object>> text = (type, about) => new Dictionary<string, object> { { "type", type }, { "description", about } };
+        Func<string, bool, bool, Dictionary<string, object>> marks = (title, readOnly, destructive) => new Dictionary<string, object> {
+            { "title", title }, { "readOnlyHint", readOnly }, { "destructiveHint", destructive }, { "idempotentHint", readOnly }, { "openWorldHint", false } };
+        var taskId = text("string", "delegate_task 返回的 task_id");
+        string delegateAbout = "派一位 AI 在这台电脑上独立完成一项子任务。它是一段新的对话，看不到你的对话历史，task 里要写清背景、范围、负责的文件和要交回的验收证据。"
+            + "调用会立即返回 task_id，子任务在后台进行，完成后结果会作为一条消息自动送回这段对话：不要查询或等待，继续做其它事，没有其它事就结束本轮回答。\n"
+            + "适合：需要另一种工具的长处；几块互不依赖的工作要并行；需要独立的 Git 工作树（isolation=worktree，改动不进主目录）。\n"
+            + "不适合：简单的活自己做，不为分工而拆分；同一工具、同一模型的小活用你自带的子代理或自己做；审查意见里的小问题自己改。"
+            + "每次复审都派一个新的子任务，写明要点、已有发现和异议。用户明确要求“协作任务”时才用 start_collaboration。\n"
+            + "子任务的权限不超过本对话；本对话被停止或结束时，子任务一并停止。\n"
+            + "可派的 AI：\n" + String.Join("\n", ToolLines(tools));
+        return new object[] {
+            new Dictionary<string, object> { { "name", DelegateToolName }, { "description", delegateAbout },
+                { "inputSchema", schema(new Dictionary<string, object> {
+                    { "tool", new Dictionary<string, object> { { "type", "string" }, { "enum", tools }, { "description", "做这项子任务的 AI：" + String.Join(" / ", tools) } } },
+                    { "task", text("string", "完整的任务说明：背景与已定约束、成品与范围（负责哪些文件、不碰哪些）、接口约定、已有线索、要交回的验收证据") },
+                    { "title", text("string", "卡片上显示的简短标题，不超过 20 字") },
+                    { "model", text("string", "选填：该工具提供的模型名；省略用工具默认模型") },
+                    { "isolation", new Dictionary<string, object> { { "type", "string" }, { "enum", Delegations.Isolations }, { "description", "shared（默认）：在本项目目录里工作；worktree：在新的独立 Git 工作树里工作，改动不进主目录" } } } },
+                    new[] { "tool", "task" }) },
+                { "annotations", marks("派出子任务", false, false) } },
+            new Dictionary<string, object> { { "name", StatusToolName },
+                { "description", "读取你派出的一个子任务的状态和结果。只在送回的消息说“用 task_status 读取”或用户问起时用；不要用来轮询进行中的子任务。" },
+                { "inputSchema", schema(new Dictionary<string, object> { { "task_id", taskId } }, new[] { "task_id" }) },
+                { "annotations", marks("查看子任务", true, false) } },
+            new Dictionary<string, object> { { "name", CancelToolName },
+                { "description", "停止你派出的一个子任务：不再需要、要换人重做或用户要求少派时。已经结束的子任务保留结果。" },
+                { "inputSchema", schema(new Dictionary<string, object> { { "task_id", taskId }, { "reason", text("string", "选填：停止的原因") } }, new[] { "task_id" }) },
+                { "annotations", marks("停止子任务", false, true) } },
+            new Dictionary<string, object> { { "name", AnswerToolName },
+                { "description", "回答子任务提出的问题（送回的消息会列出问题和选项）。答案能从任务和用户的要求推出时才代答，推不出时先问用户。" },
+                { "inputSchema", schema(new Dictionary<string, object> { { "task_id", taskId }, { "answer", text("string", "选项的序号（从 1 开始）或选项原文") } }, new[] { "task_id", "answer" }) },
+                { "annotations", marks("回答子任务的问题", false, false) } } };
+    }
+
+    /// A call of a task tool, given to Delegations; what comes back is said in words the AI reads.
+    Dictionary<string, object> TaskCall(Seat seat, string name, Dictionary<string, object> args) {
+        if (!CanDelegate(seat)) return Fail("这段对话不能派出子任务");
+        args = args ?? new Dictionary<string, object>();
+        string id = Text(args, "task_id");
+        Dictionary<string, object> back =
+            name == DelegateToolName ? delegations.Start(seat.TerminalId, seat.CallerTool, args)
+            : name == StatusToolName ? delegations.Status(seat.TerminalId, id)
+            : name == CancelToolName ? delegations.Cancel(seat.TerminalId, id, Text(args, "reason"))
+            : name == AnswerToolName ? delegations.Answer(seat.TerminalId, id, Convert.ToString(At(args, "answer") ?? ""))
+            : Fail("不支持的工具：" + name);
+        if (!true.Equals(At(back, "ok"))) return back;
+        string said = Delegations.Said(name, back);
+        if (String.Equals(seat.CallerTool, "agy", StringComparison.OrdinalIgnoreCase) && Encoding.UTF8.GetByteCount(said) > AgyMaxAnswerBytes)
+            said = ProcessText.FoldHeadTailUtf8(said, AgyMaxAnswerBytes);
+        return new Dictionary<string, object> { { "ok", true }, { "text", said } };
     }
 
     Dictionary<string, object> Ask(Seat seat, string peerTool, string question, bool fresh, CancellationToken cancel) {
@@ -503,6 +581,8 @@ public sealed class Peers : IDisposable {
                         : Fail("当前对话已结束，无法请教其他 AI");
                 } else if (op == "list") {
                     reply = new Dictionary<string, object> { { "ok", true }, { "tools", ToolDefinitions(seat) } };
+                } else if (op == "task") {
+                    reply = TaskCall(seat, Text(req, "name"), At(req, "args") as Dictionary<string, object>);
                 } else if (op == "call" || op == "collab") {
                     // Watch for client disconnect (e.g. caller stopped/cancelled the MCP call) so the peer/confirmation stops too.
                     using (var stopWatch = new CancellationTokenSource()) {
@@ -622,7 +702,7 @@ public sealed class Peers : IDisposable {
                     } else if (method == "tools/call") {
                         string name = Text(p, "name");
                         var args = At(p, "arguments");
-                        if (name != ToolName && name != CollabToolName) {
+                        if (Array.IndexOf(ToolNames, name) < 0) {
                             reply(id, ToolResult("不支持的工具：" + name, true), framed);
                             continue;
                         }
@@ -633,9 +713,9 @@ public sealed class Peers : IDisposable {
                                 { "tool", Text(args, "tool") }, { "question", Text(args, "question") },
                                 { "fresh", true.Equals(At(args, "fresh")) } }
                             : new Dictionary<string, object> {
-                                { "op", "collab" }, { "token", token },
+                                { "op", name == CollabToolName ? "collab" : "task" }, { "token", token }, { "name", name },
                                 { "args", args as Dictionary<string, object> ?? new Dictionary<string, object>() } };
-                        string fallbackErr = name == ToolName ? "请教失败" : "开启协作失败";
+                        string fallbackErr = name == ToolName ? "请教失败" : name == CollabToolName ? "开启协作失败" : "子任务操作失败";
                         Task.Run(() => {
                             var back = pipeCall(reqKey, reqPayload, 3000);
                             if (back == null) reply(id, ToolResult("电脑端协作服务暂时不可用或调用已取消", true), framed);
@@ -728,6 +808,33 @@ public sealed class Peers : IDisposable {
     static object At(object from, string key) { var d = from as Dictionary<string, object>; object v; return d != null && d.TryGetValue(key, out v) ? v : null; }
     static string Text(object from, string key) { return At(from, key) as string ?? ""; }
 
+    /// Which of this server's tools a chat driver's step calls, by the name its tool gives it (`mcp__remote_ai__ask_ai`,
+    /// `ask_ai`, `remote_ai_ask_ai`); "" for none.
+    public static string OwnTool(string name) {
+        name = name ?? "";
+        foreach (string one in ToolNames)
+            if (name == one || name.EndsWith("__" + one, StringComparison.Ordinal) || name.EndsWith("_" + one, StringComparison.Ordinal)) return one;
+        return "";
+    }
+    /// The title of a step that calls one of this server's tools (`tool`, from OwnTool), and what it shows unfolded.
+    public static string StepOf(string tool, object input, out string detail) {
+        string task = Text(input, "task_id");
+        switch (tool) {
+            case ToolName: detail = Text(input, "question"); return StepTitle(Text(input, "tool"), detail);
+            case CollabToolName: detail = Text(input, "goal"); return CollabStepTitle(Text(input, "mode"), detail);
+            case DelegateToolName: {
+                detail = Text(input, "task");
+                string title = Text(input, "title").Trim();
+                if (title.Length == 0) title = detail.Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+                if (title.Length > 60) title = title.Substring(0, 60) + "…";
+                return "派给 " + Tool.LabelOf(Text(input, "tool")) + (title.Length > 0 ? "：" + title : "");
+            }
+            case StatusToolName: detail = ""; return "查看子任务 " + task;
+            case CancelToolName: detail = Text(input, "reason"); return "停止子任务 " + task;
+            case AnswerToolName: detail = Convert.ToString(At(input, "answer") ?? ""); return "回答子任务 " + task + (detail.Length > 0 ? "：" + detail : "");
+        }
+        detail = ""; return tool;
+    }
     /// Formats a step title for an `ask_ai` tool call across chat drivers.
     public static string StepTitle(string peerTool, string question) {
         string who = String.IsNullOrEmpty(peerTool) ? "其他 AI" : Tool.LabelOf(peerTool);

@@ -210,6 +210,15 @@ public abstract class Chat : IRunning {
         if (String.IsNullOrWhiteSpace(text)) return;
         lock (gate) { if (!Closed && !disposed) Note(text); }
     }
+    /// Shows the card of a task this conversation gave out (Delegations.cs) in its stream: a `task` event, the same
+    /// id again bringing it up to date.
+    public void Card(Dictionary<string, object> card) {
+        lock (gate) { if (!Closed && !disposed) Event(card); }
+    }
+    /// The choices of what it asks now, by the request's id; none where it asks for a decision, not a choice.
+    public IList<string> ChoicesOf(string ask) {
+        lock (gate) { Asked asked; return asks.TryGetValue(ask ?? "", out asked) ? asked.Choices.ToList() : new List<string>(); }
+    }
     void WithdrawInternal(string askId) {
         Action<string> notify = null;
         lock (gate) {
@@ -633,15 +642,11 @@ public sealed class ClaudeChat : Chat {
                 string toolName = Text(part, "name");
                 var input = At(part, "input");
                 var more = new Dictionary<string, object> { { "name", toolName }, { "state", "run" } };
-                string title;
-                if (toolName == "mcp__" + Peers.ServerName + "__" + Peers.ToolName || toolName.EndsWith("__" + Peers.ToolName, StringComparison.Ordinal)) {
-                    string question = Text(input, "question");
-                    title = Peers.StepTitle(Text(input, "tool"), question);
-                    if (question.Length > 0) more["detail"] = Cut(question, 2000);
-                } else if (toolName == "mcp__" + Peers.ServerName + "__" + Peers.CollabToolName || toolName.EndsWith("__" + Peers.CollabToolName, StringComparison.Ordinal)) {
-                    string goal = Text(input, "goal");
-                    title = Peers.CollabStepTitle(Text(input, "mode"), goal);
-                    if (goal.Length > 0) more["detail"] = Cut(goal, 2000);
+                string title, own = toolName.StartsWith("mcp__" + Peers.ServerName + "__", StringComparison.Ordinal) ? Peers.OwnTool(toolName) : "";
+                if (own.Length > 0) {
+                    string detail;
+                    title = Peers.StepOf(own, input, out detail);
+                    if (detail.Length > 0) more["detail"] = Cut(detail, 2000);
                 } else {
                     title = Brief(At(part, "name"), input);
                     string command = Text(input, "command");
@@ -689,8 +694,9 @@ public sealed class ClaudeChat : Chat {
         }
         string name = Text(request, "tool_name"), shown = Text(request, "display_name");
         var input = At(request, "input");
-        // Built-in Remote AI MCP tools run through Remote AI's own controls (`ask_ai` is read-only; `start_collaboration` shows Remote AI's own confirmation card).
-        if (mcp != null && (name == "mcp__" + mcp.Name + "__" + Peers.ToolName || name == "mcp__" + mcp.Name + "__" + Peers.CollabToolName)) {
+        // Built-in Remote AI MCP tools run through Remote AI's own controls (`ask_ai` is read-only; `start_collaboration`
+        // shows Remote AI's own confirmation card; a task given out never works more widely than this conversation).
+        if (mcp != null && name.StartsWith("mcp__" + mcp.Name + "__", StringComparison.Ordinal) && Peers.OwnTool(name).Length > 0) {
             Respond(id, new Dictionary<string, object> { { "behavior", "allow" }, { "updatedInput", input ?? new Dictionary<string, object>() } }, null);
             return;
         }
@@ -993,16 +999,10 @@ public sealed class CodexChat : JsonRpcChat {
             string toolName = Text(item, "tool");
             var more = new Dictionary<string, object> { { "name", "mcp" }, { "state", "run" } };
             string title;
-            if (toolName == Peers.ToolName) {
-                var argsObj = At(item, "arguments");
-                string question = Text(argsObj, "question");
-                title = Peers.StepTitle(Text(argsObj, "tool"), question);
-                if (question.Length > 0) more["detail"] = Cut(question, 2000);
-            } else if (toolName == Peers.CollabToolName) {
-                var argsObj = At(item, "arguments");
-                string goal = Text(argsObj, "goal");
-                title = Peers.CollabStepTitle(Text(argsObj, "mode"), goal);
-                if (goal.Length > 0) more["detail"] = Cut(goal, 2000);
+            if (Text(item, "server") == Peers.ServerName && Array.IndexOf(Peers.ToolNames, toolName) >= 0) {
+                string detail;
+                title = Peers.StepOf(toolName, At(item, "arguments"), out detail);
+                if (detail.Length > 0) more["detail"] = Cut(detail, 2000);
             } else {
                 title = Text(item, "server") + "：" + toolName;
             }

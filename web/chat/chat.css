@@ -98,6 +98,27 @@ main > .attach-tray { margin: 4px 12px 0; padding-left: 4px; }
 .step code { display: block; margin: 0 0 2px 30px; font-family: var(--mono); font-size: .84em; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
 .step pre { margin: 0 0 8px 30px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--chat-code-border, transparent); background: var(--chat-code-bg, var(--surface-sub, var(--bg))); font-family: var(--mono); font-size: .84em; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
 .step.shut pre, .step.shut code { display: none; }
+/* a task this conversation gave out: a row of the same list, its AI's mark, title, what came of it, and where it stands */
+.task { display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; min-height: 52px; padding: 6px 2px; text-align: left; color: var(--ink); }
+.task .mark { flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: var(--tool-tint, var(--accent)); background: color-mix(in srgb, var(--tool-tint, var(--accent)) 14%, transparent); }
+.task .mark.tool-claude { --tool-tint: #d97757; }
+.task .mark.tool-codex { --tool-tint: var(--accent); }
+.task .mark.tool-agy { --tool-tint: #6366f1; }
+.task[data-state="running"] .mark, .task[data-state="waiting"] .mark { animation: working 1.2s ease-in-out infinite; }
+.task .body { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.task b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .line { color: var(--muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .state { flex: none; color: var(--muted); font-size: .76rem; }
+.task .chev { transform: none; }
+.steps > [hidden]:first-child + .task { border-top: 0; }
+.task[data-state="waiting"] .state { color: var(--busy-dot, var(--busy)); font-weight: 600; }
+.task[data-state="failed"] .state { color: var(--bad); }
+/* what Remote AI brought back from those tasks: folded, since it is not the user's words */
+.relayed { display: grid; gap: 4px; }
+.relayed > button { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 2px; color: var(--muted); font-size: .84rem; text-align: left; }
+.relayed .mark { flex: none; width: 18px; height: 18px; display: grid; place-items: center; }
+.relayed .what { flex: 1; }
+.relayed > .text { padding: 8px 10px; border-radius: 10px; background: var(--chat-code-bg, var(--surface-sub, var(--bg))); font-size: .9rem; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- under a message: when it was said and a copy button; an answer's on the left, the user's on the right */

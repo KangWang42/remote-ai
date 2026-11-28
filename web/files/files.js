@@ -401,8 +401,37 @@
       $('loading').hidden = true;
     } catch (error) {
       if (mine !== run || error.message === 'left') return;
+      // An answer often names a file without its folder ('Peers.cs'): it is looked for in the project by that name.
+      if (/不存在/.test(error.message) && await lookFor(path, mine)) return;
+      if (mine !== run) return;
       problem('打不开这个文件', error.message, show);
     }
+  }
+  /** The project's files whose path ends with `path`: the one there is opened in its place, several are offered. */
+  async function lookFor(path, mine) {
+    let answer;
+    try { answer = await ask('file_find', path); } catch (error) { return false; }
+    const found = (answer && answer.found) || [];
+    if (mine !== run || !found.length) return false;
+    const at = p => ({ path: p.split('/').slice(0, -1).join('/'), file: p.split('/').pop() });
+    if (found.length === 1 && !answer.more) {
+      place = Object.assign(at(found[0]), { depth: (history.state && history.state.depth) || 0 });
+      history.replaceState(place, '', address(place));
+      show();
+      return true;
+    }
+    $('loading').hidden = true; $('file').hidden = true; $('folder').hidden = false; $('crumbs').hidden = true;
+    $('search').hidden = true; $('folder-note').hidden = !answer.more;
+    $('folder-note').textContent = '同名文件较多，只列出离项目根目录最近的 ' + found.length + ' 个。';
+    $('heading').textContent = place.file;
+    $('where').textContent = '项目里有 ' + found.length + (answer.more ? '+' : '') + ' 个同名文件';
+    $('entries').replaceChildren(...found.map(p => {
+      const name = p.split('/').pop(), folder = p.split('/').slice(0, -1).join('/'), picture = K.picture(name, false);
+      return el('li', { className: 'card' }, el('button', { type: 'button', className: 'open', onclick: () => go(at(p)) },
+        el('span', { className: 'tool kind-' + picture, html: ICON[picture] }),
+        el('span', { className: 'text' }, el('b', { textContent: name }), el('span', { className: 'meta', textContent: folder || dir })), ''));
+    }));
+    return true;
   }
   function unknown(size, why) {
     const picture = K.picture(place.file, false);

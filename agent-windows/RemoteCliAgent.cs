@@ -171,11 +171,14 @@ public sealed class TerminalAgent {
         NativeDesktop = new CodexDesktopSessions(OpenDesktopConversation);
         NativeDesktop.Changed += () => { sessionsDirty = true; Wake(); };
         Quotas = new Quotas(dataDir);
+        Delegations = new Delegations(new Delegations.Hands {
+            Begin = BeginTask, StateOf = StateOf, Say = SayToMember, Stop = StopMember, Close = CloseMember, Answer = AnswerIn, Card = CardIn });
+        Delegations.Changed += () => { soon = true; Wake(); };
         Peers = new Peers(RemoteCli.Peers.PipeName(dataDir), FindTool, Quotas, Path.Combine(dataDir, "mcp"), null, RemoteCli.Peers.DefaultTimeoutSeconds, new Peers.CollabHooks {
             CanPromote = CanPromoteTerminal,
             Confirm = ConfirmInTerminal,
             Promote = PromoteFromMcp
-        });
+        }, Delegations);
         Reach = new Reach(RemoteCli.Reach.PipeName(dataDir), null, KeptForPhone, InOwnTerminal, new Outbox(Path.Combine(dataDir, "outbox"))); Reach.Changed += () => { sessionsDirty = true; Wake(); }; Reach.Outbox.Changed += () => { sessionsDirty = true; Wake(); };
         Stats = new Stats(() => ClaudeSessions.Home, () => CodexSessions.Home, () => Antigravity.Home, Path.Combine(dataDir, "stats-ledger.json"));
         Schedules = new Schedules(Path.Combine(dataDir, "schedules.json"));
@@ -654,6 +657,61 @@ public sealed class TerminalAgent {
     public readonly Worktrees Worktrees;
     /// Local MCP service that lets an active conversation ask another AI in the same project for read-only advice (Peers.cs).
     public readonly Peers Peers;
+    /// Work a conversation the phone runs hands to another AI by itself (Delegations.cs): each task is a conversation
+    /// of the phone's that this program begins.
+    public readonly Delegations Delegations;
+    // ---- the tasks a conversation gives out: conversations the phone runs, begun by this program
+    /// Begins a task's conversation beside the one that gives it out: in its folder (or worktree), never working more
+    /// widely than it, or in a new worktree of the project where that is asked.
+    Delegations.Began BeginTask(Delegations.Opening one) {
+        var prefs = Preferences(); var dirs = AllDirs(prefs);
+        Tool kind = Tool.Of(one.Tool);
+        if (kind == null || !kind.Chats) throw new ArgumentException("不能派给 " + one.Tool + "：它不在可派的 AI 里");
+        string launcher = FindTool(one.Tool);
+        if (launcher == null) throw new ArgumentException("电脑上没有安装 " + kind.Label);
+        lock (work) {
+            LiveTerminal parent;
+            if (!terminals.TryGetValue(one.Parent, out parent) || parent.Pty.Closed || parent.Chat == null) throw new InvalidOperationException("原对话已结束");
+            RequireTerminalSlot();
+            string mode = ClampMode(parent.Mode, Get(prefs, "RemoteMaxMode"));
+            var live = new LiveTerminal { Id = Guid.NewGuid().ToString("N"), Tool = one.Tool, Dir = parent.Dir, Folder = parent.Folder, Model = one.Model, Mode = mode, Title = one.Title };
+            if (one.Worktree) {
+                if (parent.Dir.Length == 0 || !dirs.ContainsKey(parent.Dir)) throw new ArgumentException("这段对话不在项目里，不能用独立工作树");
+                var made = Worktrees.CreateSessionWorktree(dirs[parent.Dir], live.Id.Substring(0, 12));
+                live.WorktreeId = made.Id; live.WorktreePath = made.Path; live.Branch = made.Branch;
+            } else { live.WorktreeId = parent.WorktreeId; live.WorktreePath = parent.WorktreePath; live.Branch = parent.Branch; }
+            string place = Place(live, dirs);
+            if (place == null || !Directory.Exists(place)) throw new InvalidOperationException("原对话的文件夹已不存在");
+            live.Pty = Chat.Open(one.Tool, launcher, place, "", false, mode, Emitted(live), Quotas, Peers.Offer(one.Tool, place, live.Id, live.Dir, true), one.Model, "");
+            Heard(live);
+            terminals[live.Id] = live;
+            live.Chat.Say(one.Words, null);
+            soon = true;
+            return new Delegations.Began { Terminal = live.Id, Worktree = one.Worktree ? live.WorktreePath : "", Branch = one.Worktree ? live.Branch : "" };
+        }
+    }
+    /// How a conversation the phone runs stands now; "" where it has ended or is gone.
+    /// For the lists: of a conversation that is a task, the one that gave it out (`parent`) or the task's id; "" else.
+    string TaskOf(string terminal, string which) {
+        var task = Delegations.Of(terminal);
+        return task == null ? "" : which == "parent" ? task.Parent : task.Id;
+    }
+    string StateOf(string terminal) {
+        lock (work) {
+            LiveTerminal live;
+            if (!terminals.TryGetValue(terminal ?? "", out live) || live.Pty.Closed || live.Chat == null) return "";
+            return live.Chat.Status == "ended" ? "" : live.Chat.Status;
+        }
+    }
+    bool AnswerIn(string terminal, string ask, string decision) {
+        try { Member(terminal).Answer(ask, decision); return true; }
+        catch (InvalidOperationException) { return false; }
+    }
+    void CardIn(string terminal, Dictionary<string, object> card) {
+        Chat chat = null;
+        lock (work) { LiveTerminal live; if (terminals.TryGetValue(terminal ?? "", out live) && !live.Pty.Closed) chat = live.Chat; }
+        if (chat != null) chat.Card(card);
+    }
     // ---- the members of a team: conversations the phone runs, begun and told by this program
     string BeginMember(Teams.Opening one) {
         var prefs = Preferences(); var dirs = AllDirs(prefs);
@@ -732,7 +790,7 @@ public sealed class TerminalAgent {
             var emit = Emitted(live);
             emit(json.Serialize(new Dictionary<string, object> { { "t", "note" }, { "text", "已重新启动 " + Label(live.Tool) + (live.Model.Length > 0 ? " · " + live.Model : "") }, { "at", Milliseconds(DateTime.UtcNow) } }) + "\n");
             string promoteId = Teams.TeamOf(live.Id, live.Tool, session).Length > 0 ? "" : live.Id;
-            live.Pty = Chat.Open(live.Tool, launcher, place, session, true, mode, emit, Quotas, mode == "read" ? null : Peers.Offer(live.Tool, place, promoteId, live.Dir), live.Model, live.Effort);
+            live.Pty = Chat.Open(live.Tool, launcher, place, session, true, mode, emit, Quotas, mode == "read" ? null : Peers.Offer(live.Tool, place, promoteId, live.Dir, Delegations.Of(live.Id) != null), live.Model, live.Effort);
             Heard(live);
             soon = true;
             return true;
@@ -773,9 +831,13 @@ public sealed class TerminalAgent {
     /// A conversation the phone runs tells a team when a turn of it ends, and captures a low-overhead hidden Git checkpoint.
     void Heard(LiveTerminal live) {
         var chat = live.Chat;
+        if (chat != null) chat.AskedFor += (ask, kind, title, text) => {
+            if (live.Chat == chat) Delegations.Asked(live.Id, ask, kind, title, text, chat.ChoicesOf(ask));
+        };
         if (chat != null) chat.Turned += (how, words) => {
             if (live.Chat == chat) {
                 Teams.Turned(live.Id, how, words);
+                Delegations.Turned(live.Id, how, words);
                 if ((how == "done" || how == "idle") && live.Mode != "read" && !String.IsNullOrWhiteSpace(live.Folder))
                     ScheduleAutoCheckpoint(live.Folder, live.Tool);
             }
@@ -2120,7 +2182,7 @@ public sealed class TerminalAgent {
         if (relaying.Contains(id)) return;       // being handed over: answered when that is done
         string error = ""; Dictionary<string, object> result = null;
         try {
-            bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read" || FileTransfers.Handles(action), update = action == "update";
+            bool project = action == "project_add" || action == "project_remove" || action == "project_rename", file = action == "file_list" || action == "file_read" || action == "file_find" || FileTransfers.Handles(action), update = action == "update";
             bool desktop = action == "app_open", organize = action == "session_organize";
             bool peek = action == "session_read" || action == "session_say" || action == "session_withdraw" || action == "session_release" || action == "session_stop" || action == "session_answer" || action == "session_mark" || action == "session_delete" || action == "session_end";
             bool computer = Array.IndexOf(ComputerActions, action) >= 0, ownWork = Array.IndexOf(WorkActions, action) >= 0, git = Array.IndexOf(GitActions, action) >= 0;
@@ -2370,7 +2432,7 @@ public sealed class TerminalAgent {
             else if (file) {
                 string root;
                 if (!AllDirs(prefs).TryGetValue(Get(op, "dir"), out root)) throw new ArgumentException("目录未获允许");
-                result = FileTransfers.Handles(action) ? uploads.Run(root, op) : Files(root, Get(op, "path"), action, op.ContainsKey("offset") ? Convert.ToInt64(op["offset"]) : 0);
+                result = FileTransfers.Handles(action) ? uploads.Run(root, op) : action == "file_find" ? FileSearch.Find(root, Get(op, "path")) : Files(root, Get(op, "path"), action, op.ContainsKey("offset") ? Convert.ToInt64(op["offset"]) : 0);
             }
             else if (action == "start") {
                 if (terminals.ContainsKey(terminal)) return;
@@ -2734,13 +2796,14 @@ public sealed class TerminalAgent {
             }
             // a team's member says which conversation it is, kept with the task for its history (Teams.Learn)
             foreach (var t in terminals.Values.Concat(ended).Where(t => t.Session.Length > 0)) Teams.Learn(t.Id, t.Tool, t.Session);
+            Delegations.Sweep();
             lock (gate) foreach (var t in terminals.Values) Seal(t);
             var advertisedRoutes = enabled && RoutesProvider != null ? RoutesProvider().Select(r => r.ToWire()).ToArray() : new object[0];
             info = new {
                 instance = instance, environment_id = EnvironmentId, enabled = enabled, workspaces = allowed.Keys.ToArray(), tools = tools,
                 agy_external = enabled ? externalAgy : new long[0], version = Version, newer = Newer, shell = "PowerShell",
                 max_mode = ClampMode("", Get(prefs, "RemoteMaxMode")),
-                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "organize", "routes", "git", "worktree" }
+                features = new[] { "codex-fork", "codex-takeover", "terminal-exit", "files", "file-upload", "file-find", "attachments", "peek", "reach", "marks", "delete", "end", "outbox", "work", "chains", "brief", "schedule-days", "codex-desktop-control", "agy-desktop-control", "chat", "chat-agy", "chat-params", "teams", "teams-v2", "teams-models", "teams-grouped", "teams-roster", "teams-effort", "teams-flex-rounds", "teams-promote", "chat-model", "handover", "reopen", "organize", "routes", "git", "worktree", "tasks" }
                     .Concat(Desktop.Tools.Select(tool => tool + "-desktop-open"))
                     .Concat(Settled != null ? new[] { "projects" } : new string[0])
                     .Concat(UpdateRequested != null ? new[] { "update" } : new string[0])
@@ -2758,7 +2821,8 @@ public sealed class TerminalAgent {
                 form = t.Chat != null ? "chat" : "", said = t.Chat != null ? t.Chat.Said : "", ask = t.Chat != null ? t.Chat.Asking : "",
                 model = t.Model ?? "", effort = t.Effort ?? "", mode = t.Mode ?? "",
                 branch = t.Branch ?? "", worktree = t.WorktreeId ?? "",
-                team = t.Chat != null ? Teams.TeamOf(t.Id, t.Tool, t.Session) : ""
+                team = t.Chat != null ? Teams.TeamOf(t.Id, t.Tool, t.Session) : "",
+                parent = TaskOf(t.Id, "parent"), task = TaskOf(t.Id, "id")
             }).ToArray();
             bool needCheck = sessionsDirty || nowUtc - sessionsChecked > TimeSpan.FromSeconds(1.5) || nowUtc - sessionsSent > TimeSpan.FromSeconds(10);
             if (needCheck) {

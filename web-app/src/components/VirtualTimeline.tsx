@@ -18,7 +18,15 @@ interface RowProps {
   onToggleTool: (id: string) => void;
   onToggleThought: (id: string, next: boolean) => void;
   onAnswer: (askId: string, decision: string) => void;
+  onOpenTask?: (terminal: string) => void;
   onMeasure?: (id: string, height: number) => void;
+}
+
+const TASK_STATES: Record<string, string> = { running: '进行中', waiting: '等回答', completed: '已完成', failed: '未完成', cancelled: '已停止' };
+function tookOf(started?: number, ended?: number): string {
+  if (!started || !ended) return '';
+  const s = Math.max(0, Math.round((ended - started) / 1000));
+  return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
 }
 
 const TimelineRow = memo(function TimelineRow({
@@ -31,6 +39,7 @@ const TimelineRow = memo(function TimelineRow({
   onToggleTool,
   onToggleThought,
   onAnswer,
+  onOpenTask,
   onMeasure,
 }: RowProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -87,6 +96,31 @@ const TimelineRow = memo(function TimelineRow({
         </div>
       </div>
     );
+  } else if (item.role === 'task' && item.task) {
+    const c = item.task, m = toolMeta(c.tool), took = tookOf(c.started, c.ended);
+    const line = c.state === 'completed' ? c.said || '已交回结果' : c.state === 'waiting' ? `在等回答：${c.question || ''}` : c.state === 'running' ? (c.worktree ? '在独立工作树里进行' : '正在进行') : c.error || '';
+    content = (
+      <button type="button" class={`task-card state-${c.state}`} onClick={() => c.terminal && onOpenTask?.(c.terminal)}>
+        <span class="tool-mark" style={toolBadgeStyle(c.tool)}>{m.mono}</span>
+        <span class="task-card-body">
+          <b>{m.label} · {c.title || '子任务'}</b>
+          <span class="task-card-line">{line}</span>
+        </span>
+        <span class="task-card-state">{(TASK_STATES[c.state] || c.state) + (took ? ` · ${took}` : '')}</span>
+        <span class="caret">▸</span>
+      </button>
+    );
+  } else if (item.role === 'relayed') {
+    content = (
+      <div class={`tool-card relayed-card status-done`}>
+        <button type="button" class="tool-card-head" onClick={() => onToggleTool(item.id)}>
+          <span class="tool-step-icon" aria-hidden="true">↩</span>
+          <span class="tool-card-title">{item.text.startsWith('【子任务提问】') ? '子任务在等回答' : '子任务的结果已送回'}</span>
+          <span class="caret">{expanded ? '▾' : '▸'}</span>
+        </button>
+        {expanded && <div class="relayed-body"><MarkdownView text={item.text} streaming={false} /></div>}
+      </div>
+    );
   } else if (item.role === 'switch') {
     const sm = toolMeta(item.tool || '');
     content = (
@@ -129,6 +163,8 @@ const TimelineRow = memo(function TimelineRow({
 /** Role & length bucket estimator so unmeasured items avoid scroll jumping in 500+ turn chats. */
 function estimateHeight(item: ChatMessageItem, expanded: boolean, thoughtExpanded?: boolean): number {
   if (item.role === 'note' || item.role === 'error' || item.role === 'switch') return 42;
+  if (item.role === 'task') return 60;
+  if (item.role === 'relayed') return expanded ? 320 : 46;
   if (item.role === 'tool') return expanded && item.output ? 240 : 62;
   if (item.role === 'ask') return 180;
   if (item.role === 'thought') {
@@ -156,6 +192,8 @@ interface Props {
   jumpRequest?: { index: number; nonce: number } | null;
   onScrollStateChange?: (scrollTop: number, stickBottom: boolean) => void;
   onAnswer: (askId: string, decision: string) => void;
+  /** Opens the conversation of a task this one gave out (its card). */
+  onOpenTask?: (terminal: string) => void;
 }
 
 /**
@@ -177,6 +215,7 @@ export function VirtualTimeline({
   jumpRequest = null,
   onScrollStateChange,
   onAnswer,
+  onOpenTask,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const heightsRef = useRef<Map<string, number>>(new Map());
@@ -394,6 +433,7 @@ export function VirtualTimeline({
                   onToggleTool={handleToggleTool}
                   onToggleThought={handleToggleThought}
                   onAnswer={onAnswer}
+                  onOpenTask={onOpenTask}
                   onMeasure={useVirtual ? handleMeasure : undefined}
                 />
               );

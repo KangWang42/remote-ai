@@ -55,12 +55,13 @@ import uuid
 from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
 import claude_permissions
+import delegations as delegations_mod
 import peers as peers_mod
 import quotas as quotas_store
 import teams
 import worktrees
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 ID_RE = re.compile(r"\A[a-f0-9]{16,32}\Z")
 TERMINAL_RE = re.compile(r"\A[a-f0-9]{32}\Z")
 SERVER_RE = re.compile(r"\Ahttps?://[^/\s]+\Z")
@@ -187,11 +188,11 @@ def private_address(url):
     return address.is_private or address.is_loopback or address.is_link_local
 PROJECT_ACTIONS = ("project_add", "project_remove", "project_rename")
 UPLOAD_ACTIONS = ("file_upload_start", "file_upload_chunk", "file_upload_finish", "file_upload_cancel")
-FILE_ACTIONS = ("file_list", "file_read") + UPLOAD_ACTIONS
+FILE_ACTIONS = ("file_list", "file_read", "file_find") + UPLOAD_ACTIONS
 FILE_PIECE = 737280     # bytes of a file in one answer, as the Windows agent cuts them
 FILE_ENTRIES = 3000     # entries of a folder in one answer
 TOOL_LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "qoder": "Qoder", "cline": "Cline", "pi": "Pi"}
-FEATURES = ["terminal-exit", "files", "file-upload", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "handover", "reopen", "teams", "teams-v2", "teams-grouped"]
+FEATURES = ["terminal-exit", "files", "file-upload", "file-find", "tasks", "attachments", "peek", "marks", "delete", "work", "chat", "chains", "brief", "schedule-days", "handover", "reopen", "teams", "teams-v2", "teams-grouped"]
 CLAUDE_READ_ONLY_TOOLS = frozenset(("Read", "Glob", "Grep", "LS", "NotebookRead"))
 ATTACHMENT_LIMIT = 20 * 1024 * 1024
 ATTACHMENT_PATH = re.compile(r"^\.remote-ai/attachments/[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(?:png|jpg|jpeg|webp|gif)$")
@@ -588,6 +589,46 @@ def files(root, relative, action, offset):
         raise OpError("没有权限读取")
     except OSError:
         raise OpError("读取失败")
+
+
+FIND_MOST, FIND_ENTRIES, FIND_SECONDS = 20, 200000, 3.0
+FIND_SKIPPED = {"node_modules", "bin", "obj", "dist", "build", "target", "__pycache__", "venv"}
+
+
+def find_file(root, given):
+    """The project's paths that end with the name an answer gives a file ('Peers.cs', 'chat/chat.js'), nearest
+    first: walked breadth first past the folders of tools and builds, without following links, within a bound of
+    entries and time. At most FIND_MOST, and `more` where there were others or the walk stopped at its bound."""
+    wanted = str(given or "").strip().replace("\\", "/").strip("/")
+    parts = wanted.split("/")
+    if not wanted or len(wanted) > 300 or any(part in ("", ".", "..") for part in parts):
+        raise OpError("文件名无效")
+    if not os.path.isdir(root):
+        raise OpError("文件夹不存在")
+    hidden_wanted = any(part.startswith(".") for part in parts)
+    tail, low = "/" + wanted.lower(), wanted.lower()
+    found, seen, started, queue = [], 0, time.monotonic(), [""]
+    while queue:
+        relative = queue.pop(0)
+        try:
+            with os.scandir(os.path.join(root, relative) if relative else root) as listing:
+                entries = sorted(listing, key=lambda e: e.name.lower())
+        except OSError:
+            continue
+        for entry in entries:
+            seen += 1
+            if seen > FIND_ENTRIES or time.monotonic() - started > FIND_SECONDS:
+                return {"found": found, "more": True}
+            path = relative + "/" + entry.name if relative else entry.name
+            if entry.is_dir(follow_symlinks=False):
+                if entry.name in FIND_SKIPPED or (entry.name.startswith(".") and not hidden_wanted):
+                    continue
+                queue.append(path)
+            elif entry.is_file() and (path.lower() == low or ("/" + path.lower()).endswith(tail)):
+                if len(found) == FIND_MOST:
+                    return {"found": found, "more": True}
+                found.append(path)
+    return {"found": found, "more": False}
 
 
 def publish_upload(tmp, name, fd):
@@ -2694,6 +2735,7 @@ class Chat(Live):
         self.quotas_note = None
         self.on_session = None
         self.on_close = None
+        self.on_ask = None          # who hears what it asks: (ask, kind, title, text, choices)
         self.mcp, self.auto_ask = mcp, False
         self.start(launcher, session, resume, mode)
 
@@ -2880,6 +2922,9 @@ class Chat(Live):
         options.append({"id": "deny", "label": "不回答" if choices else "拒绝"})
         self.event(t="ask", id=ask, kind=kind, title=title, text=text[:4000], options=options)
         self.state("confirm")
+        heard = self.on_ask
+        if heard:
+            threading.Thread(target=heard, args=(ask, kind, title, text, list(choices or [])), daemon=True).start()
 
     def before(self, messages, more):
         """What was said before, where a saved conversation is gone on with."""
@@ -3055,11 +3100,11 @@ class ClaudeChat(Chat):
                 self.steps[part["id"]] = item
                 given, name = part.get("input") or {}, part.get("name") or ""
                 more = {"name": name, "state": "run"}
-                if name == "mcp__" + peers_mod.SERVER_NAME + "__" + peers_mod.TOOL_NAME or name.endswith("__" + peers_mod.TOOL_NAME):
-                    question = str(given.get("question") or "") if isinstance(given, dict) else ""
-                    title = peers_mod.step_title(str(given.get("tool") or "") if isinstance(given, dict) else "", question)
-                    if question:
-                        more["detail"] = question[:2000]
+                own = peers_mod.own_tool(name) if name.startswith("mcp__" + peers_mod.SERVER_NAME + "__") else ""
+                if own:
+                    title, detail = peers_mod.step_of(own, given)
+                    if detail:
+                        more["detail"] = detail[:2000]
                 else:
                     title = chat_brief(name, given)
                     if isinstance(given, dict) and given.get("command"):
@@ -3097,7 +3142,8 @@ class ClaudeChat(Chat):
         if request.get("subtype") != "can_use_tool":
             return self.respond(m.get("request_id"), None, "不支持的请求")
         name, given = request.get("tool_name") or "", request.get("input") or {}
-        if self.mcp and name == "mcp__" + self.mcp.name + "__" + peers_mod.TOOL_NAME:
+        # Remote AI's own tools run through its own controls (a task given out never works more widely than this conversation)
+        if self.mcp and name.startswith("mcp__" + self.mcp.name + "__") and peers_mod.own_tool(name):
             return self.respond(m.get("request_id"), {"behavior": "allow", "updatedInput": given}, None)
         if name == "AskUserQuestion":
             questions = given.get("questions") or []
@@ -3296,12 +3342,10 @@ class CodexChat(Chat):
         elif kind == "mcpToolCall":
             tool_name = str(item.get("tool") or "")
             more = {"name": "mcp", "state": "run"}
-            if tool_name == peers_mod.TOOL_NAME:
-                args_obj = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
-                question = str(args_obj.get("question") or "")
-                title = peers_mod.step_title(str(args_obj.get("tool") or ""), question)
-                if question:
-                    more["detail"] = question[:2000]
+            if item.get("server") == peers_mod.SERVER_NAME and tool_name in peers_mod.TOOL_NAMES:
+                title, detail = peers_mod.step_of(tool_name, item.get("arguments"))
+                if detail:
+                    more["detail"] = detail[:2000]
             else:
                 title = "%s：%s" % (item.get("server") or "", tool_name)
             self.item(key, "step", title, **more)
@@ -4068,10 +4112,14 @@ class Agent:
         self.chains = Chains(os.path.join(data, "chains.json"))
         self.quotas = quotas_store.Quotas(data)
         self.next_codex_ask = self.next_agy_ask = 0.0
+        # what a conversation the phone runs hands to another AI by itself (delegations.py)
+        self.delegations = delegations_mod.Delegations(delegations_mod.Hands(
+            begin=self.begin_task, state_of=self.state_of, say=self.say_to_member, stop=self.stop_member, close=self.close_member,
+            answer=self.answer_in, card=self.card_in, label=peers_mod.peers_label), changed=lambda: self.wake())
         self.peers = peers_mod.Peers(peers_mod.socket_path(data), find_tool, quota_of=self.quotas.of,
                                      config_dir=data, chat_tools=CHAT_TOOLS,
                                      open_read_only=self.open_peer_chat,
-                                     bridge_script=os.path.abspath(__file__))
+                                     bridge_script=os.path.abspath(__file__), delegations=self.delegations)
         self.worktrees = worktrees.Worktrees(os.path.join(data, "worktrees"))
         self.teams = teams.Teams(os.path.join(data, "teams.json"), teams.Hands(
             begin_in=self.begin_member_in, say=self.say_to_member,
@@ -4259,6 +4307,7 @@ class Agent:
                                "state": "closed" if live.closed else "running",
                                "cols": live.cols, "rows": live.rows, "session": live.session,
                                "team": self.teams.team_of(live.id, live.tool, live.session),
+                               "parent": self.task_of(live.id, "parent"), "task": self.task_of(live.id, "id"),
                                "status": "" if live.closed or live.status == "ended" else live.status, "exit_code": live.exit_code,
                                "error": "程序退出（代码 %d），请检查终端画面中的原因" % live.exit_code
                                         if live.exit_code else ""},
@@ -4360,6 +4409,8 @@ class Agent:
                     raise OpError("没有这个项目")
                 if action in UPLOAD_ACTIONS:
                     result = self.uploads.run(root, op)
+                elif action == "file_find":
+                    result = find_file(root, op.get("path", ""))
                 else:
                     result = files(root, op.get("path", ""), action, op.get("offset", 0))
             elif action == "session_read":
@@ -4585,6 +4636,76 @@ class Agent:
         chat.auto_ask = True
         chat.quotas_note = self.quotas.note
         return chat
+
+    # ---- the tasks a conversation gives out (delegations.py Hands): conversations the phone runs, begun here
+    def hear(self, chat):
+        """A conversation the phone runs tells the tasks what its turns and questions are."""
+        one = chat.id
+        chat.turned = lambda how, said: self.delegations.turned(one, how, said)
+        chat.on_ask = lambda ask, kind, title, text, choices: self.delegations.asked(one, ask, kind, title, text, choices)
+
+    def begin_task(self, one):
+        """Begins a task's conversation beside the one that gives it out: in its folder, never working more widely
+        than the computer allows, or in a new worktree of the project where that is asked."""
+        tool = one["tool"]
+        if tool not in CHAT_TOOLS:
+            raise delegations_mod.Refused("不能派给 %s：它不在可派的 AI 里" % tool)
+        launcher = find_tool(tool)
+        if launcher is None:
+            raise delegations_mod.Refused("电脑上没有安装 " + peers_mod.peers_label(tool))
+        cfg = read_config(self.data)
+        with self.work:
+            parent = self.terminals.get(one["parent"])
+            if not isinstance(parent, Chat) or parent.closed:
+                raise delegations_mod.Refused("原对话已结束")
+            if sum(1 for live in self.terminals.values() if not live.closed) >= MAX_TERMINALS:
+                raise delegations_mod.Refused("最多同时运行 %d 个终端，请先结束一个" % MAX_TERMINALS)
+            cwd, worktree, branch = parent.dir, "", ""
+            if one["worktree"]:
+                try:
+                    made = self.worktrees.create(parent.dir, uuid.uuid4().hex[:16], tool)
+                except (worktrees.OpError, OSError) as error:
+                    raise delegations_mod.Refused("没能建立独立工作树：" + str(error))
+                cwd, worktree, branch = made["path"], made["path"], made.get("branch", "")
+            terminal = uuid.uuid4().hex
+            session = str(uuid.uuid4()) if tool == "claude" else ""
+            chat = open_chat(terminal, parent.project, cwd, tool, launcher, self.wake, session, False, str(cfg.get("RemoteMaxMode") or ""),
+                             mcp=self.peers.offer(tool, cwd, terminal, child=True))
+            chat.quotas_note = self.quotas.note
+            self.hear(chat)
+            self.terminals[terminal] = chat
+            chat.say(one["words"])
+        self.wake()
+        return {"terminal": terminal, "worktree": worktree, "branch": branch}
+
+    def state_of(self, terminal):
+        with self.work:
+            live = self.terminals.get(terminal)
+            if not isinstance(live, Chat) or live.closed or live.status == "ended":
+                return ""
+            return live.status
+
+    def answer_in(self, terminal, ask, decision):
+        with self.work:
+            live = self.terminals.get(terminal)
+        if not isinstance(live, Chat) or live.closed:
+            return False
+        try:
+            live.answer(ask, decision)
+            return True
+        except OpError:
+            return False
+
+    def card_in(self, terminal, card):
+        with self.work:
+            live = self.terminals.get(terminal)
+        if isinstance(live, Chat) and not live.closed:
+            with live.gate:
+                live.event(**card)
+
+    def task_of(self, terminal, which):
+        task = self.delegations.of(terminal)
+        return "" if task is None else task["parent"] if which == "parent" else task["id"]
 
     # ---- the members of a team: conversations this program begins and tells (teams.py Hands)
     def terminal_is_asking(self, terminal):
@@ -4936,8 +5057,9 @@ class Agent:
                         first_text = handover(handed, read.get("messages", []), "") + "\n\n" + HANDOVER_ASK + "\n" + first_text
                 chat = open_chat(terminal, name, cwd, tool, launcher, self.wake, session, resume,
                                  str(cfg.get("RemoteMaxMode") or ""),
-                                 mcp=self.peers.offer(tool, cwd))
+                                 mcp=self.peers.offer(tool, cwd, terminal))
                 chat.quotas_note = self.quotas.note
+                self.hear(chat)
                 if handed_runs is not None:
                     handed_runs.kill()
                     self.terminals.pop(handed_runs.id, None)
@@ -5035,6 +5157,7 @@ class Agent:
         while not self.stop.is_set():
             try:
                 self.report()
+                self.delegations.sweep()
             except Exception as exc:            # network and login failures are retried
                 say("报告失败：%s" % type(exc).__name__)
             pause = 0.02 if self.soon else 0.25 if time.time() - self.last_activity < 20 else 0.7
